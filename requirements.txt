@@ -1,0 +1,18 @@
+# Dependencias core del Generador de Cotizaciones Mobiliti
+# Instalar con: pip install -r requirements.txt
+
+# Excel automation (requiere Windows + Excel instalado)
+xlwings>=0.35.0
+openpyxl>=3.1.0
+
+# Clasificacion de productos
+rapidfuzz>=3.0.0
+
+# Manipulacion de imagenes
+Pillow>=10.0.0
+
+# Testing
+pytest>=9.0.0
+
+# Utilidades Windows (opcional, para hardware ID en SaaS)
+wmi>=1.5.0

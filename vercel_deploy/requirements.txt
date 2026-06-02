@@ -1,0 +1,6 @@
+fastapi>=0.115.0
+mangum>=0.21.0
+bcrypt>=4.1.0
+python-jose[cryptography]>=3.4.0
+python-multipart>=0.0.20
+pydantic>=2.10.0

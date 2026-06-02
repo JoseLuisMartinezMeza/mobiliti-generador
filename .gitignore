@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+
+# PyInstaller
+build/
+dist/
+*.spec
+!mobiliti_saas/Mobiliti_SaaS.spec
+
+# Archivos grandes / binarios
+*.exe
+*.zip
+*.msi
+
+# Temporales
+temp_images/
+*.tmp
+*.temp
+
+# Historial (solo scripts, no outputs)
+historial/test_outputs/
+historial/test_screenshots/
+historial/debug_scripts/
+!historial/*.py
+!historial/*.bas
+
+# Excel locks
+~$*.xlsx
+~$*.xls
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
