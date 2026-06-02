@@ -30,6 +30,7 @@ import openpyxl
 import xlwings as xw
 import clasificador
 import insertar_imagenes
+import mejorador_imagenes
 
 Q_HEADER_ROW = 7
 
@@ -362,6 +363,15 @@ def generar_cotizacion(args):
         print("[1/8] Extrayendo imagenes del Quotation...")
         image_map, temp_dir = extraer_imagenes(str(source_path))
         print(f"      [OK] {len(image_map)} imagenes extraidas")
+        
+        # PASO 1b: Mejorar imagenes con Pillow
+        print("[1b/8] Mejorando imagenes...")
+        cache_dir = os.path.join(
+            os.environ.get('LOCALAPPDATA', os.path.expanduser('~')),
+            'Mobiliti', 'Cache', 'Imagenes'
+        )
+        image_map = mejorador_imagenes.mejorar_image_map(image_map, cache_dir)
+        print(f"      [OK] Imagenes mejoradas")
         
         # PASO 2: Leer items
         print("[2/8] Leyendo items del Quotation...")
@@ -942,9 +952,6 @@ def generar_cotizacion(args):
         # Guardar
         print("      Guardando...")
         wb_template.save(str(output_path))
-        wb_template.close()
-        wb_source.close()
-        app.quit()
         
         print()
         print("=" * 60)
@@ -952,6 +959,20 @@ def generar_cotizacion(args):
         print("=" * 60)
         print(f"Archivo: {output_path}")
         print()
+        
+        # Cerrar workbooks (ignorar errores OLE no criticos)
+        try:
+            wb_template.close()
+        except Exception as e:
+            print(f"      [ADVERTENCIA] Al cerrar template: {e}")
+        try:
+            wb_source.close()
+        except Exception as e:
+            print(f"      [ADVERTENCIA] Al cerrar source: {e}")
+        try:
+            app.quit()
+        except Exception as e:
+            print(f"      [ADVERTENCIA] Al cerrar Excel: {e}")
         
     except Exception as e:
         print()

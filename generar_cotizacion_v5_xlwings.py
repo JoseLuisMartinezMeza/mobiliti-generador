@@ -30,6 +30,7 @@ import openpyxl
 import xlwings as xw
 import clasificador
 import insertar_imagenes
+import mejorador_imagenes
 
 Q_HEADER_ROW = 7
 
@@ -362,6 +363,15 @@ def generar_cotizacion(args):
         print("[1/8] Extrayendo imagenes del Quotation...")
         image_map, temp_dir = extraer_imagenes(str(source_path))
         print(f"      [OK] {len(image_map)} imagenes extraidas")
+        
+        # PASO 1b: Mejorar imagenes con Pillow
+        print("[1b/8] Mejorando imagenes...")
+        cache_dir = os.path.join(
+            os.environ.get('LOCALAPPDATA', os.path.expanduser('~')),
+            'Mobiliti', 'Cache', 'Imagenes'
+        )
+        image_map = mejorador_imagenes.mejorar_image_map(image_map, cache_dir)
+        print(f"      [OK] Imagenes mejoradas")
         
         # PASO 2: Leer items
         print("[2/8] Leyendo items del Quotation...")

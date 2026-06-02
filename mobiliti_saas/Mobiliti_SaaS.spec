@@ -25,6 +25,7 @@ a = Analysis(
         (os.path.join(project_root, 'Formato Cotización 2026 GDL (1).xlsx'), '.'),
         # Clasificador e imagenes
         (os.path.join(project_root, 'insertar_imagenes.py'), '.'),
+        (os.path.join(project_root, 'mejorador_imagenes.py'), '.'),
         (os.path.join(project_root, 'clasificador.py'), '.'),
         (os.path.join(project_root, 'generar_cotizacion_v5_xlwings.py'), '.'),
         # GUI del cliente
@@ -39,6 +40,7 @@ a = Analysis(
         'PIL',
         'clasificador',
         'insertar_imagenes',
+        'mejorador_imagenes',
         'generar_cotizacion_v5_xlwings',
         'main_cliente',
         'verificador',
