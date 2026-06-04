@@ -43,6 +43,22 @@ def _iso(dt: datetime) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
+# VERSION MANIFEST (Auto-updater)
+# ═══════════════════════════════════════════════════════════════
+
+CURRENT_VERSION = {
+    "version": "1.5.3",
+    "major": 1,
+    "minor": 5,
+    "patch": 3,
+    "download_url": "https://github.com/tuusuario/mobiliti/releases/download/v1.5.3/Mobiliti_Generador.exe",
+    "release_notes": "Fix: deteccion dinamica de columna Vol. Mejora: escalado de imagenes por categoria.",
+    "release_date": "2026-06-04T10:00:00Z",
+    "force_update": False,
+    "min_version_required": None,
+}
+
+# ═══════════════════════════════════════════════════════════════
 # SUPABASE REST HELPERS (urllib.request)
 # ═══════════════════════════════════════════════════════════════
 
@@ -456,6 +472,19 @@ def generar_cotizacion(body: dict, authorization: str = Header(None)):
         raise HTTPException(status_code=403, detail="Suscripcion no activa")
 
     return {"autorizado": True, "mensaje": "Puedes generar la cotizacion localmente"}
+
+
+# ─── VERSION / AUTO-UPDATE ────────────────────────────────────
+
+@app.get("/version")
+def get_latest_version():
+    """Devuelve informacion de la ultima version disponible."""
+    return CURRENT_VERSION
+
+@app.get("/download/latest")
+def download_latest():
+    """Redirige a la descarga del .exe mas reciente."""
+    return {"url": CURRENT_VERSION["download_url"]}
 
 
 # ═══════════════════════════════════════════════════════════════
