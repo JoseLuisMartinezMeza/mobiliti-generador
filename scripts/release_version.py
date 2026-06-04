@@ -109,7 +109,7 @@ def main():
     args = parser.parse_args()
 
     version = args.version.lstrip("v")
-    download_url = args.download_url or f"https://github.com/TU_USUARIO_GITHUB/TU_REPO/releases/download/v{version}/Mobiliti_Generador.exe"
+    download_url = args.download_url or f"https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v{version}/Mobiliti_Generador.exe"
 
     update_version_txt(version)
     update_version_in_index(API_DIR / "index.py", version, args.notes, download_url, args.force)

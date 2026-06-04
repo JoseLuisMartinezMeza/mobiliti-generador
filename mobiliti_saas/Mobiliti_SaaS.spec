@@ -14,7 +14,7 @@ project_root = os.path.dirname(base_dir)
 
 a = Analysis(
     ['cliente\\entry_point.py'],
-    pathex=[base_dir, project_root],
+    pathex=[base_dir, project_root, os.path.join(base_dir, 'cliente')],
     binaries=[],
     datas=[
         # Archivos de configuracion y recursos
@@ -29,10 +29,10 @@ a = Analysis(
         (os.path.join(project_root, 'clasificador.py'), '.'),
         (os.path.join(project_root, 'generar_cotizacion_v5_xlwings.py'), '.'),
         # GUI del cliente
-        ('cliente\\main_cliente.py', '.'),
-        ('cliente\\updater.py', '.'),
-        ('cliente\\version.txt', '.'),
-        ('cliente\\verificador.py', '.'),
+        (os.path.join(base_dir, 'cliente', 'main_cliente.py'), '.'),
+        (os.path.join(base_dir, 'cliente', 'updater.py'), '.'),
+        (os.path.join(base_dir, 'cliente', 'version.txt'), '.'),
+        (os.path.join(base_dir, 'cliente', 'verificador.py'), '.'),
     ],
     hiddenimports=[
         'wmi',
