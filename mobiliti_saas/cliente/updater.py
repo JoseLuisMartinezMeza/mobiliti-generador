@@ -89,8 +89,9 @@ def _read_local_version():
 # SemVer
 # ---------------------------------------------------------------------------
 def _parse_version(v):
-    """Parse '1.5.3' -> (1, 5, 3). Missing segments default to 0."""
-    parts = v.strip().split('.')
+    """Parse '1.5.3' or 'v1.5.3' -> (1, 5, 3). Missing segments default to 0."""
+    v = v.strip().lstrip('v').lstrip('V')
+    parts = v.split('.')
     nums = []
     for p in parts[:3]:
         try:
