@@ -61,7 +61,7 @@ CURRENT_VERSION = {
     "major": 1,
     "minor": 5,
     "patch": 3,
-    "download_url": "https://github.com/tuusuario/mobiliti/releases/download/v1.5.3/Mobiliti_Generador.exe",
+    "download_url": "https://github.com/TU_USUARIO_GITHUB/TU_REPO/releases/download/v1.5.3/Mobiliti_Generador.exe",
     "release_notes": "Fix: deteccion dinamica de columna Vol. Mejora: escalado de imagenes por categoria.",
     "release_date": "2026-06-04T10:00:00Z",
     "force_update": False,
