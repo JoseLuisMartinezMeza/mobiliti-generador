@@ -30,6 +30,8 @@ a = Analysis(
         (os.path.join(project_root, 'generar_cotizacion_v5_xlwings.py'), '.'),
         # GUI del cliente
         ('cliente\\main_cliente.py', '.'),
+        ('cliente\\updater.py', '.'),
+        ('cliente\\version.txt', '.'),
         ('cliente\\verificador.py', '.'),
     ],
     hiddenimports=[
@@ -43,6 +45,7 @@ a = Analysis(
         'mejorador_imagenes',
         'generar_cotizacion_v5_xlwings',
         'main_cliente',
+        'updater',
         'verificador',
         'tkinter',
         'tkinter.filedialog',
