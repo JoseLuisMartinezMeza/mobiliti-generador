@@ -16,6 +16,8 @@ from tkinter import messagebox, ttk, filedialog
 import threading
 from datetime import datetime
 
+import updater
+
 try:
     from PIL import Image, ImageTk
     HAS_PIL = True
@@ -378,6 +380,7 @@ class MobilitiClient:
     def show_main_screen(self):
         """Pantalla principal del generador."""
         self.clear_window()
+        updater.check_and_prompt_update(self.root)
 
         # Menu
         menubar = tk.Menu(self.root, bg=self.COLORS['surface'], fg=self.COLORS['text'],
@@ -708,15 +711,7 @@ class MobilitiClient:
 
     def check_updates(self):
         try:
-            req = urllib.request.Request(f"{API_URL}/version")
-            with urllib.request.urlopen(req, timeout=5) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                if data.get("version") != VERSION:
-                    messagebox.showinfo("Actualizacion",
-                        f"Nueva version disponible: {data.get('version')}\n"
-                        f"Contacta al administrador para descargar.")
-                else:
-                    messagebox.showinfo("Actualizacion", "Tienes la ultima version.")
+            updater.check_and_prompt_update(self.root)
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo verificar actualizaciones:\n{str(e)}")
 
