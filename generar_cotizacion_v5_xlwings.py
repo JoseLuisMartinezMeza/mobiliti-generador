@@ -767,6 +767,12 @@ def generar_cotizacion(args):
         ws_cot.api.Columns("B").Width = 975   # 1300 px
         ws_cot.api.Columns("C").Width = 1050  # 1400 px
         
+        # Desactivar redibujado y calculo automatico para acelerar el loop
+        original_screen_updating = app.api.ScreenUpdating
+        original_calculation = app.api.Calculation
+        app.api.ScreenUpdating = False
+        app.api.Calculation = -4135  # xlCalculationManual
+        
         for item in items:
             if item['tipo'] == 'categoria':
                 # 1. Copiar formato de categoria desde fila template (rango A:J)
@@ -857,6 +863,10 @@ def generar_cotizacion(args):
         
         # Insertar imagenes usando modulo separado
         img_count = insertar_imagenes.insertar_imagenes_cotizacion(ws_cot, items, image_map, categoria_map=categoria_map)
+        
+        # Reactivar redibujado y calculo automatico
+        app.api.ScreenUpdating = original_screen_updating
+        app.api.Calculation = original_calculation
         
         # Totales - copiar formato nativo del template (filas 21-25)
         print("      Agregando totales con formato nativo del template...")
