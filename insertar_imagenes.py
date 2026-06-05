@@ -11,19 +11,29 @@ Uso:
 """
 
 
-def insertar_imagenes_cotizacion(ws_cot, items, image_map, start_row=16):
+def insertar_imagenes_cotizacion(ws_cot, items, image_map, start_row=16, categoria_map=None):
     """
-    Inserta imágenes de productos en la columna B de la hoja Cotizacion.
+    Inserta imagenes de productos en la columna B de la hoja Cotizacion.
     
     Args:
         ws_cot: Hoja 'Cotizacion' del workbook xlwings.
-        items: Lista de items leídos del Quotation.
+        items: Lista de items leidos del Quotation.
         image_map: Diccionario {fila_quotation: ruta_imagen}.
         start_row: Fila donde empiezan los productos (default 16).
+        categoria_map: Diccionario {fila_quotation: categoria} para escala por categoria.
     
     Returns:
-        int: Cantidad de imágenes insertadas.
+        int: Cantidad de imagenes insertadas.
     """
+    # Factores de escala por categoria (% del tamano de la celda)
+    ESCALAS = {
+        'Escritorios-WorkStation': 0.95,
+        'Mesas de Juntas': 0.95,
+        'Silla': 0.75,
+        'Sillones': 0.75,
+        'Mesas de Apoyo': 0.50,
+    }
+    ESCALA_DEFAULT = 0.60
     # Eliminar imagenes existentes en Cotizacion (solo productos, no el logo del encabezado)
     print("      Eliminando imagenes previas...")
     for pic in ws_cot.pictures:
@@ -55,9 +65,13 @@ def insertar_imagenes_cotizacion(ws_cot, items, image_map, start_row=16):
                 orig_width = pic.width
                 orig_height = pic.height
                 
-                # Calcular tamaño máximo (98% de la celda para dejar márgenes)
-                max_width = cell.width * 0.98
-                max_height = cell.height * 0.98
+                # Determinar escala segun categoria (default 60%)
+                categoria = (categoria_map or {}).get(q_row)
+                escala_pct = ESCALAS.get(categoria, ESCALA_DEFAULT)
+                
+                # Calcular tamano maximo (% de la celda segun categoria)
+                max_width = cell.width * escala_pct
+                max_height = cell.height * escala_pct
                 
                 # Calcular factor de escala manteniendo proporción
                 scale_w = max_width / orig_width if orig_width > 0 else 1

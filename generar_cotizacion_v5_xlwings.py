@@ -762,6 +762,11 @@ def generar_cotizacion(args):
         cot_cat_height = float(ws_cot.api.Rows(cot_cat_row).RowHeight)  # Altura de categoria
         cot_prod_height = float(ws_cot.api.Rows(cot_prod_row).RowHeight)  # Altura de producto
         
+        # Configurar anchos de columnas (puntos = px * 0.75)
+        ws_cot.api.Columns("A").Width = 390   # 520 px
+        ws_cot.api.Columns("B").Width = 975   # 1300 px
+        ws_cot.api.Columns("C").Width = 1050  # 1400 px
+        
         for item in items:
             if item['tipo'] == 'categoria':
                 # 1. Copiar formato de categoria desde fila template (rango A:J)
@@ -834,8 +839,8 @@ def generar_cotizacion(args):
                     ws_cot.range(f'{col}{current_row}').api.NumberFormat = fmt_contable
                 
                 # 3. Ajustar altura de fila (PasteSpecial con rango no copia altura)
-                # Aumentar altura para que las imagenes se vean mas grandes (max 409 puntos de Excel)
-                ws_cot.api.Rows(current_row).RowHeight = min(cot_prod_height * 1.3, 409)
+                # Altura fija: 500 px = 375 puntos (500 * 0.75)
+                ws_cot.api.Rows(current_row).RowHeight = 375
                 
                 current_row += 1
         
@@ -843,8 +848,15 @@ def generar_cotizacion(args):
         
         # Descuento base ya fue establecido en el primer producto (G{descuento_row})
         
+        # Pre-calcular categorias para escala de imagenes
+        categoria_map = {}
+        if diccionario:
+            for item in items:
+                if item['tipo'] == 'producto':
+                    categoria_map[item['row']] = clasificador.clasificar_producto(item['nombre'], diccionario)
+        
         # Insertar imagenes usando modulo separado
-        img_count = insertar_imagenes.insertar_imagenes_cotizacion(ws_cot, items, image_map)
+        img_count = insertar_imagenes.insertar_imagenes_cotizacion(ws_cot, items, image_map, categoria_map=categoria_map)
         
         # Totales - copiar formato nativo del template (filas 21-25)
         print("      Agregando totales con formato nativo del template...")
