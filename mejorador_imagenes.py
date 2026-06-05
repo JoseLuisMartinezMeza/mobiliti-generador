@@ -143,8 +143,8 @@ def _aplicar_fondo_blanco(img: Image.Image) -> Image.Image:
 def _mejorar_imagen_pillow(img_path: str, output_path: str) -> bool:
     """
     Aplica el pipeline de mejora Pillow a una imagen.
-    Quita el fondo blanco y deja transparencia.
-    Guarda el resultado en output_path como PNG RGBA.
+    Quita el fondo blanco/gris claro y compone sobre fondo blanco puro.
+    Guarda el resultado en output_path como PNG RGB.
     Devuelve True si tuvo éxito, False en caso contrario.
     """
     try:
@@ -162,16 +162,19 @@ def _mejorar_imagen_pillow(img_path: str, output_path: str) -> bool:
                     img = img.convert("RGB")
                 img = ImageOps.autocontrast(img, cutoff=0)
 
-            # 2. Quitar fondo blanco (hacer transparente)
-            img = _quitar_fondo_blanco(img)
+            # 2. Quitar fondo blanco/gris claro (umbral 200 captura grises)
+            img = _quitar_fondo_blanco(img, umbral=200)
 
             # 3. Trim de bordes transparentes
             img = _trim_bordes_blancos(img)
 
-            # 4. Sharpening ligero
+            # 4. Componer sobre fondo blanco puro (#FFFFFF)
+            img = _aplicar_fondo_blanco(img)
+
+            # 5. Sharpening ligero
             img = img.filter(ImageFilter.SHARPEN)
 
-            # 5. Guardar como PNG con canal alpha
+            # 6. Guardar como PNG RGB (sin canal alpha)
             img.save(output_path, "PNG", optimize=True)
             return True
     except Exception:

@@ -496,9 +496,9 @@ def generar_cotizacion(body: dict, authorization: str = Header(None)):
 
 # Fallback inline por si Supabase no responde
 _CURRENT_VERSION_FALLBACK = {
-    "version": "1.5.6",
-    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.6/Mobiliti_Generador.exe",
-    "release_notes": "Fix: eliminado subprocess del proceso hijo en modo .exe. El generador ahora se llama directamente, evitando condiciones de carrera en el directorio temporal _MEI de PyInstaller (Tcl data not found crash).",
+    "version": "1.5.7",
+    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.7/Mobiliti_Generador.exe",
+    "release_notes": "Fix: fondo de imagenes ahora es blanco puro. Umbral bajado a 200 para capturar grises claros. Pipeline compone sobre #FFFFFF en vez de dejar transparente.",
     "force_update": False,
 }
 
