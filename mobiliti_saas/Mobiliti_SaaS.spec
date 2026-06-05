@@ -31,6 +31,8 @@ a = Analysis(
         # GUI del cliente
         ('cliente\\main_cliente.py', '.'),
         ('cliente\\verificador.py', '.'),
+        ('cliente\\updater.py', '.'),
+        ('cliente\\version.txt', '.'),
     ],
     hiddenimports=[
         'wmi',
@@ -44,6 +46,7 @@ a = Analysis(
         'generar_cotizacion_v5_xlwings',
         'main_cliente',
         'verificador',
+        'updater',
         'tkinter',
         'tkinter.filedialog',
         'tkinter.messagebox',

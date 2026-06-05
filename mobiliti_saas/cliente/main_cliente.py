@@ -15,6 +15,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 import threading
 from datetime import datetime
+import updater
 
 try:
     from PIL import Image, ImageTk
@@ -371,6 +372,8 @@ class MobilitiClient:
             self.save_credentials(email, password)
             self.status_label.config(text=f"Bienvenido, {self.user_info['nombre']}!", foreground='#2e7d32')
             self.root.after(1000, self.show_main_screen)
+            # Verificar actualizaciones automaticamente 3s despues del login
+            self.root.after(4000, lambda: updater.check_and_prompt_update(self.root))
         else:
             msg = result.get("detail", "Error de login")
             self.status_label.config(text=msg, foreground='#c62828')
@@ -647,7 +650,9 @@ class MobilitiClient:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    cwd=base_dir
+                    cwd=base_dir,
+                    close_fds=True,
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
                 )
 
                 for line in process.stdout:
@@ -706,7 +711,12 @@ class MobilitiClient:
         self.suscripcion_info = None
         self.show_login_screen()
 
+    def _check_updates(self):
+        """Verifica actualizaciones usando el updater con soporte de descarga."""
+        updater.check_and_prompt_update(self.root)
+
     def check_updates(self):
+        """Legacy: verificacion basica sin descarga (mantiene compatibilidad)."""
         try:
             req = urllib.request.Request(f"{API_URL}/version")
             with urllib.request.urlopen(req, timeout=5) as response:

@@ -10,12 +10,13 @@ con la resolucion DNS de algunos dominios mediante esas librerias.
 
 import os
 import json
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 import bcrypt
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
@@ -29,6 +30,32 @@ JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# ═══════════════════════════════════════════════════════════════
+# RATE LIMITING (in-memory, simple, para serverless)
+# ═══════════════════════════════════════════════════════════════
+
+_MAX_ATTEMPTS = 5
+_WINDOW_SECONDS = 900  # 15 minutos
+_RATE_LIMIT_STORE: dict[str, list[float]] = {}
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """Retorna True si el IP esta dentro del limite."""
+    now = time.monotonic()
+    attempts = _RATE_LIMIT_STORE.get(ip, [])
+    # Filtrar intentos dentro de la ventana
+    attempts = [t for t in attempts if now - t < _WINDOW_SECONDS]
+    _RATE_LIMIT_STORE[ip] = attempts
+    return len(attempts) < _MAX_ATTEMPTS
+
+
+def _record_attempt(ip: str):
+    """Registra un intento de login fallido."""
+    now = time.monotonic()
+    attempts = _RATE_LIMIT_STORE.get(ip, [])
+    attempts.append(now)
+    _RATE_LIMIT_STORE[ip] = attempts
 
 # Password hashing helpers
 def _hash_password(password: str) -> str:
@@ -243,7 +270,12 @@ def health():
 # ─── LOGIN ────────────────────────────────────────────────────
 
 @app.post("/login")
-def login_endpoint(body: dict):
+def login_endpoint(body: dict, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+
+    if not _check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Demasiados intentos. Espera 15 minutos.")
+
     email = body.get("email", "").lower().strip()
     password = body.get("password", "")
 
@@ -256,9 +288,11 @@ def login_endpoint(body: dict):
         raise HTTPException(status_code=503, detail=f"Error de conexion a base de datos: {e}")
 
     if not usuario:
+        _record_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
 
     if not verify_password(password, usuario["hashed_password"]):
+        _record_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
 
     try:
@@ -456,6 +490,25 @@ def generar_cotizacion(body: dict, authorization: str = Header(None)):
         raise HTTPException(status_code=403, detail="Suscripcion no activa")
 
     return {"autorizado": True, "mensaje": "Puedes generar la cotizacion localmente"}
+
+
+# ─── VERSION / DOWNLOAD (Auto-Updater) ────────────────────────
+
+CURRENT_VERSION = {
+    "version": "1.5.5",
+    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.5/Mobiliti_Generador.exe",
+    "release_notes": "Fix: eliminado warning de directorio temporal _MEI al cerrar la aplicacion. El proceso hijo ya no hereda handles de archivos del padre.",
+}
+
+
+@app.get("/version")
+def version_endpoint():
+    return CURRENT_VERSION
+
+
+@app.get("/download/latest")
+def download_latest():
+    return {"url": CURRENT_VERSION["download_url"]}
 
 
 # ═══════════════════════════════════════════════════════════════

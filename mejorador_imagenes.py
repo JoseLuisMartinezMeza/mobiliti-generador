@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 try:
-    from PIL import Image, ImageFilter, ImageOps
+    from PIL import Image, ImageChops, ImageFilter, ImageOps
     PIL_DISPONIBLE = True
 except ImportError:
     PIL_DISPONIBLE = False
@@ -68,16 +68,54 @@ def _limpiar_cache_antigua(cache_dir: str, dias: int = 30):
 def _trim_bordes_blancos(img: Image.Image) -> Image.Image:
     """
     Recorta bordes blancos o casi-blancos de la imagen.
+    Si la imagen tiene canal alpha, recorta basándose en la transparencia.
     Devuelve la imagen recortada o la original si no hay bordes.
     """
-    # Convertir a escala de grises para análisis de un solo canal
-    gray = img.convert("L")
-    # Crear máscara binaria: 255 donde el pixel NO es blanco (< umbral)
-    mask = gray.point(lambda p: 255 if p < UMBRAL_BLANCO_TRIM else 0, mode="1")
-    # Encontrar bounding box del contenido no-blanco
+    if img.mode == "RGBA":
+        # Usar canal alpha para encontrar el bounding box del contenido visible
+        alpha = img.split()[-1]
+        mask = alpha.point(lambda p: 255 if p > 10 else 0, mode="1")
+    else:
+        # Convertir a escala de grises para análisis de un solo canal
+        gray = img.convert("L")
+        # Crear máscara binaria: 255 donde el pixel NO es blanco (< umbral)
+        mask = gray.point(lambda p: 255 if p < UMBRAL_BLANCO_TRIM else 0, mode="1")
+    # Encontrar bounding box del contenido no-blanco/no-transparente
     bbox = mask.getbbox()
     if bbox:
         return img.crop(bbox)
+    return img
+
+
+def _quitar_fondo_blanco(img: Image.Image, umbral: int = 240) -> Image.Image:
+    """
+    Hace transparentes los píxeles blancos o cercanos al blanco.
+    Devuelve imagen RGBA con fondo transparente.
+    """
+    # Asegurar RGBA
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+
+    # Separar canales
+    r, g, b, a = img.split()
+
+    # Crear máscaras individuales para cada canal (modo L, 0 o 255)
+    mask_r = r.point(lambda p: 255 if p > umbral else 0)
+    mask_g = g.point(lambda p: 255 if p > umbral else 0)
+    mask_b = b.point(lambda p: 255 if p > umbral else 0)
+
+    # Combinar máscaras (AND lógico via multiply): 255 solo donde R, G y B > umbral
+    mask_blanco = ImageChops.multiply(mask_r, mask_g)
+    mask_blanco = ImageChops.multiply(mask_blanco, mask_b)
+
+    # Invertir: ahora 255 = contenido (no blanco), 0 = blanco (transparente)
+    mask_visible = ImageChops.invert(mask_blanco)
+
+    # Aplicar máscara al canal alpha existente
+    nuevo_alpha = ImageChops.multiply(a, mask_visible)
+
+    # Recomponer imagen con nuevo alpha
+    img.putalpha(nuevo_alpha)
     return img
 
 
@@ -85,6 +123,8 @@ def _aplicar_fondo_blanco(img: Image.Image) -> Image.Image:
     """
     Componer la imagen sobre un fondo blanco puro (#FFFFFF).
     Si la imagen tiene transparencia, se respeta.
+    NOTA: Esta funcion ya no se usa en el pipeline por defecto;
+    se mantiene por compatibilidad si se necesita fondo blanco.
     """
     if img.mode in ("RGBA", "LA", "P"):
         # Convertir paleta a RGBA si es necesario
@@ -103,28 +143,35 @@ def _aplicar_fondo_blanco(img: Image.Image) -> Image.Image:
 def _mejorar_imagen_pillow(img_path: str, output_path: str) -> bool:
     """
     Aplica el pipeline de mejora Pillow a una imagen.
-    Guarda el resultado en output_path como PNG.
+    Quita el fondo blanco y deja transparencia.
+    Guarda el resultado en output_path como PNG RGBA.
     Devuelve True si tuvo éxito, False en caso contrario.
     """
     try:
         with Image.open(img_path) as img:
-            # Normalizar a RGB para procesamiento (autocontrast no soporta RGBA)
-            if img.mode != "RGB":
-                img = img.convert("RGB")
+            # 1. Auto-contraste (sobre RGB para evitar problemas con alpha)
+            if img.mode == "RGBA":
+                # Aplicar autocontrast solo a los canales RGB
+                rgb = img.convert("RGB")
+                rgb = ImageOps.autocontrast(rgb, cutoff=0)
+                r, g, b = rgb.split()
+                a = img.split()[-1]
+                img = Image.merge("RGBA", (r, g, b, a))
+            else:
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img = ImageOps.autocontrast(img, cutoff=0)
 
-            # 1. Auto-contraste
-            img = ImageOps.autocontrast(img, cutoff=0)
+            # 2. Quitar fondo blanco (hacer transparente)
+            img = _quitar_fondo_blanco(img)
 
-            # 2. Trim de bordes blancos
+            # 3. Trim de bordes transparentes
             img = _trim_bordes_blancos(img)
-
-            # 3. Fondo blanco uniforme
-            img = _aplicar_fondo_blanco(img)
 
             # 4. Sharpening ligero
             img = img.filter(ImageFilter.SHARPEN)
 
-            # 5. Guardar como PNG (calidad sin pérdida para re-inserción)
+            # 5. Guardar como PNG con canal alpha
             img.save(output_path, "PNG", optimize=True)
             return True
     except Exception:
