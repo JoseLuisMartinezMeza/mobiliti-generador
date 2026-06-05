@@ -1,4 +1,14 @@
-"""Script para crear el primer usuario administrador en la base de datos."""
+"""Script para crear el primer usuario administrador en la base de datos.
+
+TODAS las credenciales se leen de variables de entorno.
+NUNCA hardcodees contrasenas en este archivo.
+
+Uso:
+    export ADMIN_EMAIL="admin@tuempresa.com"
+    export ADMIN_PASSWORD="TuContrasenaSegura123!"
+    export ADMIN_NOMBRE="REMOVED_PASSWORD Luis Martinez"
+    python seed_admin.py
+"""
 
 import os
 import sys
@@ -9,12 +19,22 @@ from sqlalchemy.orm import sessionmaker
 from backend.models import Usuario, Suscripcion
 from backend.auth import get_password_hash
 
-# Configuracion - CAMBIA ESTOS VALORES
-DB_URL = "postgresql://postgres.hcdspekajlszcycecpml:CONTRASENA_AQUI@db.hcdspekajlszcycecpml.supabase.co:5432/postgres"
+# Configuracion desde variables de entorno
+DB_URL = os.environ.get("DATABASE_URL", "sqlite:///./mobiliti_saas.db")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").strip()
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+ADMIN_NOMBRE = os.environ.get("ADMIN_NOMBRE", "Administrador")
 
-ADMIN_EMAIL = "***REMOVED***"
-ADMIN_PASSWORD = "***REMOVED***"
-ADMIN_NOMBRE = "REMOVED_PASSWORD Luis Martinez"
+if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+    print("ERROR: Debes configurar ADMIN_EMAIL y ADMIN_PASSWORD como variables de entorno.")
+    print("Ejemplo:")
+    print('  export ADMIN_EMAIL="admin@tuempresa.com"')
+    print('  export ADMIN_PASSWORD="TuContrasenaSegura123!"')
+    sys.exit(1)
+
+if len(ADMIN_PASSWORD) < 8:
+    print("ERROR: La contrasena debe tener al menos 8 caracteres.")
+    sys.exit(1)
 
 
 def crear_admin():
@@ -85,10 +105,10 @@ def crear_admin():
         db.commit()
 
         print(f"Suscripcion activa creada para admin.")
-        print(f"\n=== ADMIN CREDENTIALS ===")
-        print(f"Email:    {ADMIN_EMAIL}")
-        print(f"Password: {ADMIN_PASSWORD}")
-        print(f"=========================\n")
+        print(f"\n=== ADMIN CREADO ===")
+        print(f"Email: {ADMIN_EMAIL}")
+        print(f"====================\n")
+        print("IMPORTANTE: Guarda estas credenciales en un gestor de contrasenas.")
 
     except Exception as e:
         print(f"ERROR: {e}")

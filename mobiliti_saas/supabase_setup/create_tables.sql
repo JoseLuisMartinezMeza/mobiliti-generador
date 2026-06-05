@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS saas_suscripciones (
     estado TEXT DEFAULT 'activa' CHECK (estado IN ('activa','vencida','suspendida','cancelada')),
     plan TEXT DEFAULT 'mensual',
     fecha_inicio TIMESTAMPTZ DEFAULT NOW(),
-    fecha_fin TIMESTAMPTZ NOT NULL,
+    fecha_fin TIMESTAMPTZ,
     creado TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -42,3 +42,7 @@ CREATE TABLE IF NOT EXISTS saas_sesiones (
 CREATE INDEX IF NOT EXISTS idx_usuarios_email ON saas_usuarios(email);
 CREATE INDEX IF NOT EXISTS idx_suscripciones_usuario ON saas_suscripciones(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_sesiones_token ON saas_sesiones(token_jwt);
+CREATE INDEX IF NOT EXISTS idx_sesiones_activa ON saas_sesiones(activa) WHERE activa = true;
+CREATE INDEX IF NOT EXISTS idx_sesiones_usuario ON saas_sesiones(usuario_id, creado DESC);
+CREATE INDEX IF NOT EXISTS idx_suscripciones_estado ON saas_suscripciones(estado);
+CREATE INDEX IF NOT EXISTS idx_usuarios_activo ON saas_usuarios(activo) WHERE activo = true;

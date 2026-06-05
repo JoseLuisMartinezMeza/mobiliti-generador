@@ -15,7 +15,7 @@ import urllib.error
 from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 import bcrypt
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
@@ -29,6 +29,28 @@ JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# Rate limiting en memoria (protege contra fuerza bruta basica)
+# Nota: En Vercel serverless esto es por instancia, no global
+_rate_limit_store = {}
+MAX_LOGIN_ATTEMPTS = 5
+RATE_LIMIT_WINDOW_SECONDS = 900  # 15 minutos
+
+def _check_rate_limit(client_ip: str) -> bool:
+    """Retorna True si el cliente esta bloqueado."""
+    now = datetime.now(timezone.utc)
+    attempts = _rate_limit_store.get(client_ip, [])
+    # Filtrar intentos dentro de la ventana de tiempo
+    attempts = [t for t in attempts if (now - t).total_seconds() < RATE_LIMIT_WINDOW_SECONDS]
+    _rate_limit_store[client_ip] = attempts
+    return len(attempts) >= MAX_LOGIN_ATTEMPTS
+
+def _record_attempt(client_ip: str):
+    """Registra un intento de login fallido."""
+    now = datetime.now(timezone.utc)
+    if client_ip not in _rate_limit_store:
+        _rate_limit_store[client_ip] = []
+    _rate_limit_store[client_ip].append(now)
 
 # Password hashing helpers
 def _hash_password(password: str) -> str:
@@ -202,18 +224,22 @@ def db_update_suscripcion(suscripcion_id, updates):
 # ═══════════════════════════════════════════════════════════════
 
 def _origins():
-    raw = os.environ.get("CORS_ORIGINS", "*")
-    return [o.strip() for o in raw.split(",")]
+    raw = os.environ.get("CORS_ORIGINS", "")
+    if not raw or raw.strip() == "":
+        # En produccion, sin CORS_ORIGINS configurado, solo permitir origenes comunes
+        return ["https://verceldeploy-pied.vercel.app", "https://mobiliti-saas.vercel.app"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 app = FastAPI(title="Mobiliti SaaS API", version="1.0.0")
 
+origins = _origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=origins,
+    allow_credentials=True if origins != ["*"] else False,
+    allow_methods=["GET", "POST", "PATCH"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -259,11 +285,17 @@ def health():
 # ─── LOGIN ────────────────────────────────────────────────────
 
 @app.post("/login")
-def login_endpoint(body: dict):
+def login_endpoint(body: dict, request: Request):
+    # Rate limiting por IP
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
+    if _check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Demasiados intentos. Intenta de nuevo en 15 minutos.")
+
     email = body.get("email", "").lower().strip()
     password = body.get("password", "")
 
     if not email or not password:
+        _record_attempt(client_ip)
         raise HTTPException(status_code=400, detail="Email y contraseña requeridos")
 
     try:
@@ -272,9 +304,11 @@ def login_endpoint(body: dict):
         raise HTTPException(status_code=503, detail=f"Error de conexion a base de datos: {e}")
 
     if not usuario:
+        _record_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
 
     if not verify_password(password, usuario["hashed_password"]):
+        _record_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
 
     try:

@@ -4,7 +4,11 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from models import Usuario, Suscripcion
 
-SECRET_KEY = "***REMOVED***"
+import os
+
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY no configurada. Establece la variable de entorno.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 horas
 

@@ -25,11 +25,15 @@ def init_db():
     db = SessionLocal()
 
     try:
-        # Crear usuario admin de prueba
+        # Crear usuario admin de prueba con credenciales ficticias
+        # CAMBIA ESTOS VALORES si vas a usar esta base de datos en produccion
+        admin_email = os.environ.get("TEST_ADMIN_EMAIL", "admin@test.local")
+        admin_password = os.environ.get("TEST_ADMIN_PASSWORD", "TestPass123!")
+
         admin = Usuario(
-            email="***REMOVED***",
-            nombre="REMOVED_PASSWORD Luis Martinez",
-            password_hash=get_password_hash("***REMOVED***"),
+            email=admin_email,
+            nombre="Admin de Prueba",
+            password_hash=get_password_hash(admin_password),
             rol="admin",
             activo=True
         )
@@ -47,7 +51,7 @@ def init_db():
         db.add(suscripcion)
         db.commit()
 
-        print(f"Usuario admin creado: ID {admin.id}")
+        print(f"Usuario admin de prueba creado: ID {admin.id}")
         print("Base de datos inicializada.")
 
     except Exception as e:

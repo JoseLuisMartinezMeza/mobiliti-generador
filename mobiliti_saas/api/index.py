@@ -9,7 +9,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
@@ -29,6 +29,24 @@ if not JWT_SECRET_KEY:
     raise RuntimeError("Falta variable de entorno JWT_SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# Rate limiting en memoria
+_rate_limit_store = {}
+MAX_LOGIN_ATTEMPTS = 5
+RATE_LIMIT_WINDOW_SECONDS = 900
+
+def _check_rate_limit(client_ip: str) -> bool:
+    now = datetime.now(timezone.utc)
+    attempts = _rate_limit_store.get(client_ip, [])
+    attempts = [t for t in attempts if (now - t).total_seconds() < RATE_LIMIT_WINDOW_SECONDS]
+    _rate_limit_store[client_ip] = attempts
+    return len(attempts) >= MAX_LOGIN_ATTEMPTS
+
+def _record_attempt(client_ip: str):
+    now = datetime.now(timezone.utc)
+    if client_ip not in _rate_limit_store:
+        _rate_limit_store[client_ip] = []
+    _rate_limit_store[client_ip].append(now)
 
 # Cliente Supabase REST
 HEADERS = {
@@ -181,18 +199,21 @@ async def db_update_suscripcion(suscripcion_id, updates):
 # ═══════════════════════════════════════════════════════════════
 
 def _origins():
-    raw = os.environ.get("CORS_ORIGINS", "*")
-    return [o.strip() for o in raw.split(",")]
+    raw = os.environ.get("CORS_ORIGINS", "")
+    if not raw or raw.strip() == "":
+        return ["https://verceldeploy-pied.vercel.app", "https://mobiliti-saas.vercel.app"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 app = FastAPI(title="Mobiliti SaaS API", version="1.0.0")
 
+origins = _origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=origins,
+    allow_credentials=True if origins != ["*"] else False,
+    allow_methods=["GET", "POST", "PATCH"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -235,18 +256,25 @@ async def health():
 # ─── LOGIN ────────────────────────────────────────────────────
 
 @app.post("/login")
-async def login_endpoint(body: dict):
+async def login_endpoint(body: dict, request: Request):
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
+    if _check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Demasiados intentos. Intenta de nuevo en 15 minutos.")
+
     email = body.get("email", "").lower().strip()
     password = body.get("password", "")
 
     if not email or not password:
+        _record_attempt(client_ip)
         raise HTTPException(status_code=400, detail="Email y contraseña requeridos")
 
     usuario = await db_get_usuario_by_email(email)
     if not usuario:
+        _record_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
 
     if not verify_password(password, usuario["hashed_password"]):
+        _record_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Credenciales invalidas")
 
     suscripcion = await db_get_suscripcion_by_usuario(usuario["id"])
