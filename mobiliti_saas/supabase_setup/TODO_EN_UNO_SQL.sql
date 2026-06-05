@@ -118,7 +118,7 @@ $$ LANGUAGE plpgsql;
 -- 9. CREAR ADMIN INICIAL (cambiar contraseña en produccion)
 INSERT INTO usuarios (email, nombre, password_hash, rol, activo)
 VALUES (
-    '***REMOVED***',
+    'proyectosjlmm@gmail.com',
     'REMOVED_PASSWORD Luis Martinez',
     '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKyNiAYMyzJ/I1i',
     'admin',
@@ -130,7 +130,7 @@ ON CONFLICT (email) DO NOTHING;
 INSERT INTO suscripciones (usuario_id, tipo, estado, fecha_fin)
 SELECT id, 'anual', 'activa', NULL
 FROM usuarios 
-WHERE email = '***REMOVED***'
+WHERE email = 'proyectosjlmm@gmail.com'
 ON CONFLICT DO NOTHING;
 
 -- 11. POLITICAS RLS (si usas Supabase con RLS)

@@ -101,13 +101,13 @@ def _iso(dt: datetime) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 CURRENT_VERSION = {
-    "version": "1.5.3",
+    "version": "1.5.4",
     "major": 1,
     "minor": 5,
-    "patch": 3,
-    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.3/Mobiliti_Generador.exe",
-    "release_notes": "Fix: deteccion dinamica de columna Vol. Mejora: escalado de imagenes por categoria.",
-    "release_date": "2026-06-04T10:00:00Z",
+    "patch": 4,
+    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.4/Mobiliti_Generador.exe",
+    "release_notes": "Fix: correccion de bug en deteccion de columnas. Mejora: performance en carga de imagenes.",
+    "release_date": "2026-06-04T18:00:00Z",
     "force_update": False,
     "min_version_required": None,
 }

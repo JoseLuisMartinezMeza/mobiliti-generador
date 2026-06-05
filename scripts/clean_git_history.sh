@@ -50,9 +50,9 @@ cd "$PROJECT_ROOT"
 # =============================================================================
 
 cat > /tmp/bfg-text-patterns.txt << 'EOF'
-***REMOVED***
-***REMOVED***
-***REMOVED***
+REMOVED_PASSWORD
+proyectosjlmm@gmail.com
+M0b1l1t1_S4AS_S3cr3t_K3y_2026_Ch4ng3_1n_Pr0d
 EOF
 
 echo ""

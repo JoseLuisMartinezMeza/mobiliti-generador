@@ -27,7 +27,7 @@ SUPABASE_SERVICE_KEY = os.environ.get(
 )
 JWT_SECRET_KEY = os.environ.get(
     "JWT_SECRET_KEY",
-    "***REMOVED***"
+    "M0b1l1t1_S4AS_S3cr3t_K3y_2026_Ch4ng3_1n_Pr0d"
 )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60

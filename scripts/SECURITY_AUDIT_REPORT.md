@@ -27,18 +27,18 @@ MITRE ATT&CK: T1552.001 (Credentials In Files)
 
 Archivos afectados:
   1. Mobiliti_Generador_Windows/credentials.json
-     - Email: ***REMOVED***
-     - Password: ***REMOVED*** (TEXTO PLANO)
+     - Email: proyectosjlmm@gmail.com
+     - Password: REMOVED_PASSWORD (TEXTO PLANO)
      
   2. Mobiliti_Generador_Windows1/credentials.json
-     - Email: ***REMOVED***
+     - Email: proyectosjlmm@gmail.com
      
   3. Mobiliti_Generador_Windows34/credentials.json
-     - Email: ***REMOVED***
+     - Email: proyectosjlmm@gmail.com
      
   4. mobiliti_saas/supabase_setup/seed_admin.py (lineas 15-16)
-     - ADMIN_EMAIL = "***REMOVED***"
-     - ADMIN_PASSWORD = "***REMOVED***"
+     - ADMIN_EMAIL = "proyectosjlmm@gmail.com"
+     - ADMIN_PASSWORD = "REMOVED_PASSWORD"
      - DB_URL con placeholder de contrasena
      
   5. mobiliti_saas/scripts/init_db.py (lineas 30-32)
@@ -69,7 +69,7 @@ CVSS Estimado: 8.5 (High)
 MITRE ATT&CK: T1552.001
 
 Archivo: mobiliti_saas/backend/auth.py (linea 7)
-  SECRET_KEY = "***REMOVED***"
+  SECRET_KEY = "M0b1l1t1_S4AS_S3cr3t_K3y_2026_Ch4ng3_1n_Pr0d"
 
 IMPACTO:
 - Cualquiera con acceso al codigo puede falsificar tokens JWT

@@ -36,7 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_sesiones_token ON saas_sesiones(token_jwt);
 
 INSERT INTO saas_usuarios (email, hashed_password, nombre, empresa, es_admin, activo)
 VALUES (
-    '***REMOVED***',
+    'proyectosjlmm@gmail.com',
     '$2b$12$beKMMIyQzAwErlJkSGc4meSk5CrMeYbaiPUDMHsPxGixhDG/uJN9C',
     'Administrador Mobiliti',
     'Mobiliti',
@@ -53,5 +53,5 @@ SELECT
     NOW(),
     NOW() + INTERVAL '10 years'
 FROM saas_usuarios 
-WHERE email = '***REMOVED***'
+WHERE email = 'proyectosjlmm@gmail.com'
 ON CONFLICT DO NOTHING;

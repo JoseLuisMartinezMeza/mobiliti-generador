@@ -82,8 +82,8 @@ python seed_admin.py
 ```
 
 **Credenciales admin:**
-- Email: `***REMOVED***`
-- Password: `***REMOVED***`
+- Email: `proyectosjlmm@gmail.com`
+- Password: `REMOVED_PASSWORD`
 
 ---
 
