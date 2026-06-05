@@ -764,8 +764,8 @@ def generar_cotizacion(args):
         
         # Configurar anchos de columnas (puntos = px * 0.75)
         ws_cot.api.Columns("A").Width = 390   # 520 px
-        ws_cot.api.Columns("B").Width = 975   # 1300 px
-        ws_cot.api.Columns("C").Width = 1050  # 1400 px
+        ws_cot.api.Columns("B").Width = 450   # 600 px
+        ws_cot.api.Columns("C").Width = 525   # 700 px
         
         # Desactivar redibujado y calculo automatico para acelerar el loop
         original_screen_updating = app.api.ScreenUpdating

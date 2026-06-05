@@ -70,8 +70,9 @@ def insertar_imagenes_cotizacion(ws_cot, items, image_map, start_row=16, categor
                 escala_pct = ESCALAS.get(categoria, ESCALA_DEFAULT)
                 
                 # Calcular tamano maximo (% de la celda segun categoria)
-                max_width = cell.width * escala_pct
-                max_height = cell.height * escala_pct
+                # Limitar a 250 pts maximo para evitar crash de Excel con imagenes enormes
+                max_width = min(cell.width * escala_pct, 250)
+                max_height = min(cell.height * escala_pct, 250)
                 
                 # Calcular factor de escala manteniendo proporción
                 scale_w = max_width / orig_width if orig_width > 0 else 1
