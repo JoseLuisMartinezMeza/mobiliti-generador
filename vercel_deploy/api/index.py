@@ -494,21 +494,45 @@ def generar_cotizacion(body: dict, authorization: str = Header(None)):
 
 # ─── VERSION / DOWNLOAD (Auto-Updater) ────────────────────────
 
-CURRENT_VERSION = {
+# Fallback inline por si Supabase no responde
+_CURRENT_VERSION_FALLBACK = {
     "version": "1.5.6",
     "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.6/Mobiliti_Generador.exe",
     "release_notes": "Fix: eliminado subprocess del proceso hijo en modo .exe. El generador ahora se llama directamente, evitando condiciones de carrera en el directorio temporal _MEI de PyInstaller (Tcl data not found crash).",
+    "force_update": False,
 }
+
+
+def _get_version_from_db():
+    """Lee la version activa desde Supabase. Retorna fallback si falla."""
+    try:
+        rows = _supabase_req(
+            "GET",
+            "/saas_versiones",
+            params={"activa": "eq.true", "select": "version,download_url,release_notes,force_update", "limit": "1", "order": "id.desc"}
+        )
+        if rows and len(rows) > 0:
+            row = rows[0]
+            return {
+                "version": row.get("version", _CURRENT_VERSION_FALLBACK["version"]),
+                "download_url": row.get("download_url", _CURRENT_VERSION_FALLBACK["download_url"]),
+                "release_notes": row.get("release_notes", _CURRENT_VERSION_FALLBACK["release_notes"]),
+                "force_update": row.get("force_update", False),
+            }
+    except Exception:
+        pass
+    return _CURRENT_VERSION_FALLBACK
 
 
 @app.get("/version")
 def version_endpoint():
-    return CURRENT_VERSION
+    return _get_version_from_db()
 
 
 @app.get("/download/latest")
 def download_latest():
-    return {"url": CURRENT_VERSION["download_url"]}
+    version_data = _get_version_from_db()
+    return {"url": version_data["download_url"]}
 
 
 # ═══════════════════════════════════════════════════════════════
