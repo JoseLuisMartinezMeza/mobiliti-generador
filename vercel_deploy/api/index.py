@@ -495,9 +495,9 @@ def generar_cotizacion(body: dict, authorization: str = Header(None)):
 # ─── VERSION / DOWNLOAD (Auto-Updater) ────────────────────────
 
 CURRENT_VERSION = {
-    "version": "1.5.5",
-    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.5/Mobiliti_Generador.exe",
-    "release_notes": "Fix: eliminado warning de directorio temporal _MEI al cerrar la aplicacion. El proceso hijo ya no hereda handles de archivos del padre.",
+    "version": "1.5.6",
+    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.6/Mobiliti_Generador.exe",
+    "release_notes": "Fix: eliminado subprocess del proceso hijo en modo .exe. El generador ahora se llama directamente, evitando condiciones de carrera en el directorio temporal _MEI de PyInstaller (Tcl data not found crash).",
 }
 
 

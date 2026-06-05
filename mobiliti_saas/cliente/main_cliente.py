@@ -612,8 +612,13 @@ class MobilitiClient:
                 self.log(f"Output: {output_path}")
 
                 if getattr(sys, 'frozen', False):
-                    # Modo ejecutable: usar el mismo .exe con --generate para crear un proceso limpio
+                    # Modo ejecutable: llamar directamente sin subprocess.
+                    # Lanzar subprocess del mismo .exe --onefile causa condiciones de carrera
+                    # en el directorio temporal _MEI* de PyInstaller (Tcl data not found).
                     import json
+                    from types import SimpleNamespace
+                    from generar_cotizacion_v5_xlwings import generar_cotizacion
+
                     args_dict = {
                         "source": source,
                         "template": template_path,
@@ -627,9 +632,41 @@ class MobilitiClient:
                         "razon_social": razon,
                         "descuento": descuento,
                     }
-                    cmd = [sys.executable, "--generate", json.dumps(args_dict)]
+                    args = SimpleNamespace(**args_dict)
+
+                    # Redirigir stdout para mostrar logs en la GUI en tiempo real
+                    old_stdout = sys.stdout
+                    class _StdoutRedirect:
+                        def __init__(self, log_callback):
+                            self._log = log_callback
+                            self._buf = ""
+                        def write(self, text):
+                            self._buf += text
+                            if "\n" in self._buf:
+                                lines = self._buf.split("\n")
+                                for line in lines[:-1]:
+                                    if line:
+                                        self._log(line)
+                                self._buf = lines[-1]
+                        def flush(self):
+                            if self._buf:
+                                self._log(self._buf)
+                                self._buf = ""
+
+                    sys.stdout = _StdoutRedirect(
+                        lambda msg: self.root.after(0, lambda m=msg: self.log(m))
+                    )
+                    try:
+                        generar_cotizacion(args)
+                    finally:
+                        sys.stdout = old_stdout
+
+                    if os.path.exists(output_path):
+                        self.root.after(0, lambda: self.on_generation_success(output_path))
+                    else:
+                        self.root.after(0, lambda: self.on_generation_error("Error en la generacion"))
                 else:
-                    # Modo desarrollo: usar subprocess con python
+                    # Modo desarrollo: subprocess con python.exe (no hay problema de PyInstaller)
                     cmd = [
                         sys.executable, script,
                         "--source", source,
@@ -644,26 +681,20 @@ class MobilitiClient:
                         "--razon_social", razon,
                         "--descuento", descuento,
                     ]
-
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    cwd=base_dir,
-                    close_fds=True,
-                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-                )
-
-                for line in process.stdout:
-                    self.root.after(0, lambda l=line: self.log(l.rstrip()))
-
-                process.wait()
-
-                if process.returncode == 0 and os.path.exists(output_path):
-                    self.root.after(0, lambda: self.on_generation_success(output_path))
-                else:
-                    self.root.after(0, lambda: self.on_generation_error("Error en la generacion"))
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        cwd=base_dir
+                    )
+                    for line in process.stdout:
+                        self.root.after(0, lambda l=line: self.log(l.rstrip()))
+                    process.wait()
+                    if process.returncode == 0 and os.path.exists(output_path):
+                        self.root.after(0, lambda: self.on_generation_success(output_path))
+                    else:
+                        self.root.after(0, lambda: self.on_generation_error("Error en la generacion"))
 
             except Exception as e:
                 self.root.after(0, lambda: self.on_generation_error(str(e)))
