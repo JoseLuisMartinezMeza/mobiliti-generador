@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.log
+.env
+.venv/
+venv/
+env/
+.mobiliti_dev_store/
+node_modules/
+dist/
+*.xlsx
+*.xls
+*.xlsm
+*.zip
+*.exe

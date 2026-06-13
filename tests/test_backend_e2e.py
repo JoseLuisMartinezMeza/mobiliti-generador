@@ -42,7 +42,8 @@ class TestPublicEndpoints:
         data = resp.json()
         assert "version" in data
         assert "download_url" in data
-        assert data["version"] == "1.5.4"
+        assert data["version"] == "1.5.7"
+        assert data["download_url"].endswith(".zip")
 
     def test_download_latest(self, client):
         resp = client.get("/download/latest")

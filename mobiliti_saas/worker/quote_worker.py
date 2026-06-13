@@ -1,0 +1,446 @@
+"""
+Worker para procesar cotizaciones web.
+
+Default/final: QUOTE_ENGINE=python, sin Microsoft Excel.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from datetime import timedelta
+import argparse
+import json
+import os
+from pathlib import Path
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
+POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "10"))
+STALE_MINUTES = int(os.environ.get("WORKER_STALE_MINUTES", "30"))
+QUOTE_ENGINE = os.environ.get("QUOTE_ENGINE", "python").strip().lower()
+DATABASE_URL = os.environ.get("DATABASE_URL")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY")
+MOBILITI_REST_SECRET = os.environ.get("MOBILITI_REST_SECRET")
+DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes"}
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEV_STORE_DIR = Path(os.environ.get("MOBILITI_DEV_STORE_DIR", PROJECT_ROOT / ".mobiliti_dev_store")).resolve()
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Falta variable de entorno requerida: {name}")
+    return value
+
+
+class SupabaseClient:
+    def __init__(self) -> None:
+        self.base_url = _required_env("SUPABASE_URL").rstrip("/")
+        self.key = os.environ.get("SUPABASE_SERVICE_KEY") or SUPABASE_ANON_KEY
+        if not self.key:
+            raise RuntimeError("Falta SUPABASE_SERVICE_KEY o SUPABASE_ANON_KEY")
+
+    def _headers(self, content_type: str = "application/json") -> dict[str, str]:
+        return {
+            "apikey": self.key,
+            "Authorization": f"Bearer {self.key}",
+            "Content-Type": content_type,
+            "Prefer": "return=representation",
+            **({"x-mobiliti-rest-secret": MOBILITI_REST_SECRET} if MOBILITI_REST_SECRET else {}),
+        }
+
+    def rest(self, method: str, path: str, params: dict | None = None, data: dict | None = None):
+        url = f"{self.base_url}/rest/v1{path}"
+        if params:
+            query = urllib.parse.urlencode(params)
+            url = f"{url}?{query}"
+        payload = json.dumps(data).encode("utf-8") if data is not None else None
+        req = urllib.request.Request(url, data=payload, method=method)
+        for key, value in self._headers().items():
+            req.add_header(key, value)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = resp.read().decode("utf-8")
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            raise RuntimeError(f"Supabase REST {exc.code}: {body}") from exc
+
+    def storage_download(self, object_path: str, dest: Path) -> None:
+        encoded = urllib.parse.quote(object_path, safe="/")
+        url = f"{self.base_url}/storage/v1/object/{BUCKET}/{encoded}"
+        req = urllib.request.Request(url, method="GET")
+        for key, value in self._headers("application/octet-stream").items():
+            req.add_header(key, value)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                dest.write_bytes(resp.read())
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            raise RuntimeError(f"Storage download {exc.code}: {body}") from exc
+
+    def storage_upload(self, object_path: str, source: Path) -> None:
+        encoded = urllib.parse.quote(object_path, safe="/")
+        url = f"{self.base_url}/storage/v1/object/{BUCKET}/{encoded}"
+        req = urllib.request.Request(url, data=source.read_bytes(), method="PUT")
+        for key, value in self._headers("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").items():
+            req.add_header(key, value)
+        req.add_header("x-upsert", "true")
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                resp.read()
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            raise RuntimeError(f"Storage upload {exc.code}: {body}") from exc
+
+
+class PostgresClient(SupabaseClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.db_url = _required_env("DATABASE_URL")
+
+    def _rows(self, sql: str, params: tuple = ()) -> list[dict]:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError("Falta dependencia psycopg para DATABASE_URL") from exc
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        return [_jsonable_row(row) for row in rows]
+
+    def _write(self, sql: str, params: tuple = ()) -> list[dict]:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+            from psycopg.types.json import Jsonb
+        except ImportError as exc:
+            raise RuntimeError("Falta dependencia psycopg para DATABASE_URL") from exc
+        adapted = tuple(Jsonb(value) if isinstance(value, (dict, list)) else value for value in params)
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, adapted)
+                rows = cur.fetchall()
+            conn.commit()
+        return [_jsonable_row(row) for row in rows]
+
+    def rest(self, method: str, path: str, params: dict | None = None, data: dict | None = None):
+        params = params or {}
+        data = data or {}
+        if method == "GET" and path == "/saas_quote_jobs":
+            limit = int(params.get("limit", "1") or 1)
+            status = str(params.get("status", "eq.queued")).split(".", 1)[1]
+            return self._rows(
+                "SELECT * FROM saas_quote_jobs WHERE status = %s ORDER BY created_at ASC LIMIT %s",
+                (status, limit),
+            )
+
+        if method == "PATCH" and path == "/saas_quote_jobs":
+            status = str(params.get("status", "eq.processing")).split(".", 1)[1]
+            updated_raw = str(params.get("updated_at", ""))
+            if not updated_raw.startswith("lt."):
+                raise RuntimeError("PATCH saas_quote_jobs requiere updated_at lt.")
+            cutoff = updated_raw.split(".", 1)[1]
+            return self._update_jobs(
+                data,
+                "status = %s AND updated_at < %s",
+                (status, cutoff),
+            )
+
+        if method == "PATCH" and path.startswith("/saas_quote_jobs?id=eq."):
+            filters = _parse_eq_filters(path)
+            where = ["id = %s"]
+            values = [filters["id"]]
+            if "status" in filters:
+                where.append("status = %s")
+                values.append(filters["status"])
+            return self._update_jobs(data, " AND ".join(where), tuple(values))
+
+        raise RuntimeError(f"Operacion Postgres no soportada: {method} {path}")
+
+    def _update_jobs(self, data: dict, where_sql: str, where_params: tuple) -> list[dict]:
+        payload = dict(data)
+        if not payload:
+            return []
+        set_clause = ", ".join(f"{key} = %s" for key in payload.keys())
+        return self._write(
+            f"UPDATE saas_quote_jobs SET {set_clause} WHERE {where_sql} RETURNING *",
+            tuple(payload.values()) + where_params,
+        )
+
+
+def _jsonable_row(row: dict | None) -> dict | None:
+    if row is None:
+        return None
+    clean = {}
+    for key, value in dict(row).items():
+        if isinstance(value, datetime):
+            clean[key] = value.isoformat()
+        else:
+            clean[key] = value
+    return clean
+
+
+def _parse_eq_filters(path: str) -> dict[str, str]:
+    query = path.split("?", 1)[0]
+    if "?" in path:
+        query = path.split("?", 1)[1]
+    elif "id=eq." in path:
+        query = path.split("/saas_quote_jobs?", 1)[-1]
+    filters: dict[str, str] = {}
+    for part in query.split("&"):
+        if "=eq." in part:
+            key, value = part.split("=eq.", 1)
+            filters[key] = value
+    if "id" not in filters and "id=eq." in path:
+        filters["id"] = path.split("id=eq.", 1)[1].split("&", 1)[0]
+    return filters
+
+
+class LocalDevClient:
+    def __init__(self) -> None:
+        self.db_path = DEV_STORE_DIR / "db.json"
+        self.storage_root = DEV_STORE_DIR / "storage" / BUCKET
+
+    def _load(self) -> dict:
+        if not self.db_path.exists():
+            raise RuntimeError("Store dev no existe. Inicia backend con MOBILITI_DEV_MODE=1 y haz login/upload primero.")
+        return json.loads(self.db_path.read_text(encoding="utf-8"))
+
+    def _save(self, data: dict) -> None:
+        DEV_STORE_DIR.mkdir(parents=True, exist_ok=True)
+        self.db_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def rest(self, method: str, path: str, params: dict | None = None, data: dict | None = None):
+        store = self._load()
+        if path == "/saas_quote_jobs" and method == "GET":
+            rows = list(store.get("quote_jobs", []))
+            status_filter = (params or {}).get("status")
+            if isinstance(status_filter, str) and status_filter.startswith("eq."):
+                wanted = status_filter.split(".", 1)[1]
+                rows = [row for row in rows if row.get("status") == wanted]
+            rows.sort(key=lambda row: row.get("created_at", ""))
+            limit = int((params or {}).get("limit", len(rows)) or len(rows))
+            return rows[:limit]
+
+        if path == "/saas_quote_jobs" and method == "PATCH":
+            params = params or {}
+            rows = []
+            for row in store.get("quote_jobs", []):
+                if params.get("status") and row.get("status") != params["status"].split(".", 1)[1]:
+                    continue
+                updated_filter = params.get("updated_at")
+                if isinstance(updated_filter, str) and updated_filter.startswith("lt."):
+                    cutoff = datetime.fromisoformat(updated_filter.split(".", 1)[1])
+                    updated_at = datetime.fromisoformat(str(row.get("updated_at")).replace("Z", "+00:00"))
+                    if updated_at >= cutoff:
+                        continue
+                row.update(data or {})
+                rows.append(dict(row))
+            if rows:
+                self._save(store)
+            return rows
+
+        if path.startswith("/saas_quote_jobs?id=eq.") and method == "PATCH":
+            filters = {}
+            for part in path.split("?", 1)[0].split("&"):
+                if "=eq." in part:
+                    key, value = part.split("=eq.", 1)
+                    filters[key.rsplit("?", 1)[-1]] = value
+            job_id = filters.get("id") or path.split("id=eq.", 1)[1].split("&", 1)[0]
+            for row in store.get("quote_jobs", []):
+                if row["id"] == job_id and all(str(row.get(k)) == str(v) for k, v in filters.items() if k != "id"):
+                    row.update(data or {})
+                    self._save(store)
+                    return [{"id": job_id, **row}]
+            return []
+
+        raise RuntimeError(f"Operacion dev no soportada: {method} {path}")
+
+    def _storage_file(self, object_path: str) -> Path:
+        safe_path = object_path.replace("\\", "/").lstrip("/")
+        if ".." in safe_path.split("/"):
+            raise RuntimeError("Ruta de storage invalida")
+        return self.storage_root / safe_path
+
+    def storage_download(self, object_path: str, dest: Path) -> None:
+        source = self._storage_file(object_path)
+        if not source.exists():
+            raise RuntimeError(f"Archivo no existe en storage dev: {object_path}")
+        dest.write_bytes(source.read_bytes())
+
+    def storage_upload(self, object_path: str, source: Path) -> None:
+        dest = self._storage_file(object_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(source.read_bytes())
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _default_template() -> Path:
+    root = _resolve_project_root()
+    candidates = [
+        root / "Formato Cotización 2026 GDL (1).xlsx",
+        root / "Formato Cotizacion 2026 GDL (1).xlsx",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _run_generator(job: dict, input_path: Path, output_path: Path) -> None:
+    metadata = job.get("metadata") or {}
+    engine = QUOTE_ENGINE
+    if engine == "auto":
+        engine = "python"
+
+    if engine in {"python", "openpyxl", "online"}:
+        from online_quote_generator import generate_online_quote
+
+        template = os.environ.get("TEMPLATE_PATH")
+        generate_online_quote(input_path, output_path, metadata, template)
+        return
+    raise RuntimeError(
+        f"QUOTE_ENGINE invalido: {QUOTE_ENGINE}. "
+        "La version final SaaS usa QUOTE_ENGINE=python; xlwings quedo archivado en historial."
+    )
+
+
+def fetch_next_job(client: SupabaseClient) -> dict | None:
+    rows = client.rest(
+        "GET",
+        "/saas_quote_jobs",
+        params={"status": "eq.queued", "select": "*", "order": "created_at.asc", "limit": "1"},
+    )
+    return rows[0] if rows else None
+
+
+def recover_stale_jobs(client: SupabaseClient) -> int:
+    if STALE_MINUTES <= 0:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES)).isoformat()
+    rows = client.rest(
+        "PATCH",
+        "/saas_quote_jobs",
+        params={"status": "eq.processing", "updated_at": f"lt.{cutoff}"},
+        data={
+            "status": "queued",
+            "error_message": "Reintentado automaticamente: worker anterior quedo stale",
+            "updated_at": _utc_now(),
+        },
+    )
+    if rows:
+        print(f"Jobs stale reencolados: {len(rows)}")
+    return len(rows)
+
+
+def claim_job(client: SupabaseClient, job: dict) -> dict | None:
+    job_id = job["id"]
+    rows = client.rest(
+        "PATCH",
+        f"/saas_quote_jobs?id=eq.{job_id}&status=eq.queued",
+        data={"status": "processing", "updated_at": _utc_now()},
+    )
+    return rows[0] if rows else None
+
+
+def update_progress(client: SupabaseClient, job: dict, percent: int) -> None:
+    metadata = {**(job.get("metadata") or {}), "progress_percent": percent}
+    rows = client.rest(
+        "PATCH",
+        f"/saas_quote_jobs?id=eq.{job['id']}",
+        data={"metadata": metadata, "updated_at": _utc_now()},
+    )
+    if rows:
+        job["metadata"] = rows[0].get("metadata") or metadata
+
+
+def process_job(client: SupabaseClient, job: dict) -> dict | None:
+    claimed = claim_job(client, job)
+    if not claimed:
+        print(f"Job {job['id']} ya fue tomado por otro worker.")
+        return None
+
+    job = {**job, **claimed}
+    job_id = job["id"]
+    output_path = f"users/{job['usuario_id']}/jobs/{job_id}/output.xlsx"
+
+    with tempfile.TemporaryDirectory(prefix="mobiliti-quote-") as tmp:
+        tmp_dir = Path(tmp)
+        local_input = tmp_dir / "input.xlsx"
+        local_output = tmp_dir / "output.xlsx"
+        try:
+            update_progress(client, job, 45)
+            client.storage_download(job["input_path"], local_input)
+            update_progress(client, job, 55)
+            _run_generator(job, local_input, local_output)
+            update_progress(client, job, 90)
+            client.storage_upload(output_path, local_output)
+            return client.rest(
+                "PATCH",
+                f"/saas_quote_jobs?id=eq.{job_id}",
+                data={
+                    "status": "completed",
+                    "output_path": output_path,
+                    "metadata": {**(job.get("metadata") or {}), "progress_percent": 100},
+                    "error_message": None,
+                    "updated_at": _utc_now(),
+                    "completed_at": _utc_now(),
+                },
+            )
+        except Exception as exc:
+            try:
+                update_progress(client, job, 100)
+            except Exception:
+                pass
+            client.rest(
+                "PATCH",
+                f"/saas_quote_jobs?id=eq.{job_id}",
+                data={"status": "failed", "error_message": str(exc)[:1000], "updated_at": _utc_now()},
+            )
+            raise
+
+
+def run_once() -> bool:
+    client = LocalDevClient() if DEV_MODE else (PostgresClient() if DATABASE_URL else SupabaseClient())
+    recover_stale_jobs(client)
+    job = fetch_next_job(client)
+    if not job:
+        print("Sin jobs pendientes.")
+        return False
+    print(f"Procesando job {job['id']}...")
+    process_job(client, job)
+    print(f"Job {job['id']} completado.")
+    return True
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Worker de cotizaciones Mobiliti")
+    parser.add_argument("--once", action="store_true", help="Procesa un solo job y termina")
+    args = parser.parse_args()
+
+    if args.once:
+        run_once()
+        return
+
+    print("Worker Mobiliti iniciado.")
+    while True:
+        try:
+            run_once()
+        except Exception as exc:
+            print(f"ERROR: {exc}")
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    main()

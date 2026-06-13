@@ -1,7 +1,7 @@
 fastapi>=0.115.0
+bcrypt>=4.1.0
 mangum>=0.21.0
-httpx>=0.28.0
-passlib[bcrypt]>=1.7.4
 python-jose[cryptography]>=3.4.0
 python-multipart>=0.0.20
 pydantic>=2.10.0
+psycopg[binary]>=3.2.0

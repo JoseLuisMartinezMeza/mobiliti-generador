@@ -1,0 +1,1065 @@
+from __future__ import annotations
+
+from copy import copy, deepcopy
+from io import BytesIO
+import math
+import posixpath
+from pathlib import Path
+import re
+import shutil
+from typing import Any
+import xml.etree.ElementTree as ET
+import zipfile
+
+from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image as XlsxImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.units import pixels_to_EMU
+from openpyxl.worksheet.cell_range import CellRange
+from openpyxl.worksheet.datavalidation import DataValidation
+from PIL import Image as PILImage
+
+from .classification import classify_product_name, load_category_dictionary
+from .descriptions import build_product_description, normalize_description_language
+from .image_processing import improve_image_map
+from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
+from .parser import QuoteItem, col_index, read_items
+
+
+MONEY_FORMAT = '$#,##0.00;[Red]-$#,##0.00;"-"'
+PERCENT_FORMAT = "0%"
+SECTION_CATS = [13, 48, 83, 118, 153, 188, 223, 258, 293, 328, 363, 397, 431]
+SECTION_PROD_STARTS = [14, 49, 84, 119, 154, 189, 224, 259, 294, 329, 364, 398, 432]
+MAX_PROD_PER_SECTION = 32
+DEFAULT_EXCHANGE_RATE = 20.0
+DEFAULT_DELIVERY_PLACE = "Guadalajara"
+FLETE_ROUTES = {
+    5: ("Guadalajara", "Monterrey"),
+    7: ("Guadalajara", "Mexico City"),
+    9: ("Guadalajara", "Tijuana"),
+    11: ("Guadalajara", "Mérida, Yucatán"),
+    13: ("Guadalajara", "Querétaro"),
+    15: ("Guadalajara", "State of Mexico"),
+    17: ("Guadalajara", "Guadalajara"),
+}
+LUMBRO_PRICE_ROWS = {
+    "MULT-LIDO-INT": 348,
+    "LIDO.OP-INT": 380,
+    "JUMP-1.5M": 396,
+    "CAJA-FUS": 406,
+}
+LUMBRO_CATEGORY = "Multicontactos"
+LUMBRO_PROVIDER = "Lumbro"
+LUMBRO_ACCESSORY_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_multicontacto_blanco.png"
+LUMBRO_WORKSTATION_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_workstation_multiusuario.png"
+
+
+def _sheet_name(name: str) -> str:
+    return "'{}'".format(name.replace("'", "''")) if any(ch in name for ch in " :!'-*[]?/\\") else name
+
+
+def _formula(sheet: str, cell: str) -> str:
+    return f"={_sheet_name(sheet)}!{cell}"
+
+
+def _num(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).replace("$", "").replace(",", "").replace("%", "").strip()
+    try:
+        return float(text)
+    except ValueError:
+        return default
+
+
+def _normalized_text(value: Any) -> str:
+    text = "" if value is None else str(value).lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def _detect_user_count(item: QuoteItem) -> int | None:
+    text = _normalized_text(
+        f"{item.nombre or ''} {item.descripcion or ''} {item.dimension or ''} {item.categoria or ''}"
+    )
+    patterns = [
+        r"(\d+)\s*pax\b",
+        r"(\d+)\s*(?:usuarios?|personas?|users?)\b",
+        r"(?:pax|capacidad|usuarios?|personas?|users?)\s*(?:de|para)?\s*(\d+)\b",
+    ]
+    matches: list[int] = []
+    for pattern in patterns:
+        matches.extend(int(match) for match in re.findall(pattern, text))
+    return max(matches) if matches else None
+
+
+def _item_quantity(item: QuoteItem) -> int:
+    return max(1, int(math.ceil(_num(item.cantidad, 1))))
+
+
+def _lumbro_accessories_for_item(item: QuoteItem, category: str) -> list[tuple[str, int]]:
+    quantity = _item_quantity(item)
+    users_per_item = _detect_user_count(item)
+
+    if category == "Escritorios-WorkStation":
+        if users_per_item:
+            total_users = users_per_item * quantity
+            fuse_count = math.ceil(total_users / 8) * 2
+            return [
+                ("LIDO.OP-INT", total_users),
+                ("JUMP-1.5M", total_users),
+                ("CAJA-FUS", fuse_count),
+            ]
+        return [("MULT-LIDO-INT", 1)]
+
+    if category == "Mesas de Juntas":
+        total_users = (users_per_item or 4) * quantity
+        multicontacts = max(1, math.ceil(total_users / 4))
+        return [
+            ("MULT-LIDO-INT", multicontacts),
+            ("JUMP-1.5M", multicontacts + 1),
+        ]
+
+    return []
+
+
+def _copy_cell_style(src, dst) -> None:
+    if src.has_style:
+        dst._style = copy(src._style)
+    if src.number_format:
+        dst.number_format = src.number_format
+    if src.alignment:
+        dst.alignment = copy(src.alignment)
+
+
+def _copy_row_style(ws, source_row: int, target_row: int, max_col: int = 10) -> None:
+    ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
+    for col in range(1, max_col + 1):
+        _copy_cell_style(ws.cell(source_row, col), ws.cell(target_row, col))
+
+
+def _unmerge_row(ws, row: int) -> None:
+    for merged in list(ws.merged_cells.ranges):
+        if merged.min_row <= row <= merged.max_row:
+            ws.unmerge_cells(str(merged))
+
+
+def _clear_row(ws, row: int, max_col: int = 10) -> None:
+    _unmerge_row(ws, row)
+    for col in range(1, max_col + 1):
+        ws.cell(row, col).value = None
+
+
+def _merged_anchor_column(ws, row: int, default_col: int) -> int:
+    for merged in ws.merged_cells.ranges:
+        if merged.min_row == row and merged.max_row == row:
+            return merged.min_col
+    return default_col
+
+
+def _find_terms_row(ws) -> int:
+    for row in range(16, min(ws.max_row, 140) + 1):
+        value = ws.cell(row, 1).value
+        if isinstance(value, str) and "CONDICIONES" in value.upper():
+            return row
+    return 32
+
+
+def _find_totals_row(ws, before_row: int) -> int:
+    for row in range(16, max(16, before_row - 4) + 1):
+        first_label = str(ws.cell(row, 4).value or "").strip().upper()
+        second_label = str(ws.cell(row + 1, 4).value or "").strip().upper()
+        total_label = str(ws.cell(row + 4, 4).value or "").strip().upper()
+        if first_label == "SUBTOTAL:" and "FLETE" in second_label and total_label == "TOTAL:":
+            return row
+    return 21
+
+
+def _snapshot_rows(ws, start_row: int, end_row: int, max_col: int = 10) -> dict[str, Any]:
+    rows = []
+    for row in range(start_row, end_row + 1):
+        cells = []
+        for col in range(1, max_col + 1):
+            cell = ws.cell(row, col)
+            cells.append(
+                {
+                    "value": cell.value,
+                    "style": copy(cell._style),
+                    "number_format": cell.number_format,
+                    "alignment": copy(cell.alignment),
+                }
+            )
+        rows.append(cells)
+    merges = [
+        str(merged)
+        for merged in ws.merged_cells.ranges
+        if start_row <= merged.min_row and merged.max_row <= end_row
+    ]
+    heights = {row: ws.row_dimensions[row].height for row in range(start_row, end_row + 1)}
+    return {"rows": rows, "merges": merges, "heights": heights}
+
+
+def _restore_rows(ws, start_row: int, snapshot: dict[str, Any]) -> int:
+    row = start_row
+    source_start = min(snapshot["heights"].keys()) if snapshot["heights"] else start_row
+    row_offset = start_row - source_start
+    for cells in snapshot["rows"]:
+        _clear_row(ws, row)
+        for col, data in enumerate(cells, start=1):
+            cell = ws.cell(row, col)
+            cell.value = data["value"]
+            cell._style = copy(data["style"])
+            cell.number_format = data["number_format"]
+            cell.alignment = copy(data["alignment"])
+        source_row = row - row_offset
+        ws.row_dimensions[row].height = snapshot["heights"].get(source_row)
+        row += 1
+    for merged in snapshot["merges"]:
+        shifted = CellRange(merged)
+        shifted.shift(row_shift=row_offset, col_shift=0)
+        try:
+            ws.merge_cells(str(shifted))
+        except ValueError:
+            pass
+    return row - 1
+
+
+def _default_template() -> Workbook:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Cotizacion"
+    wb.create_sheet("Mobiliti")
+    widths = [78, 156, 42, 22, 12, 14, 12, 14, 14, 16]
+    for index, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(index)].width = width
+    ws.merge_cells("A1:J1")
+    ws["A1"] = "MOBILITI - COTIZACION"
+    ws["A1"].fill = PatternFill("solid", fgColor="12332F")
+    ws["A1"].font = Font(color="FFFFFF", bold=True, size=16)
+    ws["A1"].alignment = Alignment(horizontal="center")
+    for row in [16, 18, 21, 22, 23, 24, 25]:
+        for col in range(1, 11):
+            ws.cell(row, col).alignment = Alignment(vertical="top", wrap_text=True)
+    return wb
+
+
+def _set_cotizacion_image_column_px(
+    ws: Worksheet, pixel_width: float = 1100, column: str = "B"
+) -> None:
+    ws.column_dimensions[column].width = max(1.0, (float(pixel_width) - 5) / 7)
+
+
+def _load_template(template_path: str | Path | None) -> Workbook:
+    if template_path:
+        path = Path(template_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Plantilla no encontrada: {path}")
+        wb = load_workbook(path, keep_links=False)
+        _sanitize_template_workbook(wb)
+        return wb
+    return _default_template()
+
+
+def _load_lumbro_prices(template_path: str | Path | None) -> dict[str, float]:
+    if not template_path:
+        return {}
+    path = Path(template_path)
+    if not path.exists():
+        return {}
+
+    wb = load_workbook(path, data_only=True, keep_links=False)
+    try:
+        if "SPEC-GUIDE-LUMBRO" not in wb.sheetnames:
+            return {}
+        ws = wb["SPEC-GUIDE-LUMBRO"]
+        prices: dict[str, float] = {}
+        for code, row in LUMBRO_PRICE_ROWS.items():
+            prices[code] = _num(ws.cell(row, 5).value, 0)
+        return prices
+    finally:
+        wb.close()
+
+
+def _sanitize_template_workbook(wb: Workbook) -> None:
+    for name in list(wb.defined_names.keys()):
+        defined_name = wb.defined_names[name]
+        text = str(getattr(defined_name, "attr_text", "") or "")
+        if "#REF!" in text or "[" in text or name.startswith("LOCAL_") or name == "Hon":
+            del wb.defined_names[name]
+
+    for ws in wb.worksheets:
+        if not (ws.title.startswith("SPEC") or ws.title.startswith("Spec")):
+            continue
+        for row in ws.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    cell.value = None
+
+
+def _quotation_image_sort_key(img: XlsxImage) -> tuple[int, int]:
+    marker = getattr(getattr(img, "anchor", None), "_from", None)
+    return (
+        int(getattr(marker, "row", 0) or 0),
+        int(getattr(marker, "col", 0) or 0),
+    )
+
+
+def _quotation_used_bounds(ws: Any) -> tuple[int, int]:
+    max_row = 1
+    max_col = 1
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value not in (None, ""):
+                max_row = max(max_row, cell.row)
+                max_col = max(max_col, cell.column)
+    for merged in ws.merged_cells.ranges:
+        max_row = max(max_row, merged.max_row)
+        max_col = max(max_col, merged.max_col)
+    for img in getattr(ws, "_images", []):
+        row, col = _quotation_image_sort_key(img)
+        max_row = max(max_row, row + 1)
+        max_col = max(max_col, col + 1)
+    return max_row, max(max_col, min(ws.max_column, 32))
+
+
+def _apply_quotation_borders(ws: Any, max_row: int, max_col: int) -> None:
+    side = Side(style="thin", color="000000")
+    border = Border(left=side, right=side, top=side, bottom=side)
+    for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
+        for cell in row:
+            cell.border = border
+
+
+def _apply_quotation_item_name_font(ws: Any, max_row: int) -> None:
+    for row in range(1, max_row + 1):
+        for column in (2, 4):
+            cell = ws.cell(row, column)
+            font = copy(cell.font)
+            font.color = "000000"
+            cell.font = font
+
+
+_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _zip_resolve_part(base_part: str, target: str) -> str:
+    if target.startswith("/"):
+        return target.lstrip("/")
+    return posixpath.normpath(posixpath.join(posixpath.dirname(base_part), target))
+
+
+def _zip_rel_target(from_part: str, to_part: str) -> str:
+    return posixpath.relpath(to_part, posixpath.dirname(from_part))
+
+
+def _worksheet_part_for_name(zf: zipfile.ZipFile, sheet_name: str) -> str:
+    workbook = ET.fromstring(zf.read("xl/workbook.xml"))
+    rel_id = None
+    for sheet in workbook.find(f"{{{_SHEET_NS}}}sheets"):
+        if sheet.attrib.get("name") == sheet_name:
+            rel_id = sheet.attrib[f"{{{_OFFICE_REL_NS}}}id"]
+            break
+    if rel_id is None:
+        raise ValueError(f"No se encontro la hoja {sheet_name!r}")
+
+    rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+    for rel in rels:
+        if rel.attrib.get("Id") == rel_id:
+            return _zip_resolve_part("xl/workbook.xml", rel.attrib["Target"])
+    raise ValueError(f"No se encontro la relacion de la hoja {sheet_name!r}")
+
+
+def _drawing_part_for_sheet(zf: zipfile.ZipFile, sheet_part: str) -> tuple[str, str]:
+    sheet = ET.fromstring(zf.read(sheet_part))
+    drawing = sheet.find(f"{{{_SHEET_NS}}}drawing")
+    if drawing is None:
+        raise ValueError("La hoja Quotation no tiene drawing de imagenes")
+    rel_id = drawing.attrib[f"{{{_OFFICE_REL_NS}}}id"]
+    sheet_rels_path = posixpath.join(
+        posixpath.dirname(sheet_part),
+        "_rels",
+        f"{posixpath.basename(sheet_part)}.rels",
+    )
+    sheet_rels = ET.fromstring(zf.read(sheet_rels_path))
+    for rel in sheet_rels:
+        if rel.attrib.get("Id") == rel_id:
+            return _zip_resolve_part(sheet_part, rel.attrib["Target"]), sheet_rels_path
+    raise ValueError("No se encontro la relacion del drawing de Quotation")
+
+
+def _image_parts_from_rels(zf: zipfile.ZipFile, drawing_part: str, rels_path: str) -> set[str]:
+    image_parts: set[str] = set()
+    rels = ET.fromstring(zf.read(rels_path))
+    for rel in rels:
+        if str(rel.attrib.get("Type", "")).endswith("/image"):
+            image_parts.add(_zip_resolve_part(drawing_part, rel.attrib["Target"]))
+    return image_parts
+
+
+def _other_drawing_image_parts(zf: zipfile.ZipFile, excluded_rels_path: str) -> set[str]:
+    image_parts: set[str] = set()
+    for name in zf.namelist():
+        if not (name.startswith("xl/drawings/_rels/") and name.endswith(".rels")):
+            continue
+        if name == excluded_rels_path:
+            continue
+        drawing_part = posixpath.join(
+            "xl/drawings",
+            posixpath.basename(name).removesuffix(".rels"),
+        )
+        if drawing_part in zf.namelist():
+            image_parts.update(_image_parts_from_rels(zf, drawing_part, name))
+    return image_parts
+
+
+def _drawing_embed_rel_ids(drawing_xml: bytes) -> set[str]:
+    drawing = ET.fromstring(drawing_xml)
+    ids: set[str] = set()
+    for element in drawing.iter():
+        rel_id = element.attrib.get(f"{{{_OFFICE_REL_NS}}}embed")
+        if rel_id:
+            ids.add(rel_id)
+    return ids
+
+
+def _patch_quotation_drawing_from_source(source_path: str | Path, output_path: str | Path) -> None:
+    ET.register_namespace("", _PKG_REL_NS)
+    source_path = Path(source_path)
+    output_path = Path(output_path)
+    tmp_path = output_path.with_name(f"{output_path.stem}.quotation_media_tmp{output_path.suffix}")
+
+    with zipfile.ZipFile(source_path) as src_zip, zipfile.ZipFile(output_path) as out_zip:
+        src_sheet_part = _worksheet_part_for_name(src_zip, "Quotation")
+        try:
+            src_drawing_part, _ = _drawing_part_for_sheet(src_zip, src_sheet_part)
+        except ValueError as exc:
+            if "no tiene drawing" in str(exc):
+                return
+            raise
+        src_drawing_rels_path = posixpath.join(
+            posixpath.dirname(src_drawing_part),
+            "_rels",
+            f"{posixpath.basename(src_drawing_part)}.rels",
+        )
+
+        out_sheet_part = _worksheet_part_for_name(out_zip, "Quotation")
+        out_drawing_part, _ = _drawing_part_for_sheet(out_zip, out_sheet_part)
+        out_drawing_rels_path = posixpath.join(
+            posixpath.dirname(out_drawing_part),
+            "_rels",
+            f"{posixpath.basename(out_drawing_part)}.rels",
+        )
+
+        old_quotation_media = _image_parts_from_rels(out_zip, out_drawing_part, out_drawing_rels_path)
+        media_used_elsewhere = _other_drawing_image_parts(out_zip, out_drawing_rels_path)
+        old_media_to_skip = old_quotation_media - media_used_elsewhere
+
+        src_drawing_xml = src_zip.read(src_drawing_part)
+        used_rel_ids = _drawing_embed_rel_ids(src_drawing_xml)
+        src_rels = ET.fromstring(src_zip.read(src_drawing_rels_path))
+        copied_media: dict[str, bytes] = {}
+        for index, rel in enumerate(list(src_rels), start=1):
+            if rel.attrib.get("Id") not in used_rel_ids:
+                src_rels.remove(rel)
+                continue
+            if not str(rel.attrib.get("Type", "")).endswith("/image"):
+                continue
+            if rel.attrib.get("TargetMode") == "External":
+                continue
+            src_media_part = _zip_resolve_part(src_drawing_part, rel.attrib["Target"])
+            if src_media_part not in src_zip.namelist():
+                continue
+            data = src_zip.read(src_media_part)
+            suffix = Path(src_media_part).suffix or ".png"
+            media_part = f"xl/media/quotation_original_{index:03d}{suffix}"
+            copied_media[media_part] = data
+            rel.attrib["Target"] = _zip_rel_target(out_drawing_part, media_part)
+
+        patched_rels_xml = ET.tostring(src_rels, encoding="utf-8", xml_declaration=True)
+
+        with zipfile.ZipFile(
+            tmp_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=6,
+        ) as patched_zip:
+            for info in out_zip.infolist():
+                if info.filename in old_media_to_skip:
+                    continue
+                data = out_zip.read(info.filename)
+                if info.filename == out_drawing_part:
+                    data = src_drawing_xml
+                elif info.filename == out_drawing_rels_path:
+                    data = patched_rels_xml
+                patched_zip.writestr(info, data)
+            for media_part, data in copied_media.items():
+                patched_zip.writestr(media_part, data)
+
+    tmp_path.replace(output_path)
+
+
+def _copy_source_sheet(source_path: str | Path, wb_out: Workbook) -> None:
+    src = load_workbook(source_path, data_only=False)
+    if "Quotation" not in src.sheetnames:
+        src.close()
+        return
+    if "Quotation" in wb_out.sheetnames:
+        del wb_out["Quotation"]
+    src_ws = src["Quotation"]
+    out_ws = wb_out.create_sheet("Quotation")
+    for row in src_ws.iter_rows():
+        for cell in row:
+            dst = out_ws.cell(cell.row, cell.column, cell.value)
+            _copy_cell_style(cell, dst)
+    for key, dim in src_ws.column_dimensions.items():
+        out_ws.column_dimensions[key].width = dim.width
+        out_ws.column_dimensions[key].hidden = dim.hidden
+        out_ws.column_dimensions[key].outlineLevel = dim.outlineLevel
+    for row, dim in src_ws.row_dimensions.items():
+        out_ws.row_dimensions[row].height = dim.height
+        out_ws.row_dimensions[row].hidden = dim.hidden
+        out_ws.row_dimensions[row].outlineLevel = dim.outlineLevel
+    for merged in src_ws.merged_cells.ranges:
+        out_ws.merge_cells(str(merged))
+
+    max_row, max_col = _quotation_used_bounds(src_ws)
+    _apply_quotation_borders(out_ws, max_row, max_col)
+    _apply_quotation_item_name_font(out_ws, max_row)
+
+    for src_img in sorted(src_ws._images, key=_quotation_image_sort_key):
+        stream = BytesIO(src_img._data())
+        img = XlsxImage(stream)
+        img.width = src_img.width
+        img.height = src_img.height
+        img.anchor = deepcopy(src_img.anchor)
+        img._mobiliti_stream = stream
+        out_ws.add_image(img)
+
+    out_ws.sheet_properties = deepcopy(src_ws.sheet_properties)
+    out_ws.sheet_format = copy(src_ws.sheet_format)
+    out_ws.page_setup = copy(src_ws.page_setup)
+    out_ws.page_margins = copy(src_ws.page_margins)
+    out_ws.print_options = copy(src_ws.print_options)
+    out_ws.sheet_view.showGridLines = src_ws.sheet_view.showGridLines
+    out_ws.sheet_view.zoomScale = src_ws.sheet_view.zoomScale
+    out_ws.sheet_view.zoomScaleNormal = src_ws.sheet_view.zoomScaleNormal
+    out_ws.sheet_view.view = src_ws.sheet_view.view
+    out_ws.sheet_view.topLeftCell = src_ws.sheet_view.topLeftCell
+    out_ws.sheet_view.selection = deepcopy(src_ws.sheet_view.selection)
+    out_ws.sheet_state = src_ws.sheet_state
+    out_ws.protection = copy(src_ws.protection)
+    out_ws.auto_filter.ref = src_ws.auto_filter.ref
+    out_ws.data_validations = deepcopy(src_ws.data_validations)
+    out_ws.conditional_formatting = deepcopy(src_ws.conditional_formatting)
+    out_ws.row_breaks = deepcopy(src_ws.row_breaks)
+    out_ws.col_breaks = deepcopy(src_ws.col_breaks)
+    out_ws.freeze_panes = None
+    out_ws.print_area = src_ws.print_area
+    out_ws.print_title_rows = src_ws.print_title_rows
+    out_ws.print_title_cols = src_ws.print_title_cols
+    src.close()
+
+
+def _first_product_row(items: list[QuoteItem]) -> int:
+    return next((item.row for item in items if item.tipo == "producto"), 9)
+
+
+def _write_header(ws, metadata: dict[str, Any]) -> None:
+    for row in range(3, 13):
+        _unmerge_row(ws, row)
+    ws["B3"] = metadata.get("cotizacion", "")
+    ws["B4"] = None
+    ws["B7"] = metadata.get("proyecto", "")
+    ws["B8"] = metadata.get("cliente", "")
+    ws["B9"] = metadata.get("correo", "")
+    ws["B10"] = metadata.get("telefono", "")
+    ws["B11"] = metadata.get("direccion", "")
+    ws["B12"] = metadata.get("razon_social", "")
+
+
+def _write_mobiliti(
+    ws,
+    items: list[QuoteItem],
+    column_map: dict[str, str],
+    lumbro_prices: dict[str, float] | None = None,
+) -> tuple[dict[int, int], dict[int, list[int]]]:
+    q_sheet = "Quotation"
+    row_map: dict[int, int] = {}
+    lumbro_row_map: dict[int, list[int]] = {}
+    lumbro_prices = lumbro_prices or {}
+    category_dictionary = load_category_dictionary(
+        [str(item.nombre or "") for item in items if item.tipo == "producto"]
+    )
+    m3_col = column_map.get("m3", column_map.get("dimension", "E"))
+    qty_col = column_map.get("cantidad", "G")
+    price_col = column_map.get("unit_price", column_map.get("list_price", "J"))
+    first_row = _first_product_row(items)
+    ws["K14"] = _formula(q_sheet, f"{m3_col}{first_row}")
+
+    section_idx = 0
+    prod_in_section = 0
+
+    def next_product_row() -> int | None:
+        nonlocal section_idx, prod_in_section
+        if prod_in_section >= MAX_PROD_PER_SECTION:
+            section_idx += 1
+            prod_in_section = 0
+        if section_idx >= len(SECTION_CATS):
+            return None
+        row_number = SECTION_PROD_STARTS[section_idx] + prod_in_section
+        prod_in_section += 1
+        return row_number
+
+    def write_lumbro_row(row_number: int, code: str, quantity: int) -> None:
+        price_mxn = lumbro_prices.get(code, 0)
+        ws.cell(row_number, 4).value = code
+        ws.cell(row_number, 5).value = LUMBRO_CATEGORY
+        ws.cell(row_number, 6).value = LUMBRO_PROVIDER
+        ws.cell(row_number, 8).value = quantity
+        ws.cell(row_number, 10).value = f"={price_mxn}/$K$6"
+        ws.cell(row_number, 10).number_format = MONEY_FORMAT
+        ws.cell(row_number, 11).value = 0
+
+    for item in items:
+        if item.tipo == "categoria":
+            if prod_in_section > 0:
+                section_idx += 1
+                prod_in_section = 0
+            if section_idx >= len(SECTION_CATS):
+                break
+            section_row = SECTION_CATS[section_idx]
+            anchor_col = _merged_anchor_column(ws, section_row, 4)
+            ws.cell(section_row, anchor_col).value = f"Sección {section_idx + 1} - {item.nombre}"
+            continue
+
+        row = next_product_row()
+        if row is None:
+            break
+
+        ws.cell(row, 4).value = _formula(q_sheet, f"B{item.row}")
+        category = classify_product_name(str(item.nombre or ""), category_dictionary)
+        ws.cell(row, 5).value = category
+        ws.cell(row, 6).value = "Sunon Inc"
+        ws.cell(row, 8).value = _formula(q_sheet, f"{qty_col}{item.row}")
+        ws.cell(row, 10).value = _formula(q_sheet, f"{price_col}{item.row}")
+        ws.cell(row, 11).value = _formula(q_sheet, f"{m3_col}{item.row}")
+        ws.cell(row, 16).value = "Centro"
+        row_map[item.row] = row
+
+        lumbro_rows: list[int] = []
+        for code, quantity in _lumbro_accessories_for_item(item, category):
+            accessory_row = next_product_row()
+            if accessory_row is None:
+                break
+            write_lumbro_row(accessory_row, code, quantity)
+            lumbro_rows.append(accessory_row)
+        if lumbro_rows:
+            lumbro_row_map[item.row] = lumbro_rows
+    return row_map, lumbro_row_map
+
+
+def _apply_mobiliti_provider_validation(ws) -> None:
+    if "Proveedores" not in ws.parent.sheetnames:
+        return
+
+    provider_ws = ws.parent["Proveedores"]
+    last_provider_row = 1
+    for row in range(provider_ws.max_row, 1, -1):
+        if provider_ws.cell(row, 1).value:
+            last_provider_row = row
+            break
+    if last_provider_row < 2:
+        return
+
+    formula = f"={_sheet_name(provider_ws.title)}!$A$2:$A${last_provider_row}"
+    validation = DataValidation(type="list", formula1=formula, allow_blank=True)
+    ws.add_data_validation(validation)
+    for start_row in SECTION_PROD_STARTS:
+        validation.add(f"F{start_row}:F{start_row + MAX_PROD_PER_SECTION - 1}")
+
+
+def _write_fletes(ws) -> None:
+    for row, (origin, destination) in FLETE_ROUTES.items():
+        ws.cell(row, 1).value = origin
+        ws.cell(row, 3).value = destination
+    ws["I8"] = "Escritorios-WorkStation"
+    ws["M8"] = "Escritorios-WorkStation"
+
+
+def _write_mobiliti_settings(ws, metadata: dict[str, Any]) -> None:
+    exchange_rate = _num(
+        metadata.get("tipo_cambio", metadata.get("exchange_rate")),
+        DEFAULT_EXCHANGE_RATE,
+    )
+    delivery_place = (
+        metadata.get("lugar_entrega")
+        or metadata.get("delivery_place")
+        or DEFAULT_DELIVERY_PLACE
+    )
+    ws["J6"] = "USD/MXN"
+    ws["K6"] = exchange_rate
+    ws["K8"] = delivery_place
+
+
+def _write_estrategia_comercial(ws) -> None:
+    ws["D59"] = "=Cotizacion!H63"
+
+
+def _format_product_row_text(ws, row: int) -> None:
+    for col in range(1, 11):
+        cell = ws.cell(row, col)
+        font = copy(cell.font)
+        font.sz = 18
+        cell.font = font
+        alignment = copy(cell.alignment)
+        cell.alignment = Alignment(
+            horizontal=alignment.horizontal,
+            vertical="center",
+            text_rotation=alignment.text_rotation,
+            wrap_text=False if col == 2 else True,
+            shrink_to_fit=alignment.shrink_to_fit,
+            indent=alignment.indent,
+        )
+
+
+def _align_description_top_for_category(ws, row: int, category: str) -> None:
+    if category not in {"Escritorios-WorkStation", "Mesas de Juntas"}:
+        return
+    cell = ws.cell(row, 3)
+    alignment = copy(cell.alignment)
+    cell.alignment = Alignment(
+        horizontal=alignment.horizontal,
+        vertical="top",
+        text_rotation=alignment.text_rotation,
+        wrap_text=alignment.wrap_text,
+        shrink_to_fit=alignment.shrink_to_fit,
+        indent=alignment.indent,
+    )
+
+
+def _anchor_position(img: XlsxImage) -> tuple[int, int]:
+    anchor = getattr(img, "anchor", None)
+    marker = getattr(anchor, "_from", None)
+    return (
+        int(getattr(marker, "row", 0) or 0) + 1,
+        int(getattr(marker, "col", 0) or 0) + 1,
+    )
+
+
+def _transparent_white_logo_png(data: bytes) -> BytesIO:
+    output = BytesIO()
+    with PILImage.open(BytesIO(data)) as src:
+        rgba = src.convert("RGBA")
+        pixels = rgba.load()
+        for y in range(rgba.height):
+            for x in range(rgba.width):
+                r, g, b, a = pixels[x, y]
+                if a == 0:
+                    continue
+                whiteness = min(r, g, b)
+                if whiteness >= 246:
+                    pixels[x, y] = (r, g, b, 0)
+                elif whiteness >= 224 and max(r, g, b) - min(r, g, b) <= 18:
+                    alpha = int(a * (246 - whiteness) / 22)
+                    pixels[x, y] = (r, g, b, alpha)
+        rgba.save(output, format="PNG")
+    output.seek(0)
+    return output
+
+
+def _normalize_cotizacion_header_logo(ws) -> None:
+    replacements: list[tuple[XlsxImage, XlsxImage]] = []
+    for img in list(getattr(ws, "_images", [])):
+        row, col = _anchor_position(img)
+        if row > 15 or col < 6:
+            continue
+        stream = _transparent_white_logo_png(img._data())
+        replacement = XlsxImage(stream)
+        replacement.width = img.width
+        replacement.height = img.height
+        replacement.anchor = deepcopy(img.anchor)
+        replacement._mobiliti_stream = stream
+        replacements.append((img, replacement))
+
+    for old_img, new_img in replacements:
+        ws._images.remove(old_img)
+        ws.add_image(new_img)
+
+
+def _find_authorization_row(ws, fallback_row: int) -> int:
+    targets = (
+        "NOMBRE, FIRMA Y FECHA DE AUTORIZACIÓN DEL CLIENTE",
+        "NOMBRE, FIRMA Y FECHA DE AUTORIZACION DEL CLIENTE",
+    )
+    for row in range(1, ws.max_row + 1):
+        for col in range(1, 11):
+            value = str(ws.cell(row, col).value or "").upper()
+            if any(target in value for target in targets):
+                return row
+    return fallback_row
+
+
+def _lumbro_accessory_image_path(
+    metadata: dict[str, Any],
+    category: str | None = None,
+    user_count: int | None = None,
+) -> Path | None:
+    raw_path = metadata.get("lumbro_image_path", metadata.get("imagen_lumbro"))
+    if raw_path:
+        path = Path(raw_path)
+    elif category == "Escritorios-WorkStation" and (user_count or 0) > 1:
+        path = LUMBRO_WORKSTATION_IMAGE
+    else:
+        path = LUMBRO_ACCESSORY_IMAGE
+    return path if path.exists() else None
+
+
+def _bottom_center_image_in_cell(
+    img: XlsxImage,
+    *,
+    row: int,
+    column: int,
+    cell_width: float,
+    cell_height: float,
+    bottom_padding: float = 18,
+) -> XlsxImage:
+    col_offset = max(0, (cell_width - img.width) / 2)
+    row_offset = max(0, cell_height - img.height - bottom_padding)
+    img.anchor = OneCellAnchor(
+        _from=AnchorMarker(
+            col=column - 1,
+            row=row - 1,
+            colOff=pixels_to_EMU(col_offset),
+            rowOff=pixels_to_EMU(row_offset),
+        ),
+        ext=XDRPositiveSize2D(pixels_to_EMU(img.width), pixels_to_EMU(img.height)),
+    )
+    return img
+
+
+def _write_cotizacion(
+    ws,
+    items: list[QuoteItem],
+    row_map: dict[int, int],
+    lumbro_row_map: dict[int, list[int]],
+    image_map: dict[int, str],
+    metadata: dict[str, Any],
+) -> None:
+    description_language = normalize_description_language(
+        metadata.get("description_language", metadata.get("idioma_descripcion", "es"))
+    )
+    category_dictionary = load_category_dictionary(
+        [str(item.nombre or "") for item in items if item.tipo == "producto"]
+    )
+    terms_start = _find_terms_row(ws)
+    totals_start = _find_totals_row(ws, terms_start)
+    totals_snapshot = _snapshot_rows(ws, totals_start, totals_start + 4)
+    terms_end = min(ws.max_row, max(terms_start, terms_start + 136))
+    terms_snapshot = _snapshot_rows(ws, terms_start, terms_end)
+
+    for row in range(16, terms_end + 1):
+        _clear_row(ws, row)
+
+    current_row = 16
+    first_product = None
+    last_product = None
+    discount_row = None
+    quote_to_cot: dict[int, int] = {}
+    category_by_quote_row: dict[int, str] = {}
+    user_count_by_quote_row: dict[int, int | None] = {}
+
+    for item in items:
+        if item.tipo == "categoria":
+            _copy_row_style(ws, 16, current_row)
+            _clear_row(ws, current_row)
+            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=10)
+            ws.cell(current_row, 1).value = _formula("Quotation", f"A{item.row}")
+            current_row += 1
+            continue
+
+        if first_product is None:
+            first_product = current_row
+            discount_row = current_row
+        last_product = current_row
+        quote_to_cot[item.row] = current_row
+        mob_row = row_map.get(item.row)
+
+        _copy_row_style(ws, 17, current_row)
+        _clear_row(ws, current_row)
+        category = classify_product_name(str(item.nombre or ""), category_dictionary)
+        category_by_quote_row[item.row] = category
+        user_count_by_quote_row[item.row] = _detect_user_count(item)
+        ws.cell(current_row, 1).value = _formula("Quotation", f"B{item.row}")
+        code_alignment = copy(ws.cell(current_row, 1).alignment)
+        ws.cell(current_row, 1).alignment = Alignment(
+            horizontal="center",
+            vertical="center",
+            text_rotation=code_alignment.text_rotation,
+            wrap_text=code_alignment.wrap_text,
+            shrink_to_fit=code_alignment.shrink_to_fit,
+            indent=code_alignment.indent,
+        )
+        ws.cell(current_row, 3).value = build_product_description(
+            item.nombre,
+            item.descripcion,
+            category,
+            description_language,
+        )
+        ws.cell(current_row, 4).value = _formula("Quotation", f"E{item.row}")
+        if mob_row:
+            ws.cell(current_row, 5).value = f"=Mobiliti!H{mob_row}"
+            price_rows = [mob_row, *lumbro_row_map.get(item.row, [])]
+            ws.cell(current_row, 6).value = "=" + "+".join(f"Mobiliti!W{row}" for row in price_rows)
+        else:
+            ws.cell(current_row, 5).value = item.cantidad
+            ws.cell(current_row, 6).value = item.precio
+        ws.cell(current_row, 7).value = 0.7 if current_row == discount_row else f"=G${discount_row}"
+        ws.cell(current_row, 8).value = f"=F{current_row}*G{current_row}"
+        ws.cell(current_row, 9).value = f"=F{current_row}-H{current_row}"
+        ws.cell(current_row, 10).value = f"=I{current_row}*E{current_row}"
+        ws.cell(current_row, 7).number_format = PERCENT_FORMAT
+        for col in [6, 8, 9, 10]:
+            ws.cell(current_row, col).number_format = MONEY_FORMAT
+        _format_product_row_text(ws, current_row)
+        _align_description_top_for_category(ws, current_row, category)
+        current_row += 1
+
+    if first_product is None or last_product is None:
+        raise ValueError("No se encontraron productos en Quotation")
+
+    total_labels = ["SUBTOTAL:", "COSTO DE FLETE:", "SUBTOTAL:", "IVA:", "TOTAL:"]
+    total_formulas = [
+        f"=SUM(J{first_product}:J{last_product})",
+        f"=H{current_row}*12%",
+        f"=H{current_row}+H{current_row + 1}",
+        f"=H{current_row + 2}*16%",
+        f"=H{current_row + 2}+H{current_row + 3}",
+    ]
+    _restore_rows(ws, current_row, totals_snapshot)
+    for offset, (label, formula) in enumerate(zip(total_labels, total_formulas)):
+        row = current_row + offset
+        ws.cell(row, 4).value = label
+        ws.cell(row, 8).value = formula
+        ws.cell(row, 8).number_format = MONEY_FORMAT
+        value_alignment = copy(ws.cell(row, 8).alignment)
+        ws.cell(row, 8).alignment = Alignment(
+            horizontal="right",
+            vertical=value_alignment.vertical,
+            text_rotation=value_alignment.text_rotation,
+            wrap_text=value_alignment.wrap_text,
+            shrink_to_fit=value_alignment.shrink_to_fit,
+            indent=value_alignment.indent,
+        )
+    for row in range(current_row + len(total_labels), current_row + 7):
+        ws.row_dimensions[row].height = 8
+    current_row += 7
+    last_terms = _restore_rows(ws, current_row, terms_snapshot)
+
+    for q_row, image_path in image_map.items():
+        cot_row = quote_to_cot.get(q_row)
+        if not cot_row:
+            continue
+        cell = ws.cell(cot_row, 2)
+        width_px = (ws.column_dimensions[get_column_letter(cell.column)].width or 18) * 7
+        height_px = (ws.row_dimensions[cot_row].height or 90) * 1.33
+        scale = image_scale_for_category(category_by_quote_row.get(q_row))
+        img = fit_image_to_cell(image_path, width_px, height_px, scale=scale)
+        center_image_in_cell(img, row=cot_row, column=cell.column, cell_width=width_px, cell_height=height_px)
+        ws.add_image(img)
+
+    for q_row in lumbro_row_map:
+        lumbro_image_path = _lumbro_accessory_image_path(
+            metadata,
+            category_by_quote_row.get(q_row),
+            user_count_by_quote_row.get(q_row),
+        )
+        if lumbro_image_path:
+            cot_row = quote_to_cot.get(q_row)
+            if not cot_row:
+                continue
+            cell = ws.cell(cot_row, 3)
+            width_px = (ws.column_dimensions[get_column_letter(cell.column)].width or 42) * 7
+            height_px = (ws.row_dimensions[cot_row].height or 90) * 1.33
+            img = fit_image_to_cell(str(lumbro_image_path), width_px, height_px, scale=0.38)
+            _bottom_center_image_in_cell(
+                img,
+                row=cot_row,
+                column=cell.column,
+                cell_width=width_px,
+                cell_height=height_px,
+            )
+            ws.add_image(img)
+
+    print_end_row = _find_authorization_row(ws, last_terms)
+    ws.print_area = f"A1:J{print_end_row}"
+
+
+def _set_calc_mode(wb: Workbook) -> None:
+    try:
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+    except Exception:
+        pass
+
+
+def generate_quote(
+    source_path: str | Path,
+    output_path: str | Path,
+    metadata: dict[str, Any] | None = None,
+    template_path: str | Path | None = None,
+) -> Path:
+    metadata = metadata or {}
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    items, column_map = read_items(source_path)
+    lumbro_prices = _load_lumbro_prices(template_path)
+    wb = _load_template(template_path)
+    if "Cotizacion" not in wb.sheetnames:
+        wb.create_sheet("Cotizacion", 0)
+    if "Mobiliti" not in wb.sheetnames:
+        wb.create_sheet("Mobiliti")
+    ws_cot = wb["Cotizacion"]
+    _set_cotizacion_image_column_px(ws_cot, 1100)
+    _set_cotizacion_image_column_px(ws_cot, 550, "A")
+    _normalize_cotizacion_header_logo(ws_cot)
+    ws_mob = wb["Mobiliti"]
+
+    _copy_source_sheet(source_path, wb)
+    _write_header(ws_cot, metadata)
+    row_map, lumbro_row_map = _write_mobiliti(ws_mob, items, column_map, lumbro_prices)
+    _apply_mobiliti_provider_validation(ws_mob)
+    _write_mobiliti_settings(ws_mob, metadata)
+    if "Estrategia Comercial " in wb.sheetnames:
+        _write_estrategia_comercial(wb["Estrategia Comercial "])
+    if "Fletes" in wb.sheetnames:
+        _write_fletes(wb["Fletes"])
+
+    image_map, temp_dir = extract_images(source_path)
+    try:
+        image_map = improve_image_map(
+            image_map,
+            temp_dir,
+            background=metadata.get("image_background", metadata.get("fondo_imagen", "transparent")),
+            min_size=int(_num(metadata.get("image_min_size", metadata.get("imagen_min_size")), 900)),
+            cleanup_strength=metadata.get(
+                "image_cleanup_strength",
+                metadata.get("limpieza_imagen", "normal"),
+            ),
+            image_provider=metadata.get("image_provider", metadata.get("proveedor_imagen")),
+        )
+        _write_cotizacion(ws_cot, items, row_map, lumbro_row_map, image_map, metadata)
+        _set_calc_mode(wb)
+        wb.save(output_path)
+        _patch_quotation_drawing_from_source(source_path, output_path)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        wb.close()
+    return output_path
