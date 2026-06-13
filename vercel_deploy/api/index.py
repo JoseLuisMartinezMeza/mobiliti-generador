@@ -34,6 +34,7 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_
 DATABASE_URL = os.environ.get("DATABASE_URL")
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
 MOBILITI_REST_SECRET = os.environ.get("MOBILITI_REST_SECRET")
+WORKER_WAKE_URL = os.environ.get("WORKER_WAKE_URL")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -704,6 +705,17 @@ def _signed_upload_url(path: str, token: str) -> str:
     return f"{SUPABASE_URL}/storage/v1/object/upload/sign/{QUOTE_STORAGE_BUCKET}/{encoded_path}?token={quote(token, safe='')}"
 
 
+def _wake_worker():
+    if DEV_MODE or not WORKER_WAKE_URL:
+        return
+    try:
+        req = urllib.request.Request(WORKER_WAKE_URL, method="GET")
+        with urllib.request.urlopen(req, timeout=3):
+            pass
+    except Exception:
+        pass
+
+
 def _create_signed_download(path: str):
     if DEV_MODE:
         return f"{DEV_PUBLIC_BASE_URL}/dev/storage/{quote(path, safe='')}"
@@ -1059,6 +1071,7 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error actualizando cotizacion: {e}")
 
+    _wake_worker()
     return {"mensaje": "Cotizacion en cola", "job": updated}
 
 
@@ -1088,6 +1101,7 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error reintentando cotizacion: {e}")
 
+    _wake_worker()
     return {"mensaje": "Cotizacion reencolada", "job": updated}
 
 
@@ -1200,9 +1214,9 @@ def generar_cotizacion(body: dict, authorization: str = Header(None)):
 
 # Fallback inline por si Supabase no responde
 _CURRENT_VERSION_FALLBACK = {
-    "version": "1.5.10",
-    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.10/Mobiliti_Generador.exe",
-    "release_notes": "Fix: fondo de imagenes ahora es blanco puro. Umbral bajado a 200 para capturar grises claros. Pipeline compone sobre #FFFFFF en vez de dejar transparente.",
+    "version": "1.5.7",
+    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.7/Mobiliti_Generador_v1.5.7.zip",
+    "release_notes": "Release estable v1.5.7 con ejecutable, config.json y version.txt.",
     "force_update": False,
 }
 
