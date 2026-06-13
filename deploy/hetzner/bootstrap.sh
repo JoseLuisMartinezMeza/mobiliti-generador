@@ -68,8 +68,11 @@ if [[ ! -f "${ENV_DIR}/worker.env" ]]; then
   echo "Created ${ENV_DIR}/worker.env. Fill SUPABASE_ANON_KEY and MOBILITI_REST_SECRET before deploy."
 fi
 
-chmod +x "${APP_DIR}/deploy/hetzner/deploy.sh"
-ln -sf "${APP_DIR}/deploy/hetzner/deploy.sh" /usr/local/bin/mobiliti-worker-deploy
+cat >/usr/local/bin/mobiliti-worker-deploy <<EOF
+#!/usr/bin/env bash
+exec bash "${APP_DIR}/deploy/hetzner/deploy.sh" "\$@"
+EOF
+chmod 0755 /usr/local/bin/mobiliti-worker-deploy
 
 echo "Bootstrap complete."
 echo "Next:"
