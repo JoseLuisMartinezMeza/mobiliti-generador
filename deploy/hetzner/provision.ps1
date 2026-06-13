@@ -22,7 +22,10 @@ function Die($message) {
 }
 
 function HCloudJson([string[]]$ArgsList) {
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $output = & $script:HCloud @ArgsList 2>&1
+    $ErrorActionPreference = $oldPreference
     if ($LASTEXITCODE -ne 0) {
         Die "hcloud failed: hcloud $($ArgsList -join ' ')`n$output"
     }
@@ -34,7 +37,10 @@ function HCloudJson([string[]]$ArgsList) {
 }
 
 function HCloud([string[]]$ArgsList) {
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $output = & $script:HCloud @ArgsList 2>&1
+    $ErrorActionPreference = $oldPreference
     if ($LASTEXITCODE -ne 0) {
         Die "hcloud failed: hcloud $($ArgsList -join ' ')`n$output"
     }
@@ -44,7 +50,10 @@ function HCloud([string[]]$ArgsList) {
 function Wait-ForSsh([string]$Ip) {
     $deadline = (Get-Date).AddMinutes(10)
     while ((Get-Date) -lt $deadline) {
-        & ssh -i $SshKeyPath -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$env:USERPROFILE\.ssh\known_hosts" -o ConnectTimeout=10 "root@$Ip" "echo ok" *> $null
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & ssh -i $SshKeyPath -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$env:USERPROFILE\.ssh\known_hosts" -o ConnectTimeout=10 -o LogLevel=ERROR "root@$Ip" "echo ok" *> $null
+        $ErrorActionPreference = $oldPreference
         if ($LASTEXITCODE -eq 0) {
             return
         }
@@ -60,6 +69,10 @@ if (-not $Token) {
 $env:HCLOUD_TOKEN = $Token
 $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Process")
 $script:HCloud = (Get-Command hcloud -ErrorAction SilentlyContinue).Source
+if (-not $script:HCloud) {
+    $script:HCloud = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter hcloud.exe -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+}
 if (-not $script:HCloud) {
     Die "hcloud CLI is not installed or not in PATH."
 }
@@ -83,17 +96,16 @@ Write-Host "Ensuring firewall '$FirewallName' exists..."
 $firewalls = HCloudJson @("firewall", "list", "-o", "json")
 $firewall = @($firewalls) | Where-Object { $_.name -eq $FirewallName } | Select-Object -First 1
 if (-not $firewall) {
-    $rules = @(
-        @{
-            direction = "in"
-            protocol = "tcp"
-            port = "22"
-            source_ips = @("0.0.0.0/0", "::/0")
-            description = "SSH only"
-        }
-    ) | ConvertTo-Json -Depth 6
+    $rule = @{
+        direction = "in"
+        protocol = "tcp"
+        port = "22"
+        source_ips = @("0.0.0.0/0", "::/0")
+        description = "SSH only"
+    }
+    $rules = ConvertTo-Json -InputObject @($rule) -Depth 6
     $rulesFile = Join-Path $env:TEMP "mobiliti-hetzner-firewall-rules.json"
-    Set-Content -LiteralPath $rulesFile -Value $rules -Encoding UTF8
+    [System.IO.File]::WriteAllText($rulesFile, $rules, [System.Text.UTF8Encoding]::new($false))
     try {
         HCloud @("firewall", "create", "--name", $FirewallName, "--rules-file", $rulesFile) | Out-Null
     }
@@ -108,7 +120,10 @@ if (-not $server) {
     $created = $false
     foreach ($location in $Locations) {
         Write-Host "Creating server '$ServerName' type '$ServerType' in '$location'..."
+        $oldPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         $output = & $script:HCloud server create --name $ServerName --type $ServerType --image $Image --location $location --ssh-key $SshKeyName --firewall $FirewallName -o json 2>&1
+        $ErrorActionPreference = $oldPreference
         if ($LASTEXITCODE -eq 0) {
             $created = $true
             break
@@ -135,7 +150,10 @@ if (-not $SkipBootstrap) {
     Wait-ForSsh $ip
 
     Write-Host "Running bootstrap on server..."
-    & ssh -i $SshKeyPath -o StrictHostKeyChecking=accept-new "root@$ip" "curl -fsSL https://raw.githubusercontent.com/REMOVED_PASSWORD/mobiliti-generador/master/deploy/hetzner/bootstrap.sh | bash"
+    $oldPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & ssh -i $SshKeyPath -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR "root@$ip" "curl -fsSL https://raw.githubusercontent.com/REMOVED_PASSWORD/mobiliti-generador/master/deploy/hetzner/bootstrap.sh | bash"
+    $ErrorActionPreference = $oldPreference
     if ($LASTEXITCODE -ne 0) {
         Die "Remote bootstrap failed."
     }
@@ -160,11 +178,17 @@ IMAGE_PROVIDER=pillow
         $tmpEnv = Join-Path $env:TEMP "mobiliti-worker.env"
         [System.IO.File]::WriteAllText($tmpEnv, $envContent, [System.Text.UTF8Encoding]::new($false))
         try {
-            & scp -i $SshKeyPath -o StrictHostKeyChecking=accept-new $tmpEnv "root@${ip}:/tmp/mobiliti-worker.env"
+            $oldPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & scp -i $SshKeyPath -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR $tmpEnv "root@${ip}:/tmp/mobiliti-worker.env"
+            $ErrorActionPreference = $oldPreference
             if ($LASTEXITCODE -ne 0) {
                 Die "Env upload failed."
             }
-            & ssh -i $SshKeyPath -o StrictHostKeyChecking=accept-new "root@$ip" "install -d -m 0700 /etc/mobiliti-worker && install -m 0600 /tmp/mobiliti-worker.env /etc/mobiliti-worker/worker.env && rm -f /tmp/mobiliti-worker.env && mobiliti-worker-deploy"
+            $oldPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & ssh -i $SshKeyPath -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR "root@$ip" "install -d -m 0700 /etc/mobiliti-worker && install -m 0600 /tmp/mobiliti-worker.env /etc/mobiliti-worker/worker.env && rm -f /tmp/mobiliti-worker.env && mobiliti-worker-deploy"
+            $ErrorActionPreference = $oldPreference
             if ($LASTEXITCODE -ne 0) {
                 Die "Remote deploy failed."
             }

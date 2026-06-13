@@ -5,6 +5,7 @@ services:
       dockerfile: mobiliti_saas/worker/Dockerfile
     image: mobiliti-worker:hetzner
     container_name: mobiliti-worker
+    command: ["python", "mobiliti_saas/worker/render_web_worker.py"]
     restart: unless-stopped
     env_file:
       - /etc/mobiliti-worker/worker.env
