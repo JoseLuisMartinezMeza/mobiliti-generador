@@ -1,0 +1,38 @@
+services:
+  mobiliti-worker:
+    build:
+      context: ../..
+      dockerfile: mobiliti_saas/worker/Dockerfile
+    image: mobiliti-worker:hetzner
+    container_name: mobiliti-worker
+    restart: unless-stopped
+    env_file:
+      - /etc/mobiliti-worker/worker.env
+    environment:
+      PORT: "10000"
+      QUOTE_ENGINE: python
+      WORKER_ISOLATE_JOBS: "1"
+    ports:
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - mobiliti-worker-tmp:/tmp
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json, urllib.request; r=urllib.request.urlopen('http://127.0.0.1:10000/health', timeout=5); data=json.load(r); raise SystemExit(0 if data.get('ok') and data.get('isolated_jobs') else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  mobiliti-worker-tmp:
