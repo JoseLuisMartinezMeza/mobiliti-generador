@@ -34,7 +34,8 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_
 DATABASE_URL = os.environ.get("DATABASE_URL")
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
 MOBILITI_REST_SECRET = os.environ.get("MOBILITI_REST_SECRET")
-WORKER_WAKE_URL = os.environ.get("WORKER_WAKE_URL")
+WORKER_WAKE_ENABLED = os.environ.get("WORKER_WAKE_ENABLED", "").lower() in {"1", "true", "yes"}
+WORKER_WAKE_URL = os.environ.get("WORKER_WAKE_URL") if WORKER_WAKE_ENABLED else None
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
