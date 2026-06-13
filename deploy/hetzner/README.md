@@ -17,6 +17,28 @@ Recommended server:
 
 ## Bootstrap
 
+### Option A: Provision from Windows with Hetzner API
+
+From the repo root on Windows:
+
+```powershell
+$env:HCLOUD_TOKEN="paste_read_write_token_here"
+$env:SUPABASE_ANON_KEY="paste_current_publishable_key_here"
+$env:MOBILITI_REST_SECRET="paste_current_rest_secret_here"
+powershell -ExecutionPolicy Bypass -File .\deploy\hetzner\provision.ps1
+```
+
+The script will:
+
+- register the local SSH public key in the Hetzner project;
+- create an SSH-only firewall;
+- create/reuse `mobiliti-worker-prod-01`;
+- install Docker/security packages/swap;
+- upload `/etc/mobiliti-worker/worker.env`;
+- build and start the worker.
+
+### Option B: Bootstrap on an existing server
+
 Run on the server as root:
 
 ```bash
