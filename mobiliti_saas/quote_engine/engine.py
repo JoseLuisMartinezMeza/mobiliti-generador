@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.cell import MergedCell
 from openpyxl.drawing.image import Image as XlsxImage
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
@@ -40,6 +41,14 @@ MAX_PROD_PER_SECTION = 32
 DEFAULT_EXCHANGE_RATE = 20.0
 DEFAULT_DELIVERY_PLACE = "Guadalajara"
 DEFAULT_DISCOUNT_PERCENT = 40.0
+DEFAULT_MOBILITI_REGION = "Centro"
+MOBILITI_REGION_COL = 16
+MOBILITI_MAX_DISCOUNT_COL = 25
+MOBILITI_COVER_DISCOUNT_COL = 26
+MOBILITI_DISCOUNT_AMOUNT_COL = 27
+MOBILITI_FINAL_PRICE_COL = 28
+MOBILITI_COMMERCIAL_TOTAL_COL = 29
+MOBILITI_CLEAR_COLS = tuple(range(4, 33))
 FLETE_ROUTES = {
     5: ("Guadalajara", "Monterrey"),
     7: ("Guadalajara", "Mexico City"),
@@ -87,6 +96,11 @@ def _discount_rate(metadata: dict[str, Any]) -> float:
     if 0 <= value <= 1:
         return value
     return max(0.0, min(value, 100.0)) / 100.0
+
+
+def _excel_decimal(value: float) -> str:
+    text = f"{float(value):.6f}".rstrip("0").rstrip(".")
+    return text or "0"
 
 
 def _normalized_text(value: Any) -> str:
@@ -601,11 +615,14 @@ def _write_mobiliti(
     items: list[QuoteItem],
     column_map: dict[str, str],
     lumbro_prices: dict[str, float] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> tuple[dict[int, int], dict[int, list[int]]]:
     q_sheet = "Quotation"
     row_map: dict[int, int] = {}
     lumbro_row_map: dict[int, list[int]] = {}
     lumbro_prices = lumbro_prices or {}
+    discount_rate = _discount_rate(metadata or {})
+    written_rows: set[int] = set()
     category_dictionary = load_category_dictionary(
         [str(item.nombre or "") for item in items if item.tipo == "producto"]
     )
@@ -629,7 +646,22 @@ def _write_mobiliti(
         prod_in_section += 1
         return row_number
 
-    def write_lumbro_row(row_number: int, code: str, quantity: int) -> None:
+    def mark_written_row(row_number: int, region: str = DEFAULT_MOBILITI_REGION) -> None:
+        ws.cell(row_number, MOBILITI_REGION_COL).value = region
+        ws.cell(row_number, MOBILITI_COVER_DISCOUNT_COL).value = (
+            f"=MIN({_excel_decimal(discount_rate)},"
+            f"{get_column_letter(MOBILITI_MAX_DISCOUNT_COL)}{row_number})"
+        )
+        ws.cell(row_number, MOBILITI_COVER_DISCOUNT_COL).number_format = PERCENT_FORMAT
+        ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).value = f"=W{row_number}*Z{row_number}"
+        ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).number_format = MONEY_FORMAT
+        ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).value = f"=W{row_number}*(1-Z{row_number})"
+        ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).number_format = MONEY_FORMAT
+        ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).value = f"=AB{row_number}*H{row_number}"
+        ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).number_format = MONEY_FORMAT
+        written_rows.add(row_number)
+
+    def write_lumbro_row(row_number: int, code: str, quantity: int, region: str = DEFAULT_MOBILITI_REGION) -> None:
         price_mxn = lumbro_prices.get(code, 0)
         ws.cell(row_number, 4).value = code
         ws.cell(row_number, 5).value = LUMBRO_CATEGORY
@@ -638,6 +670,7 @@ def _write_mobiliti(
         ws.cell(row_number, 10).value = f"={price_mxn}/$K$6"
         ws.cell(row_number, 10).number_format = MONEY_FORMAT
         ws.cell(row_number, 11).value = 0
+        mark_written_row(row_number, region)
 
     for item in items:
         if item.tipo == "categoria":
@@ -662,7 +695,7 @@ def _write_mobiliti(
         ws.cell(row, 8).value = _formula(q_sheet, f"{qty_col}{item.row}")
         ws.cell(row, 10).value = _formula(q_sheet, f"{price_col}{item.row}")
         ws.cell(row, 11).value = _formula(q_sheet, f"{m3_col}{item.row}")
-        ws.cell(row, 16).value = "Centro"
+        mark_written_row(row)
         row_map[item.row] = row
 
         lumbro_rows: list[int] = []
@@ -674,7 +707,20 @@ def _write_mobiliti(
             lumbro_rows.append(accessory_row)
         if lumbro_rows:
             lumbro_row_map[item.row] = lumbro_rows
+    _clear_unused_mobiliti_product_rows(ws, written_rows)
     return row_map, lumbro_row_map
+
+
+def _clear_unused_mobiliti_product_rows(ws, written_rows: set[int]) -> None:
+    for start_row in SECTION_PROD_STARTS:
+        for row in range(start_row, start_row + MAX_PROD_PER_SECTION):
+            if row in written_rows:
+                continue
+            for col in MOBILITI_CLEAR_COLS:
+                cell = ws.cell(row, col)
+                if isinstance(cell, MergedCell):
+                    continue
+                cell.value = None
 
 
 def _apply_mobiliti_provider_validation(ws) -> None:
@@ -1149,7 +1195,7 @@ def generate_quote(
 
     _copy_source_sheet(source_path, wb)
     _write_header(ws_cot, metadata)
-    row_map, lumbro_row_map = _write_mobiliti(ws_mob, items, column_map, lumbro_prices)
+    row_map, lumbro_row_map = _write_mobiliti(ws_mob, items, column_map, lumbro_prices, metadata)
     _apply_mobiliti_provider_validation(ws_mob)
     _apply_mobiliti_region_validation(ws_mob)
     _write_mobiliti_settings(ws_mob, metadata)

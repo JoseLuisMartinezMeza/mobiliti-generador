@@ -133,6 +133,7 @@ def _normalize_provider_output(output: Path, options: ImageProcessingOptions) ->
         processed = img.convert("RGBA")
         if processed.getchannel("A").getbbox():
             processed = _trim_transparent_edges(processed)
+        processed = _trim_outer_background_padding(processed)
         processed = _upscale_if_needed(processed, options.min_size)
         if options.background == "white":
             processed = _flatten_to_white(processed)
@@ -166,7 +167,8 @@ def _process_image(img: Image.Image, options: ImageProcessingOptions) -> Image.I
     rgba = _sharpen_rgb_preserve_alpha(rgba)
     rgba = _cleanup_edge_fringe(rgba, options)
     rgba = _upscale_if_needed(rgba, math.ceil(options.min_size * 1.04))
-    return _drop_faint_residue(rgba, options)
+    rgba = _drop_faint_residue(rgba, options)
+    return _trim_outer_background_padding(rgba)
 
 
 def _should_use_light_product_safe(img: Image.Image, options: ImageProcessingOptions) -> bool:
@@ -203,6 +205,7 @@ def _should_use_light_product_safe(img: Image.Image, options: ImageProcessingOpt
 
 def _process_light_product_safe(img: Image.Image, options: ImageProcessingOptions) -> Image.Image:
     rgba = _matte_light_background_to_white(img)
+    rgba = _trim_outer_background_padding(rgba)
     rgba = _upscale_if_needed(rgba, options.min_size)
     return _sharpen_rgb_preserve_alpha(rgba)
 
@@ -353,6 +356,85 @@ def _trim_transparent_edges(img: Image.Image) -> Image.Image:
     if not bbox:
         return img
     return img.crop(bbox)
+
+
+def _trim_outer_background_padding(img: Image.Image) -> Image.Image:
+    rgba = img.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    visible = alpha.point(lambda value: 255 if value > 8 else 0)
+    if not visible.getbbox():
+        return rgba
+
+    background = _estimate_visible_background_color(rgba)
+    diff = ImageChops.difference(rgba.convert("RGB"), Image.new("RGB", rgba.size, background)).convert("L")
+    gray = rgba.convert("L")
+    dark = gray.point(lambda value: 255 if value < 150 else 0)
+
+    bbox = None
+    min_width = max(12, int(rgba.width * 0.12))
+    min_height = max(12, int(rgba.height * 0.12))
+    for threshold in (70, 42, 24):
+        different = diff.point(lambda value, threshold=threshold: 255 if value > threshold else 0)
+        content = ImageChops.lighter(different, dark)
+        content = ImageChops.multiply(content, visible)
+        candidate = content.getbbox()
+        if not candidate:
+            continue
+        left, top, right, bottom = candidate
+        if right - left >= min_width and bottom - top >= min_height:
+            bbox = candidate
+            break
+
+    if bbox is None:
+        bbox = visible.getbbox()
+    if not bbox:
+        return rgba
+
+    padded = _pad_bbox(bbox, rgba.size, max(8, int(max(rgba.size) * 0.035)))
+    left, top, right, bottom = padded
+    removes_horizontal = left > 2 or right < rgba.width - 2
+    removes_vertical = top > 2 or bottom < rgba.height - 2
+    if not (removes_horizontal or removes_vertical):
+        return rgba
+    return rgba.crop(padded)
+
+
+def _estimate_visible_background_color(img: Image.Image) -> tuple[int, int, int]:
+    rgba = img.convert("RGBA")
+    width, height = rgba.size
+    samples: list[tuple[int, int, int]] = []
+    points = [
+        (0, 0),
+        (width - 1, 0),
+        (0, height - 1),
+        (width - 1, height - 1),
+        (width // 2, 0),
+        (width // 2, height - 1),
+        (0, height // 2),
+        (width - 1, height // 2),
+    ]
+    for x, y in points:
+        r, g, b, a = rgba.getpixel((x, y))
+        if a > 8:
+            samples.append((r, g, b))
+    if not samples:
+        return (255, 255, 255)
+    return tuple(sorted(channel)[len(channel) // 2] for channel in zip(*samples))
+
+
+def _pad_bbox(
+    bbox: tuple[int, int, int, int],
+    size: tuple[int, int],
+    margin: int,
+) -> tuple[int, int, int, int]:
+    width, height = size
+    left, top, right, bottom = bbox
+    return (
+        max(0, left - margin),
+        max(0, top - margin),
+        min(width, right + margin),
+        min(height, bottom + margin),
+    )
 
 
 def _upscale_if_needed(img: Image.Image, min_size: int) -> Image.Image:
