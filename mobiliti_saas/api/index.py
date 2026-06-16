@@ -49,6 +49,21 @@ DEV_STORE_DIR = Path(os.environ.get("MOBILITI_DEV_STORE_DIR", DEV_PROJECT_ROOT /
 DEV_PUBLIC_BASE_URL = os.environ.get("MOBILITI_DEV_PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 DEV_USER_EMAIL = os.environ.get("MOBILITI_DEV_USER_EMAIL", "dev@mobiliti.local")
 DEV_USER_PASSWORD = os.environ.get("MOBILITI_DEV_USER_PASSWORD", "dev12345")
+DEFAULT_CORS_ORIGINS = (
+    "https://web-lemon-one-45.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+)
+QUOTE_NUMBER_PREFIX_BY_EMAIL = {
+    "joel.meza@mobiliti.mx": "100",
+    "karen.merin@mobiliti.mx": "200",
+    "jl.martinez@mobiliti.mx": "300",
+    "gabriela.zavala@mobiliti.mx": "400",
+    "susana@mobiliti.mx": "500",
+    "emiliano.quevedo@mobiliti.mx": "600",
+}
 
 # ═══════════════════════════════════════════════════════════════
 # RATE LIMITING (in-memory, simple, para serverless)
@@ -653,9 +668,31 @@ def _safe_quote_filename(job: dict) -> str:
     return f"Cotizacion_{name}.xlsx"
 
 
+def _quote_number_prefix_for_user(user: dict) -> str | None:
+    return QUOTE_NUMBER_PREFIX_BY_EMAIL.get(str(user.get("email", "")).strip().lower())
+
+
+def _next_quote_number_for_user(user: dict) -> str | None:
+    prefix = _quote_number_prefix_for_user(user)
+    if not prefix:
+        return None
+    try:
+        jobs = db_list_quote_jobs(int(user["id"]))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Error leyendo folio de cotizacion: {e}")
+
+    max_suffix = 0
+    for job in jobs:
+        raw = str((job.get("metadata") or {}).get("cotizacion", "")).strip()
+        head, separator, tail = raw.partition("-")
+        if head != prefix or separator != "-" or not tail.isdigit():
+            continue
+        max_suffix = max(max_suffix, int(tail))
+    return f"{prefix}-{max_suffix + 1:05d}"
+
+
 def _validate_metadata(body: dict) -> dict:
     fields = {
-        "cotizacion": "Numero de cotizacion",
         "proyecto": "Proyecto",
         "cliente": "Cliente",
         "correo": "Correo",
@@ -669,11 +706,14 @@ def _validate_metadata(body: dict) -> dict:
         if not value:
             raise HTTPException(status_code=400, detail=f"{label} requerido")
         clean[key] = value[:500]
+    quote_number = str(body.get("cotizacion", "")).strip()
+    if quote_number:
+        clean["cotizacion"] = quote_number[:500]
     description_language = str(body.get("description_language", "es")).strip().lower()
     if description_language not in {"es", "en"}:
         raise HTTPException(status_code=400, detail="Idioma de descripcion invalido")
     clean["description_language"] = description_language
-    image_provider = str(body.get("image_provider", body.get("proveedor_imagen", "pillow"))).strip().lower()
+    image_provider = str(body.get("image_provider", body.get("proveedor_imagen", "dezgo"))).strip().lower()
     image_provider = {
         "local": "pillow",
         "gratis": "pillow",
@@ -687,6 +727,26 @@ def _validate_metadata(body: dict) -> dict:
     if image_provider not in {"pillow", "dezgo"}:
         raise HTTPException(status_code=400, detail="Proveedor de imagen invalido")
     clean["image_provider"] = image_provider
+    cleanup_strength = str(body.get("image_cleanup_strength", body.get("limpieza_imagen", "balanced"))).strip().lower()
+    cleanup_strength = {
+        "suave": "normal",
+        "conservadora": "normal",
+        "fuerte": "aggressive",
+        "agresiva": "aggressive",
+    }.get(cleanup_strength, cleanup_strength)
+    if cleanup_strength not in {"normal", "balanced", "aggressive"}:
+        raise HTTPException(status_code=400, detail="Limpieza de imagen invalida")
+    clean["image_cleanup_strength"] = cleanup_strength
+    image_background = str(body.get("image_background", body.get("fondo_imagen", "white"))).strip().lower()
+    image_background = {"blanco": "white", "transparente": "transparent"}.get(image_background, image_background)
+    if image_background not in {"white", "transparent"}:
+        raise HTTPException(status_code=400, detail="Fondo de imagen invalido")
+    clean["image_background"] = image_background
+    image_prompt = str(
+        body.get("image_prompt", body.get("prompt_imagen", "Mejora la calidad de imagen y que este en fondo blanco"))
+    ).strip()
+    clean["image_prompt"] = (image_prompt or "Mejora la calidad de imagen y que este en fondo blanco")[:1000]
+    clean["estimated_duration_seconds"] = 360 if image_provider == "dezgo" else 90
     return clean
 
 
@@ -737,8 +797,19 @@ def _create_signed_download(path: str):
 # ═══════════════════════════════════════════════════════════════
 
 def _origins():
-    raw = os.environ.get("CORS_ORIGINS", "*")
-    return [o.strip() for o in raw.split(",")]
+    raw = os.environ.get("CORS_ORIGINS", "")
+    configured = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    allow_wildcard = os.environ.get("ALLOW_WILDCARD_CORS", "").lower() in {"1", "true", "yes"}
+
+    if "*" in configured and allow_wildcard:
+        return ["*"]
+
+    origins = [origin for origin in configured if origin != "*"] or list(DEFAULT_CORS_ORIGINS)
+    for env_name in ("PUBLIC_APP_ORIGIN", "APP_ORIGIN", "FRONTEND_URL", "VERCEL_PROJECT_PRODUCTION_URL", "VERCEL_URL"):
+        value = os.environ.get(env_name, "").strip().rstrip("/")
+        if value:
+            origins.append(value if value.startswith(("http://", "https://")) else f"https://{value}")
+    return sorted(set(origins))
 
 
 app = FastAPI(title="Mobiliti SaaS API", version="1.0.0")
@@ -1055,6 +1126,11 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
         raise HTTPException(status_code=409, detail="La cotizacion ya fue enviada")
 
     metadata = {**(job.get("metadata") or {}), **_validate_metadata(body)}
+    assigned_quote_number = _next_quote_number_for_user(current_user)
+    if assigned_quote_number:
+        metadata["cotizacion"] = assigned_quote_number
+    elif not metadata.get("cotizacion"):
+        metadata["cotizacion"] = metadata["proyecto"]
     template = str(body.get("template") or job.get("template") or "").strip()
     if not template:
         raise HTTPException(status_code=400, detail="Template requerido")

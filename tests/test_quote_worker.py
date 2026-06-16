@@ -7,6 +7,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mobiliti_saas"
 import quote_worker
 
 
+def test_default_template_resolves_existing_template():
+    template = quote_worker._default_template()
+
+    assert template.exists()
+    assert template.name.startswith("Formato")
+
+
 class FakeClient:
     def __init__(self):
         self.calls = []
@@ -49,6 +56,8 @@ def test_process_job_marks_completed(monkeypatch):
     statuses = [data["status"] for _, _, data in client.calls if isinstance(data, dict) and "status" in data]
     assert statuses == ["processing", "completed"]
     assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
+    completed_payload = next(data for _, _, data in client.calls if isinstance(data, dict) and data.get("status") == "completed")
+    assert completed_payload["metadata"]["generation_seconds"] >= 0
 
 
 def test_process_job_skips_when_not_claimed(monkeypatch):
@@ -129,3 +138,5 @@ def test_process_job_marks_failed(monkeypatch):
 
     statuses = [data["status"] for _, _, data in client.calls if isinstance(data, dict) and "status" in data]
     assert statuses == ["processing", "failed"]
+    failed_payload = next(data for _, _, data in client.calls if isinstance(data, dict) and data.get("status") == "failed")
+    assert failed_payload["metadata"]["generation_seconds"] >= 0

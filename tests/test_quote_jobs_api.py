@@ -20,17 +20,17 @@ def _token(user_id=7, email="cliente@example.com"):
     return index.create_access_token({"sub": str(user_id), "email": email})
 
 
-def _auth_headers(user_id=7):
-    return {"Authorization": f"Bearer {_token(user_id)}"}
+def _auth_headers(user_id=7, email="cliente@example.com"):
+    return {"Authorization": f"Bearer {_token(user_id, email)}"}
 
 
-def _mock_user(monkeypatch, user_id=7, active=True):
+def _mock_user(monkeypatch, user_id=7, active=True, email="cliente@example.com"):
     monkeypatch.setattr(
         index,
         "db_get_usuario_by_id",
         lambda requested_id: {
             "id": requested_id,
-            "email": "cliente@example.com",
+            "email": email,
             "nombre": "Cliente",
             "empresa": "Mobiliti",
             "es_admin": False,
@@ -53,6 +53,16 @@ def _mock_user(monkeypatch, user_id=7, active=True):
 def test_init_upload_requires_token():
     resp = _client().post("/cotizaciones/init-upload", json={"filename": "q.xlsx", "size": 100})
     assert resp.status_code == 401
+
+
+def test_cors_wildcard_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    monkeypatch.delenv("ALLOW_WILDCARD_CORS", raising=False)
+
+    origins = index._origins()
+
+    assert "*" not in origins
+    assert "https://web-lemon-one-45.vercel.app" in origins
 
 
 def test_init_upload_creates_signed_upload(monkeypatch):
@@ -132,6 +142,7 @@ def test_submit_moves_job_to_queued(monkeypatch):
             "direccion": "Direccion",
             "razon_social": "Empresa SA",
             "image_provider": "dezgo",
+            "image_prompt": "Prompt personalizado para mobiliario en fondo blanco",
             "template": "Template.xlsx",
         },
     )
@@ -139,7 +150,97 @@ def test_submit_moves_job_to_queued(monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["job"]["status"] == "queued"
     assert resp.json()["job"]["metadata"]["cotizacion"] == "COT-001"
+    assert resp.json()["job"]["metadata"]["descuento"] == 40
     assert resp.json()["job"]["metadata"]["image_provider"] == "dezgo"
+    assert resp.json()["job"]["metadata"]["image_prompt"] == "Prompt personalizado para mobiliario en fondo blanco"
+    assert resp.json()["job"]["metadata"]["estimated_duration_seconds"] == 360
+
+
+def test_submit_assigns_locked_quote_number_for_known_user(monkeypatch):
+    _mock_user(monkeypatch, email="joel.meza@mobiliti.mx")
+    monkeypatch.setattr(
+        index,
+        "db_get_quote_job",
+        lambda job_id: {
+            "id": job_id,
+            "usuario_id": 7,
+            "status": "draft",
+            "metadata": {"original_filename": "quotation.xlsx"},
+            "template": "Template.xlsx",
+        },
+    )
+    monkeypatch.setattr(
+        index,
+        "db_list_quote_jobs",
+        lambda usuario_id: [
+            {"metadata": {"cotizacion": "100-00000"}},
+            {"metadata": {"cotizacion": "100-00004"}},
+            {"metadata": {"cotizacion": "200-00099"}},
+            {"metadata": {"cotizacion": "sin-folio"}},
+        ],
+    )
+
+    def fake_update(job_id, updates):
+        return {"id": job_id, **updates}
+
+    monkeypatch.setattr(index, "db_update_quote_job", fake_update)
+
+    resp = _client().post(
+        "/cotizaciones/job-1/submit",
+        headers=_auth_headers(email="joel.meza@mobiliti.mx"),
+        json={
+            "cotizacion": "HACK-123",
+            "proyecto": "Proyecto",
+            "cliente": "Cliente",
+            "correo": "cliente@example.com",
+            "telefono": "555",
+            "direccion": "Direccion",
+            "razon_social": "Empresa SA",
+            "template": "Template.xlsx",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["job"]["metadata"]["cotizacion"] == "100-00005"
+
+
+def test_submit_defaults_to_dezgo_for_missing_product_images(monkeypatch):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(
+        index,
+        "db_get_quote_job",
+        lambda job_id: {
+            "id": job_id,
+            "usuario_id": 7,
+            "status": "draft",
+            "metadata": {"original_filename": "quotation.xlsx"},
+            "template": "Template.xlsx",
+        },
+    )
+
+    def fake_update(job_id, updates):
+        return {"id": job_id, **updates}
+
+    monkeypatch.setattr(index, "db_update_quote_job", fake_update)
+
+    resp = _client().post(
+        "/cotizaciones/job-1/submit",
+        headers=_auth_headers(),
+        json={
+            "cotizacion": "COT-001",
+            "proyecto": "Proyecto",
+            "cliente": "Cliente",
+            "correo": "cliente@example.com",
+            "telefono": "555",
+            "direccion": "Direccion",
+            "razon_social": "Empresa SA",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["job"]["metadata"]["image_provider"] == "dezgo"
+    assert resp.json()["job"]["metadata"]["image_prompt"] == "Mejora la calidad de imagen y que este en fondo blanco"
+    assert resp.json()["job"]["metadata"]["estimated_duration_seconds"] == 360
 
 
 def test_submit_rejects_invalid_image_provider(monkeypatch):
@@ -172,6 +273,39 @@ def test_submit_rejects_invalid_image_provider(monkeypatch):
     )
 
     assert resp.status_code == 400
+
+
+def test_submit_rejects_discount_over_100(monkeypatch):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(
+        index,
+        "db_get_quote_job",
+        lambda job_id: {
+            "id": job_id,
+            "usuario_id": 7,
+            "status": "draft",
+            "metadata": {"original_filename": "quotation.xlsx"},
+            "template": "Template.xlsx",
+        },
+    )
+
+    resp = _client().post(
+        "/cotizaciones/job-1/submit",
+        headers=_auth_headers(),
+        json={
+            "cotizacion": "COT-001",
+            "proyecto": "Proyecto",
+            "cliente": "Cliente",
+            "correo": "cliente@example.com",
+            "telefono": "555",
+            "direccion": "Direccion",
+            "razon_social": "Empresa SA",
+            "descuento": 101,
+        },
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Descuento debe estar entre 0 y 100"
 
 
 def test_download_requires_completed_job(monkeypatch):

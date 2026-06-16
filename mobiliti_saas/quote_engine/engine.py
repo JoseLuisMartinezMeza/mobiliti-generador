@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from copy import copy, deepcopy
 from io import BytesIO
+import hashlib
 import math
+import os
 import posixpath
 from pathlib import Path
 import re
@@ -24,6 +26,7 @@ from PIL import Image as PILImage
 
 from .classification import classify_product_name, load_category_dictionary
 from .descriptions import build_product_description, normalize_description_language
+from .ai_image_provider import dezgo_config_from_env, generate_with_dezgo, normalize_image_provider
 from .image_processing import improve_image_map
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .parser import QuoteItem, col_index, read_items
@@ -36,6 +39,7 @@ SECTION_PROD_STARTS = [14, 49, 84, 119, 154, 189, 224, 259, 294, 329, 364, 398, 
 MAX_PROD_PER_SECTION = 32
 DEFAULT_EXCHANGE_RATE = 20.0
 DEFAULT_DELIVERY_PLACE = "Guadalajara"
+DEFAULT_DISCOUNT_PERCENT = 40.0
 FLETE_ROUTES = {
     5: ("Guadalajara", "Monterrey"),
     7: ("Guadalajara", "Mexico City"),
@@ -75,6 +79,14 @@ def _num(value: Any, default: float = 0.0) -> float:
         return float(text)
     except ValueError:
         return default
+
+
+def _discount_rate(metadata: dict[str, Any]) -> float:
+    raw = metadata.get("descuento", metadata.get("discount_percent", DEFAULT_DISCOUNT_PERCENT))
+    value = _num(raw, DEFAULT_DISCOUNT_PERCENT)
+    if 0 <= value <= 1:
+        return value
+    return max(0.0, min(value, 100.0)) / 100.0
 
 
 def _normalized_text(value: Any) -> str:
@@ -685,6 +697,13 @@ def _apply_mobiliti_provider_validation(ws) -> None:
         validation.add(f"F{start_row}:F{start_row + MAX_PROD_PER_SECTION - 1}")
 
 
+def _apply_mobiliti_region_validation(ws) -> None:
+    validation = DataValidation(type="list", formula1="Taba_Region", allow_blank=True)
+    ws.add_data_validation(validation)
+    for start_row in SECTION_PROD_STARTS:
+        validation.add(f"P{start_row}:P{start_row + MAX_PROD_PER_SECTION - 1}")
+
+
 def _write_fletes(ws) -> None:
     for row, (origin, destination) in FLETE_ROUTES.items():
         ws.cell(row, 1).value = origin
@@ -708,8 +727,8 @@ def _write_mobiliti_settings(ws, metadata: dict[str, Any]) -> None:
     ws["K8"] = delivery_place
 
 
-def _write_estrategia_comercial(ws) -> None:
-    ws["D59"] = "=Cotizacion!H63"
+def _write_estrategia_comercial(ws, total_row: int) -> None:
+    ws["D59"] = f"=Cotizacion!H{total_row}"
 
 
 def _format_product_row_text(ws, row: int) -> None:
@@ -851,7 +870,7 @@ def _write_cotizacion(
     lumbro_row_map: dict[int, list[int]],
     image_map: dict[int, str],
     metadata: dict[str, Any],
-) -> None:
+) -> int:
     description_language = normalize_description_language(
         metadata.get("description_language", metadata.get("idioma_descripcion", "es"))
     )
@@ -871,6 +890,7 @@ def _write_cotizacion(
     first_product = None
     last_product = None
     discount_row = None
+    discount_rate = _discount_rate(metadata)
     quote_to_cot: dict[int, int] = {}
     category_by_quote_row: dict[int, str] = {}
     user_count_by_quote_row: dict[int, int | None] = {}
@@ -920,7 +940,7 @@ def _write_cotizacion(
         else:
             ws.cell(current_row, 5).value = item.cantidad
             ws.cell(current_row, 6).value = item.precio
-        ws.cell(current_row, 7).value = 0.7 if current_row == discount_row else f"=G${discount_row}"
+        ws.cell(current_row, 7).value = discount_rate if current_row == discount_row else f"=G${discount_row}"
         ws.cell(current_row, 8).value = f"=F{current_row}*G{current_row}"
         ws.cell(current_row, 9).value = f"=F{current_row}-H{current_row}"
         ws.cell(current_row, 10).value = f"=I{current_row}*E{current_row}"
@@ -942,6 +962,7 @@ def _write_cotizacion(
         f"=H{current_row + 2}*16%",
         f"=H{current_row + 2}+H{current_row + 3}",
     ]
+    total_row = current_row + len(total_labels) - 1
     _restore_rows(ws, current_row, totals_snapshot)
     for offset, (label, formula) in enumerate(zip(total_labels, total_formulas)):
         row = current_row + offset
@@ -999,6 +1020,100 @@ def _write_cotizacion(
 
     print_end_row = _find_authorization_row(ws, last_terms)
     ws.print_area = f"A1:J{print_end_row}"
+    return total_row
+
+
+def _align_image_map_to_product_rows(
+    image_map: dict[int, str],
+    items: list[QuoteItem],
+    max_distance: int = 3,
+) -> dict[int, str]:
+    product_rows = [item.row for item in items if item.tipo == "producto"]
+    if not product_rows:
+        return image_map
+
+    product_row_set = set(product_rows)
+    aligned: dict[int, str] = {}
+    for image_row, image_path in sorted(image_map.items()):
+        if image_row in product_row_set:
+            target_row = image_row
+        else:
+            nearby = [row for row in product_rows if abs(row - image_row) <= max_distance]
+            if not nearby:
+                aligned[image_row] = image_path
+                continue
+            # Excel often anchors floating images one row above the product row.
+            target_row = min(nearby, key=lambda row: (abs(row - image_row), 0 if row >= image_row else 1))
+
+        if target_row not in aligned or target_row == image_row:
+            aligned[target_row] = image_path
+    return aligned
+
+
+def _generate_missing_dezgo_images(
+    image_map: dict[int, str],
+    items: list[QuoteItem],
+    temp_dir: str | Path,
+    metadata: dict[str, Any],
+    stats: dict[str, Any] | None = None,
+) -> dict[int, str]:
+    requested_provider = metadata.get("image_provider", metadata.get("proveedor_imagen"))
+    provider = normalize_image_provider(requested_provider or os.environ.get("IMAGE_PROVIDER"))
+    if provider != "dezgo":
+        return image_map
+
+    config = dezgo_config_from_env()
+    style_prompt = str(metadata.get("image_prompt", metadata.get("prompt_imagen", ""))).strip() or config.prompt
+    generated_dir = Path(temp_dir) / "generated"
+    result = dict(image_map)
+    for item in items:
+        if item.tipo != "producto" or item.row in result:
+            continue
+        _bump_image_stat(stats, "image_ai_missing_attempted_count")
+        prompt = _dezgo_missing_image_prompt(item, style_prompt)
+        output = generated_dir / f"missing_{item.row}_{hashlib.sha256(prompt.encode('utf-8')).hexdigest()[:16]}.png"
+        if not output.exists():
+            try:
+                generate_with_dezgo(prompt, output, config)
+            except Exception:
+                _bump_image_stat(stats, "image_ai_missing_failed_count")
+                if normalize_image_provider(requested_provider) == "dezgo":
+                    raise
+                continue
+        _bump_image_stat(stats, "image_ai_generated_count")
+        result[item.row] = str(output)
+    return result
+
+
+def _bump_image_stat(stats: dict[str, Any] | None, key: str, amount: int = 1) -> None:
+    if stats is not None:
+        stats[key] = int(stats.get(key, 0) or 0) + amount
+
+
+def _estimate_generation_seconds(metadata: dict[str, Any], image_stats: dict[str, Any], item_count: int) -> int:
+    provider = normalize_image_provider(metadata.get("image_provider", metadata.get("proveedor_imagen")))
+    products = max(1, item_count)
+    if provider == "dezgo":
+        source_images = int(image_stats.get("image_source_count", 0) or 0)
+        missing_attempts = int(image_stats.get("image_ai_missing_attempted_count", 0) or 0)
+        return min(1800, max(240, 90 + products * 4 + source_images * 22 + missing_attempts * 35))
+    return min(420, max(75, 45 + products * 2))
+
+
+def _dezgo_missing_image_prompt(item: QuoteItem, style_prompt: str) -> str:
+    details = " ".join(
+        str(part or "").replace("\n", " ")
+        for part in [item.nombre, item.dimension, item.descripcion]
+        if part
+    )
+    details = " ".join(details.split())[:560]
+    category = f"Category: {item.categoria}. " if item.categoria else ""
+    return (
+        f"{style_prompt}. Generate a catalog image for this quoted office furniture product. "
+        f"{category}Product: {details}. "
+        "Single item only, centered, full product visible, realistic scale, commercial furniture render, "
+        "no text, no SKU labels, no watermark, no people."
+    )
 
 
 def _set_calc_mode(wb: Workbook) -> None:
@@ -1036,13 +1151,13 @@ def generate_quote(
     _write_header(ws_cot, metadata)
     row_map, lumbro_row_map = _write_mobiliti(ws_mob, items, column_map, lumbro_prices)
     _apply_mobiliti_provider_validation(ws_mob)
+    _apply_mobiliti_region_validation(ws_mob)
     _write_mobiliti_settings(ws_mob, metadata)
-    if "Estrategia Comercial " in wb.sheetnames:
-        _write_estrategia_comercial(wb["Estrategia Comercial "])
     if "Fletes" in wb.sheetnames:
         _write_fletes(wb["Fletes"])
 
     image_map, temp_dir = extract_images(source_path)
+    image_stats: dict[str, Any] = {}
     try:
         image_map = improve_image_map(
             image_map,
@@ -1054,8 +1169,17 @@ def generate_quote(
                 metadata.get("limpieza_imagen", "normal"),
             ),
             image_provider=metadata.get("image_provider", metadata.get("proveedor_imagen")),
+            image_prompt=metadata.get("image_prompt", metadata.get("prompt_imagen")),
+            stats=image_stats,
         )
-        _write_cotizacion(ws_cot, items, row_map, lumbro_row_map, image_map, metadata)
+        image_map = _align_image_map_to_product_rows(image_map, items)
+        image_map = _generate_missing_dezgo_images(image_map, items, temp_dir, metadata, stats=image_stats)
+        metadata.update(image_stats)
+        metadata["product_count"] = len([item for item in items if item.tipo == "producto"])
+        metadata["estimated_duration_seconds"] = _estimate_generation_seconds(metadata, image_stats, len(items))
+        total_row = _write_cotizacion(ws_cot, items, row_map, lumbro_row_map, image_map, metadata)
+        if "Estrategia Comercial " in wb.sheetnames:
+            _write_estrategia_comercial(wb["Estrategia Comercial "], total_row)
         _set_calc_mode(wb)
         wb.save(output_path)
         _patch_quotation_drawing_from_source(source_path, output_path)

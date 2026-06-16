@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any
 from pathlib import Path
 import hashlib
 import math
@@ -9,7 +10,19 @@ import os
 
 from PIL import Image, ImageChops, ImageFilter
 
-from .ai_image_provider import dezgo_config_from_env, enhance_with_dezgo, normalize_image_provider
+from .ai_image_provider import DEFAULT_DEZGO_PROMPT, dezgo_config_from_env, enhance_with_dezgo, normalize_image_provider
+
+
+class _ProtectionMask:
+    def __init__(self, image: Image.Image | None = None) -> None:
+        self.image = image
+        self.pixels = image.load() if image is not None and image.getbbox() else None
+
+    def __contains__(self, point: tuple[int, int]) -> bool:
+        if self.pixels is None:
+            return False
+        x, y = point
+        return self.pixels[x, y] > 0
 
 
 @dataclass(frozen=True)
@@ -25,6 +38,9 @@ class ImageProcessingOptions:
     floor_fringe_brightness: int = 220
 
 
+MAX_WORKING_IMAGE_EDGE = 1800
+
+
 def improve_product_image(
     source_path: str | Path,
     output_dir: str | Path,
@@ -33,6 +49,8 @@ def improve_product_image(
     min_size: int = 900,
     cleanup_strength: str = "normal",
     image_provider: str | None = None,
+    image_prompt: str | None = None,
+    stats: dict[str, Any] | None = None,
 ) -> Path:
     source = Path(source_path)
     output_root = Path(output_dir)
@@ -40,18 +58,30 @@ def improve_product_image(
 
     options = _build_options(background, min_size, cleanup_strength)
     provider = normalize_image_provider(image_provider or os.environ.get("IMAGE_PROVIDER"))
-    provider_signature = _provider_signature(provider)
+    provider_signature = _provider_signature(provider, image_prompt)
     output = output_root / f"{_cache_key(source, options, provider_signature)}.png"
     if output.exists():
+        if provider == "dezgo":
+            _bump_stat(stats, "image_ai_cached_count")
         return output
 
     if provider == "dezgo":
+        _bump_stat(stats, "image_ai_attempted_count")
         try:
-            enhance_with_dezgo(source, output, dezgo_config_from_env())
+            config = dezgo_config_from_env()
+            if str(image_prompt or "").strip():
+                config = replace(
+                    config,
+                    prompt=_compose_dezgo_retouch_prompt(str(image_prompt).strip(), config.prompt),
+                )
+            enhance_with_dezgo(source, output, config)
             _normalize_provider_output(output, options)
+            _bump_stat(stats, "image_ai_enhanced_count")
             return output
         except Exception:
-            pass
+            _bump_stat(stats, "image_ai_failed_count")
+            if _strict_dezgo_requested(image_provider):
+                raise
 
     with Image.open(source) as img:
         processed = _process_image(img, options)
@@ -69,8 +99,13 @@ def improve_image_map(
     min_size: int = 900,
     cleanup_strength: str = "normal",
     image_provider: str | None = None,
+    image_prompt: str | None = None,
+    stats: dict[str, Any] | None = None,
 ) -> dict[int, str]:
     output_dir = Path(temp_dir) / "mejoradas"
+    if stats is not None:
+        stats["image_provider"] = normalize_image_provider(image_provider or os.environ.get("IMAGE_PROVIDER"))
+        stats["image_source_count"] = len(image_map)
     improved: dict[int, str] = {}
     for row, image_path in image_map.items():
         try:
@@ -82,9 +117,13 @@ def improve_image_map(
                     min_size=min_size,
                     cleanup_strength=cleanup_strength,
                     image_provider=image_provider,
+                    image_prompt=image_prompt,
+                    stats=stats,
                 )
             )
         except Exception:
+            if _strict_dezgo_requested(image_provider):
+                raise
             improved[row] = image_path
     return improved
 
@@ -100,8 +139,24 @@ def _normalize_provider_output(output: Path, options: ImageProcessingOptions) ->
         processed.save(output, "PNG", optimize=True)
 
 
+def _compose_dezgo_retouch_prompt(user_prompt: str, base_prompt: str) -> str:
+    user = " ".join(str(user_prompt or "").split())
+    base = " ".join(str(base_prompt or DEFAULT_DEZGO_PROMPT).split())
+    if not user:
+        return base[:1000].rstrip()
+    if user.lower() in base.lower():
+        return base[:1000].rstrip()
+    return f"{user}. {base}"[:1000].rstrip()
+
+
+def _bump_stat(stats: dict[str, Any] | None, key: str, amount: int = 1) -> None:
+    if stats is not None:
+        stats[key] = int(stats.get(key, 0) or 0) + amount
+
+
 def _process_image(img: Image.Image, options: ImageProcessingOptions) -> Image.Image:
     rgba = img.convert("RGBA")
+    rgba = _downscale_if_needed(rgba, MAX_WORKING_IMAGE_EDGE)
     if _should_use_light_product_safe(rgba, options):
         return _process_light_product_safe(rgba, options)
 
@@ -205,34 +260,32 @@ def _remove_light_edge_background(img: Image.Image, options: ImageProcessingOpti
     return img
 
 
-def _foreground_protection_mask(img: Image.Image, options: ImageProcessingOptions) -> set[tuple[int, int]]:
-    if options.cleanup_strength not in {"balanced", "normal"}:
-        return set()
+def _foreground_protection_mask(img: Image.Image, options: ImageProcessingOptions) -> _ProtectionMask:
+    if options.cleanup_strength != "balanced":
+        return _ProtectionMask()
 
     gray = img.convert("L")
     width, height = gray.size
     pixels = gray.load()
-    seeds: list[tuple[int, int, int]] = []
+    dark_mask = Image.new("L", gray.size, 0)
+    light_mask = Image.new("L", gray.size, 0)
+    dark_pixels = dark_mask.load()
+    light_pixels = light_mask.load()
     light_product = _has_light_product_surface(pixels, width, height)
     for y in range(1, height - 1):
         for x in range(1, width - 1):
             value = pixels[x, y]
-            contrast = _local_contrast(pixels, x, y)
             if value < 95:
-                seeds.append((x, y, 1))
-            elif light_product and y < height * 0.58 and 120 <= value <= 235 and contrast >= 14:
-                seeds.append((x, y, 18))
+                dark_pixels[x, y] = 255
+            elif light_product and y < height * 0.58 and 120 <= value <= 235 and _local_contrast(pixels, x, y) >= 14:
+                light_pixels[x, y] = 255
 
-    if not seeds:
-        return set()
-
-    protected: set[tuple[int, int]] = set()
-    for x, y, margin in seeds:
-        for ny in range(max(0, y - margin), min(height, y + margin + 1)):
-            for nx in range(max(0, x - margin), min(width, x + margin + 1)):
-                if abs(nx - x) + abs(ny - y) <= margin:
-                    protected.add((nx, ny))
-    return protected
+    protected = Image.new("L", gray.size, 0)
+    if dark_mask.getbbox():
+        protected = ImageChops.lighter(protected, dark_mask.filter(ImageFilter.MaxFilter(3)))
+    if light_mask.getbbox():
+        protected = ImageChops.lighter(protected, light_mask.filter(ImageFilter.MaxFilter(37)))
+    return _ProtectionMask(protected)
 
 
 def _local_contrast(pixels, x: int, y: int) -> int:
@@ -311,41 +364,56 @@ def _upscale_if_needed(img: Image.Image, min_size: int) -> Image.Image:
     return _resize_rgba_premultiplied(img, size)
 
 
+def _downscale_if_needed(img: Image.Image, max_edge: int) -> Image.Image:
+    long_edge = max(img.size)
+    if long_edge <= max_edge:
+        return img
+    scale = max_edge / long_edge
+    size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+    return _resize_rgba_premultiplied(img, size)
+
+
 def _cleanup_edge_fringe(img: Image.Image, options: ImageProcessingOptions) -> Image.Image:
     rgba = img.convert("RGBA")
     pixels = rgba.load()
     width, height = rgba.size
     protected = _foreground_protection_mask(rgba, options)
-    queue: deque[tuple[int, int]] = deque()
-    visited: set[tuple[int, int]] = set()
+
+    alpha = rgba.getchannel("A")
+    transparent = alpha.point(lambda value: 255 if value <= 8 else 0)
+    candidate = Image.new("L", rgba.size, 0)
+    candidate_pixels = candidate.load()
 
     for y in range(height):
         for x in range(width):
-            if pixels[x, y][3] > 8:
+            if (x, y) in protected:
                 continue
-            pixels[x, y] = (0, 0, 0, 0)
-            for nx, ny in _neighbors(width, height, x, y):
-                if (
-                    (nx, ny) not in visited
-                    and (nx, ny) not in protected
-                    and _is_fringe_pixel(pixels[nx, ny], ny, height, options)
-                ):
-                    visited.add((nx, ny))
-                    queue.append((nx, ny))
+            if _is_fringe_pixel(pixels[x, y], y, height, options):
+                candidate_pixels[x, y] = 255
 
-    while queue:
-        x, y = queue.popleft()
-        if (x, y) in protected:
-            continue
-        pixels[x, y] = (0, 0, 0, 0)
-        for nx, ny in _neighbors(width, height, x, y):
-            if (
-                (nx, ny) not in visited
-                and (nx, ny) not in protected
-                and _is_fringe_pixel(pixels[nx, ny], ny, height, options)
-            ):
-                visited.add((nx, ny))
-                queue.append((nx, ny))
+    if not candidate.getbbox():
+        data = [(0, 0, 0, 0) if a <= 8 else (r, g, b, a) for r, g, b, a in _flat_channel_data(rgba)]
+        rgba.putdata(data)
+        return _trim_transparent_edges(rgba)
+
+    connected = ImageChops.multiply(candidate, transparent.filter(ImageFilter.MaxFilter(3)))
+    max_expansions = {"normal": 10, "balanced": 18, "aggressive": 32}.get(options.cleanup_strength, 12)
+    for _ in range(max_expansions):
+        expanded = ImageChops.multiply(candidate, connected.filter(ImageFilter.MaxFilter(3)))
+        delta = ImageChops.subtract(expanded, connected)
+        if not delta.getbbox():
+            break
+        connected = ImageChops.lighter(connected, expanded)
+
+    removal = _flat_channel_data(connected)
+    data = []
+    for pixel, remove in zip(_flat_channel_data(rgba), removal):
+        r, g, b, a = pixel
+        if a <= 8 or remove:
+            data.append((0, 0, 0, 0))
+        else:
+            data.append((r, g, b, a))
+    rgba.putdata(data)
     return _trim_transparent_edges(rgba)
 
 
@@ -405,39 +473,7 @@ def _sharpen_rgb_preserve_alpha(img: Image.Image) -> Image.Image:
 
 
 def _resize_rgba_premultiplied(img: Image.Image, size: tuple[int, int]) -> Image.Image:
-    rgba = img.convert("RGBA")
-    r, g, b, a = rgba.split()
-    premultiplied = Image.merge(
-        "RGBA",
-        (
-            ImageChops.multiply(r, a),
-            ImageChops.multiply(g, a),
-            ImageChops.multiply(b, a),
-            a,
-        ),
-    ).resize(size, Image.Resampling.LANCZOS)
-    pr, pg, pb, pa = premultiplied.split()
-    data = []
-    for red, green, blue, alpha in zip(
-        _flat_channel_data(pr),
-        _flat_channel_data(pg),
-        _flat_channel_data(pb),
-        _flat_channel_data(pa),
-    ):
-        if alpha == 0:
-            data.append((0, 0, 0, 0))
-            continue
-        data.append(
-            (
-                min(255, round(red * 255 / alpha)),
-                min(255, round(green * 255 / alpha)),
-                min(255, round(blue * 255 / alpha)),
-                alpha,
-            )
-        )
-    resized = Image.new("RGBA", size)
-    resized.putdata(data)
-    return resized
+    return img.convert("RGBa").resize(size, Image.Resampling.LANCZOS).convert("RGBA")
 
 
 def _flat_channel_data(channel: Image.Image):
@@ -506,10 +542,11 @@ def _build_options(background: str, min_size: int, cleanup_strength: str) -> Ima
     )
 
 
-def _provider_signature(provider: str) -> str:
+def _provider_signature(provider: str, image_prompt: str | None = None) -> str:
     if provider != "dezgo":
         return "pillow"
     config = dezgo_config_from_env()
+    prompt = str(image_prompt or "").strip() or config.prompt
     return "|".join(
         [
             "dezgo",
@@ -518,7 +555,7 @@ def _provider_signature(provider: str) -> str:
             config.mode,
             config.output_format,
             str(config.strength),
-            config.prompt,
+            prompt,
         ]
     )
 
@@ -529,3 +566,7 @@ def _cache_key(source: Path, options: ImageProcessingOptions, provider_signature
     digest.update(repr(options).encode("utf-8"))
     digest.update(provider_signature.encode("utf-8"))
     return digest.hexdigest()
+
+
+def _strict_dezgo_requested(image_provider: str | None) -> bool:
+    return normalize_image_provider(image_provider) == "dezgo"

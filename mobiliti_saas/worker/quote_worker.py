@@ -291,6 +291,11 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _resolve_project_root() -> Path:
+    history_dir = PROJECT_ROOT / "versiones historial" / "HISTORIAL DE VERSIONES" / "Mobiliti_Generador_Windows"
+    return history_dir if history_dir.exists() else PROJECT_ROOT
+
+
 def _default_template() -> Path:
     root = _resolve_project_root()
     candidates = [
@@ -305,6 +310,7 @@ def _default_template() -> Path:
 
 def _run_generator(job: dict, input_path: Path, output_path: Path) -> None:
     metadata = job.get("metadata") or {}
+    job["metadata"] = metadata
     engine = QUOTE_ENGINE
     if engine == "auto":
         engine = "python"
@@ -312,7 +318,7 @@ def _run_generator(job: dict, input_path: Path, output_path: Path) -> None:
     if engine in {"python", "openpyxl", "online"}:
         from online_quote_generator import generate_online_quote
 
-        template = os.environ.get("TEMPLATE_PATH")
+        template = os.environ.get("TEMPLATE_PATH") or str(_default_template())
         generate_online_quote(input_path, output_path, metadata, template)
         return
     raise RuntimeError(
@@ -384,26 +390,34 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
         tmp_dir = Path(tmp)
         local_input = tmp_dir / "input.xlsx"
         local_output = tmp_dir / "output.xlsx"
+        started_at = time.perf_counter()
         try:
             update_progress(client, job, 45)
             client.storage_download(job["input_path"], local_input)
             update_progress(client, job, 55)
             _run_generator(job, local_input, local_output)
+            generation_seconds = round(time.perf_counter() - started_at, 1)
             update_progress(client, job, 90)
             client.storage_upload(output_path, local_output)
+            metadata = {
+                **(job.get("metadata") or {}),
+                "progress_percent": 100,
+                "generation_seconds": generation_seconds,
+            }
             return client.rest(
                 "PATCH",
                 f"/saas_quote_jobs?id=eq.{job_id}",
                 data={
                     "status": "completed",
                     "output_path": output_path,
-                    "metadata": {**(job.get("metadata") or {}), "progress_percent": 100},
+                    "metadata": metadata,
                     "error_message": None,
                     "updated_at": _utc_now(),
                     "completed_at": _utc_now(),
                 },
             )
         except Exception as exc:
+            generation_seconds = round(time.perf_counter() - started_at, 1)
             try:
                 update_progress(client, job, 100)
             except Exception:
@@ -411,7 +425,16 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
             client.rest(
                 "PATCH",
                 f"/saas_quote_jobs?id=eq.{job_id}",
-                data={"status": "failed", "error_message": str(exc)[:1000], "updated_at": _utc_now()},
+                data={
+                    "status": "failed",
+                    "metadata": {
+                        **(job.get("metadata") or {}),
+                        "progress_percent": 100,
+                        "generation_seconds": generation_seconds,
+                    },
+                    "error_message": str(exc)[:1000],
+                    "updated_at": _utc_now(),
+                },
             )
             raise
 

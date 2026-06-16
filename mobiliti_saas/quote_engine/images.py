@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import posixpath
 import unicodedata
 import os
 import tempfile
@@ -14,6 +15,7 @@ from openpyxl.utils.units import pixels_to_EMU
 
 
 NS = {
+    "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
     "xdr": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
@@ -32,7 +34,8 @@ def extract_images(source_path: str | Path) -> tuple[dict[int, str], str]:
                 with open(dest, "wb") as fh:
                     fh.write(zf.read(name))
 
-        rels_name = "xl/worksheets/_rels/sheet1.xml.rels"
+        worksheet_path = _worksheet_path_for_sheet(zf, "Quotation")
+        rels_name = _rels_path_for_part(worksheet_path)
         if rels_name not in zf.namelist():
             return image_map, temp_dir
         rels_root = ET.fromstring(zf.read(rels_name).decode("utf-8"))
@@ -40,7 +43,7 @@ def extract_images(source_path: str | Path) -> tuple[dict[int, str], str]:
         for rel in rels_root.findall(".//rels:Relationship", NS):
             target = rel.get("Target") or ""
             if "drawing" in target.lower() and "vml" not in target.lower():
-                drawing_path = target.replace("../", "xl/")
+                drawing_path = _resolve_zip_part(worksheet_path, target)
                 break
         if not drawing_path or drawing_path not in zf.namelist():
             return image_map, temp_dir
@@ -55,20 +58,70 @@ def extract_images(source_path: str | Path) -> tuple[dict[int, str], str]:
                 rel_to_file[rel.get("Id") or ""] = os.path.basename(rel.get("Target") or "")
 
         drawing_root = ET.fromstring(zf.read(drawing_path).decode("utf-8"))
-        for anchor in drawing_root.findall(".//xdr:twoCellAnchor", NS):
-            blip = anchor.find(".//a:blip", NS)
-            row_node = anchor.find("xdr:from/xdr:row", NS)
-            if blip is None or row_node is None:
-                continue
-            rid = blip.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed")
-            filename = rel_to_file.get(rid or "")
-            if not filename:
-                continue
-            path = os.path.join(temp_dir, filename)
-            if os.path.exists(path):
-                image_map[int(row_node.text or "0") + 1] = path
+        for anchor in [
+            *drawing_root.findall(".//xdr:twoCellAnchor", NS),
+            *drawing_root.findall(".//xdr:oneCellAnchor", NS),
+        ]:
+            image_row = _image_row_from_anchor(anchor, rel_to_file, temp_dir)
+            if image_row:
+                row, path = image_row
+                image_map[row] = path
 
     return image_map, temp_dir
+
+
+def _worksheet_path_for_sheet(zf: zipfile.ZipFile, sheet_name: str) -> str:
+    default = "xl/worksheets/sheet1.xml"
+    if "xl/workbook.xml" not in zf.namelist() or "xl/_rels/workbook.xml.rels" not in zf.namelist():
+        return default
+
+    workbook = ET.fromstring(zf.read("xl/workbook.xml").decode("utf-8"))
+    workbook_rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels").decode("utf-8"))
+    rid_to_target = {
+        rel.get("Id") or "": rel.get("Target") or ""
+        for rel in workbook_rels.findall(".//rels:Relationship", NS)
+    }
+    wanted = sheet_name.strip().lower()
+    for sheet in workbook.findall(".//main:sheet", NS):
+        if str(sheet.get("name") or "").strip().lower() != wanted:
+            continue
+        rid = sheet.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+        target = rid_to_target.get(rid or "")
+        if target:
+            return _resolve_zip_part("xl/workbook.xml", target)
+    return default
+
+
+def _rels_path_for_part(part_path: str) -> str:
+    folder = posixpath.dirname(part_path)
+    name = posixpath.basename(part_path)
+    return posixpath.join(folder, "_rels", f"{name}.rels")
+
+
+def _resolve_zip_part(base_part: str, target: str) -> str:
+    clean_target = str(target or "").replace("\\", "/")
+    if clean_target.startswith("/"):
+        return clean_target.lstrip("/")
+    return posixpath.normpath(posixpath.join(posixpath.dirname(base_part), clean_target))
+
+
+def _image_row_from_anchor(
+    anchor: ET.Element,
+    rel_to_file: dict[str, str],
+    temp_dir: str,
+) -> tuple[int, str] | None:
+    blip = anchor.find(".//a:blip", NS)
+    row_node = anchor.find("xdr:from/xdr:row", NS)
+    if blip is None or row_node is None:
+        return None
+    rid = blip.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed")
+    filename = rel_to_file.get(rid or "")
+    if not filename:
+        return None
+    path = os.path.join(temp_dir, filename)
+    if not os.path.exists(path):
+        return None
+    return int(row_node.text or "0") + 1, path
 
 
 def image_scale_for_category(category: str | None) -> float:

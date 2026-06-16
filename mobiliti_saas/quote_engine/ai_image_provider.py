@@ -10,11 +10,18 @@ import urllib.request
 import uuid
 
 
-DEFAULT_DEZGO_ENDPOINT = "https://api.dezgo.com/remove-background"
-DEFAULT_DEZGO_MODEL = "flux_2"
+DEFAULT_DEZGO_ENDPOINT = "https://api.dezgo.com/image2image"
+DEFAULT_DEZGO_TEXT_ENDPOINT = "https://api.dezgo.com/text2image_flux"
+DEFAULT_DEZGO_MODEL = "realistic_vision_5_1"
 DEFAULT_DEZGO_PROMPT = (
-    "clean professional furniture product photo, preserve the original object, "
-    "sharp details, pure white studio background"
+    "realistic premium office furniture catalog render, preserve the exact original product shape, "
+    "materials, color and proportions, centered full product, pure white seamless background, "
+    "soft studio lighting, realistic contact shadow, premium commercial catalog quality, sharp details, "
+    "no text, no logos, no people"
+)
+DEFAULT_DEZGO_NEGATIVE_PROMPT = (
+    "distorted geometry, changed product design, extra furniture, people, hands, text, watermark, "
+    "logo, cropped product, blurry, low resolution, cartoon, illustration, oversaturated colors"
 )
 
 
@@ -26,12 +33,17 @@ class ImageProviderError(RuntimeError):
 class DezgoImageProviderConfig:
     api_key: str | None = None
     endpoint: str = DEFAULT_DEZGO_ENDPOINT
+    text_endpoint: str = DEFAULT_DEZGO_TEXT_ENDPOINT
     model: str = DEFAULT_DEZGO_MODEL
     prompt: str = DEFAULT_DEZGO_PROMPT
+    negative_prompt: str = DEFAULT_DEZGO_NEGATIVE_PROMPT
     mode: str = "transparent"
     output_format: str = "png"
-    strength: float = 0.35
+    strength: float = 0.58
     timeout_seconds: int = 120
+    text_width: int = 1024
+    text_height: int = 1024
+    text_steps: int = 8
 
 
 def normalize_image_provider(value: str | None) -> str:
@@ -46,14 +58,35 @@ def normalize_image_provider(value: str | None) -> str:
 def dezgo_config_from_env() -> DezgoImageProviderConfig:
     return DezgoImageProviderConfig(
         api_key=os.environ.get("DEZGO_API_KEY"),
-        endpoint=os.environ.get("DEZGO_ENDPOINT", DEFAULT_DEZGO_ENDPOINT),
+        endpoint=_retouch_endpoint_from_env(),
+        text_endpoint=os.environ.get("DEZGO_TEXT_ENDPOINT", DEFAULT_DEZGO_TEXT_ENDPOINT),
         model=os.environ.get("DEZGO_MODEL", DEFAULT_DEZGO_MODEL),
         prompt=os.environ.get("DEZGO_PROMPT", DEFAULT_DEZGO_PROMPT),
+        negative_prompt=os.environ.get("DEZGO_NEGATIVE_PROMPT", DEFAULT_DEZGO_NEGATIVE_PROMPT),
         mode=os.environ.get("DEZGO_REMOVE_BACKGROUND_MODE", "transparent"),
         output_format=os.environ.get("DEZGO_OUTPUT_FORMAT", "png"),
-        strength=_float_env("DEZGO_IMAGE_STRENGTH", 0.35),
+        strength=_float_env("DEZGO_IMAGE_STRENGTH", 0.58),
         timeout_seconds=int(_float_env("DEZGO_TIMEOUT_SECONDS", 120)),
+        text_width=int(_float_env("DEZGO_TEXT_WIDTH", 1024)),
+        text_height=int(_float_env("DEZGO_TEXT_HEIGHT", 1024)),
+        text_steps=int(_float_env("DEZGO_TEXT_STEPS", 8)),
     )
+
+
+def _retouch_endpoint_from_env() -> str:
+    endpoint = os.environ.get("DEZGO_IMAGE2IMAGE_ENDPOINT") or os.environ.get("DEZGO_ENDPOINT", DEFAULT_DEZGO_ENDPOINT)
+    if _is_non_retouch_endpoint(endpoint) and not _truthy_env("DEZGO_ALLOW_NON_RETOUCH_ENDPOINT"):
+        return DEFAULT_DEZGO_ENDPOINT
+    return endpoint
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_non_retouch_endpoint(endpoint: str | None) -> bool:
+    path = urllib.parse.urlparse(str(endpoint or "")).path.lower()
+    return "remove-background" in path or "upscale" in path
 
 
 def enhance_with_dezgo(
@@ -79,6 +112,39 @@ def enhance_with_dezgo(
     )
     request = urllib.request.Request(
         endpoint,
+        data=body,
+        method="POST",
+        headers={
+            "X-Dezgo-Key": config.api_key,
+            "Content-Type": content_type,
+            "User-Agent": "MobilitiQuoteWorker/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(response.read())
+    except urllib.error.HTTPError as exc:
+        raise ImageProviderError(_safe_http_error_message(exc)) from exc
+    except urllib.error.URLError as exc:
+        raise ImageProviderError(f"No se pudo conectar con Dezgo: {exc.reason}") from exc
+    return output
+
+
+def generate_with_dezgo(
+    prompt: str,
+    output_path: str | Path,
+    config: DezgoImageProviderConfig | None = None,
+) -> Path:
+    config = config or dezgo_config_from_env()
+    if not config.api_key:
+        raise ImageProviderError("Falta configurar DEZGO_API_KEY")
+
+    output = Path(output_path)
+    fields = _fields_for_text_endpoint(config, prompt)
+    body, content_type = _multipart_body(fields, "unused", "unused.txt", b"", "text/plain", include_file=False)
+    request = urllib.request.Request(
+        _normalize_endpoint(config.text_endpoint),
         data=body,
         method="POST",
         headers={
@@ -130,11 +196,50 @@ def _fields_for_endpoint(endpoint: str, config: DezgoImageProviderConfig) -> dic
         "prompt": config.prompt,
         "format": config.output_format,
     }
-    if config.model:
-        fields["model"] = config.model
+    if config.negative_prompt:
+        fields["negative_prompt"] = config.negative_prompt
+    model = _model_for_endpoint(path, config.model)
+    if model:
+        fields["model"] = model
     if "image2image" in path:
         fields["strength"] = str(config.strength)
     return fields
+
+
+def _fields_for_text_endpoint(config: DezgoImageProviderConfig, prompt: str) -> dict[str, str]:
+    endpoint = _normalize_endpoint(config.text_endpoint)
+    path = urllib.parse.urlparse(endpoint).path.lower()
+    fields = {
+        "prompt": _limit_prompt(prompt),
+        "format": config.output_format,
+    }
+    if "text2image_flux" in path:
+        fields.update(
+            {
+                "width": str(_clamp_multiple(config.text_width, 512, 1536)),
+                "height": str(_clamp_multiple(config.text_height, 512, 1536)),
+                "steps": str(max(2, min(20, int(config.text_steps or 8)))),
+                "transparent_background": "false",
+            }
+        )
+    else:
+        fields.update(
+            {
+                "width": str(_clamp_multiple(config.text_width, 320, 1024)),
+                "height": str(_clamp_multiple(config.text_height, 320, 1024)),
+                "negative_prompt": config.negative_prompt,
+            }
+        )
+        if config.model:
+            fields["model"] = config.model
+    return fields
+
+
+def _model_for_endpoint(path: str, model: str) -> str:
+    text = str(model or "").strip()
+    if "image2image" in path and text.startswith("flux_"):
+        return DEFAULT_DEZGO_MODEL
+    return text
 
 
 def _multipart_body(
@@ -143,6 +248,7 @@ def _multipart_body(
     filename: str,
     file_bytes: bytes,
     content_type: str,
+    include_file: bool = True,
 ) -> tuple[bytes, str]:
     boundary = f"----MobilitiDezgo{uuid.uuid4().hex}"
     chunks: list[bytes] = []
@@ -155,20 +261,31 @@ def _multipart_body(
                 b"\r\n",
             ]
         )
-    chunks.extend(
-        [
-            f"--{boundary}\r\n".encode("utf-8"),
-            (
-                f'Content-Disposition: form-data; name="{file_field}"; '
-                f'filename="{filename}"\r\n'
-            ).encode("utf-8"),
-            f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
-            file_bytes,
-            b"\r\n",
-            f"--{boundary}--\r\n".encode("utf-8"),
-        ]
-    )
+    if include_file:
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode("utf-8"),
+                (
+                    f'Content-Disposition: form-data; name="{file_field}"; '
+                    f'filename="{filename}"\r\n'
+                ).encode("utf-8"),
+                f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
+                file_bytes,
+                b"\r\n",
+            ]
+        )
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def _limit_prompt(prompt: str, limit: int = 1000) -> str:
+    clean = " ".join(str(prompt or "").split())
+    return clean[:limit].rstrip()
+
+
+def _clamp_multiple(value: int, min_value: int, max_value: int) -> int:
+    value = max(min_value, min(max_value, int(value or min_value)))
+    return max(min_value, value - (value % 8))
 
 
 def _content_type_for(path: Path) -> str:
