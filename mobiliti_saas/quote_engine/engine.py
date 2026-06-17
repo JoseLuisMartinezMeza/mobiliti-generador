@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import copy, deepcopy
+from dataclasses import dataclass
 from io import BytesIO
 import hashlib
 import math
@@ -37,15 +38,16 @@ from .parser import QuoteItem, col_index, read_items
 MONEY_FORMAT = '$#,##0.00;[Red]-$#,##0.00;"-"'
 PERCENT_FORMAT = "0%"
 MOBILITI_SECTION_COUNT = 32
+BASE_PROD_PER_SECTION = 32
 MAX_PROD_PER_SECTION = 64
 MOBILITI_FIRST_SECTION_ROW = 13
-MOBILITI_SECTION_BLOCK_HEIGHT = MAX_PROD_PER_SECTION + 3
+MOBILITI_SECTION_BLOCK_HEIGHT = BASE_PROD_PER_SECTION + 3
 SECTION_CATS = [
     MOBILITI_FIRST_SECTION_ROW + index * MOBILITI_SECTION_BLOCK_HEIGHT
     for index in range(MOBILITI_SECTION_COUNT)
 ]
 SECTION_PROD_STARTS = [row + 1 for row in SECTION_CATS]
-SECTION_SUBTOTAL_ROWS = [row + MAX_PROD_PER_SECTION + 2 for row in SECTION_CATS]
+SECTION_SUBTOTAL_ROWS = [row + BASE_PROD_PER_SECTION + 2 for row in SECTION_CATS]
 MOBILITI_TOTAL_ROW = SECTION_SUBTOTAL_ROWS[-1] + 1
 DEFAULT_EXCHANGE_RATE = 20.0
 DEFAULT_DELIVERY_PLACE = "Guadalajara"
@@ -77,6 +79,14 @@ LUMBRO_CATEGORY = "Multicontactos"
 LUMBRO_PROVIDER = "Lumbro"
 LUMBRO_ACCESSORY_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_multicontacto_blanco.png"
 LUMBRO_WORKSTATION_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_workstation_multiusuario.png"
+
+
+@dataclass(frozen=True)
+class MobilitiSectionLayout:
+    section_row: int
+    product_start: int
+    capacity: int
+    subtotal_row: int
 
 
 def _sheet_name(name: str) -> str:
@@ -281,8 +291,14 @@ def _normalize_mobiliti_row_formulas(ws, row: int, total_row: int, discount_star
         ws.cell(row, MOBILITI_MAX_DISCOUNT_COL).number_format = PERCENT_FORMAT
 
 
-def _set_mobiliti_subtotal_formulas(ws, row: int, section_number: int, product_start: int) -> None:
-    product_end = product_start + MAX_PROD_PER_SECTION - 1
+def _set_mobiliti_subtotal_formulas(
+    ws,
+    row: int,
+    section_number: int,
+    product_start: int,
+    capacity: int = BASE_PROD_PER_SECTION,
+) -> None:
+    product_end = product_start + capacity - 1
     ws.cell(row, 1).value = f"Subtotales Sección {section_number}"
     for col in (8, 12, 14, 24, 29, 32):
         letter = get_column_letter(col)
@@ -290,17 +306,80 @@ def _set_mobiliti_subtotal_formulas(ws, row: int, section_number: int, product_s
     ws.cell(row, 33).value = f"=IFERROR(1-(N{row}/AC{row}),0)"
 
 
-def _set_mobiliti_total_formulas(ws, row: int) -> None:
-    ws.cell(row, 8).value = "=" + "+".join(f"H{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
-    ws.cell(row, 11).value = "=" + "+".join(f"L{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
-    ws.cell(row, 13).value = "=" + "+".join(f"N{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
-    ws.cell(row, 24).value = "=" + "+".join(f"X{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
-    ws.cell(row, 29).value = "=" + "+".join(f"AC{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
-    ws.cell(row, 32).value = "=" + "+".join(f"AF{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
-    ws.cell(row, 33).value = f"=AVERAGE({','.join(f'AG{subtotal}' for subtotal in SECTION_SUBTOTAL_ROWS)})"
+def _set_mobiliti_total_formulas(
+    ws,
+    row: int,
+    subtotal_rows: list[int] | None = None,
+) -> None:
+    subtotal_rows = subtotal_rows or SECTION_SUBTOTAL_ROWS
+    ws.cell(row, 8).value = "=" + "+".join(f"H{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, 11).value = "=" + "+".join(f"L{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, 13).value = "=" + "+".join(f"N{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, 24).value = "=" + "+".join(f"X{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, 29).value = "=" + "+".join(f"AC{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, 32).value = "=" + "+".join(f"AF{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, 33).value = f"=AVERAGE({','.join(f'AG{subtotal}' for subtotal in subtotal_rows)})"
 
 
-def _ensure_mobiliti_capacity(ws) -> None:
+def _normalize_mobiliti_section_capacities(capacities: list[int]) -> list[int]:
+    normalized = [
+        MAX_PROD_PER_SECTION if capacity > BASE_PROD_PER_SECTION else BASE_PROD_PER_SECTION
+        for capacity in capacities[:MOBILITI_SECTION_COUNT]
+    ]
+    while len(normalized) < MOBILITI_SECTION_COUNT:
+        normalized.append(BASE_PROD_PER_SECTION)
+    return normalized
+
+
+def _mobiliti_section_capacities(
+    items: list[QuoteItem],
+    category_dictionary: dict[str, str],
+) -> list[int]:
+    needs: list[int] = []
+
+    for item in items:
+        if item.tipo == "categoria":
+            if not needs or needs[-1] > 0:
+                needs.append(0)
+            continue
+        if item.tipo != "producto":
+            continue
+
+        if not needs:
+            needs.append(0)
+
+        category = classify_product_name(str(item.nombre or ""), category_dictionary)
+        rows_needed = 1 + len(_lumbro_accessories_for_item(item, category))
+        while rows_needed > 0:
+            remaining = MAX_PROD_PER_SECTION - needs[-1]
+            if remaining <= 0:
+                needs.append(0)
+                remaining = MAX_PROD_PER_SECTION
+            take = min(rows_needed, remaining)
+            needs[-1] += take
+            rows_needed -= take
+
+    return _normalize_mobiliti_section_capacities(needs)
+
+
+def _mobiliti_product_ranges(ws) -> list[tuple[int, int]]:
+    ranges = getattr(ws, "_mobiliti_product_ranges", None)
+    if ranges:
+        return list(ranges)
+    return [(start_row, BASE_PROD_PER_SECTION) for start_row in SECTION_PROD_STARTS]
+
+
+def _write_mobiliti_section_title(
+    ws,
+    layout: MobilitiSectionLayout,
+    section_number: int,
+    title: str,
+) -> None:
+    anchor_col = _merged_anchor_column(ws, layout.section_row, 4)
+    ws.cell(layout.section_row, anchor_col).value = f"Secci\u00f3n {section_number} - {title}"
+
+
+def _ensure_mobiliti_capacity_legacy(ws) -> None:
     if ws.max_row >= MOBILITI_TOTAL_ROW and str(ws.cell(MOBILITI_TOTAL_ROW, 6).value or "") == "TOTAL PIEZAS":
         return
 
@@ -370,6 +449,89 @@ def _ensure_mobiliti_capacity(ws) -> None:
     ws["E8"] = f"=(AC{MOBILITI_TOTAL_ROW}-M{MOBILITI_TOTAL_ROW})/AC{MOBILITI_TOTAL_ROW}"
 
 
+def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSectionLayout]:
+    capacities = _normalize_mobiliti_section_capacities(capacities)
+    max_col = max(ws.max_column, 48)
+    original_total_row = _find_mobiliti_total_row(ws)
+    if not original_total_row:
+        layouts = [
+            MobilitiSectionLayout(row, row + 1, capacity, row + capacity + 2)
+            for row, capacity in zip(SECTION_CATS, capacities, strict=False)
+        ]
+        ws._mobiliti_product_ranges = [(layout.product_start, layout.capacity) for layout in layouts]
+        return layouts
+
+    section = _snapshot_mobiliti_row(ws, 48, max_col)
+    product = _snapshot_mobiliti_row(ws, 14, max_col)
+    blank = _snapshot_mobiliti_row(ws, 46, max_col)
+    subtotal = _snapshot_mobiliti_row(ws, 47, max_col)
+
+    rows_to_insert = MOBILITI_TOTAL_ROW - original_total_row
+    if rows_to_insert > 0:
+        ws.insert_rows(original_total_row, rows_to_insert)
+
+    for index in range(16, MOBILITI_SECTION_COUNT):
+        section_row = SECTION_CATS[index]
+        _copy_mobiliti_row_from_snapshot(
+            ws,
+            section,
+            section_row,
+            source_row=48,
+            max_col=max_col,
+            translate_formulas=False,
+        )
+        ws.cell(section_row, _merged_anchor_column(ws, section_row, 4)).value = f"Secci\u00f3n {index + 1} - NOMBRE"
+
+        product_start = section_row + 1
+        for row in range(product_start, product_start + BASE_PROD_PER_SECTION):
+            _copy_mobiliti_row_from_snapshot(ws, product, row, source_row=14, max_col=max_col)
+
+        blank_row = product_start + BASE_PROD_PER_SECTION
+        _copy_mobiliti_row_from_snapshot(ws, blank, blank_row, source_row=46, max_col=max_col)
+
+        subtotal_row = blank_row + 1
+        _copy_mobiliti_row_from_snapshot(ws, subtotal, subtotal_row, source_row=47, max_col=max_col)
+
+    layouts: list[MobilitiSectionLayout] = []
+    inserted_rows = 0
+    for index, capacity in enumerate(capacities):
+        section_row = SECTION_CATS[index] + inserted_rows
+        product_start = section_row + 1
+        extra_rows = capacity - BASE_PROD_PER_SECTION
+        if extra_rows > 0:
+            insert_at = product_start + BASE_PROD_PER_SECTION
+            ws.insert_rows(insert_at, extra_rows)
+            for row in range(insert_at, insert_at + extra_rows):
+                _copy_mobiliti_row_from_snapshot(ws, product, row, source_row=14, max_col=max_col)
+            inserted_rows += extra_rows
+
+        subtotal_row = product_start + capacity + 1
+        layouts.append(MobilitiSectionLayout(section_row, product_start, capacity, subtotal_row))
+
+    total_row = MOBILITI_TOTAL_ROW + inserted_rows
+    discount_start = _find_provider_discount_start(ws)
+    subtotal_rows = [layout.subtotal_row for layout in layouts]
+
+    for index, layout in enumerate(layouts, start=1):
+        _write_mobiliti_section_title(ws, layout, index, "NOMBRE")
+        for row in range(layout.product_start, layout.product_start + layout.capacity):
+            _normalize_mobiliti_row_formulas(ws, row, total_row, discount_start)
+        _set_mobiliti_subtotal_formulas(
+            ws,
+            layout.subtotal_row,
+            index,
+            layout.product_start,
+            layout.capacity,
+        )
+
+    _set_mobiliti_total_formulas(ws, total_row, subtotal_rows)
+    ws["E4"] = f"=AC{total_row}"
+    ws["E6"] = f"=E4*E5"
+    ws["E8"] = f"=(AC{total_row}-M{total_row})/AC{total_row}"
+    ws._mobiliti_product_ranges = [(layout.product_start, layout.capacity) for layout in layouts]
+    return layouts
+
+
 def _unmerge_row(ws, row: int) -> None:
     for merged in list(ws.merged_cells.ranges):
         if merged.min_row <= row <= merged.max_row:
@@ -390,8 +552,16 @@ def _clear_row(ws, row: int, max_col: int = 10) -> None:
 
 def _merged_anchor_column(ws, row: int, default_col: int) -> int:
     for merged in ws.merged_cells.ranges:
-        if merged.min_row == row and merged.max_row == row:
+        if (
+            merged.min_row == row
+            and merged.max_row == row
+            and merged.min_col <= default_col <= merged.max_col
+        ):
             return merged.min_col
+    if isinstance(ws.cell(row, default_col), MergedCell):
+        for col in range(default_col, 0, -1):
+            if not isinstance(ws.cell(row, col), MergedCell):
+                return col
     return default_col
 
 
@@ -824,7 +994,6 @@ def _write_mobiliti(
     lumbro_prices: dict[str, float] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> tuple[dict[int, int], dict[int, list[int]]]:
-    _ensure_mobiliti_capacity(ws)
     q_sheet = "Quotation"
     row_map: dict[int, int] = {}
     lumbro_row_map: dict[int, list[int]] = {}
@@ -834,6 +1003,10 @@ def _write_mobiliti(
     category_dictionary = load_category_dictionary(
         [str(item.nombre or "") for item in items if item.tipo == "producto"]
     )
+    section_layouts = _ensure_mobiliti_capacity(
+        ws,
+        _mobiliti_section_capacities(items, category_dictionary),
+    )
     m3_col = column_map.get("m3", column_map.get("dimension", "E"))
     qty_col = column_map.get("cantidad", "G")
     price_col = column_map.get("unit_price", column_map.get("list_price", "J"))
@@ -842,15 +1015,23 @@ def _write_mobiliti(
 
     section_idx = 0
     prod_in_section = 0
+    active_section_name = "NOMBRE"
 
     def next_product_row() -> int | None:
         nonlocal section_idx, prod_in_section
-        if prod_in_section >= MAX_PROD_PER_SECTION:
+        if prod_in_section >= section_layouts[section_idx].capacity:
             section_idx += 1
             prod_in_section = 0
-        if section_idx >= len(SECTION_CATS):
+            if section_idx < len(section_layouts):
+                _write_mobiliti_section_title(
+                    ws,
+                    section_layouts[section_idx],
+                    section_idx + 1,
+                    active_section_name,
+                )
+        if section_idx >= len(section_layouts):
             return None
-        row_number = SECTION_PROD_STARTS[section_idx] + prod_in_section
+        row_number = section_layouts[section_idx].product_start + prod_in_section
         prod_in_section += 1
         return row_number
 
@@ -882,12 +1063,13 @@ def _write_mobiliti(
 
     for item in items:
         if item.tipo == "categoria":
+            active_section_name = str(item.nombre or "NOMBRE")
             if prod_in_section > 0:
                 section_idx += 1
                 prod_in_section = 0
-            if section_idx >= len(SECTION_CATS):
+            if section_idx >= len(section_layouts):
                 break
-            section_row = SECTION_CATS[section_idx]
+            section_row = section_layouts[section_idx].section_row
             anchor_col = _merged_anchor_column(ws, section_row, 4)
             ws.cell(section_row, anchor_col).value = f"Sección {section_idx + 1} - {item.nombre}"
             continue
@@ -920,8 +1102,8 @@ def _write_mobiliti(
 
 
 def _clear_unused_mobiliti_product_rows(ws, written_rows: set[int]) -> None:
-    for start_row in SECTION_PROD_STARTS:
-        for row in range(start_row, start_row + MAX_PROD_PER_SECTION):
+    for start_row, capacity in _mobiliti_product_ranges(ws):
+        for row in range(start_row, start_row + capacity):
             if row in written_rows:
                 continue
             for col in MOBILITI_CLEAR_COLS:
@@ -947,15 +1129,15 @@ def _apply_mobiliti_provider_validation(ws) -> None:
     formula = f"={_sheet_name(provider_ws.title)}!$A$2:$A${last_provider_row}"
     validation = DataValidation(type="list", formula1=formula, allow_blank=True)
     ws.add_data_validation(validation)
-    for start_row in SECTION_PROD_STARTS:
-        validation.add(f"F{start_row}:F{start_row + MAX_PROD_PER_SECTION - 1}")
+    for start_row, capacity in _mobiliti_product_ranges(ws):
+        validation.add(f"F{start_row}:F{start_row + capacity - 1}")
 
 
 def _apply_mobiliti_region_validation(ws) -> None:
     validation = DataValidation(type="list", formula1="Taba_Region", allow_blank=True)
     ws.add_data_validation(validation)
-    for start_row in SECTION_PROD_STARTS:
-        validation.add(f"P{start_row}:P{start_row + MAX_PROD_PER_SECTION - 1}")
+    for start_row, capacity in _mobiliti_product_ranges(ws):
+        validation.add(f"P{start_row}:P{start_row + capacity - 1}")
 
 
 def _write_fletes(ws) -> None:

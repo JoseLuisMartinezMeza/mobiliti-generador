@@ -39,7 +39,25 @@ def test_mobiliti_capacity_constants_are_expanded():
     assert len(SECTION_CATS) == 32
     assert MAX_PROD_PER_SECTION == 64
     assert SECTION_PROD_STARTS[0] == SECTION_CATS[0] + 1
-    assert SECTION_CATS[1] - SECTION_CATS[0] >= MAX_PROD_PER_SECTION + 2
+    assert SECTION_CATS[1] - SECTION_CATS[0] == 35
+
+
+def test_mobiliti_preserves_template_spacing_when_section_fits_base_capacity():
+    wb = load_workbook(TEMPLATE, data_only=False, keep_links=False)
+    ws = wb["Mobiliti"]
+    try:
+        _write_mobiliti(
+            ws,
+            _many_products(3),
+            {"m3": "H", "cantidad": "G", "unit_price": "J"},
+        )
+
+        assert str(ws.cell(47, 1).value).startswith("Subtotales Secci")
+        assert "Secci" in str(ws.cell(48, 1).value)
+        assert ws.row_dimensions[47].height == 24
+        assert ws.row_dimensions[48].height == 26
+    finally:
+        wb.close()
 
 
 def test_mobiliti_writes_all_products_through_expanded_sections():
@@ -54,8 +72,11 @@ def test_mobiliti_writes_all_products_through_expanded_sections():
 
         assert len(row_map) == 70
         assert row_map[9] == SECTION_PROD_STARTS[0]
+        assert row_map[40] == SECTION_PROD_STARTS[0] + 31
+        assert row_map[41] == SECTION_PROD_STARTS[0] + 32
         assert row_map[72] == SECTION_PROD_STARTS[0] + 63
-        assert row_map[73] == SECTION_PROD_STARTS[1]
+        assert str(ws.cell(79, 1).value).startswith("Subtotales Secci")
+        assert row_map[73] == 81
         assert ws.cell(row_map[73], 4).value == "=Quotation!B73"
     finally:
         wb.close()
