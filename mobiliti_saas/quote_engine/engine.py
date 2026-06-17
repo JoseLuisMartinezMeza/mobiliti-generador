@@ -462,9 +462,10 @@ def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSection
         return layouts
 
     section = _snapshot_mobiliti_row(ws, 48, max_col)
-    product = _snapshot_mobiliti_row(ws, 14, max_col)
-    blank = _snapshot_mobiliti_row(ws, 46, max_col)
-    subtotal = _snapshot_mobiliti_row(ws, 47, max_col)
+    first_product = _snapshot_mobiliti_row(ws, 14, max_col)
+    section_product = _snapshot_mobiliti_row(ws, 49, max_col)
+    section_blank = _snapshot_mobiliti_row(ws, 81, max_col)
+    section_subtotal = _snapshot_mobiliti_row(ws, 82, max_col)
 
     rows_to_insert = MOBILITI_TOTAL_ROW - original_total_row
     if rows_to_insert > 0:
@@ -484,13 +485,19 @@ def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSection
 
         product_start = section_row + 1
         for row in range(product_start, product_start + BASE_PROD_PER_SECTION):
-            _copy_mobiliti_row_from_snapshot(ws, product, row, source_row=14, max_col=max_col)
+            _copy_mobiliti_row_from_snapshot(
+                ws,
+                section_product,
+                row,
+                source_row=49,
+                max_col=max_col,
+            )
 
         blank_row = product_start + BASE_PROD_PER_SECTION
-        _copy_mobiliti_row_from_snapshot(ws, blank, blank_row, source_row=46, max_col=max_col)
+        _copy_mobiliti_row_from_snapshot(ws, section_blank, blank_row, source_row=81, max_col=max_col)
 
         subtotal_row = blank_row + 1
-        _copy_mobiliti_row_from_snapshot(ws, subtotal, subtotal_row, source_row=47, max_col=max_col)
+        _copy_mobiliti_row_from_snapshot(ws, section_subtotal, subtotal_row, source_row=82, max_col=max_col)
 
     layouts: list[MobilitiSectionLayout] = []
     inserted_rows = 0
@@ -501,8 +508,16 @@ def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSection
         if extra_rows > 0:
             insert_at = product_start + BASE_PROD_PER_SECTION
             ws.insert_rows(insert_at, extra_rows)
+            product_snapshot = first_product if index == 0 else section_product
+            product_source_row = 14 if index == 0 else 49
             for row in range(insert_at, insert_at + extra_rows):
-                _copy_mobiliti_row_from_snapshot(ws, product, row, source_row=14, max_col=max_col)
+                _copy_mobiliti_row_from_snapshot(
+                    ws,
+                    product_snapshot,
+                    row,
+                    source_row=product_source_row,
+                    max_col=max_col,
+                )
             inserted_rows += extra_rows
 
         subtotal_row = product_start + capacity + 1
@@ -1041,13 +1056,9 @@ def _write_mobiliti(
             f"=MIN({_excel_decimal(discount_rate)},"
             f"{get_column_letter(MOBILITI_MAX_DISCOUNT_COL)}{row_number})"
         )
-        ws.cell(row_number, MOBILITI_COVER_DISCOUNT_COL).number_format = PERCENT_FORMAT
         ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).value = f"=W{row_number}*Z{row_number}"
-        ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).number_format = MONEY_FORMAT
         ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).value = f"=W{row_number}*(1-Z{row_number})"
-        ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).number_format = MONEY_FORMAT
         ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).value = f"=AB{row_number}*H{row_number}"
-        ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).number_format = MONEY_FORMAT
         written_rows.add(row_number)
 
     def write_lumbro_row(row_number: int, code: str, quantity: int, region: str = DEFAULT_MOBILITI_REGION) -> None:
@@ -1057,7 +1068,6 @@ def _write_mobiliti(
         ws.cell(row_number, 6).value = LUMBRO_PROVIDER
         ws.cell(row_number, 8).value = quantity
         ws.cell(row_number, 10).value = f"={price_mxn}/$K$6"
-        ws.cell(row_number, 10).number_format = MONEY_FORMAT
         ws.cell(row_number, 11).value = 0
         mark_written_row(row_number, region)
 
