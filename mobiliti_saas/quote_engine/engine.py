@@ -16,6 +16,7 @@ import zipfile
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.drawing.image import Image as XlsxImage
+from openpyxl.formula.translate import Translator
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -35,9 +36,17 @@ from .parser import QuoteItem, col_index, read_items
 
 MONEY_FORMAT = '$#,##0.00;[Red]-$#,##0.00;"-"'
 PERCENT_FORMAT = "0%"
-SECTION_CATS = [13, 48, 83, 118, 153, 188, 223, 258, 293, 328, 363, 398, 433, 468, 503, 538]
+MOBILITI_SECTION_COUNT = 32
+MAX_PROD_PER_SECTION = 64
+MOBILITI_FIRST_SECTION_ROW = 13
+MOBILITI_SECTION_BLOCK_HEIGHT = MAX_PROD_PER_SECTION + 3
+SECTION_CATS = [
+    MOBILITI_FIRST_SECTION_ROW + index * MOBILITI_SECTION_BLOCK_HEIGHT
+    for index in range(MOBILITI_SECTION_COUNT)
+]
 SECTION_PROD_STARTS = [row + 1 for row in SECTION_CATS]
-MAX_PROD_PER_SECTION = 32
+SECTION_SUBTOTAL_ROWS = [row + MAX_PROD_PER_SECTION + 2 for row in SECTION_CATS]
+MOBILITI_TOTAL_ROW = SECTION_SUBTOTAL_ROWS[-1] + 1
 DEFAULT_EXCHANGE_RATE = 20.0
 DEFAULT_DELIVERY_PLACE = "Guadalajara"
 DEFAULT_DISCOUNT_PERCENT = 40.0
@@ -169,10 +178,208 @@ def _copy_row_style(ws, source_row: int, target_row: int, max_col: int = 10) -> 
         _copy_cell_style(ws.cell(source_row, col), ws.cell(target_row, col))
 
 
+def _find_mobiliti_total_row(ws) -> int | None:
+    for row in range(1, ws.max_row + 1):
+        if str(ws.cell(row, 6).value or "").strip().upper() == "TOTAL PIEZAS":
+            return row
+    return None
+
+
+def _find_provider_discount_start(ws) -> int | None:
+    for row in range(1, ws.max_row + 1):
+        if str(ws.cell(row, 35).value or "").strip() == "Sunon Inc":
+            return row
+    return None
+
+
+def _snapshot_mobiliti_row(ws, row: int, max_col: int) -> dict[str, Any]:
+    return {
+        "height": ws.row_dimensions[row].height,
+        "cells": [
+            {
+                "value": ws.cell(row, col).value,
+                "style": copy(ws.cell(row, col)._style),
+                "number_format": ws.cell(row, col).number_format,
+                "alignment": copy(ws.cell(row, col).alignment),
+            }
+            for col in range(1, max_col + 1)
+        ],
+        "merges": [
+            str(merged)
+            for merged in ws.merged_cells.ranges
+            if merged.min_row == row and merged.max_row == row
+        ],
+    }
+
+
+def _translate_formula_value(value: Any, origin: str, target: str) -> Any:
+    if isinstance(value, str) and value.startswith("="):
+        try:
+            return Translator(value, origin=origin).translate_formula(target)
+        except Exception:
+            return value
+    return value
+
+
+def _copy_mobiliti_row_from_snapshot(
+    ws,
+    snapshot: dict[str, Any],
+    target_row: int,
+    *,
+    source_row: int,
+    max_col: int,
+    translate_formulas: bool = True,
+) -> None:
+    _unmerge_row(ws, target_row)
+    ws.row_dimensions[target_row].height = snapshot["height"]
+    for col, data in enumerate(snapshot["cells"], start=1):
+        cell = ws.cell(target_row, col)
+        cell.value = None
+        cell._style = copy(data["style"])
+        cell.number_format = data["number_format"]
+        cell.alignment = copy(data["alignment"])
+        value = data["value"]
+        if translate_formulas:
+            value = _translate_formula_value(
+                value,
+                f"{get_column_letter(col)}{source_row}",
+                f"{get_column_letter(col)}{target_row}",
+            )
+        cell.value = value
+
+    row_offset = target_row - source_row
+    for merge in snapshot["merges"]:
+        shifted = CellRange(merge)
+        shifted.shift(row_shift=row_offset, col_shift=0)
+        try:
+            ws.merge_cells(str(shifted))
+        except ValueError:
+            pass
+
+
+def _normalize_mobiliti_row_formulas(ws, row: int, total_row: int, discount_start: int | None) -> None:
+    for col in range(1, min(ws.max_column, 48) + 1):
+        cell = ws.cell(row, col)
+        value = cell.value
+        if not isinstance(value, str) or not value.startswith("="):
+            continue
+        value = value.replace("$H$573", f"$H${total_row}")
+        value = re.sub(r"K\d+(?=\s*<=\s*\$AO\$)", f"K{total_row}", value)
+        value = re.sub(r"K\d+(?=\s*>\s*\$AN\$)", f"K{total_row}", value)
+        if discount_start:
+            offset = discount_start - 577
+            value = value.replace("$AO$578", f"$AO${578 + offset}")
+            value = value.replace("$AN$579", f"$AN${579 + offset}")
+            value = value.replace("$AN$580", f"$AN${580 + offset}")
+        cell.value = value
+
+    if discount_start:
+        discount_end = discount_start + 30
+        ws.cell(row, MOBILITI_MAX_DISCOUNT_COL).value = (
+            f'=IFERROR(VLOOKUP(F{row},$AI${discount_start}:$AJ${discount_end},2,FALSE),0.5)'
+        )
+        ws.cell(row, MOBILITI_MAX_DISCOUNT_COL).number_format = PERCENT_FORMAT
+
+
+def _set_mobiliti_subtotal_formulas(ws, row: int, section_number: int, product_start: int) -> None:
+    product_end = product_start + MAX_PROD_PER_SECTION - 1
+    ws.cell(row, 1).value = f"Subtotales Sección {section_number}"
+    for col in (8, 12, 14, 24, 29, 32):
+        letter = get_column_letter(col)
+        ws.cell(row, col).value = f"=SUM({letter}{product_start}:{letter}{product_end})"
+    ws.cell(row, 33).value = f"=IFERROR(1-(N{row}/AC{row}),0)"
+
+
+def _set_mobiliti_total_formulas(ws, row: int) -> None:
+    ws.cell(row, 8).value = "=" + "+".join(f"H{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
+    ws.cell(row, 11).value = "=" + "+".join(f"L{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
+    ws.cell(row, 13).value = "=" + "+".join(f"N{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
+    ws.cell(row, 24).value = "=" + "+".join(f"X{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
+    ws.cell(row, 29).value = "=" + "+".join(f"AC{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
+    ws.cell(row, 32).value = "=" + "+".join(f"AF{subtotal}" for subtotal in SECTION_SUBTOTAL_ROWS)
+    ws.cell(row, 33).value = f"=AVERAGE({','.join(f'AG{subtotal}' for subtotal in SECTION_SUBTOTAL_ROWS)})"
+
+
+def _ensure_mobiliti_capacity(ws) -> None:
+    if ws.max_row >= MOBILITI_TOTAL_ROW and str(ws.cell(MOBILITI_TOTAL_ROW, 6).value or "") == "TOTAL PIEZAS":
+        return
+
+    max_col = max(ws.max_column, 48)
+    original_total_row = _find_mobiliti_total_row(ws)
+    if not original_total_row:
+        return
+
+    first_section = _snapshot_mobiliti_row(ws, 13, max_col)
+    section = _snapshot_mobiliti_row(ws, 48, max_col)
+    product = _snapshot_mobiliti_row(ws, 14, max_col)
+    blank = _snapshot_mobiliti_row(ws, 46, max_col)
+    subtotal = _snapshot_mobiliti_row(ws, 47, max_col)
+
+    rows_to_insert = MOBILITI_TOTAL_ROW - original_total_row
+    if rows_to_insert > 0:
+        ws.insert_rows(original_total_row, rows_to_insert)
+
+    discount_start = _find_provider_discount_start(ws)
+
+    for index, section_row in enumerate(SECTION_CATS, start=1):
+        section_snapshot = first_section if index == 1 else section
+        section_source_row = 13 if index == 1 else 48
+        _copy_mobiliti_row_from_snapshot(
+            ws,
+            section_snapshot,
+            section_row,
+            source_row=section_source_row,
+            max_col=max_col,
+            translate_formulas=False,
+        )
+        ws.cell(section_row, _merged_anchor_column(ws, section_row, 4)).value = f"Sección {index} - NOMBRE"
+
+        product_start = section_row + 1
+        for row in range(product_start, product_start + MAX_PROD_PER_SECTION):
+            _copy_mobiliti_row_from_snapshot(
+                ws,
+                product,
+                row,
+                source_row=14,
+                max_col=max_col,
+            )
+            _normalize_mobiliti_row_formulas(ws, row, MOBILITI_TOTAL_ROW, discount_start)
+
+        blank_row = product_start + MAX_PROD_PER_SECTION
+        _copy_mobiliti_row_from_snapshot(
+            ws,
+            blank,
+            blank_row,
+            source_row=46,
+            max_col=max_col,
+        )
+
+        subtotal_row = SECTION_SUBTOTAL_ROWS[index - 1]
+        _copy_mobiliti_row_from_snapshot(
+            ws,
+            subtotal,
+            subtotal_row,
+            source_row=47,
+            max_col=max_col,
+        )
+        _set_mobiliti_subtotal_formulas(ws, subtotal_row, index, product_start)
+
+    _set_mobiliti_total_formulas(ws, MOBILITI_TOTAL_ROW)
+    ws["E4"] = f"=AC{MOBILITI_TOTAL_ROW}"
+    ws["E6"] = f"=E4*E5"
+    ws["E8"] = f"=(AC{MOBILITI_TOTAL_ROW}-M{MOBILITI_TOTAL_ROW})/AC{MOBILITI_TOTAL_ROW}"
+
+
 def _unmerge_row(ws, row: int) -> None:
     for merged in list(ws.merged_cells.ranges):
         if merged.min_row <= row <= merged.max_row:
-            ws.unmerge_cells(str(merged))
+            try:
+                ws.unmerge_cells(str(merged))
+            except KeyError:
+                try:
+                    ws.merged_cells.ranges.remove(merged)
+                except KeyError:
+                    pass
 
 
 def _clear_row(ws, row: int, max_col: int = 10) -> None:
@@ -617,6 +824,7 @@ def _write_mobiliti(
     lumbro_prices: dict[str, float] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> tuple[dict[int, int], dict[int, list[int]]]:
+    _ensure_mobiliti_capacity(ws)
     q_sheet = "Quotation"
     row_map: dict[int, int] = {}
     lumbro_row_map: dict[int, list[int]] = {}
