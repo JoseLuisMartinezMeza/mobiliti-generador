@@ -59,7 +59,8 @@ def improve_product_image(
     options = _build_options(background, min_size, cleanup_strength)
     provider = normalize_image_provider(image_provider or os.environ.get("IMAGE_PROVIDER"))
     provider_signature = _provider_signature(provider, image_prompt)
-    output = output_root / f"{_cache_key(source, options, provider_signature)}.png"
+    output_suffix = ".jpg" if provider != "dezgo" and options.background == "white" else ".png"
+    output = output_root / f"{_cache_key(source, options, provider_signature)}{output_suffix}"
     if output.exists():
         if provider == "dezgo":
             _bump_stat(stats, "image_ai_cached_count")
@@ -85,9 +86,7 @@ def improve_product_image(
 
     with Image.open(source) as img:
         processed = _process_image(img, options)
-        if options.background == "white":
-            processed = _flatten_to_white(processed)
-        processed.save(output, "PNG", optimize=True)
+        _save_processed_image(processed, output, options)
     return output
 
 
@@ -138,6 +137,14 @@ def _normalize_provider_output(output: Path, options: ImageProcessingOptions) ->
         if options.background == "white":
             processed = _flatten_to_white(processed)
         processed.save(output, "PNG", optimize=True)
+
+
+def _save_processed_image(img: Image.Image, output: Path, options: ImageProcessingOptions) -> None:
+    if options.background == "white":
+        rgb = _flatten_to_white(img).convert("RGB")
+        rgb.save(output, "JPEG", quality=82, optimize=True, progressive=True)
+        return
+    img.save(output, "PNG", optimize=True)
 
 
 def _compose_dezgo_retouch_prompt(user_prompt: str, base_prompt: str) -> str:
