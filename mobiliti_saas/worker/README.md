@@ -12,7 +12,7 @@ Variables requeridas:
 
 ```powershell
 $env:SUPABASE_URL="https://TU-PROYECTO.supabase.co"
-$env:SUPABASE_SERVICE_KEY="REMOVED_SUPABASE_SERVICE_KEY"
+$env:SUPABASE_SERVICE_KEY="REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY"
 ```
 
 Variables opcionales:

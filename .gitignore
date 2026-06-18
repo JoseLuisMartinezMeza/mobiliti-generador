@@ -25,6 +25,16 @@ temp_images/
 *.tmp
 *.temp
 
+# Secrets / local credentials
+.env
+.env.*
+!.env.example
+credentials.json
+*credentials*.json
+secrets.json
+*.pem
+*.key
+
 # Historial (solo scripts, no outputs)
 historial/test_outputs/
 historial/test_screenshots/

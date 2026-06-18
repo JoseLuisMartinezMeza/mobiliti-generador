@@ -28,7 +28,7 @@ def test_check_env_accepts_valid_shape():
     results = saas_doctor.check_env(
         {
             "SUPABASE_URL": "https://example.supabase.co",
-            "SUPABASE_SERVICE_KEY": "REMOVED_SUPABASE_SERVICE_KEY",
+            "SUPABASE_SERVICE_KEY": "service-role-key-example-long-value",
             "JWT_SECRET_KEY": "long-secret-value-at-least-24",
             "CORS_ORIGINS": "https://web.example.com",
             "QUOTE_ENGINE": "python",

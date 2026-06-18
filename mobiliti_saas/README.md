@@ -119,7 +119,7 @@ vercel env add SUPABASE_URL
 # Valor: https://TU-PROYECTO.supabase.co
 
 vercel env add SUPABASE_SERVICE_KEY
-# Valor: tu `REMOVED_SUPABASE_SERVICE_KEY` o service role key de Supabase
+# Valor: tu service role key de Supabase
 
 vercel env add JWT_SECRET_KEY
 # Valor: una clave secreta larga (cambiar en produccion)
