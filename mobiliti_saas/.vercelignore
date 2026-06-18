@@ -1,0 +1,17 @@
+dist/
+build/
+build_protected/
+release/
+web/node_modules/
+web/dist/
+backend/uploads/
+backend/historial/
+*.exe
+*.zip
+*.msi
+*.db
+*.pyc
+__pycache__/
+.mobiliti_dev_store/
+.Python/
+.pytest_cache/

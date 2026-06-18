@@ -2,11 +2,15 @@
 
 Sistema de generacion de cotizaciones con control de suscripciones.
 
+Para probar el SaaS completo sin Supabase ni Excel, usa
+[`DEV_LOCAL.md`](DEV_LOCAL.md).
+
 **Arquitectura:**
-- **Backend API** → Desplegado en Vercel (serverless)
-- **Base de Datos** → Supabase (PostgreSQL)
-- **Cliente** → Aplicacion de escritorio Windows (.exe) con Tkinter
-- **Generador** → xlwings local (requiere Excel en Windows)
+- **Web SaaS** -> React/Vite en `mobiliti_saas/web`
+- **Backend API** -> Vercel/FastAPI en `vercel_deploy/api/index.py`
+- **Base de Datos/Storage** -> Supabase PostgreSQL + bucket privado `quote-files`
+- **Worker online** -> `mobiliti_saas/worker` con `QUOTE_ENGINE=python` sin Excel
+- **Cliente desktop legado** -> archivado en `versiones historial`; no es ruta de produccion
 
 ---
 
@@ -14,20 +18,26 @@ Sistema de generacion de cotizaciones con control de suscripciones.
 
 ```
 +----------------------------+         +---------------------+
-| Cliente Windows (.exe)     |         | Vercel (Serverless) |
-| - Tkinter GUI              |  HTTPS  | - FastAPI + Mangum  |
-| - xlwings local            | <-----> | - Auth JWT          |
-| - Genera cotizaciones      |         | - Verifica suscrip. |
+| Web React / Cliente legacy |         | Vercel (Serverless) |
+| - Upload XLSX              |  HTTPS  | - FastAPI + JWT     |
+| - Historial/descarga       | <-----> | - Jobs cotizacion   |
 +----------------------------+         +----------+----------+
                                                   |
-                                                  | REST API
+                                                  | REST API + Storage
                                                   v
-                                       +---------------------+
-                                       | Supabase (Postgres) |
-                                       | - saas_usuarios     |
-                                       | - saas_suscripciones|
-                                       | - saas_sesiones     |
-                                       +---------------------+
+                               +-------------------------------+
+                               | Supabase                      |
+                               | - saas_usuarios/suscripciones |
+                               | - saas_quote_jobs             |
+                               | - quote-files private bucket  |
+                               +---------------+---------------+
+                                               |
+                                               v
+                               +-------------------------------+
+                               | Worker quote_worker.py        |
+                               | - quote_engine Python puro    |
+                               | - Docker/cloud sin Excel      |
+                               +-------------------------------+
 ```
 
 ---
@@ -81,9 +91,12 @@ pip install passlib[bcrypt] requests
 python seed_admin.py
 ```
 
-**Credenciales admin:**
-- Email: `***REMOVED***`
-- Password: `***REMOVED***`
+Variables requeridas para `seed_admin.py`:
+- `DATABASE_URL`
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD`
+- `ADMIN_NOMBRE` (opcional)
+- `ADMIN_EMPRESA` (opcional)
 
 ---
 
@@ -98,15 +111,15 @@ npm install -g vercel
 ### 2.2 Configurar variables de entorno
 
 ```bash
-cd mobiliti_saas
+cd vercel_deploy
 vercel --version  # login primero si es necesario
 
 # Variables requeridas
 vercel env add SUPABASE_URL
-# Valor: https://amarztcyhgtszmwazxgl.supabase.co
+# Valor: https://TU-PROYECTO.supabase.co
 
 vercel env add SUPABASE_SERVICE_KEY
-# Valor: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+# Valor: tu `REMOVED_SUPABASE_SERVICE_KEY` o service role key de Supabase
 
 vercel env add JWT_SECRET_KEY
 # Valor: una clave secreta larga (cambiar en produccion)
@@ -118,12 +131,12 @@ vercel env add CORS_ORIGINS
 ### 2.3 Desplegar
 
 ```bash
-cd mobiliti_saas
+cd vercel_deploy
 vercel --prod
 ```
 
 O con drag & drop:
-1. Comprime la carpeta `mobiliti_saas` (sin node_modules)
+1. Comprime la carpeta `vercel_deploy`
 2. Sube a [vercel.com](https://vercel.com) como proyecto Python
 
 ### 2.4 Verificar despliegue
@@ -135,37 +148,47 @@ curl https://TU-URL.vercel.app/health
 
 ---
 
-## 3. Compilar Cliente Desktop
+## 3. Cliente Desktop Legacy
 
-### 3.1 Configurar URL del API
+El cliente desktop con `xlwings` ya no es la ruta productiva. Para produccion,
+usa la web SaaS + API + worker Docker con `QUOTE_ENGINE=python`.
 
-Edita `mobiliti_saas/config.json`:
+El historico del cliente/generador Windows se conserva en `versiones historial`
+solo como referencia.
 
-```json
-{
-  "api_url": "https://TU-URL.vercel.app"
-}
-```
+---
 
-### 3.2 Compilar
+## 3B. Ejecutar Web SaaS y Worker Online
 
-```bash
-cd mobiliti_saas
-python scripts/build_cliente.py
-```
-
-O manualmente:
+### Web local
 
 ```bash
-cd mobiliti_saas
-python -m PyInstaller Mobiliti_SaaS.spec --clean --noconfirm
+cd mobiliti_saas/web
+npm install
+npm run dev
 ```
 
-### 3.3 Salida
+Variables en `mobiliti_saas/web/.env`:
 
-El ejecutable se genera en:
-- `mobiliti_saas/dist/Mobiliti_Generador.exe`
-- `mobiliti_saas/release/Mobiliti_Generador.exe` (copia)
+```env
+VITE_API_BASE_URL=https://TU-API.vercel.app
+VITE_SUPABASE_URL=https://TU-PROYECTO.supabase.co
+VITE_SUPABASE_ANON_KEY=TU_ANON_KEY_PUBLICA
+```
+
+### Worker online sin Excel
+
+```bash
+cd mobiliti_saas/worker
+pip install -r requirements.txt
+set SUPABASE_URL=https://TU-PROYECTO.supabase.co
+set SUPABASE_SERVICE_KEY=TU_SERVICE_KEY
+set QUOTE_ENGINE=python
+python quote_worker.py
+```
+
+`QUOTE_ENGINE=python` es el motor final para SaaS. El motor `xlwings` queda
+solo en historial como referencia antigua.
 
 ---
 
@@ -183,6 +206,11 @@ El ejecutable se genera en:
 | `/admin/suscripciones` | GET | Admin | Listar suscripciones |
 | `/admin/suscripciones` | POST | Admin | Crear suscripcion |
 | `/admin/suscripciones/{id}` | PATCH | Admin | Cambiar estado |
+| `/cotizaciones/init-upload` | POST | Token | Crea job y token de carga firmado |
+| `/cotizaciones/{id}/submit` | POST | Token | Encola cotizacion para worker |
+| `/cotizaciones` | GET | Token | Lista historial web |
+| `/cotizaciones/{id}` | GET | Token | Estado de una cotizacion |
+| `/cotizaciones/{id}/download` | GET | Token | URL firmada de descarga |
 
 ### Crear usuario cliente
 
@@ -226,13 +254,13 @@ curl -X PATCH https://TU-URL.vercel.app/admin/suscripciones/2 \
 
 ```
 1. Admin crea usuario + suscripcion via API/curl
-2. Cliente recibe email/password
-3. Cliente abre Mobiliti_Generador.exe
-4. Cliente ingresa credenciales
-5. Backend verifica suscripcion activa
-6. Cliente puede generar cotizaciones
-7. Cada generacion re-verifica suscripcion online
-8. Admin puede suspender en cualquier momento
+2. Cliente entra a la web y hace login
+3. Web pide /cotizaciones/init-upload
+4. Web sube XLSX a Supabase Storage con token firmado
+5. Web manda metadata a /cotizaciones/{id}/submit
+6. Worker toma job queued, genera XLSX y sube output
+7. Web consulta estado y descarga con URL firmada
+8. El endpoint `/generar-cotizacion` queda solo como compatibilidad de API; la ruta productiva usa `/cotizaciones/*`
 ```
 
 ---
@@ -241,48 +269,45 @@ curl -X PATCH https://TU-URL.vercel.app/admin/suscripciones/2 \
 
 ```
 mobiliti_saas/
-  api/                    # Backend para Vercel
-    index.py              # FastAPI app + endpoints
-    db.py                 # Cliente Supabase REST
-    auth.py               # JWT + bcrypt
-  cliente/                # Cliente desktop (Tkinter)
-    main_cliente.py       # GUI principal
-    entry_point.py        # Entry point PyInstaller
-  scripts/                # Scripts utilitarios
-    build_cliente.py      # Compila el .exe
+  api/                    # Copia local de API
+  quote_engine/           # Motor final Python puro
+  worker/                 # Worker Docker/cloud
+    quote_worker.py       # Consume jobs y genera XLSX
+    online_quote_generator.py
+    Dockerfile
+  web/                    # Frontend React/Vite
   supabase_setup/         # Setup de base de datos
     create_tables.sql     # SQL para crear tablas
     seed_admin.py         # Crea admin inicial
-  vercel.json             # Configuracion Vercel
-  requirements.txt        # Dependencias Vercel
-  config.json             # URL del API (para cliente)
-  Mobiliti_SaaS.spec      # Spec PyInstaller
+
+vercel_deploy/
+  api/index.py            # API productiva para Vercel
+  vercel.json
+
+versiones historial/
+  HISTORIAL DE VERSIONES/ # Desktop/xlwings/backend viejo archivados
 ```
 
 ---
 
 ## 7. Notas Importantes
 
-- **Vercel** es serverless: NO ejecuta xlwings (no tiene Excel). El generador corre localmente en Windows.
+- **Vercel** es serverless: NO ejecuta Excel. La API encola jobs y el worker Docker con Python puro genera los XLSX.
 - **Supabase** guarda usuarios y suscripciones. El backend en Vercel solo hace queries REST a Supabase.
 - **JWT tokens** expiran en 60 minutos. El cliente re-verifica en cada accion.
-- **config.json** debe distribuirse junto al .exe para que el cliente sepa a que API conectarse.
-- **No hay archivos .py expuestos** en la distribucion: todo esta empaquetado en el .exe.
+- **Worker Docker** usa `QUOTE_ENGINE=python`; no necesita Windows ni Microsoft Excel.
+- **Legacy desktop/xlwings** esta archivado en `versiones historial` y no es parte de produccion.
 
 ---
 
 ## 8. Troubleshooting
 
-### "Sin conexion" al abrir el cliente
-- Verifica que `config.json` tenga la URL correcta de Vercel
-- Verifica que el backend responda: `curl URL/health`
+### Job queda en `queued`
+- Verifica que el worker Docker este corriendo.
+- Verifica `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `QUOTE_STORAGE_BUCKET` y `QUOTE_ENGINE=python`.
 
 ### Error 403 "Suscripcion expirada"
 - El admin debe renovar la suscripcion via PATCH `/admin/suscripciones/{id}`
-
-### Build muy grande
-- PyInstaller incluye todo Python + dependencias (~90MB es normal)
-- Usa UPX (`--upx-dir`) para reducir tamano
 
 ### Vercel timeout
 - Las funciones serverless de Vercel tienen timeout de 10s (hobby) o 60s (pro)

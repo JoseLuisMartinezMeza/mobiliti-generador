@@ -1,0 +1,7 @@
+Contact: pepe@example.com
+OPENAI_API_KEY=test-secret-value-1234567890
+DEEPSEEK_TOKEN=ds-1234567890abcdefghijklmnop
+Authorization: Bearer TEST_BEARER_TOKEN
+Path: C:\Users\pepem\Downloads\secret-project
+JWT: JWT_PLACEHOLDER
+password: supersecret

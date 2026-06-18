@@ -1,0 +1,39 @@
+{
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/login",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/verificar-sesion",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/version",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/health",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/admin/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/cotizaciones/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/generar-cotizacion",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

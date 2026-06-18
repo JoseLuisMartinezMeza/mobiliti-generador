@@ -272,16 +272,17 @@ def build_product_description(
 ) -> str:
     language = normalize_description_language(language)
     clean_name = _clean_text(product_name)
+    display_name = _display_model_name(clean_name)
     clean_source = _clean_text(source_description)
 
     if language == "en":
         label = ENGLISH_CATEGORY_LABELS.get(category, category or "Product")
         body = _summarize_source(clean_source, max_parts=7)
-        return _join_description(label, "model", clean_name, body)
+        return _join_description(label, "model", display_name, body)
 
     label = SPANISH_CATEGORY_LABELS.get(category, category or "Producto")
     body = _translate_description_to_spanish(clean_source)
-    return _join_description(label, "modelo", clean_name, body)
+    return _join_description(label, "modelo", display_name, body)
 
 
 def _join_description(label: str, model_word: str, product_name: str, body: str) -> str:
@@ -296,6 +297,28 @@ def _clean_text(value: Any) -> str:
     text = text.replace("\r", " ").replace("\n", " ")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def _display_model_name(product_name: str) -> str:
+    """Remove only an initial SKU/code from the visible model title."""
+    text = _clean_text(product_name)
+    first_token, sep, remainder = text.partition(" ")
+    if not sep:
+        return text
+
+    glued_match = re.match(r"^([A-Z0-9._/-]*\d[A-Z0-9._/-]*?)([A-Z][a-z].*)$", first_token)
+    if glued_match:
+        return f"{glued_match.group(2)} {remainder}".strip()
+
+    if _looks_like_model_code(first_token):
+        return remainder.strip()
+    return text
+
+
+def _looks_like_model_code(token: str) -> bool:
+    normalized = re.sub(r"[^A-Za-z0-9]", "", token)
+    has_code_separator = bool(re.search(r"[._/-]", token))
+    return (len(normalized) >= 5 or has_code_separator) and any(char.isdigit() for char in normalized)
 
 
 def _summarize_source(text: str, max_parts: int = 6) -> str:

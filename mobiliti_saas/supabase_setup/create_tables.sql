@@ -49,7 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_sesiones_token ON saas_sesiones(token_jwt);
 
 CREATE TABLE IF NOT EXISTS saas_versiones (
     id SERIAL PRIMARY KEY,
-    version TEXT NOT NULL,
+    version TEXT NOT NULL UNIQUE,
     download_url TEXT NOT NULL,
     release_notes TEXT,
     force_update BOOLEAN DEFAULT FALSE,
@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS saas_versiones (
 );
 
 -- Insertar versión actual (v1.5.6)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_versiones_version ON saas_versiones(version);
+
 INSERT INTO saas_versiones (version, download_url, release_notes, force_update)
 VALUES (
     '1.5.6',
@@ -66,7 +68,11 @@ VALUES (
     'Fix: eliminado subprocess en modo .exe para evitar crash _MEI Tcl data',
     FALSE
 )
-ON CONFLICT DO NOTHING;
+ON CONFLICT (version) DO UPDATE SET
+    download_url = EXCLUDED.download_url,
+    release_notes = EXCLUDED.release_notes,
+    force_update = EXCLUDED.force_update,
+    actualizado = NOW();
 
 -- Solo debe haber una versión activa: desactivar las anteriores automáticamente
 CREATE OR REPLACE FUNCTION mantener_unica_version_activa()
@@ -87,3 +93,42 @@ CREATE TRIGGER trigger_unica_version_activa
 
 -- Índice útil
 CREATE INDEX IF NOT EXISTS idx_versiones_activa ON saas_versiones(activa);
+
+-- ============================================================
+-- Storage privado y cola de cotizaciones web
+-- ============================================================
+
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+    'quote-files',
+    'quote-files',
+    FALSE,
+    26214400,
+    ARRAY[
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/octet-stream'
+    ]
+)
+ON CONFLICT (id) DO UPDATE SET
+    public = EXCLUDED.public,
+    file_size_limit = EXCLUDED.file_size_limit,
+    allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+CREATE TABLE IF NOT EXISTS saas_quote_jobs (
+    id UUID PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES saas_usuarios(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft','queued','processing','completed','failed')),
+    input_path TEXT NOT NULL,
+    output_path TEXT,
+    template TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_quote_jobs_usuario ON saas_quote_jobs(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_quote_jobs_status ON saas_quote_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_quote_jobs_updated ON saas_quote_jobs(updated_at DESC);

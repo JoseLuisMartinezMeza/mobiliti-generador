@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from io import BytesIO
@@ -17,14 +18,17 @@ import zipfile
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.drawing.image import Image as XlsxImage
+from openpyxl.formatting.formatting import ConditionalFormatting
 from openpyxl.formula.translate import Translator
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.units import pixels_to_EMU
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.cell_range import CellRange
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.formula import ArrayFormula
 from PIL import Image as PILImage
 
 from .classification import classify_product_name, load_category_dictionary
@@ -54,12 +58,23 @@ DEFAULT_DELIVERY_PLACE = "Guadalajara"
 DEFAULT_DISCOUNT_PERCENT = 40.0
 DEFAULT_MOBILITI_REGION = "Centro"
 MOBILITI_REGION_COL = 16
+MOBILITI_PROVIDER_COL = 6
+MOBILITI_PRODUCT_CATEGORY_COL = 5
 MOBILITI_MAX_DISCOUNT_COL = 25
 MOBILITI_COVER_DISCOUNT_COL = 26
 MOBILITI_DISCOUNT_AMOUNT_COL = 27
 MOBILITI_FINAL_PRICE_COL = 28
 MOBILITI_COMMERCIAL_TOTAL_COL = 29
-MOBILITI_CLEAR_COLS = tuple(range(4, 33))
+MOBILITI_STATUS_COL = 34
+MOBILITI_CLEAR_COLS = tuple(range(4, MOBILITI_STATUS_COL + 1))
+MOBILITI_AUX_START_COL = 44
+MOBILITI_AUX_END_COL = 48
+MOBILITI_AUX_PRESERVE_MAX_ROW = 18
+MOBILITI_PROVIDER_LIST_NAME = "Lista_Proveedores_Mobiliti"
+MOBILITI_SUBTOTAL_FILL_RGB = "FF404040"
+MOBILITI_SECTION_FILL_RGB = "FF3E2500"
+MOBILITI_SECTION_TRAILING_FILL_RGB = "FF262626"
+MOBILITI_SECTION_TEXT_RGB = "FFFFFFFF"
 FLETE_ROUTES = {
     5: ("Guadalajara", "Monterrey"),
     7: ("Guadalajara", "Mexico City"),
@@ -133,9 +148,9 @@ def _detect_user_count(item: QuoteItem) -> int | None:
         f"{item.nombre or ''} {item.descripcion or ''} {item.dimension or ''} {item.categoria or ''}"
     )
     patterns = [
-        r"(\d+)\s*pax\b",
+        r"(\d+)\s*(?:pax|px)\b",
         r"(\d+)\s*(?:usuarios?|personas?|users?)\b",
-        r"(?:pax|capacidad|usuarios?|personas?|users?)\s*(?:de|para)?\s*(\d+)\b",
+        r"(?:pax|px|capacidad|usuarios?|personas?|users?)\s*(?:de|para)?\s*(\d+)\b",
     ]
     matches: list[int] = []
     for pattern in patterns:
@@ -160,7 +175,7 @@ def _lumbro_accessories_for_item(item: QuoteItem, category: str) -> list[tuple[s
                 ("JUMP-1.5M", total_users),
                 ("CAJA-FUS", fuse_count),
             ]
-        return [("MULT-LIDO-INT", 1)]
+        return [("MULT-LIDO-INT", quantity)]
 
     if category == "Mesas de Juntas":
         total_users = (users_per_item or 4) * quantity
@@ -202,12 +217,18 @@ def _find_provider_discount_start(ws) -> int | None:
     return None
 
 
+def _snapshot_mobiliti_value(value: Any) -> Any:
+    if isinstance(value, ArrayFormula):
+        return value.text
+    return value
+
+
 def _snapshot_mobiliti_row(ws, row: int, max_col: int) -> dict[str, Any]:
     return {
         "height": ws.row_dimensions[row].height,
         "cells": [
             {
-                "value": ws.cell(row, col).value,
+                "value": _snapshot_mobiliti_value(ws.cell(row, col).value),
                 "style": copy(ws.cell(row, col)._style),
                 "number_format": ws.cell(row, col).number_format,
                 "alignment": copy(ws.cell(row, col).alignment),
@@ -220,6 +241,72 @@ def _snapshot_mobiliti_row(ws, row: int, max_col: int) -> dict[str, Any]:
             if merged.min_row == row and merged.max_row == row
         ],
     }
+
+
+def _snapshot_mobiliti_auxiliary_area(ws) -> dict[str, Any]:
+    cells: dict[tuple[int, int], dict[str, Any]] = {}
+    for row in range(1, MOBILITI_AUX_PRESERVE_MAX_ROW + 1):
+        for col in range(MOBILITI_AUX_START_COL, MOBILITI_AUX_END_COL + 1):
+            cell = ws.cell(row, col)
+            cells[(row, col)] = {
+                "value": _snapshot_mobiliti_value(cell.value),
+                "style": copy(cell._style),
+                "number_format": cell.number_format,
+                "alignment": copy(cell.alignment),
+            }
+    merges = [
+        str(merged)
+        for merged in ws.merged_cells.ranges
+        if (
+            merged.min_row <= MOBILITI_AUX_PRESERVE_MAX_ROW
+            and merged.max_row >= 1
+            and merged.min_col <= MOBILITI_AUX_END_COL
+            and merged.max_col >= MOBILITI_AUX_START_COL
+        )
+    ]
+    return {"cells": cells, "merges": merges}
+
+
+def _restore_mobiliti_auxiliary_area(
+    ws,
+    snapshot: dict[str, Any],
+    total_row: int,
+) -> None:
+    for merged in list(ws.merged_cells.ranges):
+        if merged.min_col <= MOBILITI_AUX_END_COL and merged.max_col >= MOBILITI_AUX_START_COL:
+            try:
+                ws.unmerge_cells(str(merged))
+            except KeyError:
+                try:
+                    ws.merged_cells.ranges.remove(merged)
+                except KeyError:
+                    pass
+
+    for row in range(MOBILITI_AUX_PRESERVE_MAX_ROW + 1, ws.max_row + 1):
+        for col in range(MOBILITI_AUX_START_COL, MOBILITI_AUX_END_COL + 1):
+            cell = ws.cell(row, col)
+            if not isinstance(cell, MergedCell):
+                cell.value = None
+
+    for (row, col), data in snapshot["cells"].items():
+        cell = ws.cell(row, col)
+        if isinstance(cell, MergedCell):
+            continue
+        cell.value = data["value"]
+        cell._style = copy(data["style"])
+        cell.number_format = data["number_format"]
+        cell.alignment = copy(data["alignment"])
+
+    ws["AS15"] = f"=AC{total_row}"
+    ws["AS16"] = f"=AF{total_row}"
+    ws["AS17"] = "=AS16-AS15"
+    ws["AS18"] = "=(AS16/AS15)-1"
+
+    for merge in snapshot["merges"]:
+        try:
+            ws.merge_cells(merge)
+        except ValueError:
+            pass
 
 
 def _translate_formula_value(value: Any, origin: str, target: str) -> Any:
@@ -241,6 +328,9 @@ def _copy_mobiliti_row_from_snapshot(
     translate_formulas: bool = True,
 ) -> None:
     _unmerge_row(ws, target_row)
+    for key, cell in list(ws._cells.items()):
+        if key[0] == target_row and isinstance(cell, MergedCell):
+            del ws._cells[key]
     ws.row_dimensions[target_row].height = snapshot["height"]
     for col, data in enumerate(snapshot["cells"], start=1):
         cell = ws.cell(target_row, col)
@@ -267,21 +357,150 @@ def _copy_mobiliti_row_from_snapshot(
             pass
 
 
+def _set_mobiliti_row_fill(
+    ws,
+    row: int,
+    start_col: int,
+    end_col: int,
+    fill_rgb: str,
+    *,
+    font_rgb: str | None = None,
+) -> None:
+    row_merges = [
+        str(merged)
+        for merged in ws.merged_cells.ranges
+        if merged.min_row == row and merged.max_row == row
+    ]
+    for merge in row_merges:
+        try:
+            ws.unmerge_cells(merge)
+        except KeyError:
+            pass
+
+    fill = PatternFill(fill_type="solid", fgColor=fill_rgb)
+    for col in range(start_col, end_col + 1):
+        cell = ws.cell(row, col)
+        if isinstance(cell, MergedCell):
+            continue
+        cell.fill = copy(fill)
+        if font_rgb:
+            font = copy(cell.font)
+            font.color = font_rgb
+            cell.font = font
+
+    for merge in row_merges:
+        try:
+            ws.merge_cells(merge)
+        except ValueError:
+            pass
+
+
+def _apply_mobiliti_subtotal_row_visual_style(ws, row: int) -> None:
+    _set_mobiliti_row_fill(
+        ws,
+        row,
+        1,
+        MOBILITI_STATUS_COL - 1,
+        MOBILITI_SUBTOTAL_FILL_RGB,
+        font_rgb=MOBILITI_SECTION_TEXT_RGB,
+    )
+
+
+def _apply_mobiliti_section_row_visual_style(ws, row: int) -> None:
+    _set_mobiliti_row_fill(
+        ws,
+        row,
+        1,
+        10,
+        MOBILITI_SECTION_FILL_RGB,
+        font_rgb=MOBILITI_SECTION_TEXT_RGB,
+    )
+    _set_mobiliti_row_fill(
+        ws,
+        row,
+        11,
+        MOBILITI_STATUS_COL - 1,
+        MOBILITI_SECTION_TRAILING_FILL_RGB,
+        font_rgb=MOBILITI_SECTION_TEXT_RGB,
+    )
+
+
+def _conditional_range_piece(cell_range: CellRange, start_row: int, end_row: int) -> str:
+    start_col = get_column_letter(cell_range.min_col)
+    end_col = get_column_letter(cell_range.max_col)
+    return f"{start_col}{start_row}:{end_col}{end_row}"
+
+
+def _exclude_mobiliti_separator_rows_from_conditional_formatting(
+    ws,
+    layouts: list[MobilitiSectionLayout],
+) -> None:
+    cf_rules = getattr(ws.conditional_formatting, "_cf_rules", None)
+    if not cf_rules:
+        return
+
+    excluded_rows = {layout.section_row for layout in layouts}
+    excluded_rows.update(layout.subtotal_row for layout in layouts)
+    updated_rules = OrderedDict()
+
+    for conditional_formatting, rules in cf_rules.items():
+        range_pieces: list[str] = []
+        for cell_range in conditional_formatting.sqref.ranges:
+            rows_to_exclude = sorted(
+                row
+                for row in excluded_rows
+                if cell_range.min_row <= row <= cell_range.max_row
+            )
+            if not rows_to_exclude:
+                range_pieces.append(str(cell_range))
+                continue
+
+            start_row = cell_range.min_row
+            for excluded_row in rows_to_exclude:
+                if start_row <= excluded_row - 1:
+                    range_pieces.append(
+                        _conditional_range_piece(cell_range, start_row, excluded_row - 1)
+                    )
+                start_row = excluded_row + 1
+            if start_row <= cell_range.max_row:
+                range_pieces.append(_conditional_range_piece(cell_range, start_row, cell_range.max_row))
+
+        if range_pieces:
+            updated_rules[ConditionalFormatting(sqref=" ".join(range_pieces))] = rules
+
+    cf_rules.clear()
+    cf_rules.update(updated_rules)
+
+
 def _normalize_mobiliti_row_formulas(ws, row: int, total_row: int, discount_start: int | None) -> None:
+    provider_cell = ws.cell(row, MOBILITI_PROVIDER_COL)
+    if not isinstance(provider_cell, MergedCell):
+        product_cell = ws.cell(row, MOBILITI_PRODUCT_CATEGORY_COL)
+        provider_cell.fill = copy(product_cell.fill)
+        provider_cell.border = copy(product_cell.border)
+
     for col in range(1, min(ws.max_column, 48) + 1):
         cell = ws.cell(row, col)
         value = cell.value
         if not isinstance(value, str) or not value.startswith("="):
             continue
         value = value.replace("$H$573", f"$H${total_row}")
-        value = re.sub(r"K\d+(?=\s*<=\s*\$AO\$)", f"K{total_row}", value)
-        value = re.sub(r"K\d+(?=\s*>\s*\$AN\$)", f"K{total_row}", value)
+        value = re.sub(
+            r"K\d+(?=\s*(?:<=|>=|<|>)\s*\$(?:AO|AN)\$)",
+            f"K{total_row}",
+            value,
+        )
         if discount_start:
             offset = discount_start - 577
             value = value.replace("$AO$578", f"$AO${578 + offset}")
             value = value.replace("$AN$579", f"$AN${579 + offset}")
             value = value.replace("$AN$580", f"$AN${580 + offset}")
         cell.value = value
+
+    ws.cell(row, 22).value = (
+        f"=IFERROR(IF(OR(K{row}=0,L{row}=0),U{row}/$H${total_row},"
+        f"U{row}*(K{row}/L{row}))*H{row},0)"
+    )
 
     if discount_start:
         discount_end = discount_start + 30
@@ -303,6 +522,7 @@ def _set_mobiliti_subtotal_formulas(
     for col in (8, 12, 14, 24, 29, 32):
         letter = get_column_letter(col)
         ws.cell(row, col).value = f"=SUM({letter}{product_start}:{letter}{product_end})"
+    ws.cell(row, 30).value = f"=IFERROR(AVERAGE(AD{product_start}:AD{product_end}),0)"
     ws.cell(row, 33).value = f"=IFERROR(1-(N{row}/AC{row}),0)"
 
 
@@ -321,9 +541,52 @@ def _set_mobiliti_total_formulas(
     ws.cell(row, 33).value = f"=AVERAGE({','.join(f'AG{subtotal}' for subtotal in subtotal_rows)})"
 
 
+def _cell_has_conditional_format(ws, coordinate: str) -> bool:
+    for cf in getattr(ws.conditional_formatting, "_cf_rules", {}):
+        for cell_range in str(cf.sqref).split():
+            if coordinate in CellRange(cell_range):
+                return True
+    return False
+
+
+def _mobiliti_status_conditional_rules(ws) -> list[Any]:
+    for cf, rules in getattr(ws.conditional_formatting, "_cf_rules", {}).items():
+        for cell_range in str(cf.sqref).split():
+            if "AH49" in CellRange(cell_range):
+                return [deepcopy(rule) for rule in rules]
+    return []
+
+
+def _apply_mobiliti_status_conditional_formatting(ws) -> None:
+    rules = _mobiliti_status_conditional_rules(ws)
+    if not rules:
+        return
+
+    for start_row, capacity in _mobiliti_product_ranges(ws):
+        end_row = start_row + capacity - 1
+        if all(_cell_has_conditional_format(ws, f"AH{row}") for row in range(start_row, end_row + 1)):
+            continue
+        target_range = f"AH{start_row}:AH{end_row}"
+        for rule in rules:
+            ws.conditional_formatting.add(target_range, deepcopy(rule))
+
+
+def _clear_mobiliti_row_values(ws, row: int) -> None:
+    for col in MOBILITI_CLEAR_COLS:
+        cell = ws.cell(row, col)
+        if isinstance(cell, MergedCell):
+            continue
+        cell.value = None
+    provider_cell = ws.cell(row, MOBILITI_PROVIDER_COL)
+    if not isinstance(provider_cell, MergedCell):
+        product_cell = ws.cell(row, MOBILITI_PRODUCT_CATEGORY_COL)
+        provider_cell.fill = copy(product_cell.fill)
+        provider_cell.border = copy(product_cell.border)
+
+
 def _normalize_mobiliti_section_capacities(capacities: list[int]) -> list[int]:
     normalized = [
-        MAX_PROD_PER_SECTION if capacity > BASE_PROD_PER_SECTION else BASE_PROD_PER_SECTION
+        max(MAX_PROD_PER_SECTION, capacity) if capacity > BASE_PROD_PER_SECTION else BASE_PROD_PER_SECTION
         for capacity in capacities[:MOBILITI_SECTION_COUNT]
     ]
     while len(normalized) < MOBILITI_SECTION_COUNT:
@@ -350,14 +613,7 @@ def _mobiliti_section_capacities(
 
         category = classify_product_name(str(item.nombre or ""), category_dictionary)
         rows_needed = 1 + len(_lumbro_accessories_for_item(item, category))
-        while rows_needed > 0:
-            remaining = MAX_PROD_PER_SECTION - needs[-1]
-            if remaining <= 0:
-                needs.append(0)
-                remaining = MAX_PROD_PER_SECTION
-            take = min(rows_needed, remaining)
-            needs[-1] += take
-            rows_needed -= take
+        needs[-1] += rows_needed
 
     return _normalize_mobiliti_section_capacities(needs)
 
@@ -388,6 +644,7 @@ def _ensure_mobiliti_capacity_legacy(ws) -> None:
     if not original_total_row:
         return
 
+    auxiliary_snapshot = _snapshot_mobiliti_auxiliary_area(ws)
     first_section = _snapshot_mobiliti_row(ws, 13, max_col)
     section = _snapshot_mobiliti_row(ws, 48, max_col)
     product = _snapshot_mobiliti_row(ws, 14, max_col)
@@ -412,6 +669,7 @@ def _ensure_mobiliti_capacity_legacy(ws) -> None:
             translate_formulas=False,
         )
         ws.cell(section_row, _merged_anchor_column(ws, section_row, 4)).value = f"Sección {index} - NOMBRE"
+        _apply_mobiliti_section_row_visual_style(ws, section_row)
 
         product_start = section_row + 1
         for row in range(product_start, product_start + MAX_PROD_PER_SECTION):
@@ -442,8 +700,10 @@ def _ensure_mobiliti_capacity_legacy(ws) -> None:
             max_col=max_col,
         )
         _set_mobiliti_subtotal_formulas(ws, subtotal_row, index, product_start)
+        _apply_mobiliti_subtotal_row_visual_style(ws, subtotal_row)
 
     _set_mobiliti_total_formulas(ws, MOBILITI_TOTAL_ROW)
+    _restore_mobiliti_auxiliary_area(ws, auxiliary_snapshot, MOBILITI_TOTAL_ROW)
     ws["E4"] = f"=AC{MOBILITI_TOTAL_ROW}"
     ws["E6"] = f"=E4*E5"
     ws["E8"] = f"=(AC{MOBILITI_TOTAL_ROW}-M{MOBILITI_TOTAL_ROW})/AC{MOBILITI_TOTAL_ROW}"
@@ -461,8 +721,12 @@ def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSection
         ws._mobiliti_product_ranges = [(layout.product_start, layout.capacity) for layout in layouts]
         return layouts
 
-    section = _snapshot_mobiliti_row(ws, 48, max_col)
+    auxiliary_snapshot = _snapshot_mobiliti_auxiliary_area(ws)
+    first_section = _snapshot_mobiliti_row(ws, 13, max_col)
     first_product = _snapshot_mobiliti_row(ws, 14, max_col)
+    first_blank = _snapshot_mobiliti_row(ws, 46, max_col)
+    first_subtotal = _snapshot_mobiliti_row(ws, 47, max_col)
+    section = _snapshot_mobiliti_row(ws, 48, max_col)
     section_product = _snapshot_mobiliti_row(ws, 49, max_col)
     section_blank = _snapshot_mobiliti_row(ws, 81, max_col)
     section_subtotal = _snapshot_mobiliti_row(ws, 82, max_col)
@@ -528,9 +792,48 @@ def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSection
     subtotal_rows = [layout.subtotal_row for layout in layouts]
 
     for index, layout in enumerate(layouts, start=1):
+        section_snapshot = first_section if index == 1 else section
+        section_source_row = 13 if index == 1 else 48
+        _copy_mobiliti_row_from_snapshot(
+            ws,
+            section_snapshot,
+            layout.section_row,
+            source_row=section_source_row,
+            max_col=max_col,
+            translate_formulas=False,
+        )
         _write_mobiliti_section_title(ws, layout, index, "NOMBRE")
+        _apply_mobiliti_section_row_visual_style(ws, layout.section_row)
+        product_snapshot = first_product if index == 1 else section_product
+        product_source_row = 14 if index == 1 else 49
         for row in range(layout.product_start, layout.product_start + layout.capacity):
+            _copy_mobiliti_row_from_snapshot(
+                ws,
+                product_snapshot,
+                row,
+                source_row=product_source_row,
+                max_col=max_col,
+            )
             _normalize_mobiliti_row_formulas(ws, row, total_row, discount_start)
+        blank_snapshot = first_blank if index == 1 else section_blank
+        blank_source_row = 46 if index == 1 else 81
+        _copy_mobiliti_row_from_snapshot(
+            ws,
+            blank_snapshot,
+            layout.subtotal_row - 1,
+            source_row=blank_source_row,
+            max_col=max_col,
+        )
+        _clear_mobiliti_row_values(ws, layout.subtotal_row - 1)
+        subtotal_snapshot = first_subtotal if index == 1 else section_subtotal
+        subtotal_source_row = 47 if index == 1 else 82
+        _copy_mobiliti_row_from_snapshot(
+            ws,
+            subtotal_snapshot,
+            layout.subtotal_row,
+            source_row=subtotal_source_row,
+            max_col=max_col,
+        )
         _set_mobiliti_subtotal_formulas(
             ws,
             layout.subtotal_row,
@@ -538,12 +841,16 @@ def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSection
             layout.product_start,
             layout.capacity,
         )
+        _apply_mobiliti_subtotal_row_visual_style(ws, layout.subtotal_row)
 
     _set_mobiliti_total_formulas(ws, total_row, subtotal_rows)
+    _restore_mobiliti_auxiliary_area(ws, auxiliary_snapshot, total_row)
     ws["E4"] = f"=AC{total_row}"
     ws["E6"] = f"=E4*E5"
     ws["E8"] = f"=(AC{total_row}-M{total_row})/AC{total_row}"
     ws._mobiliti_product_ranges = [(layout.product_start, layout.capacity) for layout in layouts]
+    _apply_mobiliti_status_conditional_formatting(ws)
+    _exclude_mobiliti_separator_rows_from_conditional_formatting(ws, layouts)
     return layouts
 
 
@@ -923,6 +1230,55 @@ def _patch_quotation_drawing_from_source(source_path: str | Path, output_path: s
     tmp_path.replace(output_path)
 
 
+def _strip_empty_color_changes(xml_bytes: bytes) -> bytes:
+    text = xml_bytes.decode("utf-8", errors="replace")
+    text = re.sub(r"<clrChange>\s*<clrFrom/>\s*<clrTo/>\s*</clrChange>", "", text)
+    text = re.sub(
+        r"<a:clrChange[^>]*>\s*<a:clrFrom/>\s*<a:clrTo/>\s*</a:clrChange>",
+        "",
+        text,
+    )
+    return text.encode("utf-8")
+
+
+def _normalize_quotation_sheet_view(xml_bytes: bytes) -> bytes:
+    text = xml_bytes.decode("utf-8", errors="replace")
+    safe_view = (
+        '<sheetViews><sheetView showGridLines="0" zoomScale="110" '
+        'zoomScaleNormal="110" workbookViewId="0"><selection activeCell="A1" '
+        'sqref="A1"/></sheetView></sheetViews>'
+    )
+    text = re.sub(r"<sheetViews>.*?</sheetViews>", safe_view, text, count=1, flags=re.S)
+    return text.encode("utf-8")
+
+
+def _sanitize_output_xlsx_for_excel(output_path: str | Path) -> None:
+    output_path = Path(output_path)
+    tmp_path = output_path.with_name(f"{output_path.stem}.excel_sanitize_tmp{output_path.suffix}")
+
+    with zipfile.ZipFile(output_path, "r") as src_zip:
+        try:
+            quotation_sheet_part = _worksheet_part_for_name(src_zip, "Quotation")
+        except ValueError:
+            quotation_sheet_part = ""
+
+        with zipfile.ZipFile(
+            tmp_path,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=6,
+        ) as patched_zip:
+            for info in src_zip.infolist():
+                data = src_zip.read(info.filename)
+                if info.filename.startswith("xl/drawings/drawing") and info.filename.endswith(".xml"):
+                    data = _strip_empty_color_changes(data)
+                elif info.filename == quotation_sheet_part:
+                    data = _normalize_quotation_sheet_view(data)
+                patched_zip.writestr(info, data)
+
+    tmp_path.replace(output_path)
+
+
 def _copy_source_sheet(source_path: str | Path, wb_out: Workbook) -> None:
     src = load_workbook(source_path, data_only=False)
     if "Quotation" not in src.sheetnames:
@@ -1116,11 +1472,7 @@ def _clear_unused_mobiliti_product_rows(ws, written_rows: set[int]) -> None:
         for row in range(start_row, start_row + capacity):
             if row in written_rows:
                 continue
-            for col in MOBILITI_CLEAR_COLS:
-                cell = ws.cell(row, col)
-                if isinstance(cell, MergedCell):
-                    continue
-                cell.value = None
+            _clear_mobiliti_row_values(ws, row)
 
 
 def _apply_mobiliti_provider_validation(ws) -> None:
@@ -1136,7 +1488,13 @@ def _apply_mobiliti_provider_validation(ws) -> None:
     if last_provider_row < 2:
         return
 
-    formula = f"={_sheet_name(provider_ws.title)}!$A$2:$A${last_provider_row}"
+    formula = MOBILITI_PROVIDER_LIST_NAME
+    target = f"{_sheet_name(provider_ws.title)}!$A$2:$A${last_provider_row}"
+    if MOBILITI_PROVIDER_LIST_NAME in ws.parent.defined_names:
+        del ws.parent.defined_names[MOBILITI_PROVIDER_LIST_NAME]
+    ws.parent.defined_names.add(
+        DefinedName(MOBILITI_PROVIDER_LIST_NAME, attr_text=target)
+    )
     validation = DataValidation(type="list", formula1=formula, allow_blank=True)
     ws.add_data_validation(validation)
     for start_row, capacity in _mobiliti_product_ranges(ws):
@@ -1150,10 +1508,21 @@ def _apply_mobiliti_region_validation(ws) -> None:
         validation.add(f"P{start_row}:P{start_row + capacity - 1}")
 
 
-def _write_fletes(ws) -> None:
+def _write_fletes(ws, mobiliti_total_row: int | None = None) -> None:
     for row, (origin, destination) in FLETE_ROUTES.items():
         ws.cell(row, 1).value = origin
         ws.cell(row, 3).value = destination
+    ws["D19"] = f"=Mobiliti!H{mobiliti_total_row or MOBILITI_TOTAL_ROW}"
+    ws["F20"] = "=IF($D$19=0,0,D11/$D$19)"
+    for row in range(6, 19):
+        for col in (11, 14):
+            value = ws.cell(row, col).value
+            if isinstance(value, str) and value.startswith("=") and not value.startswith("=IFERROR("):
+                ws.cell(row, col).value = f"=IFERROR({value[1:]},0)"
+    for row in range(27, 31):
+        ws.cell(row, 2).value = f"=IF($D$19=0,0,_xlfn.XLOOKUP(A{row},Taba_Region,Fletes!$D$5:$D$18)/$D$19)"
+        ws.cell(row, 3).value = 0
+        ws.cell(row, 4).value = 0
     ws["I8"] = "Escritorios-WorkStation"
     ws["M8"] = "Escritorios-WorkStation"
 
@@ -1381,8 +1750,13 @@ def _write_cotizacion(
         ws.cell(current_row, 4).value = _formula("Quotation", f"E{item.row}")
         if mob_row:
             ws.cell(current_row, 5).value = f"=Mobiliti!H{mob_row}"
-            price_rows = [mob_row, *lumbro_row_map.get(item.row, [])]
-            ws.cell(current_row, 6).value = "=" + "+".join(f"Mobiliti!W{row}" for row in price_rows)
+            lumbro_rows = lumbro_row_map.get(item.row, [])
+            if lumbro_rows:
+                price_rows = [mob_row, *lumbro_rows]
+                total_formula = "+".join(f"Mobiliti!X{row}" for row in price_rows)
+                ws.cell(current_row, 6).value = f"=IFERROR(({total_formula})/Mobiliti!H{mob_row},0)"
+            else:
+                ws.cell(current_row, 6).value = f"=Mobiliti!W{mob_row}"
         else:
             ws.cell(current_row, 5).value = item.cantidad
             ws.cell(current_row, 6).value = item.precio
@@ -1600,7 +1974,7 @@ def generate_quote(
     _apply_mobiliti_region_validation(ws_mob)
     _write_mobiliti_settings(ws_mob, metadata)
     if "Fletes" in wb.sheetnames:
-        _write_fletes(wb["Fletes"])
+        _write_fletes(wb["Fletes"], _find_mobiliti_total_row(ws_mob))
 
     image_map, temp_dir = extract_images(source_path)
     image_stats: dict[str, Any] = {}
@@ -1629,6 +2003,7 @@ def generate_quote(
         _set_calc_mode(wb)
         wb.save(output_path)
         _patch_quotation_drawing_from_source(source_path, output_path)
+        _sanitize_output_xlsx_for_excel(output_path)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
         wb.close()

@@ -190,6 +190,7 @@ def _should_use_light_product_safe(img: Image.Image, options: ImageProcessingOpt
     y_end = min(height, int(height * 0.97))
     total = 0
     light_neutral = 0
+    upper_light_neutral = 0
     dark = 0
 
     for y in range(y_start, y_end):
@@ -202,17 +203,24 @@ def _should_use_light_product_safe(img: Image.Image, options: ImageProcessingOpt
             neutral = max(r, g, b) - min(r, g, b) <= 35
             if neutral and 135 <= brightness <= 245:
                 light_neutral += 1
+                if y < height * 0.58:
+                    upper_light_neutral += 1
             if brightness < 95:
                 dark += 1
 
     if total == 0:
         return False
-    return (light_neutral / total) >= 0.18 and (dark / total) <= 0.08
+    if light_neutral == 0:
+        return False
+    return (
+        (light_neutral / total) >= 0.18
+        and (dark / total) <= 0.28
+        and (upper_light_neutral / light_neutral) >= 0.25
+    )
 
 
 def _process_light_product_safe(img: Image.Image, options: ImageProcessingOptions) -> Image.Image:
     rgba = _matte_light_background_to_white(img)
-    rgba = _trim_outer_background_padding(rgba)
     rgba = _upscale_if_needed(rgba, options.min_size)
     return _sharpen_rgb_preserve_alpha(rgba)
 

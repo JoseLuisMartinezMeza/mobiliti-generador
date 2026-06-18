@@ -9,11 +9,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from datetime import timedelta
 import argparse
-import gc
 import json
 import os
 from pathlib import Path
-import shutil
 import tempfile
 import time
 import urllib.error
@@ -81,8 +79,7 @@ class SupabaseClient:
             req.add_header(key, value)
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
-                with dest.open("wb") as fh:
-                    shutil.copyfileobj(resp, fh, length=1024 * 1024)
+                dest.write_bytes(resp.read())
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8")
             raise RuntimeError(f"Storage download {exc.code}: {body}") from exc
@@ -90,15 +87,13 @@ class SupabaseClient:
     def storage_upload(self, object_path: str, source: Path) -> None:
         encoded = urllib.parse.quote(object_path, safe="/")
         url = f"{self.base_url}/storage/v1/object/{BUCKET}/{encoded}"
+        req = urllib.request.Request(url, data=source.read_bytes(), method="PUT")
+        for key, value in self._headers("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").items():
+            req.add_header(key, value)
+        req.add_header("x-upsert", "true")
         try:
-            with source.open("rb") as fh:
-                req = urllib.request.Request(url, data=fh, method="PUT")
-                for key, value in self._headers("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").items():
-                    req.add_header(key, value)
-                req.add_header("Content-Length", str(source.stat().st_size))
-                req.add_header("x-upsert", "true")
-                with urllib.request.urlopen(req, timeout=180) as resp:
-                    resp.read()
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                resp.read()
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8")
             raise RuntimeError(f"Storage upload {exc.code}: {body}") from exc
@@ -279,12 +274,12 @@ class LocalDevClient:
         source = self._storage_file(object_path)
         if not source.exists():
             raise RuntimeError(f"Archivo no existe en storage dev: {object_path}")
-        shutil.copyfile(source, dest)
+        dest.write_bytes(source.read_bytes())
 
     def storage_upload(self, object_path: str, source: Path) -> None:
         dest = self._storage_file(object_path)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, dest)
+        dest.write_bytes(source.read_bytes())
 
 
 def _utc_now() -> str:
@@ -447,10 +442,7 @@ def run_once() -> bool:
         print("Sin jobs pendientes.")
         return False
     print(f"Procesando job {job['id']}...")
-    try:
-        process_job(client, job)
-    finally:
-        gc.collect()
+    process_job(client, job)
     print(f"Job {job['id']} completado.")
     return True
 

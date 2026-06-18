@@ -1,98 +1,94 @@
-"""Script para crear el primer usuario administrador en la base de datos."""
+"""Script para crear o reparar el usuario administrador inicial."""
 
+from datetime import datetime, timedelta
 import os
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from backend.models import Usuario, Suscripcion
+
 from backend.auth import get_password_hash
+from backend.models import Suscripcion, Usuario
 
-# Configuracion - CAMBIA ESTOS VALORES
-DB_URL = "postgresql://postgres.hcdspekajlszcycecpml:CONTRASENA_AQUI@db.hcdspekajlszcycecpml.supabase.co:5432/postgres"
 
-ADMIN_EMAIL = "***REMOVED***"
-ADMIN_PASSWORD = "***REMOVED***"
-ADMIN_NOMBRE = "REMOVED_PASSWORD Luis Martinez"
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Falta variable de entorno requerida: {name}")
+    return value
+
+
+def _load_settings() -> dict:
+    return {
+        "db_url": _required_env("DATABASE_URL"),
+        "admin_email": _required_env("ADMIN_EMAIL").lower(),
+        "admin_password": _required_env("ADMIN_PASSWORD"),
+        "admin_nombre": os.environ.get("ADMIN_NOMBRE", "Administrador Mobiliti").strip() or "Administrador Mobiliti",
+        "admin_empresa": os.environ.get("ADMIN_EMPRESA", "Mobiliti").strip() or "Mobiliti",
+    }
 
 
 def crear_admin():
-    print(f"Conectando a la base de datos...")
-    engine = create_engine(DB_URL, echo=False)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db = SessionLocal()
+    settings = _load_settings()
+    print("Conectando a la base de datos...")
+    engine = create_engine(settings["db_url"], echo=False)
+    session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    db = session_local()
 
     try:
-        # Verificar si ya existe
-        admin_existente = db.query(Usuario).filter(
-            Usuario.email == ADMIN_EMAIL
-        ).first()
+        admin = db.query(Usuario).filter(Usuario.email == settings["admin_email"]).first()
 
-        if admin_existente:
-            print(f"El usuario {ADMIN_EMAIL} ya existe (ID: {admin_existente.id}).")
+        if not admin:
+            admin = Usuario(
+                email=settings["admin_email"],
+                hashed_password=get_password_hash(settings["admin_password"]),
+                nombre=settings["admin_nombre"],
+                empresa=settings["admin_empresa"],
+                es_admin=True,
+                activo=True,
+            )
+            db.add(admin)
+            db.commit()
+            db.refresh(admin)
+            print(f"Usuario admin creado con ID: {admin.id}.")
+        else:
+            admin.hashed_password = get_password_hash(settings["admin_password"])
+            admin.nombre = settings["admin_nombre"]
+            admin.empresa = settings["admin_empresa"]
+            admin.es_admin = True
+            admin.activo = True
+            db.commit()
+            print(f"Usuario admin actualizado (ID: {admin.id}).")
 
-            # Asegurar que tenga el rol admin
-            if admin_existente.rol != "admin":
-                admin_existente.rol = "admin"
-                db.commit()
-                print("Rol actualizado a 'admin'.")
+        suscripcion = db.query(Suscripcion).filter(Suscripcion.usuario_id == admin.id).first()
+        fecha_fin = datetime.utcnow() + timedelta(days=3650)
 
-            # Asegurar que tenga suscripcion
-            suscripcion = db.query(Suscripcion).filter(
-                Suscripcion.usuario_id == admin_existente.id
-            ).first()
+        if not suscripcion:
+            suscripcion = Suscripcion(
+                usuario_id=admin.id,
+                estado="activa",
+                plan="anual",
+                fecha_inicio=datetime.utcnow(),
+                fecha_fin=fecha_fin,
+            )
+            db.add(suscripcion)
+            db.commit()
+            print("Suscripcion admin creada.")
+        else:
+            suscripcion.estado = "activa"
+            suscripcion.plan = "anual"
+            suscripcion.fecha_fin = fecha_fin
+            db.commit()
+            print("Suscripcion admin actualizada.")
 
-            if not suscripcion:
-                nueva_sus = Suscripcion(
-                    usuario_id=admin_existente.id,
-                    tipo="anual",
-                    estado="activa",
-                    fecha_fin=None  # Ilimitada
-                )
-                db.add(nueva_sus)
-                db.commit()
-                print("Suscripcion activa creada.")
-            else:
-                suscripcion.estado = "activa"
-                db.commit()
-                print("Suscripcion activa verificada.")
-
-            return
-
-        # Crear usuario admin
-        admin = Usuario(
-            email=ADMIN_EMAIL,
-            nombre=ADMIN_NOMBRE,
-            password_hash=get_password_hash(ADMIN_PASSWORD),
-            rol="admin",
-            activo=True
-        )
-        db.add(admin)
-        db.commit()
-        db.refresh(admin)
-
-        print(f"Usuario admin creado con ID: {admin.id}")
-
-        # Crear suscripcion ilimitada
-        suscripcion = Suscripcion(
-            usuario_id=admin.id,
-            tipo="anual",
-            estado="activa",
-            fecha_fin=None
-        )
-        db.add(suscripcion)
-        db.commit()
-
-        print(f"Suscripcion activa creada para admin.")
-        print(f"\n=== ADMIN CREDENTIALS ===")
-        print(f"Email:    {ADMIN_EMAIL}")
-        print(f"Password: {ADMIN_PASSWORD}")
-        print(f"=========================\n")
-
-    except Exception as e:
-        print(f"ERROR: {e}")
+        print("Admin listo.")
+        print(f"Email: {settings['admin_email']}")
+    except Exception as exc:
         db.rollback()
+        print(f"ERROR: {exc}")
+        raise
     finally:
         db.close()
 
