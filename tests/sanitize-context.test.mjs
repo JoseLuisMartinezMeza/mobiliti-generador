@@ -11,13 +11,19 @@ import { sanitizeInputs } from "../scripts/sanitize-context.mjs";
 const fixtureDir = path.resolve("tests/fixtures/context");
 
 test("sanitizeText redacts common secret and identity patterns", () => {
+  const fakeJwt = [
+    "eyJhbGciOiJIUzI1NiJ9",
+    "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+    "signature1234567890"
+  ].join(".");
+
   const raw = [
     "OPENAI_API_KEY=test-secret-value-1234567890",
     "Authorization: Bearer TEST_BEARER_TOKEN",
     "pepe@example.com",
     "C:\\Users\\pepem\\Downloads\\thing",
     "password: supersecret",
-    "JWT_PLACEHOLDER",
+    fakeJwt,
     "-----BEGIN " + "PRIVATE KEY-----\nabc\n-----END " + "PRIVATE KEY-----"
   ].join("\n");
 
