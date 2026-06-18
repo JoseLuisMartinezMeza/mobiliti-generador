@@ -152,7 +152,7 @@ if (-not $SkipBootstrap) {
     Write-Host "Running bootstrap on server..."
     $oldPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    & ssh -i $SshKeyPath -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR "root@$ip" "curl -fsSL https://raw.githubusercontent.com/REMOVED_PASSWORD/mobiliti-generador/master/deploy/hetzner/bootstrap.sh | bash"
+    & ssh -i $SshKeyPath -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR "root@$ip" "curl -fsSL https://raw.githubusercontent.com/JoseLuisMartinezMeza/mobiliti-generador/master/deploy/hetzner/bootstrap.sh | bash"
     $ErrorActionPreference = $oldPreference
     if ($LASTEXITCODE -ne 0) {
         Die "Remote bootstrap failed."

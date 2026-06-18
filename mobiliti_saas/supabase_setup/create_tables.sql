@@ -64,7 +64,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_versiones_version ON saas_versiones(versio
 INSERT INTO saas_versiones (version, download_url, release_notes, force_update)
 VALUES (
     '1.5.6',
-    'https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.6/Mobiliti_Generador.exe',
+    'https://github.com/JoseLuisMartinezMeza/mobiliti-generador/releases/download/v1.5.6/Mobiliti_Generador.exe',
     'Fix: eliminado subprocess en modo .exe para evitar crash _MEI Tcl data',
     FALSE
 )

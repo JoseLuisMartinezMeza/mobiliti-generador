@@ -28,7 +28,7 @@ def init_db():
         # Crear usuario admin de prueba
         admin = Usuario(
             email="***REMOVED***",
-            nombre="REMOVED_PASSWORD Luis Martinez",
+            nombre="Jose Luis Martinez",
             password_hash=get_password_hash("***REMOVED***"),
             rol="admin",
             activo=True

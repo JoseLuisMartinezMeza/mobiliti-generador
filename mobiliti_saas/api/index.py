@@ -1292,7 +1292,7 @@ def generar_cotizacion(body: dict, authorization: str = Header(None)):
 # Fallback inline por si Supabase no responde
 _CURRENT_VERSION_FALLBACK = {
     "version": "1.5.7",
-    "download_url": "https://github.com/REMOVED_PASSWORD/mobiliti-generador/releases/download/v1.5.7/Mobiliti_Generador_v1.5.7.zip",
+    "download_url": "https://github.com/JoseLuisMartinezMeza/mobiliti-generador/releases/download/v1.5.7/Mobiliti_Generador_v1.5.7.zip",
     "release_notes": "Release estable v1.5.7 con ejecutable, config.json y version.txt.",
     "force_update": False,
 }

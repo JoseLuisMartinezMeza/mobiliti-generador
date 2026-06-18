@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/mobiliti-worker/app}"
 ENV_DIR="${ENV_DIR:-/etc/mobiliti-worker}"
-GIT_REPO="${GIT_REPO:-https://github.com/REMOVED_PASSWORD/mobiliti-generador.git}"
+GIT_REPO="${GIT_REPO:-https://github.com/JoseLuisMartinezMeza/mobiliti-generador.git}"
 GIT_REF="${GIT_REF:-master}"
 SWAP_SIZE="${SWAP_SIZE:-8G}"
 

@@ -119,7 +119,7 @@ $$ LANGUAGE plpgsql;
 INSERT INTO usuarios (email, nombre, password_hash, rol, activo)
 VALUES (
     '***REMOVED***',
-    'REMOVED_PASSWORD Luis Martinez',
+    'Jose Luis Martinez',
     '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewKyNiAYMyzJ/I1i',
     'admin',
     true

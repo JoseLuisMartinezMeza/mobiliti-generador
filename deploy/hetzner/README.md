@@ -42,7 +42,7 @@ The script will:
 Run on the server as root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/REMOVED_PASSWORD/mobiliti-generador/master/deploy/hetzner/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JoseLuisMartinezMeza/mobiliti-generador/master/deploy/hetzner/bootstrap.sh | bash
 ```
 
 Then edit secrets:
