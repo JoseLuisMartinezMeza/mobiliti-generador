@@ -5,8 +5,10 @@ import pytest
 from PIL import Image
 
 from mobiliti_saas.quote_engine.ai_image_provider import (
+    DEFAULT_DEZGO_ENDPOINT,
     DEFAULT_DEZGO_NEGATIVE_PROMPT,
     DEFAULT_DEZGO_PROMPT,
+    DEFAULT_DEZGO_TEXT_ENDPOINT,
     DezgoImageProviderConfig,
     ImageProviderError,
     dezgo_config_from_env,
@@ -43,20 +45,40 @@ def test_normalize_image_provider_defaults_to_pillow():
 
 
 def test_default_dezgo_prompt_targets_realistic_ambient_catalog():
-    assert "realistic" in DEFAULT_DEZGO_PROMPT
-    assert "pure white seamless background" in DEFAULT_DEZGO_PROMPT
+    assert DEFAULT_DEZGO_ENDPOINT == "https://api.dezgo.com/image2image_flux_2_pro"
+    assert DEFAULT_DEZGO_TEXT_ENDPOINT == "https://api.dezgo.com/text2image_flux_2_pro"
+    assert "photorealistic" in DEFAULT_DEZGO_PROMPT
+    assert "clean pure white or transparent studio background" in DEFAULT_DEZGO_PROMPT
     assert "preserve the exact original product shape" in DEFAULT_DEZGO_PROMPT
     assert "changed product design" in DEFAULT_DEZGO_NEGATIVE_PROMPT
 
 
-def test_dezgo_env_uses_image2image_even_if_legacy_endpoint_was_background_removal(monkeypatch):
+def test_dezgo_env_uses_flux_2_pro_even_if_legacy_endpoint_was_background_removal(monkeypatch):
     monkeypatch.setenv("DEZGO_ENDPOINT", "https://api.dezgo.com/remove-background")
     monkeypatch.delenv("DEZGO_ALLOW_NON_RETOUCH_ENDPOINT", raising=False)
 
     config = dezgo_config_from_env()
 
-    assert config.endpoint == "https://api.dezgo.com/image2image"
+    assert config.endpoint == "https://api.dezgo.com/image2image_flux_2_pro"
     assert config.strength >= 0.5
+
+
+def test_dezgo_env_upgrades_legacy_image2image_endpoint_to_flux_2_pro(monkeypatch):
+    monkeypatch.setenv("DEZGO_ENDPOINT", "https://api.dezgo.com/image2image")
+    monkeypatch.delenv("DEZGO_ALLOW_LEGACY_IMAGE_ENDPOINT", raising=False)
+
+    config = dezgo_config_from_env()
+
+    assert config.endpoint == "https://api.dezgo.com/image2image_flux_2_pro"
+
+
+def test_dezgo_env_can_explicitly_allow_legacy_image_endpoint(monkeypatch):
+    monkeypatch.setenv("DEZGO_ENDPOINT", "https://api.dezgo.com/image2image")
+    monkeypatch.setenv("DEZGO_ALLOW_LEGACY_IMAGE_ENDPOINT", "1")
+
+    config = dezgo_config_from_env()
+
+    assert config.endpoint == "https://api.dezgo.com/image2image"
 
 
 def test_dezgo_env_can_explicitly_allow_non_retouch_endpoint(monkeypatch):
@@ -118,21 +140,21 @@ def test_dezgo_image2image_includes_flux_model_and_prompt(monkeypatch, tmp_path)
         output,
         DezgoImageProviderConfig(
             api_key="fake-key",
-            endpoint="https://api.dezgo.com/image2image",
-            model="realistic_vision_5_1",
+            endpoint="https://api.dezgo.com/image2image_flux_2_pro",
+            model="flux_2_pro",
             prompt="clean furniture product photo on a pure white background",
         ),
     )
 
     assert b'name="init_image"; filename="source.png"' in captured["body"]
-    assert b'name="model"' in captured["body"]
-    assert b"realistic_vision_5_1" in captured["body"]
+    assert b'name="model"' not in captured["body"]
     assert b'name="prompt"' in captured["body"]
     assert b"pure white background" in captured["body"]
     assert b'name="negative_prompt"' in captured["body"]
+    assert b'name="strength"' not in captured["body"]
 
 
-def test_dezgo_image2image_replaces_flux_model_with_valid_sd_model(monkeypatch, tmp_path):
+def test_dezgo_legacy_image2image_replaces_flux_model_with_valid_endpoint_model(monkeypatch, tmp_path):
     source = tmp_path / "source.png"
     expected = _png_bytes(source, color=(20, 20, 20, 255))
     output = tmp_path / "out.png"
@@ -177,7 +199,7 @@ def test_dezgo_text2image_flux_generates_from_prompt(monkeypatch, tmp_path):
         output,
         DezgoImageProviderConfig(
             api_key="fake-key",
-            text_endpoint="https://api.dezgo.com/text2image_flux",
+            text_endpoint="https://api.dezgo.com/text2image_flux_2_pro",
             text_width=1024,
             text_height=1024,
             text_steps=8,
@@ -185,13 +207,13 @@ def test_dezgo_text2image_flux_generates_from_prompt(monkeypatch, tmp_path):
     )
 
     assert output.read_bytes() == expected
-    assert captured["url"] == "https://api.dezgo.com/text2image_flux"
+    assert captured["url"] == "https://api.dezgo.com/text2image_flux_2_pro"
     assert captured["timeout"] == 120
     assert b'name="prompt"' in captured["body"]
     assert b"realistic workstation render" in captured["body"]
-    assert b'name="width"' in captured["body"]
-    assert b"1024" in captured["body"]
-    assert b'name="transparent_background"' in captured["body"]
+    assert b'name="format"' in captured["body"]
+    assert b'name="width"' not in captured["body"]
+    assert b'name="transparent_background"' not in captured["body"]
 
 
 def test_dezgo_missing_key_raises_clear_error(tmp_path):

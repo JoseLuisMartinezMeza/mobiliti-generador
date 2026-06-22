@@ -10,13 +10,15 @@ import urllib.request
 import uuid
 
 
-DEFAULT_DEZGO_ENDPOINT = "https://api.dezgo.com/image2image"
-DEFAULT_DEZGO_TEXT_ENDPOINT = "https://api.dezgo.com/text2image_flux"
-DEFAULT_DEZGO_MODEL = "realistic_vision_5_1"
+DEFAULT_DEZGO_ENDPOINT = "https://api.dezgo.com/image2image_flux_2_pro"
+DEFAULT_DEZGO_TEXT_ENDPOINT = "https://api.dezgo.com/text2image_flux_2_pro"
+DEFAULT_DEZGO_MODEL = "flux_2_pro"
+LEGACY_DEZGO_SD_MODEL = "realistic_vision_5_1"
 DEFAULT_DEZGO_PROMPT = (
-    "realistic premium office furniture catalog render, preserve the exact original product shape, "
-    "materials, color and proportions, centered full product, pure white seamless background, "
-    "soft studio lighting, realistic contact shadow, premium commercial catalog quality, sharp details, "
+    "photorealistic premium office furniture product image, preserve the exact original product shape and identity, "
+    "geometry, materials, wood grain, metal legs, color and proportions, centered full product visible, "
+    "isolated on a clean pure white or transparent studio background, soft natural catalog shadow only, "
+    "crisp edges, high resolution, sharp commercial catalog quality, remove dirty gray background artifacts, "
     "no text, no logos, no people"
 )
 DEFAULT_DEZGO_NEGATIVE_PROMPT = (
@@ -77,6 +79,8 @@ def _retouch_endpoint_from_env() -> str:
     endpoint = os.environ.get("DEZGO_IMAGE2IMAGE_ENDPOINT") or os.environ.get("DEZGO_ENDPOINT", DEFAULT_DEZGO_ENDPOINT)
     if _is_non_retouch_endpoint(endpoint) and not _truthy_env("DEZGO_ALLOW_NON_RETOUCH_ENDPOINT"):
         return DEFAULT_DEZGO_ENDPOINT
+    if _is_legacy_image_endpoint(endpoint) and not _truthy_env("DEZGO_ALLOW_LEGACY_IMAGE_ENDPOINT"):
+        return DEFAULT_DEZGO_ENDPOINT
     return endpoint
 
 
@@ -87,6 +91,11 @@ def _truthy_env(name: str) -> bool:
 def _is_non_retouch_endpoint(endpoint: str | None) -> bool:
     path = urllib.parse.urlparse(str(endpoint or "")).path.lower()
     return "remove-background" in path or "upscale" in path
+
+
+def _is_legacy_image_endpoint(endpoint: str | None) -> bool:
+    path = urllib.parse.urlparse(str(endpoint or "")).path.lower().rstrip("/")
+    return path in {"/image2image", "/image2image_flux_2"}
 
 
 def enhance_with_dezgo(
@@ -201,7 +210,7 @@ def _fields_for_endpoint(endpoint: str, config: DezgoImageProviderConfig) -> dic
     model = _model_for_endpoint(path, config.model)
     if model:
         fields["model"] = model
-    if "image2image" in path:
+    if "image2image" in path and "flux_2_pro" not in path:
         fields["strength"] = str(config.strength)
     return fields
 
@@ -213,7 +222,9 @@ def _fields_for_text_endpoint(config: DezgoImageProviderConfig, prompt: str) -> 
         "prompt": _limit_prompt(prompt),
         "format": config.output_format,
     }
-    if "text2image_flux" in path:
+    if "text2image_flux_2_pro" in path:
+        pass
+    elif "text2image_flux" in path:
         fields.update(
             {
                 "width": str(_clamp_multiple(config.text_width, 512, 1536)),
@@ -237,8 +248,10 @@ def _fields_for_text_endpoint(config: DezgoImageProviderConfig, prompt: str) -> 
 
 def _model_for_endpoint(path: str, model: str) -> str:
     text = str(model or "").strip()
+    if "flux_2" in path:
+        return ""
     if "image2image" in path and text.startswith("flux_"):
-        return DEFAULT_DEZGO_MODEL
+        return LEGACY_DEZGO_SD_MODEL
     return text
 
 
