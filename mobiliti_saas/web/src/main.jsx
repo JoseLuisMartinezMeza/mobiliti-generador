@@ -59,6 +59,24 @@ function filenameFromDisposition(disposition, fallback) {
   return match?.[1] || fallback;
 }
 
+function safeFilenamePart(value, limit = 80) {
+  const cleaned = String(value || "")
+    .trim()
+    .replace(/[^\p{L}\p{N}_-]+/gu, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned.slice(0, limit);
+}
+
+function quoteDownloadFallbackName(job) {
+  const metadata = job?.metadata || {};
+  const project = safeFilenamePart(metadata.proyecto, 80);
+  const quoteNumber = safeFilenamePart(metadata.cotizacion, 40);
+  const fallback = safeFilenamePart(job?.id, 80) || "cotizacion";
+  const name = project && quoteNumber ? `${project}_${quoteNumber}` : quoteNumber || project || fallback;
+  return `Cotizacion_${name.slice(0, 140)}.xlsx`;
+}
+
 async function downloadJobFile(job, token) {
   if (!job?.id) return "";
   const res = await fetch(apiUrl(`/cotizaciones/${job.id}/file`), {
@@ -76,7 +94,7 @@ async function downloadJobFile(job, token) {
   const blob = await res.blob();
   const filename = filenameFromDisposition(
     res.headers.get("Content-Disposition"),
-    `Cotizacion_${job.metadata?.cotizacion || job.id}.xlsx`
+    quoteDownloadFallbackName(job)
   );
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

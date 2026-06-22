@@ -388,7 +388,7 @@ def test_file_download_returns_xlsx_attachment(monkeypatch):
             "usuario_id": 7,
             "status": "completed",
             "output_path": "users/7/jobs/job-1/output.xlsx",
-            "metadata": {"cotizacion": "COT-001"},
+            "metadata": {"proyecto": "Proyecto Alpha", "cotizacion": "COT-001"},
         },
     )
     monkeypatch.setattr(index, "_storage_download_bytes", lambda path: b"PK\x03\x04xlsx")
@@ -397,4 +397,12 @@ def test_file_download_returns_xlsx_attachment(monkeypatch):
 
     assert resp.status_code == 200
     assert resp.content.startswith(b"PK\x03\x04")
-    assert resp.headers["content-disposition"] == 'attachment; filename="Cotizacion_COT-001.xlsx"'
+    assert resp.headers["content-disposition"] == 'attachment; filename="Cotizacion_Proyecto_Alpha_COT-001.xlsx"'
+
+
+def test_safe_quote_filename_uses_project_and_quote_number():
+    filename = index._safe_quote_filename(
+        {"id": "job-1", "metadata": {"proyecto": "IZA Reforma / Piso 3", "cotizacion": "300-00010"}}
+    )
+
+    assert filename == "Cotizacion_IZA_Reforma_Piso_3_300-00010.xlsx"

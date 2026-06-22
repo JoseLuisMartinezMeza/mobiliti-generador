@@ -660,12 +660,19 @@ def _quote_job_for_user(job_id: str, usuario_id: int):
     return job
 
 
+def _safe_filename_part(value: object, limit: int = 80) -> str:
+    raw = str(value or "").strip()
+    name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
+    return "_".join(part for part in name.split("_") if part)[:limit]
+
+
 def _safe_quote_filename(job: dict) -> str:
     metadata = job.get("metadata") or {}
-    raw = metadata.get("cotizacion") or metadata.get("proyecto") or job["id"]
-    name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(raw).strip())
-    name = "_".join(part for part in name.split("_") if part)[:80] or job["id"]
-    return f"Cotizacion_{name}.xlsx"
+    project = _safe_filename_part(metadata.get("proyecto"), 80)
+    quote_number = _safe_filename_part(metadata.get("cotizacion"), 40)
+    fallback = _safe_filename_part(job.get("id"), 80) or "cotizacion"
+    name = f"{project}_{quote_number}" if project and quote_number else quote_number or project or fallback
+    return f"Cotizacion_{name[:140]}.xlsx"
 
 
 def _quote_number_prefix_for_user(user: dict) -> str | None:
