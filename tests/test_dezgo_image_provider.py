@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import urllib.error
 
 import pytest
@@ -22,8 +23,9 @@ def _png_bytes(path: Path, color=(255, 255, 255, 0)) -> bytes:
 
 
 class _FakeResponse:
-    def __init__(self, body: bytes):
+    def __init__(self, body: bytes, content_type: str = ""):
         self._body = body
+        self.headers = {"content-type": content_type}
 
     def __enter__(self):
         return self
@@ -44,7 +46,7 @@ def test_normalize_image_provider_defaults_to_pillow():
 
 def test_default_dezgo_prompt_targets_realistic_ambient_catalog():
     assert "realistic" in DEFAULT_DEZGO_PROMPT
-    assert "pure white seamless background" in DEFAULT_DEZGO_PROMPT
+    assert "pure white or transparent" in DEFAULT_DEZGO_PROMPT
     assert "preserve the exact original product shape" in DEFAULT_DEZGO_PROMPT
     assert "changed product design" in DEFAULT_DEZGO_NEGATIVE_PROMPT
 
@@ -55,8 +57,17 @@ def test_dezgo_env_uses_image2image_even_if_legacy_endpoint_was_background_remov
 
     config = dezgo_config_from_env()
 
-    assert config.endpoint == "https://api.dezgo.com/image2image"
+    assert config.endpoint == "https://api.dezgo.com/image2image_flux_2_pro"
     assert config.strength >= 0.5
+
+
+def test_dezgo_env_upgrades_legacy_image2image_endpoint_to_flux2_pro(monkeypatch):
+    monkeypatch.setenv("DEZGO_ENDPOINT", "https://api.dezgo.com/image2image")
+    monkeypatch.delenv("DEZGO_ALLOW_LEGACY_IMAGE_ENDPOINT", raising=False)
+
+    config = dezgo_config_from_env()
+
+    assert config.endpoint == "https://api.dezgo.com/image2image_flux_2_pro"
 
 
 def test_dezgo_env_can_explicitly_allow_non_retouch_endpoint(monkeypatch):
@@ -101,7 +112,7 @@ def test_dezgo_remove_background_posts_image_with_auth_header(monkeypatch, tmp_p
     assert b"transparent" in captured["body"]
 
 
-def test_dezgo_image2image_includes_flux_model_and_prompt(monkeypatch, tmp_path):
+def test_dezgo_image2image_flux2_pro_includes_prompt_without_sd_fields(monkeypatch, tmp_path):
     source = tmp_path / "source.png"
     expected = _png_bytes(source, color=(20, 20, 20, 255))
     output = tmp_path / "out.png"
@@ -118,15 +129,15 @@ def test_dezgo_image2image_includes_flux_model_and_prompt(monkeypatch, tmp_path)
         output,
         DezgoImageProviderConfig(
             api_key="fake-key",
-            endpoint="https://api.dezgo.com/image2image",
-            model="realistic_vision_5_1",
+            endpoint="https://api.dezgo.com/image2image_flux_2_pro",
+            model="flux_2_pro",
             prompt="clean furniture product photo on a pure white background",
         ),
     )
 
     assert b'name="init_image"; filename="source.png"' in captured["body"]
-    assert b'name="model"' in captured["body"]
-    assert b"realistic_vision_5_1" in captured["body"]
+    assert b'name="model"' not in captured["body"]
+    assert b'name="strength"' not in captured["body"]
     assert b'name="prompt"' in captured["body"]
     assert b"pure white background" in captured["body"]
     assert b'name="negative_prompt"' in captured["body"]
@@ -159,6 +170,50 @@ def test_dezgo_image2image_replaces_flux_model_with_valid_sd_model(monkeypatch, 
     assert b"flux_2" not in captured["body"]
 
 
+def test_dezgo_flux2_pro_polls_job_output_when_api_returns_tx(monkeypatch, tmp_path):
+    source = tmp_path / "source.png"
+    expected = _png_bytes(source, color=(20, 20, 20, 255))
+    output = tmp_path / "out.png"
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append(request.full_url)
+        if request.full_url == "https://api.dezgo.com/image2image_flux_2_pro":
+            body = json.dumps({"tx": {"_id": "job-123"}}).encode("utf-8")
+            return _FakeResponse(body, "application/json; charset=utf-8")
+        if request.full_url == "https://api.dezgo.com/unstable/job/job-123":
+            body = json.dumps(
+                {
+                    "status": "Success",
+                    "final": True,
+                    "files": {"output": {"url": "https://files.dezgo.com/o/job-123.png"}},
+                }
+            ).encode("utf-8")
+            return _FakeResponse(body, "application/json; charset=utf-8")
+        if request.full_url == "https://files.dezgo.com/o/job-123.png":
+            return _FakeResponse(expected, "image/png")
+        raise AssertionError(request.full_url)
+
+    monkeypatch.setattr("mobiliti_saas.quote_engine.ai_image_provider.urllib.request.urlopen", fake_urlopen)
+
+    result = enhance_with_dezgo(
+        source,
+        output,
+        DezgoImageProviderConfig(
+            api_key="fake-key",
+            endpoint="https://api.dezgo.com/image2image_flux_2_pro",
+        ),
+    )
+
+    assert result == output
+    assert output.read_bytes() == expected
+    assert calls == [
+        "https://api.dezgo.com/image2image_flux_2_pro",
+        "https://api.dezgo.com/unstable/job/job-123",
+        "https://files.dezgo.com/o/job-123.png",
+    ]
+
+
 def test_dezgo_text2image_flux_generates_from_prompt(monkeypatch, tmp_path):
     expected = _png_bytes(tmp_path / "expected.png", color=(30, 30, 30, 255))
     output = tmp_path / "generated.png"
@@ -177,7 +232,7 @@ def test_dezgo_text2image_flux_generates_from_prompt(monkeypatch, tmp_path):
         output,
         DezgoImageProviderConfig(
             api_key="fake-key",
-            text_endpoint="https://api.dezgo.com/text2image_flux",
+            text_endpoint="https://api.dezgo.com/text2image_flux_2_pro",
             text_width=1024,
             text_height=1024,
             text_steps=8,
@@ -185,7 +240,7 @@ def test_dezgo_text2image_flux_generates_from_prompt(monkeypatch, tmp_path):
     )
 
     assert output.read_bytes() == expected
-    assert captured["url"] == "https://api.dezgo.com/text2image_flux"
+    assert captured["url"] == "https://api.dezgo.com/text2image_flux_2_pro"
     assert captured["timeout"] == 120
     assert b'name="prompt"' in captured["body"]
     assert b"realistic workstation render" in captured["body"]

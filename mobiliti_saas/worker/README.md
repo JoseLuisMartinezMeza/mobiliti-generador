@@ -34,11 +34,11 @@ $env:IMAGE_PROVIDER="pillow"
 # Opcion IA de costo. No guardes la clave en el repo.
 $env:IMAGE_PROVIDER="dezgo"
 $env:DEZGO_API_KEY="..."
-$env:DEZGO_MODEL="realistic_vision_5_1"
-$env:DEZGO_ENDPOINT="https://api.dezgo.com/image2image"
-$env:DEZGO_TEXT_ENDPOINT="https://api.dezgo.com/text2image_flux"
+$env:DEZGO_MODEL="flux_2_pro"
+$env:DEZGO_ENDPOINT="https://api.dezgo.com/image2image_flux_2_pro"
+$env:DEZGO_TEXT_ENDPOINT="https://api.dezgo.com/text2image_flux_2_pro"
 $env:DEZGO_IMAGE_STRENGTH="0.58"
-$env:DEZGO_PROMPT="realistic premium office furniture catalog render, preserve the exact original product shape, materials, color and proportions, centered full product, pure white seamless background, soft studio lighting, realistic contact shadow, premium commercial catalog quality, sharp details, no text, no logos, no people"
+$env:DEZGO_PROMPT="photorealistic premium office furniture product image, preserve the exact original product shape and identity, geometry, materials, color and proportions, centered full product visible, clean pure white or transparent studio background, soft catalog shadow, crisp edges, high resolution, sharp commercial catalog quality, no text, no logos, no people"
 $env:DEZGO_NEGATIVE_PROMPT="distorted geometry, changed product design, extra furniture, people, hands, text, watermark, logo, cropped product, blurry, low resolution, cartoon, illustration, oversaturated colors"
 ```
 
@@ -48,8 +48,9 @@ falla, el job debe fallar con error visible; no hace fallback silencioso a
 imagenes originales/locales.
 
 Nota: `remove-background` no es retoque IA generativo. Para mejorar imagenes con
-Dezgo usa `image2image`; el motor ignora `DEZGO_ENDPOINT=remove-background` por
-defecto salvo que configures `DEZGO_ALLOW_NON_RETOUCH_ENDPOINT=1`.
+Dezgo usa `image2image_flux_2_pro`; el motor ignora endpoints legacy como
+`DEZGO_ENDPOINT=image2image` salvo que configures
+`DEZGO_ALLOW_LEGACY_IMAGE_ENDPOINT=1`.
 
 Cuando `image_provider=dezgo` y una fila de producto no trae imagen embebida en
 `Quotation`, el worker intenta generar una imagen nueva desde el nombre,
