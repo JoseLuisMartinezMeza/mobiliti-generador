@@ -41,6 +41,9 @@ historial/test_screenshots/
 historial/debug_scripts/
 !historial/*.py
 !historial/*.bas
+HISTORIAL DE VERSIONES/dogfood-output-*/
+HISTORIAL DE VERSIONES/cleanup_legacy_root_20260622/generar_cotizacion_v5_xlwings.py
+HISTORIAL DE VERSIONES/cleanup_legacy_root_20260622/mobiliti_saas_vercel/api/index.py
 
 # Excel locks
 ~$*.xlsx
