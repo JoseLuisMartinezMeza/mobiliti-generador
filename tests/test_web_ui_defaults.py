@@ -47,3 +47,14 @@ def test_expired_session_is_cleared_instead_of_showing_raw_token_error():
     assert "notice-line" in source
     assert ".notice-line" in styles
     assert 'os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720")' in api
+
+
+def test_history_exposes_delete_quote_action():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert "Trash2" in source
+    assert "async function deleteJob" in source
+    assert 'method: "DELETE"' in source
+    assert "Eliminar" in source
+    assert ".danger-action" in styles

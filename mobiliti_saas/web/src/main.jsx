@@ -14,6 +14,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Trash2,
   UploadCloud,
   UserRound,
   UsersRound,
@@ -930,7 +931,7 @@ function StatCard({ label, value, tone = "" }) {
   );
 }
 
-function HistoryView({ jobs, onDownload, onRetry, downloadState }) {
+function HistoryView({ jobs, onDownload, onRetry, onDelete, downloadState, deleteState }) {
   return (
     <section className="main-card full">
       <div className="card-head">
@@ -956,6 +957,15 @@ function HistoryView({ jobs, onDownload, onRetry, downloadState }) {
             ) : (
               <DownloadButton job={job} onDownload={onDownload} downloadState={downloadState} className="" />
             )}
+            <button
+              className="danger-action"
+              type="button"
+              onClick={() => onDelete(job)}
+              disabled={deleteState?.jobId === job.id}
+            >
+              {deleteState?.jobId === job.id ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+              {deleteState?.jobId === job.id ? "Eliminando" : "Eliminar"}
+            </button>
           </div>
         ))}
         {!jobs.length ? <p className="empty">No hay historial todavia.</p> : null}
@@ -1158,6 +1168,7 @@ function App() {
   const [view, setView] = useState("cotizaciones");
   const [jobs, setJobs] = useState([]);
   const [downloadState, setDownloadState] = useState(null);
+  const [deleteState, setDeleteState] = useState(null);
   const { request } = useApi(session?.access_token);
 
   useEffect(() => {
@@ -1166,6 +1177,7 @@ function App() {
       setSession(null);
       setJobs([]);
       setDownloadState(null);
+      setDeleteState(null);
       setView("cotizaciones");
       setSessionNotice(AUTH_EXPIRED_MESSAGE);
     }
@@ -1215,6 +1227,21 @@ function App() {
     setJobs((current) => [data.job, ...current.filter((item) => item.id !== data.job.id)]);
   }
 
+  async function deleteJob(job) {
+    if (!job?.id) return;
+    const label = job.metadata?.cotizacion || job.metadata?.proyecto || "esta cotizacion";
+    if (!window.confirm(`Eliminar ${label}?`)) return;
+    setDeleteState({ jobId: job.id });
+    try {
+      await request(`/cotizaciones/${job.id}`, { method: "DELETE" });
+      setJobs((current) => current.filter((item) => item.id !== job.id));
+    } catch (err) {
+      window.alert(err.message || "No se pudo eliminar la cotizacion");
+    } finally {
+      setDeleteState(null);
+    }
+  }
+
   const quoteForm = (
     <QuoteForm
       token={session.access_token}
@@ -1231,7 +1258,7 @@ function App() {
     : view === "nueva"
       ? quoteForm
       : view === "historial"
-        ? <HistoryView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} downloadState={downloadState} />
+        ? <HistoryView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} downloadState={downloadState} deleteState={deleteState} />
         : view === "admin" || view === "clientes"
           ? <AdminView token={session.access_token} />
           : quoteForm;

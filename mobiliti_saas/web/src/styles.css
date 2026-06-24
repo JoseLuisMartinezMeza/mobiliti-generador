@@ -368,6 +368,11 @@ textarea:focus {
   padding: 0 14px;
 }
 
+.danger-action {
+  border-color: var(--danger) !important;
+  color: var(--danger) !important;
+}
+
 .ghost-action:disabled,
 .output-row button:disabled,
 .history-row button:disabled {
@@ -770,7 +775,7 @@ textarea:focus {
 }
 
 .history-row {
-  grid-template-columns: 150px 1fr 130px 170px 190px 170px;
+  grid-template-columns: 150px 1fr 130px 170px 190px 170px 150px;
 }
 
 .status {

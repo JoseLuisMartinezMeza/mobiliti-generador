@@ -41,6 +41,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
 QUOTE_STORAGE_BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
 MAX_QUOTE_UPLOAD_MB = int(os.environ.get("MAX_QUOTE_UPLOAD_MB", "25"))
+MAX_QUOTE_HISTORY_PER_USER = int(os.environ.get("MAX_QUOTE_HISTORY_PER_USER", "15"))
 ALLOWED_QUOTE_INPUT_EXTENSIONS = (".xlsx", ".pdf")
 SIGNED_UPLOAD_TTL_SECONDS = int(os.environ.get("SIGNED_UPLOAD_TTL_SECONDS", "3600"))
 SIGNED_DOWNLOAD_TTL_SECONDS = int(os.environ.get("SIGNED_DOWNLOAD_TTL_SECONDS", "3600"))
@@ -638,6 +639,21 @@ def db_update_quote_job(job_id: str, updates: dict):
     return rows[0] if rows else {}
 
 
+def db_delete_quote_job(job_id: str):
+    if DEV_MODE:
+        data = _dev_load()
+        for index, row in enumerate(data["quote_jobs"]):
+            if row["id"] == job_id:
+                deleted = data["quote_jobs"].pop(index)
+                _dev_save(data)
+                return deleted
+        return {}
+    if _use_postgres():
+        return _pg_write("DELETE FROM saas_quote_jobs WHERE id = %s RETURNING *", (job_id,)) or {}
+    rows = _supabase_req("DELETE", f"/saas_quote_jobs?id=eq.{job_id}")
+    return rows[0] if isinstance(rows, list) and rows else {}
+
+
 def _require_active_subscription(usuario_id: int):
     suscripcion = db_get_suscripcion_by_usuario(usuario_id)
     now = datetime.now(timezone.utc)
@@ -659,6 +675,43 @@ def _quote_job_for_user(job_id: str, usuario_id: int):
     if int(job["usuario_id"]) != int(usuario_id):
         raise HTTPException(status_code=403, detail="No puedes acceder a esta cotizacion")
     return job
+
+
+def _quote_storage_paths(job: dict) -> list[str]:
+    paths = []
+    for key in ("input_path", "output_path"):
+        path = str(job.get(key) or "").strip().lstrip("/")
+        if path:
+            paths.append(path)
+    return list(dict.fromkeys(paths))
+
+
+def _delete_quote_storage(job: dict) -> None:
+    paths = _quote_storage_paths(job)
+    if not paths:
+        return
+    if DEV_MODE:
+        for path in paths:
+            _dev_storage_file(path).unlink(missing_ok=True)
+        return
+    _storage_req("DELETE", f"/object/{QUOTE_STORAGE_BUCKET}", json_data={"prefixes": paths})
+
+
+def _created_at_sort_key(job: dict) -> str:
+    return str(job.get("created_at") or job.get("updated_at") or "")
+
+
+def _enforce_quote_history_limit(usuario_id: int, jobs: list[dict] | None = None) -> list[dict]:
+    current_jobs = list(jobs if jobs is not None else db_list_quote_jobs(usuario_id))
+    sorted_jobs = sorted(current_jobs, key=_created_at_sort_key, reverse=True)
+    if len(sorted_jobs) <= MAX_QUOTE_HISTORY_PER_USER:
+        return sorted_jobs
+
+    keep = sorted_jobs[:MAX_QUOTE_HISTORY_PER_USER]
+    for old_job in sorted_jobs[MAX_QUOTE_HISTORY_PER_USER:]:
+        _delete_quote_storage(old_job)
+        db_delete_quote_job(old_job["id"])
+    return keep
 
 
 def _safe_filename_part(value: object, limit: int = 80) -> str:
@@ -1103,6 +1156,10 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
         job = db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error preparando carga: {e}")
+    try:
+        _enforce_quote_history_limit(current_user["id"])
+    except RuntimeError:
+        pass
 
     token = upload.get("token") or upload.get("signedToken")
     if not token:
@@ -1212,6 +1269,7 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
 def cotizaciones_list(current_user: dict = Depends(get_current_user)):
     try:
         jobs = db_list_quote_jobs(current_user["id"])
+        jobs = _enforce_quote_history_limit(current_user["id"], jobs)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error de conexion a base de datos: {e}")
     return {"cotizaciones": jobs}
@@ -1221,6 +1279,17 @@ def cotizaciones_list(current_user: dict = Depends(get_current_user)):
 def cotizaciones_get(job_id: str, current_user: dict = Depends(get_current_user)):
     job = _quote_job_for_user(job_id, current_user["id"])
     return {"job": job}
+
+
+@app.delete("/cotizaciones/{job_id}")
+def cotizaciones_delete(job_id: str, current_user: dict = Depends(get_current_user)):
+    job = _quote_job_for_user(job_id, current_user["id"])
+    try:
+        _delete_quote_storage(job)
+        db_delete_quote_job(job_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Error eliminando cotizacion: {e}")
+    return {"deleted_id": job_id}
 
 
 @app.get("/cotizaciones/{job_id}/download")
