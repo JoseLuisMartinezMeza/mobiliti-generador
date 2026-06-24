@@ -59,6 +59,16 @@ function filenameFromDisposition(disposition, fallback) {
   return match?.[1] || fallback;
 }
 
+function isSupportedQuoteInput(fileName) {
+  return /\.(xlsx|pdf)$/i.test(String(fileName || ""));
+}
+
+function quoteInputContentType(fileName) {
+  return String(fileName || "").toLowerCase().endsWith(".pdf")
+    ? "application/pdf"
+    : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+}
+
 function safeFilenamePart(value, limit = 80) {
   const cleaned = String(value || "")
     .trim()
@@ -443,9 +453,9 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
       setFile(null);
       return;
     }
-    if (!nextFile.name.toLowerCase().endsWith(".xlsx")) {
+    if (!isSupportedQuoteInput(nextFile.name)) {
       setFile(null);
-      setError("Selecciona un archivo .xlsx valido.");
+      setError("Selecciona un archivo .xlsx o .pdf valido.");
       return;
     }
     setFile(nextFile);
@@ -464,7 +474,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
     setDownloadState(null);
 
     if (!file) {
-      setError("Selecciona un archivo .xlsx primero.");
+      setError("Selecciona un archivo .xlsx o .pdf primero.");
       return;
     }
     setBusy(true);
@@ -477,7 +487,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
         const uploadRes = await fetch(init.signed_upload_url, {
           method: "PUT",
           headers: {
-            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "Content-Type": quoteInputContentType(file.name)
           },
           body: file
         });
@@ -545,7 +555,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
           <p>Carga la cotizacion del proveedor y genera la propuesta para tu cliente.</p>
         </div>
         <form onSubmit={createQuote} className="quote-form">
-          <h3>1. Cargar cotizacion del proveedor (Excel)</h3>
+          <h3>1. Cargar cotizacion del proveedor (Excel o PDF)</h3>
           <button
             className={`dropzone ${isDragging ? "dragging" : ""}`}
             type="button"
@@ -560,13 +570,13 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
             <input
               ref={inputRef}
               type="file"
-              accept=".xlsx"
+              accept=".xlsx,.pdf"
               onChange={(event) => selectFile(event.target.files?.[0] || null)}
               hidden
             />
             <FileSpreadsheet size={44} />
             <strong>{file ? file.name : "Arrastra y suelta tu archivo aqui"}</strong>
-            <span>{file ? formatBytes(file.size) : "o selecciona un archivo .xlsx"}</span>
+            <span>{file ? formatBytes(file.size) : "o selecciona un archivo .xlsx o .pdf"}</span>
             <small>Tamano maximo: 25 MB</small>
           </button>
 

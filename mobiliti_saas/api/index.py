@@ -41,6 +41,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
 QUOTE_STORAGE_BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
 MAX_QUOTE_UPLOAD_MB = int(os.environ.get("MAX_QUOTE_UPLOAD_MB", "25"))
+ALLOWED_QUOTE_INPUT_EXTENSIONS = (".xlsx", ".pdf")
 SIGNED_UPLOAD_TTL_SECONDS = int(os.environ.get("SIGNED_UPLOAD_TTL_SECONDS", "3600"))
 SIGNED_DOWNLOAD_TTL_SECONDS = int(os.environ.get("SIGNED_DOWNLOAD_TTL_SECONDS", "3600"))
 DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes"}
@@ -666,6 +667,14 @@ def _safe_filename_part(value: object, limit: int = 80) -> str:
     return "_".join(part for part in name.split("_") if part)[:limit]
 
 
+def _quote_input_extension(filename: str) -> str:
+    lower_name = str(filename or "").strip().lower()
+    for extension in ALLOWED_QUOTE_INPUT_EXTENSIONS:
+        if lower_name.endswith(extension):
+            return extension
+    raise HTTPException(status_code=400, detail="Solo se aceptan archivos .xlsx o .pdf")
+
+
 def _safe_quote_filename(job: dict) -> str:
     metadata = job.get("metadata") or {}
     project = _safe_filename_part(metadata.get("proyecto"), 80)
@@ -1071,16 +1080,15 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
     file_size = int(body.get("size", 0) or 0)
     template = str(body.get("template", "Formato Cotizacion 2026 GDL (1).xlsx")).strip()
 
-    if not filename.lower().endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="Solo se aceptan archivos .xlsx")
+    input_extension = _quote_input_extension(filename)
     if file_size <= 0:
         raise HTTPException(status_code=400, detail="Tamano de archivo requerido")
     if file_size > MAX_QUOTE_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(status_code=400, detail=f"Archivo mayor a {MAX_QUOTE_UPLOAD_MB} MB")
 
     job_id = str(uuid.uuid4())
-    input_path = f"users/{current_user['id']}/jobs/{job_id}/input.xlsx"
-    metadata = {"original_filename": filename, "file_size": file_size}
+    input_path = f"users/{current_user['id']}/jobs/{job_id}/input{input_extension}"
+    metadata = {"original_filename": filename, "file_size": file_size, "input_extension": input_extension}
 
     try:
         upload = _create_signed_upload(input_path)
@@ -1100,6 +1108,7 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
         "signed_upload_url": _signed_upload_url(input_path, token) if not DEV_MODE else None,
         "upload_url": f"/cotizaciones/{job['id']}/dev-upload" if DEV_MODE else None,
         "max_size_mb": MAX_QUOTE_UPLOAD_MB,
+        "allowed_extensions": list(ALLOWED_QUOTE_INPUT_EXTENSIONS),
     }
 
 
@@ -1108,8 +1117,10 @@ async def cotizaciones_dev_upload(job_id: str, file: UploadFile = File(...), cur
     if not DEV_MODE:
         raise HTTPException(status_code=404, detail="No disponible")
     job = _quote_job_for_user(job_id, current_user["id"])
-    if not file.filename.lower().endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="Solo se aceptan archivos .xlsx")
+    input_extension = _quote_input_extension(file.filename)
+    expected_extension = Path(str(job.get("input_path") or "")).suffix.lower()
+    if expected_extension and input_extension != expected_extension:
+        raise HTTPException(status_code=400, detail="El archivo no coincide con el tipo de carga inicial")
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Archivo vacio")

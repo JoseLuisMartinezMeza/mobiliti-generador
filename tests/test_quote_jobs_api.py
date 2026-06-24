@@ -93,6 +93,51 @@ def test_init_upload_creates_signed_upload(monkeypatch):
     assert data["path"] == f"users/7/jobs/{data['job_id']}/input.xlsx"
 
 
+def test_init_upload_accepts_pdf(monkeypatch):
+    _mock_user(monkeypatch)
+    created = {}
+
+    monkeypatch.setattr(index, "_create_signed_upload", lambda path: {"token": "upload-token"})
+
+    def fake_create(usuario_id, template, metadata, input_path, job_id=None):
+        created.update({"metadata": metadata, "input_path": input_path})
+        return {
+            "id": job_id or "job-1",
+            "usuario_id": usuario_id,
+            "template": template,
+            "metadata": metadata,
+            "input_path": input_path,
+        }
+
+    monkeypatch.setattr(index, "db_create_quote_job", fake_create)
+
+    resp = _client().post(
+        "/cotizaciones/init-upload",
+        headers=_auth_headers(),
+        json={"filename": "supplier-quotation.pdf", "size": 2048, "template": "Template.xlsx"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["path"] == f"users/7/jobs/{data['job_id']}/input.pdf"
+    assert created["input_path"] == data["path"]
+    assert created["metadata"]["input_extension"] == ".pdf"
+    assert created["metadata"]["original_filename"] == "supplier-quotation.pdf"
+
+
+def test_init_upload_rejects_unsupported_file(monkeypatch):
+    _mock_user(monkeypatch)
+
+    resp = _client().post(
+        "/cotizaciones/init-upload",
+        headers=_auth_headers(),
+        json={"filename": "quotation.xls", "size": 1024},
+    )
+
+    assert resp.status_code == 400
+    assert ".xlsx o .pdf" in resp.json()["detail"]
+
+
 def test_submit_rejects_job_from_other_user(monkeypatch):
     _mock_user(monkeypatch, user_id=7)
     monkeypatch.setattr(

@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import time
 import urllib.error
@@ -28,6 +29,8 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_
 MOBILITI_REST_SECRET = os.environ.get("MOBILITI_REST_SECRET")
 DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes"}
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 DEV_STORE_DIR = Path(os.environ.get("MOBILITI_DEV_STORE_DIR", PROJECT_ROOT / ".mobiliti_dev_store")).resolve()
 
 
@@ -303,6 +306,37 @@ def _default_template() -> Path:
     return candidates[0]
 
 
+def _template_path() -> str:
+    return os.environ.get("TEMPLATE_PATH") or str(_default_template())
+
+
+def _input_extension_for_job(job: dict) -> str:
+    input_path = str(job.get("input_path") or "").lower()
+    original_filename = str((job.get("metadata") or {}).get("original_filename") or "").lower()
+    if input_path.endswith(".pdf") or original_filename.endswith(".pdf"):
+        return ".pdf"
+    return ".xlsx"
+
+
+def _convert_pdf_to_quotation(source_pdf: Path, output_xlsx: Path, reference_xlsx: str | Path) -> None:
+    from pdf_quotation_import import convert_pdf_to_quotation
+
+    convert_pdf_to_quotation(source_pdf, output_xlsx, reference_xlsx=reference_xlsx)
+
+
+def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Path:
+    if _input_extension_for_job(job) != ".pdf":
+        return local_input
+
+    converted_input = tmp_dir / "quotation_from_pdf.xlsx"
+    _convert_pdf_to_quotation(local_input, converted_input, _template_path())
+    metadata = job.get("metadata") or {}
+    metadata["input_extension"] = ".pdf"
+    metadata["pdf_converted"] = True
+    job["metadata"] = metadata
+    return converted_input
+
+
 def _run_generator(job: dict, input_path: Path, output_path: Path) -> None:
     metadata = job.get("metadata") or {}
     job["metadata"] = metadata
@@ -313,8 +347,7 @@ def _run_generator(job: dict, input_path: Path, output_path: Path) -> None:
     if engine in {"python", "openpyxl", "online"}:
         from online_quote_generator import generate_online_quote
 
-        template = os.environ.get("TEMPLATE_PATH") or str(_default_template())
-        generate_online_quote(input_path, output_path, metadata, template)
+        generate_online_quote(input_path, output_path, metadata, _template_path())
         return
     raise RuntimeError(
         f"QUOTE_ENGINE invalido: {QUOTE_ENGINE}. "
@@ -383,14 +416,15 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
 
     with tempfile.TemporaryDirectory(prefix="mobiliti-quote-") as tmp:
         tmp_dir = Path(tmp)
-        local_input = tmp_dir / "input.xlsx"
+        local_input = tmp_dir / f"input{_input_extension_for_job(job)}"
         local_output = tmp_dir / "output.xlsx"
         started_at = time.perf_counter()
         try:
             update_progress(client, job, 45)
             client.storage_download(job["input_path"], local_input)
             update_progress(client, job, 55)
-            _run_generator(job, local_input, local_output)
+            generator_input = _prepare_generator_input(job, local_input, tmp_dir)
+            _run_generator(job, generator_input, local_output)
             generation_seconds = round(time.perf_counter() - started_at, 1)
             update_progress(client, job, 90)
             client.storage_upload(output_path, local_output)

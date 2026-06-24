@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY mobiliti_saas/worker /app/mobiliti_saas/worker
 COPY mobiliti_saas/quote_engine /app/mobiliti_saas/quote_engine
+COPY pdf_quotation_import /app/pdf_quotation_import
 COPY mobiliti_saas/worker/templates /app/templates
 
 CMD ["python", "mobiliti_saas/worker/quote_worker.py"]

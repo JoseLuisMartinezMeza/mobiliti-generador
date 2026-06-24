@@ -17,11 +17,12 @@ def test_default_template_resolves_existing_template():
 class FakeClient:
     def __init__(self):
         self.calls = []
+        self.claim_input_path = "users/7/jobs/job-1/input.xlsx"
 
     def rest(self, method, path, params=None, data=None):
         self.calls.append((method, path, data))
         if method == "PATCH" and "status=eq.queued" in path and data and data.get("status") == "processing":
-            return [{"id": "job-1", "usuario_id": 7, "input_path": "users/7/jobs/job-1/input.xlsx", **data}]
+            return [{"id": "job-1", "usuario_id": 7, "input_path": self.claim_input_path, **data}]
         if method == "PATCH" and data and data.get("status") == "completed":
             return [{"id": "job-1", **data}]
         return []
@@ -58,6 +59,41 @@ def test_process_job_marks_completed(monkeypatch):
     assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
     completed_payload = next(data for _, _, data in client.calls if isinstance(data, dict) and data.get("status") == "completed")
     assert completed_payload["metadata"]["generation_seconds"] >= 0
+
+
+def test_process_job_converts_pdf_before_generator(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.pdf"
+    seen = {}
+
+    def fake_convert(source_pdf, output_xlsx, reference_xlsx):
+        seen["source_pdf"] = source_pdf.name
+        seen["reference_xlsx"] = str(reference_xlsx)
+        output_xlsx.write_bytes(b"converted")
+
+    def fake_generator(job, input_path, output_path):
+        seen["generator_input"] = input_path.name
+        seen["metadata"] = dict(job.get("metadata") or {})
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(quote_worker, "_convert_pdf_to_quotation", fake_convert)
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+
+    quote_worker.process_job(
+        client,
+        {
+            "id": "job-1",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-1/input.pdf",
+            "metadata": {"original_filename": "supplier.pdf"},
+        },
+    )
+
+    assert seen["source_pdf"] == "input.pdf"
+    assert seen["generator_input"] == "quotation_from_pdf.xlsx"
+    assert seen["metadata"]["input_extension"] == ".pdf"
+    assert seen["metadata"]["pdf_converted"] is True
+    assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
 
 
 def test_process_job_skips_when_not_claimed(monkeypatch):
