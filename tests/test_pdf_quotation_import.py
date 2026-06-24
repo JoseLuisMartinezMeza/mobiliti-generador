@@ -4,7 +4,7 @@ from io import BytesIO
 from pathlib import Path
 import sys
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from PIL import Image
 
 try:
@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from mobiliti_saas.quote_engine.images import extract_images  # noqa: E402
 from mobiliti_saas.quote_engine.parser import read_items  # noqa: E402
 from pdf_quotation_import import convert_pdf_to_quotation  # noqa: E402
+from pdf_quotation_import.converter import load_style_source  # noqa: E402
 
 
 def test_convert_pdf_to_engine_quotation_format(tmp_path: Path) -> None:
@@ -51,6 +52,21 @@ def test_convert_pdf_to_engine_quotation_format(tmp_path: Path) -> None:
 
     image_map, _temp_dir = extract_images(output_xlsx)
     assert sorted(image_map) == [9, 10, 12, 13]
+
+
+def test_style_source_accepts_merged_header_cells(tmp_path: Path) -> None:
+    reference_xlsx = tmp_path / "reference.xlsx"
+    _write_reference_workbook(reference_xlsx)
+
+    workbook = load_workbook(reference_xlsx)
+    sheet = workbook["Quotation"]
+    sheet.merge_cells(start_row=7, start_column=3, end_row=7, end_column=4)
+    workbook.save(reference_xlsx)
+    workbook.close()
+
+    style_source = load_style_source(reference_xlsx)
+
+    assert style_source.column_widths.keys() >= set(range(1, 13))
 
 
 def _write_reference_workbook(path: Path) -> None:

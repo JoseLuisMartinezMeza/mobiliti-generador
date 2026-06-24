@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - older PyMuPDF exposes only fitz
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XlsxImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 
 HEADER_ROW = 7
@@ -500,7 +501,7 @@ def load_style_source(reference_path: Path | None) -> StyleSource:
     try:
         sheet = workbook["Quotation"] if "Quotation" in workbook.sheetnames else workbook.active
         for col in range(1, 13):
-            letter = sheet.cell(row=HEADER_ROW, column=col).column_letter
+            letter = get_column_letter(col)
             source.column_widths[col] = sheet.column_dimensions[letter].width
         for row in range(1, HEADER_ROW + 1):
             source.row_heights[row] = sheet.row_dimensions[row].height
@@ -556,7 +557,7 @@ def write_workbook(
 
 def apply_base_layout(sheet, style_source: StyleSource) -> None:
     for col in range(1, 13):
-        letter = sheet.cell(row=HEADER_ROW, column=col).column_letter
+        letter = get_column_letter(col)
         sheet.column_dimensions[letter].width = style_source.column_widths.get(col) or default_width(col)
 
     for row in range(1, HEADER_ROW + 1):
