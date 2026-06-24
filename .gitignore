@@ -29,6 +29,7 @@ temp_images/
 .env
 .env.*
 !.env.example
+*.db
 credentials.json
 *credentials*.json
 secrets.json
