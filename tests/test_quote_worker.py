@@ -176,3 +176,32 @@ def test_process_job_marks_failed(monkeypatch):
     assert statuses == ["processing", "failed"]
     failed_payload = next(data for _, _, data in client.calls if isinstance(data, dict) and data.get("status") == "failed")
     assert failed_payload["metadata"]["generation_seconds"] >= 0
+
+
+def test_process_job_rejects_output_larger_than_storage_limit(monkeypatch):
+    client = FakeClient()
+
+    def fake_generator(job, input_path, output_path):
+        output_path.write_bytes(b"x" * 11)
+
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+    monkeypatch.setattr(quote_worker, "MAX_QUOTE_OUTPUT_MB", 0)
+
+    try:
+        quote_worker.process_job(
+            client,
+            {
+                "id": "job-1",
+                "usuario_id": 7,
+                "input_path": "users/7/jobs/job-1/input.xlsx",
+                "metadata": {},
+            },
+        )
+    except RuntimeError as exc:
+        assert "supera el limite de Storage" in str(exc)
+    else:
+        raise AssertionError("oversized output should fail before storage upload")
+
+    assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) not in client.calls
+    failed_payload = next(data for _, _, data in client.calls if isinstance(data, dict) and data.get("status") == "failed")
+    assert "supera el limite de Storage" in failed_payload["error_message"]

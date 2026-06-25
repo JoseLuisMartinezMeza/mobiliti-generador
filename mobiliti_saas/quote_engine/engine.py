@@ -197,6 +197,18 @@ def _copy_cell_style(src, dst) -> None:
         dst.alignment = copy(src.alignment)
 
 
+def _copy_external_cell_style(src, dst) -> None:
+    if src.has_style:
+        dst.font = copy(src.font)
+        dst.fill = copy(src.fill)
+        dst.border = copy(src.border)
+        dst.protection = copy(src.protection)
+    if src.number_format:
+        dst.number_format = src.number_format
+    if src.alignment:
+        dst.alignment = copy(src.alignment)
+
+
 def _copy_row_style(ws, source_row: int, target_row: int, max_col: int = 10) -> None:
     ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
     for col in range(1, max_col + 1):
@@ -1291,7 +1303,7 @@ def _copy_source_sheet(source_path: str | Path, wb_out: Workbook) -> None:
     for row in src_ws.iter_rows():
         for cell in row:
             dst = out_ws.cell(cell.row, cell.column, cell.value)
-            _copy_cell_style(cell, dst)
+            _copy_external_cell_style(cell, dst)
     for key, dim in src_ws.column_dimensions.items():
         out_ws.column_dimensions[key].width = dim.width
         out_ws.column_dimensions[key].hidden = dim.hidden

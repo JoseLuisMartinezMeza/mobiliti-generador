@@ -20,6 +20,7 @@ Variables opcionales:
 ```powershell
 $env:QUOTE_STORAGE_BUCKET="quote-files"
 $env:QUOTE_ENGINE="python"
+$env:MAX_QUOTE_OUTPUT_MB="100"
 $env:TEMPLATE_PATH="C:\ruta\Formato Cotizacion 2026 GDL (1).xlsx"
 $env:WORKER_POLL_SECONDS="10"
 $env:WORKER_STALE_MINUTES="30"

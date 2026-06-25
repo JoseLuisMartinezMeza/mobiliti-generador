@@ -16,6 +16,8 @@ def test_quote_form_recommends_dezgo_by_default():
     assert "IA Dezgo recomendado - genera faltantes realistas" in source
     assert "Local sin IA - no inventa imagenes faltantes" in source
     assert "Prompt para imagenes" in source
+    assert "MAX_QUOTE_INPUT_MB = 25" in source
+    assert "El archivo supera el limite" in source
 
 
 def test_download_and_generation_timers_are_visible():

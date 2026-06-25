@@ -6,9 +6,10 @@ VALUES (
     'quote-files',
     'quote-files',
     FALSE,
-    26214400,
+    104857600,
     ARRAY[
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/pdf',
         'application/octet-stream'
     ]
 )

@@ -28,6 +28,7 @@ const DEFAULT_API_BASE = ["127.0.0.1", "localhost"].includes(
 const API_BASE = import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE;
 const AUTH_EXPIRED_EVENT = "mobiliti:auth-expired";
 const AUTH_EXPIRED_MESSAGE = "Tu sesion expiro. Vuelve a iniciar sesion para generar cotizaciones.";
+const MAX_QUOTE_INPUT_MB = 25;
 
 class ApiError extends Error {
   constructor(message, status = 0) {
@@ -459,6 +460,11 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
       setError("Selecciona un archivo .xlsx o .pdf valido.");
       return;
     }
+    if (nextFile.size > MAX_QUOTE_INPUT_MB * 1024 * 1024) {
+      setFile(null);
+      setError(`El archivo supera el limite de ${MAX_QUOTE_INPUT_MB} MB.`);
+      return;
+    }
     setFile(nextFile);
   }
 
@@ -578,7 +584,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
             <FileSpreadsheet size={44} />
             <strong>{file ? file.name : "Arrastra y suelta tu archivo aqui"}</strong>
             <span>{file ? formatBytes(file.size) : "o selecciona un archivo .xlsx o .pdf"}</span>
-            <small>Tamano maximo: 25 MB</small>
+            <small>Tamano maximo: {MAX_QUOTE_INPUT_MB} MB</small>
           </button>
 
           <h3>2. Informacion de la cotizacion</h3>

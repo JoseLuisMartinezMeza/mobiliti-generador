@@ -23,6 +23,7 @@ import urllib.request
 BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
 POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "10"))
 STALE_MINUTES = int(os.environ.get("WORKER_STALE_MINUTES", "30"))
+MAX_QUOTE_OUTPUT_MB = int(os.environ.get("MAX_QUOTE_OUTPUT_MB", "100"))
 QUOTE_ENGINE = os.environ.get("QUOTE_ENGINE", "python").strip().lower()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY")
@@ -39,6 +40,20 @@ def _required_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"Falta variable de entorno requerida: {name}")
     return value
+
+
+def _format_size_mb(size_bytes: int) -> str:
+    return f"{size_bytes / 1024 / 1024:.1f} MB"
+
+
+def _validate_output_size(source: Path) -> None:
+    max_bytes = MAX_QUOTE_OUTPUT_MB * 1024 * 1024
+    size = source.stat().st_size
+    if size > max_bytes:
+        raise RuntimeError(
+            "Cotizacion generada pesa "
+            f"{_format_size_mb(size)} y supera el limite de Storage de {MAX_QUOTE_OUTPUT_MB} MB"
+        )
 
 
 class SupabaseClient:
@@ -427,6 +442,7 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
             _run_generator(job, generator_input, local_output)
             generation_seconds = round(time.perf_counter() - started_at, 1)
             update_progress(client, job, 90)
+            _validate_output_size(local_output)
             client.storage_upload(output_path, local_output)
             metadata = {
                 **(job.get("metadata") or {}),

@@ -56,6 +56,7 @@ JWT_SECRET_KEY=[LONG_RANDOM_SECRET]
 CORS_ORIGINS=https://TU-WEB.vercel.app
 QUOTE_STORAGE_BUCKET=quote-files
 MAX_QUOTE_UPLOAD_MB=25
+MAX_QUOTE_OUTPUT_MB=100
 ```
 
 Comandos:
@@ -76,7 +77,7 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-saas.ps1 -Prod -ApiUrl h
 `saas_doctor.py` debe confirmar:
 
 - `saas_quote_jobs` accesible por REST
-- bucket `quote-files` privado
+- bucket `quote-files` privado con `file_size_limit` de 100 MB para permitir outputs XLSX con imagenes
 - env vars reales, sin placeholders
 
 ## 3. Web en Vercel

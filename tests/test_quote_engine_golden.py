@@ -1,15 +1,16 @@
 from pathlib import Path
+import os
 import sys
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine import generate_quote  # noqa: E402
-from mobiliti_saas.quote_engine.engine import SECTION_PROD_STARTS, _write_estrategia_comercial  # noqa: E402
+from mobiliti_saas.quote_engine.engine import SECTION_PROD_STARTS, _copy_source_sheet, _write_estrategia_comercial  # noqa: E402
 
 
 DOWNLOADS = Path(r"C:\Users\pepem\Downloads")
@@ -24,6 +25,7 @@ TARGET_VISUAL = next(
     DOWNLOADS / "Cotizacion ESSENTIA EVIDIKA.xlsx",
 )
 IZA_CORRECTA = DOWNLOADS / "Cotizacion_IZA_REFORMA.xlsx"
+LEAC_QUOTATION = DOWNLOADS / "LEAC" / "LEAC- GOTAPP - MORGINS-Quotation Sheet - V1.xlsx"
 EXPECTED_TEMPLATE_SHEETS = {
     "Cotizacion",
     "Mobiliti",
@@ -62,6 +64,24 @@ def test_python_engine_generates_golden_structure(source, tmp_path):
     assert wb["Cotizacion"].print_area
     assert len(wb["Cotizacion"]._images) > 0
     wb.close()
+
+
+def test_copy_source_sheet_handles_leac_external_styles(tmp_path):
+    if os.environ.get("RUN_SLOW_QUOTE_TESTS") != "1":
+        pytest.skip("LEAC copy is a slow local regression test")
+    if not LEAC_QUOTATION.exists():
+        pytest.skip("LEAC quotation fixture not available on this machine")
+
+    workbook = Workbook()
+    _copy_source_sheet(LEAC_QUOTATION, workbook)
+    output = tmp_path / "leac-copy.xlsx"
+    workbook.save(output)
+    workbook.close()
+
+    copied = load_workbook(output)
+    assert "Quotation" in copied.sheetnames
+    assert len(copied["Quotation"].merged_cells.ranges) > 0
+    copied.close()
 
 
 def test_visual_golden_references_are_intact():
