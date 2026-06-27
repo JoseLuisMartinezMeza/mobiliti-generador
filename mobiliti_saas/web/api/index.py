@@ -24,6 +24,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from mangum import Mangum
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 # ═══════════════════════════════════════════════════════════════
 # CONFIGURACION
 # ═══════════════════════════════════════════════════════════════
@@ -34,6 +41,7 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_
 DATABASE_URL = os.environ.get("DATABASE_URL")
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
 MOBILITI_REST_SECRET = os.environ.get("MOBILITI_REST_SECRET")
+QUOTE_RETENTION_TOKEN = os.environ.get("QUOTE_RETENTION_TOKEN")
 WORKER_WAKE_ENABLED = os.environ.get("WORKER_WAKE_ENABLED", "").lower() in {"1", "true", "yes"}
 WORKER_WAKE_URL = os.environ.get("WORKER_WAKE_URL") if WORKER_WAKE_ENABLED else None
 
@@ -41,7 +49,10 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
 QUOTE_STORAGE_BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
 MAX_QUOTE_UPLOAD_MB = int(os.environ.get("MAX_QUOTE_UPLOAD_MB", "25"))
-MAX_QUOTE_HISTORY_PER_USER = int(os.environ.get("MAX_QUOTE_HISTORY_PER_USER", "15"))
+MAX_QUOTE_HISTORY_PER_USER = int(os.environ.get("MAX_QUOTE_HISTORY_PER_USER", "3"))
+QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS = int(os.environ.get("QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS", "14"))
+DELETE_COMPLETED_QUOTE_INPUTS = _env_bool("DELETE_COMPLETED_QUOTE_INPUTS", True)
+QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS = int(os.environ.get("QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS", "1"))
 ALLOWED_QUOTE_INPUT_EXTENSIONS = (".xlsx", ".pdf")
 SIGNED_UPLOAD_TTL_SECONDS = int(os.environ.get("SIGNED_UPLOAD_TTL_SECONDS", "3600"))
 SIGNED_DOWNLOAD_TTL_SECONDS = int(os.environ.get("SIGNED_DOWNLOAD_TTL_SECONDS", "3600"))
@@ -184,6 +195,18 @@ def _use_postgres() -> bool:
     return bool(DATABASE_URL) and not DEV_MODE
 
 
+def _pg_connect_kwargs(dict_row) -> dict:
+    return {
+        "row_factory": dict_row,
+        "connect_timeout": 10,
+        "prepare_threshold": None,
+    }
+
+
+def _raise_pg_runtime_error(exc: Exception) -> None:
+    raise RuntimeError(f"Postgres connection/query error: {exc.__class__.__name__}") from exc
+
+
 def _pg_rows(sql: str, params: tuple = ()) -> list[dict]:
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL no configurada")
@@ -192,10 +215,13 @@ def _pg_rows(sql: str, params: tuple = ()) -> list[dict]:
         from psycopg.rows import dict_row
     except ImportError as exc:
         raise RuntimeError("Falta dependencia psycopg para DATABASE_URL") from exc
-    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            rows = cur.fetchall()
+    try:
+        with psycopg.connect(DATABASE_URL, **_pg_connect_kwargs(dict_row)) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+    except psycopg.Error as exc:
+        _raise_pg_runtime_error(exc)
     return [_jsonable_row(row) for row in rows]
 
 
@@ -214,11 +240,14 @@ def _pg_write(sql: str, params: tuple = ()) -> dict | None:
     except ImportError as exc:
         raise RuntimeError("Falta dependencia psycopg para DATABASE_URL") from exc
     adapted = tuple(Jsonb(value) if isinstance(value, (dict, list)) else value for value in params)
-    with psycopg.connect(DATABASE_URL, row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, adapted)
-            row = cur.fetchone()
-        conn.commit()
+    try:
+        with psycopg.connect(DATABASE_URL, **_pg_connect_kwargs(dict_row)) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, adapted)
+                row = cur.fetchone()
+            conn.commit()
+    except psycopg.Error as exc:
+        _raise_pg_runtime_error(exc)
     return _jsonable_row(row) if row else None
 
 
@@ -247,6 +276,22 @@ def _pg_update(table: str, key_name: str, key_value, updates: dict) -> dict:
     return row or {}
 
 
+def _safe_http_error(service: str, code: int, body: str) -> str:
+    raw = str(body or "")
+    known_reasons = (
+        "exceed_storage_size_quota",
+        "Payload too large",
+        "InvalidRequest",
+        "Unauthorized",
+        "Forbidden",
+        "Not Found",
+    )
+    for reason in known_reasons:
+        if reason in raw:
+            return f"{service} HTTP {code}: {reason}"
+    return f"{service} HTTP {code}"
+
+
 def _supabase_req(method: str, path: str, params=None, json_data=None):
     """Ejecuta una peticion sincronica a Supabase REST usando urllib."""
     if not SUPABASE_URL:
@@ -273,7 +318,7 @@ def _supabase_req(method: str, path: str, params=None, json_data=None):
             return {}
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8")
-        raise RuntimeError(f"Supabase HTTP {e.code}: {body}") from e
+        raise RuntimeError(_safe_http_error("Supabase", e.code, body)) from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"Supabase connection error: {e.reason}") from e
 
@@ -300,7 +345,7 @@ def _storage_req(method: str, path: str, json_data=None):
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8")
-        raise RuntimeError(f"Supabase Storage HTTP {e.code}: {body}") from e
+        raise RuntimeError(_safe_http_error("Supabase Storage", e.code, body)) from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"Supabase Storage connection error: {e.reason}") from e
 
@@ -323,7 +368,7 @@ def _storage_download_bytes(path: str) -> bytes:
             return resp.read()
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8")
-        raise RuntimeError(f"Supabase Storage HTTP {e.code}: {body}") from e
+        raise RuntimeError(_safe_http_error("Supabase Storage", e.code, body)) from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"Supabase Storage connection error: {e.reason}") from e
 
@@ -686,32 +731,290 @@ def _quote_storage_paths(job: dict) -> list[str]:
     return list(dict.fromkeys(paths))
 
 
-def _delete_quote_storage(job: dict) -> None:
-    paths = _quote_storage_paths(job)
-    if not paths:
+def _delete_storage_paths(paths: list[str]) -> None:
+    clean_paths = [str(path or "").strip().lstrip("/") for path in paths if str(path or "").strip()]
+    if not clean_paths:
         return
     if DEV_MODE:
-        for path in paths:
+        for path in clean_paths:
             _dev_storage_file(path).unlink(missing_ok=True)
         return
-    _storage_req("DELETE", f"/object/{QUOTE_STORAGE_BUCKET}", json_data={"prefixes": paths})
+    _storage_req("DELETE", f"/object/{QUOTE_STORAGE_BUCKET}", json_data={"prefixes": list(dict.fromkeys(clean_paths))})
+
+
+def _delete_quote_storage(job: dict) -> None:
+    paths = _quote_storage_paths(job)
+    _delete_storage_paths(paths)
+
+
+def _quote_storage_job_dir(path: str) -> str | None:
+    parts = path.strip("/").split("/")
+    if len(parts) >= 4 and parts[0] == "users" and parts[2] == "jobs":
+        return "/".join(parts[:4])
+    return None
+
+
+def _storage_object_size_mb(obj: dict) -> float:
+    metadata = obj.get("metadata") or {}
+    try:
+        return float(metadata.get("size") or 0) / 1024.0 / 1024.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _storage_list_prefix(bucket: str, prefix: str) -> list[dict]:
+    rows = []
+    offset = 0
+    while True:
+        batch = _storage_req(
+            "POST",
+            f"/object/list/{bucket}",
+            json_data={
+                "prefix": prefix,
+                "limit": 1000,
+                "offset": offset,
+                "sortBy": {"column": "name", "order": "asc"},
+            },
+        )
+        if not isinstance(batch, list) or not batch:
+            break
+        for item in batch:
+            name = str(item.get("name") or "").strip("/")
+            if not name:
+                continue
+            item["_full_name"] = f"{prefix.strip('/')}/{name}" if prefix else name
+            rows.append(item)
+        if len(batch) < 1000:
+            break
+        offset += len(batch)
+    return rows
+
+
+def _storage_list_recursive(bucket: str, prefix: str) -> list[dict]:
+    found = []
+    pending = [prefix.strip("/")]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        for item in _storage_list_prefix(bucket, current):
+            full_name = item["_full_name"]
+            if item.get("id"):
+                found.append(item)
+            else:
+                pending.append(full_name)
+    return found
+
+
+def _build_storage_retention_plan(
+    objects: list[dict],
+    max_per_user: int,
+    min_age_days: int = QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS,
+    now: datetime | None = None,
+) -> dict:
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max(0, int(min_age_days)))
+    by_job = {}
+    for obj in objects:
+        path = str(obj.get("_full_name") or "").strip("/")
+        job_dir = _quote_storage_job_dir(path)
+        if not job_dir:
+            continue
+        leaf = path.rsplit("/", 1)[-1].lower()
+        by_job.setdefault(job_dir, {})
+        if leaf.startswith("output") and leaf.endswith(".xlsx"):
+            by_job[job_dir]["output"] = obj
+        elif leaf.startswith("input") and (leaf.endswith(".xlsx") or leaf.endswith(".pdf")):
+            by_job[job_dir]["input"] = obj
+
+    by_user = {}
+    for job_dir, files in by_job.items():
+        if "output" not in files:
+            continue
+        user_id = job_dir.split("/")[1]
+        sort_date = _parse_iso_datetime(files["output"].get("updated_at") or files["output"].get("created_at"))
+        by_user.setdefault(user_id, []).append((sort_date or datetime.fromtimestamp(0, timezone.utc), files))
+
+    delete_paths = []
+    summary = {
+        "users_reviewed": len(by_user),
+        "jobs_with_outputs": sum(len(rows) for rows in by_user.values()),
+        "old_jobs_deleted": 0,
+        "completed_inputs_deleted": 0,
+        "recent_jobs_skipped": 0,
+        "recent_inputs_skipped": 0,
+        "objects_planned": 0,
+        "estimated_mb": 0.0,
+    }
+
+    for jobs in by_user.values():
+        jobs.sort(key=lambda row: row[0], reverse=True)
+        for index, (sort_date, files) in enumerate(jobs):
+            old_enough = sort_date <= cutoff
+            input_obj = files.get("input")
+            output_obj = files.get("output")
+            if index >= max_per_user:
+                if not old_enough:
+                    summary["recent_jobs_skipped"] += 1
+                    continue
+                for obj in (input_obj, output_obj):
+                    if obj:
+                        delete_paths.append(obj["_full_name"])
+                        summary["estimated_mb"] += _storage_object_size_mb(obj)
+                summary["old_jobs_deleted"] += 1
+            elif input_obj:
+                if not old_enough:
+                    summary["recent_inputs_skipped"] += 1
+                    continue
+                delete_paths.append(input_obj["_full_name"])
+                summary["estimated_mb"] += _storage_object_size_mb(input_obj)
+                summary["completed_inputs_deleted"] += 1
+
+    delete_paths = list(dict.fromkeys(delete_paths))
+    summary["objects_planned"] = len(delete_paths)
+    summary["estimated_mb"] = round(summary["estimated_mb"], 2)
+    return {"summary": summary, "delete_paths": delete_paths}
+
+
+def _validate_emergency_delete_paths(paths: list[object]) -> list[str]:
+    clean_paths = []
+    for raw_path in paths:
+        path = str(raw_path or "").strip().lstrip("/")
+        parts = path.split("/")
+        leaf = parts[-1].lower() if parts else ""
+        if (
+            len(parts) != 5
+            or parts[0] != "users"
+            or not parts[1].isdigit()
+            or parts[2] != "jobs"
+            or not parts[3]
+            or not (leaf.startswith("input.") or leaf.startswith("output."))
+            or not (leaf.endswith(".xlsx") or leaf.endswith(".pdf"))
+        ):
+            raise RuntimeError("Ruta de borrado de storage invalida")
+        clean_paths.append(path)
+    return list(dict.fromkeys(clean_paths))
 
 
 def _created_at_sort_key(job: dict) -> str:
     return str(job.get("created_at") or job.get("updated_at") or "")
 
 
-def _enforce_quote_history_limit(usuario_id: int, jobs: list[dict] | None = None) -> list[dict]:
+def _quote_job_metadata(job: dict) -> dict:
+    metadata = job.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            metadata = {}
+    return dict(metadata) if isinstance(metadata, dict) else {}
+
+
+def _parse_iso_datetime(value: object) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _downloaded_output_expired(job: dict, now: datetime) -> bool:
+    if QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS <= 0:
+        return False
+    metadata = _quote_job_metadata(job)
+    downloaded_at = _parse_iso_datetime(metadata.get("last_downloaded_at"))
+    if not downloaded_at:
+        return False
+    return downloaded_at <= now - timedelta(days=QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS)
+
+
+def _mark_quote_downloaded(job: dict) -> None:
+    metadata = _quote_job_metadata(job)
+    metadata["last_downloaded_at"] = _iso(datetime.now(timezone.utc))
+    metadata["download_count"] = int(metadata.get("download_count") or 0) + 1
+    db_update_quote_job(job["id"], {"metadata": metadata})
+
+
+def _run_quote_retention(usuario_id: int, jobs: list[dict] | None = None, dry_run: bool = False) -> dict:
     current_jobs = list(jobs if jobs is not None else db_list_quote_jobs(usuario_id))
     sorted_jobs = sorted(current_jobs, key=_created_at_sort_key, reverse=True)
-    if len(sorted_jobs) <= MAX_QUOTE_HISTORY_PER_USER:
-        return sorted_jobs
+    completed_jobs = [job for job in sorted_jobs if job.get("status") == "completed"]
+    now = datetime.now(timezone.utc)
+    deleted_job_ids: set[str] = set()
+    summary = {
+        "usuario_id": usuario_id,
+        "dry_run": dry_run,
+        "max_completed_outputs_per_user": MAX_QUOTE_HISTORY_PER_USER,
+        "downloaded_output_retention_days": QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS,
+        "delete_completed_inputs": DELETE_COMPLETED_QUOTE_INPUTS,
+        "jobs_reviewed": len(sorted_jobs),
+        "jobs_deleted": 0,
+        "completed_inputs_deleted": 0,
+        "storage_objects_deleted": 0,
+        "storage_objects_planned": 0,
+        "deleted_reasons": {},
+    }
 
-    keep = sorted_jobs[:MAX_QUOTE_HISTORY_PER_USER]
-    for old_job in sorted_jobs[MAX_QUOTE_HISTORY_PER_USER:]:
-        _delete_quote_storage(old_job)
-        db_delete_quote_job(old_job["id"])
-    return keep
+    for index, job in enumerate(completed_jobs):
+        reason = None
+        if index >= MAX_QUOTE_HISTORY_PER_USER:
+            reason = "beyond_user_limit"
+        elif _downloaded_output_expired(job, now):
+            reason = "downloaded_output_expired"
+        if not reason:
+            continue
+
+        paths = _quote_storage_paths(job)
+        summary["storage_objects_planned"] += len(paths)
+        summary["jobs_deleted"] += 1
+        summary["deleted_reasons"][reason] = summary["deleted_reasons"].get(reason, 0) + 1
+        deleted_job_ids.add(str(job["id"]))
+        if not dry_run:
+            _delete_quote_storage(job)
+            db_delete_quote_job(job["id"])
+            summary["storage_objects_deleted"] += len(paths)
+
+    if DELETE_COMPLETED_QUOTE_INPUTS:
+        for job in completed_jobs:
+            if str(job["id"]) in deleted_job_ids:
+                continue
+            input_path = str(job.get("input_path") or "").strip().lstrip("/")
+            if not input_path:
+                continue
+            summary["storage_objects_planned"] += 1
+            summary["completed_inputs_deleted"] += 1
+            if not dry_run:
+                _delete_storage_paths([input_path])
+                db_update_quote_job(job["id"], {"input_path": None})
+                job["input_path"] = None
+                summary["storage_objects_deleted"] += 1
+
+    if not dry_run:
+        print(
+            json.dumps(
+                {
+                    "event": "quote_retention",
+                    "usuario_id": usuario_id,
+                    "dry_run": False,
+                    "jobs_deleted": summary["jobs_deleted"],
+                    "completed_inputs_deleted": summary["completed_inputs_deleted"],
+                    "storage_objects_deleted": summary["storage_objects_deleted"],
+                },
+                separators=(",", ":"),
+            )
+        )
+
+    remaining_jobs = [job for job in sorted_jobs if str(job["id"]) not in deleted_job_ids]
+    summary["remaining_jobs"] = remaining_jobs
+    return summary
+
+
+def _enforce_quote_history_limit(usuario_id: int, jobs: list[dict] | None = None) -> list[dict]:
+    return _run_quote_retention(usuario_id, jobs, dry_run=False)["remaining_jobs"]
 
 
 def _safe_filename_part(value: object, limit: int = 80) -> str:
@@ -927,6 +1230,17 @@ def require_admin(current_user: dict = Depends(get_current_user)):
     return current_user
 
 
+def require_retention_token(
+    x_quote_retention_token: str = Header(None),
+    x_mobiliti_rest_secret: str = Header(None),
+):
+    if QUOTE_RETENTION_TOKEN and x_quote_retention_token == QUOTE_RETENTION_TOKEN:
+        return True
+    if MOBILITI_REST_SECRET and x_mobiliti_rest_secret == MOBILITI_REST_SECRET:
+        return True
+    raise HTTPException(status_code=403, detail="Token de retencion requerido")
+
+
 # ─── Health Check ─────────────────────────────────────────────
 
 @app.get("/")
@@ -936,7 +1250,11 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "db_backend": "postgres" if _use_postgres() else "supabase_rest",
+        "storage_configured": bool(SUPABASE_URL and _storage_key()),
+    }
 
 
 # ─── LOGIN ────────────────────────────────────────────────────
@@ -1126,6 +1444,98 @@ def admin_update_suscripcion(suscripcion_id: int, body: dict, user: dict = Depen
     return {"mensaje": "Suscripcion actualizada", "suscripcion": updated}
 
 
+@app.post("/admin/storage-retention")
+def admin_storage_retention(body: dict | None = None, user: dict = Depends(require_admin)):
+    body = body or {}
+    dry_run = bool(body.get("dry_run", True))
+    requested_user_id = body.get("usuario_id")
+
+    try:
+        if requested_user_id:
+            user_ids = [int(requested_user_id)]
+        else:
+            user_ids = [int(row["id"]) for row in db_list_usuarios()]
+
+        reports = []
+        totals = {
+            "users_reviewed": 0,
+            "jobs_deleted": 0,
+            "completed_inputs_deleted": 0,
+            "storage_objects_planned": 0,
+            "storage_objects_deleted": 0,
+        }
+        for target_user_id in user_ids:
+            report = _run_quote_retention(target_user_id, dry_run=dry_run)
+            report.pop("remaining_jobs", None)
+            reports.append(report)
+            totals["users_reviewed"] += 1
+            totals["jobs_deleted"] += int(report["jobs_deleted"])
+            totals["completed_inputs_deleted"] += int(report["completed_inputs_deleted"])
+            totals["storage_objects_planned"] += int(report["storage_objects_planned"])
+            totals["storage_objects_deleted"] += int(report["storage_objects_deleted"])
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Error ejecutando retencion: {e}")
+
+    return {
+        "dry_run": dry_run,
+        "policy": {
+            "max_completed_outputs_per_user": MAX_QUOTE_HISTORY_PER_USER,
+            "downloaded_output_retention_days": QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS,
+            "delete_completed_inputs": DELETE_COMPLETED_QUOTE_INPUTS,
+        },
+        "totals": totals,
+        "users": reports,
+    }
+
+
+@app.post("/admin/storage-retention-emergency")
+def admin_storage_retention_emergency(body: dict | None = None, _authorized: bool = Depends(require_retention_token)):
+    body = body or {}
+    dry_run = bool(body.get("dry_run", True))
+    max_per_user = int(body.get("max_per_user", MAX_QUOTE_HISTORY_PER_USER) or MAX_QUOTE_HISTORY_PER_USER)
+    min_age_days = int(body.get("min_age_days", QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS) or 0)
+    prefix = str(body.get("prefix", "users")).strip("/") or "users"
+    try:
+        if body.get("paths") is not None:
+            if body.get("confirm") != "delete-quote-storage-paths":
+                raise RuntimeError("Confirmacion requerida")
+            paths = _validate_emergency_delete_paths(body.get("paths") or [])
+            summary = {
+                "bucket": QUOTE_STORAGE_BUCKET,
+                "dry_run": dry_run,
+                "mode": "explicit_paths",
+                "objects_planned": len(paths),
+            }
+            if not dry_run:
+                _delete_storage_paths(paths)
+                summary["objects_deleted"] = len(paths)
+                print(
+                    json.dumps(
+                        {"event": "quote_storage_explicit_delete", "objects_deleted": len(paths)},
+                        separators=(",", ":"),
+                    )
+                )
+            return summary
+
+        objects = _storage_list_recursive(QUOTE_STORAGE_BUCKET, prefix)
+        plan = _build_storage_retention_plan(objects, max_per_user, min_age_days=min_age_days)
+        summary = {
+            **plan["summary"],
+            "bucket": QUOTE_STORAGE_BUCKET,
+            "dry_run": dry_run,
+            "max_per_user": max_per_user,
+            "min_age_days": min_age_days,
+        }
+        if not dry_run:
+            _delete_storage_paths(plan["delete_paths"])
+            summary["objects_deleted"] = len(plan["delete_paths"])
+            print(json.dumps({"event": "quote_storage_retention_emergency", **summary}, separators=(",", ":")))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Error ejecutando retencion de storage: {e}")
+
+    return summary
+
+
 # ─── GENERAR COTIZACION ───────────────────────────────────────
 
 # COTIZACIONES WEB
@@ -1303,6 +1713,10 @@ def cotizaciones_download(job_id: str, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=503, detail=f"Error preparando descarga: {e}")
     if not signed_url:
         raise HTTPException(status_code=500, detail="Supabase no devolvio URL de descarga")
+    try:
+        _mark_quote_downloaded(job)
+    except RuntimeError:
+        print(json.dumps({"event": "quote_download_mark_failed", "job_id": job_id}, separators=(",", ":")))
     return {"download_url": signed_url, "expires_in": SIGNED_DOWNLOAD_TTL_SECONDS}
 
 
@@ -1318,12 +1732,20 @@ def cotizaciones_file(job_id: str, current_user: dict = Depends(get_current_user
         source = _dev_storage_file(job["output_path"])
         if not source.exists():
             raise HTTPException(status_code=404, detail="Archivo no encontrado")
+        try:
+            _mark_quote_downloaded(job)
+        except RuntimeError:
+            print(json.dumps({"event": "quote_download_mark_failed", "job_id": job_id}, separators=(",", ":")))
         return FileResponse(source, media_type=media_type, filename=filename)
 
     try:
         content = _storage_download_bytes(job["output_path"])
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error descargando cotizacion: {e}")
+    try:
+        _mark_quote_downloaded(job)
+    except RuntimeError:
+        print(json.dumps({"event": "quote_download_mark_failed", "job_id": job_id}, separators=(",", ":")))
     return Response(
         content=content,
         media_type=media_type,

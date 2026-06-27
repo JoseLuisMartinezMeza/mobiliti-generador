@@ -116,6 +116,21 @@ class SupabaseClient:
             body = exc.read().decode("utf-8")
             raise RuntimeError(f"Storage upload {exc.code}: {body}") from exc
 
+    def storage_delete(self, object_path: str) -> None:
+        clean_path = str(object_path or "").strip().lstrip("/")
+        if not clean_path:
+            return
+        url = f"{self.base_url}/storage/v1/object/{BUCKET}"
+        req = urllib.request.Request(url, data=json.dumps({"prefixes": [clean_path]}).encode("utf-8"), method="DELETE")
+        for key, value in self._headers().items():
+            req.add_header(key, value)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resp.read()
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            raise RuntimeError(f"Storage delete {exc.code}: {body}") from exc
+
 
 class PostgresClient(SupabaseClient):
     def __init__(self) -> None:
@@ -299,6 +314,9 @@ class LocalDevClient:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(source.read_bytes())
 
+    def storage_delete(self, object_path: str) -> None:
+        self._storage_file(object_path).unlink(missing_ok=True)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -444,6 +462,12 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
             update_progress(client, job, 90)
             _validate_output_size(local_output)
             client.storage_upload(output_path, local_output)
+            input_deleted = False
+            try:
+                client.storage_delete(job.get("input_path") or "")
+                input_deleted = True
+            except Exception as exc:
+                print(f"WARN: no se pudo borrar input de job {job_id}: {exc}")
             metadata = {
                 **(job.get("metadata") or {}),
                 "progress_percent": 100,
@@ -454,6 +478,7 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
                 f"/saas_quote_jobs?id=eq.{job_id}",
                 data={
                     "status": "completed",
+                    "input_path": None if input_deleted else job.get("input_path"),
                     "output_path": output_path,
                     "metadata": metadata,
                     "error_message": None,
