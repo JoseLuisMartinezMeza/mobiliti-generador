@@ -41,6 +41,13 @@ $env:R2_REGION="auto"
 $env:R2_ENDPOINT_URL="https://REPLACE_WITH_ACCOUNT_ID.r2.cloudflarestorage.com"
 ```
 
+Verifica antes de activar:
+
+```powershell
+cd C:\Users\pepem\Downloads\ARMADO_DE_CARATULA_prod_git_worktree
+python scripts\r2_doctor.py --bucket quote-files --origin https://web-lemon-one-45.vercel.app --probe-object
+```
+
 Proveedor de mejora de imagenes:
 
 ```powershell

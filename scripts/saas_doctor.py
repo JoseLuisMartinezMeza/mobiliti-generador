@@ -87,12 +87,19 @@ def _request_json(url: str, headers: dict | None = None, timeout: int = 20):
         return json.loads(body) if body else {}
 
 
-def check_api(api_url: str) -> dict:
+def check_api(api_url: str, expected_storage_provider: str | None = None) -> dict:
     try:
         data = _request_json(f"{api_url.rstrip('/')}/health")
-        if data.get("status") == "ok":
-            return _result("API /health", "ok", api_url)
-        return _result("API /health", "fail", f"respuesta inesperada: {data}")
+        if data.get("status") != "ok":
+            return _result("API /health", "fail", f"respuesta inesperada: {data}")
+        provider = data.get("storage_provider")
+        configured = data.get("storage_configured")
+        message = f"{api_url} storage_provider={provider or 'unknown'} storage_configured={configured}"
+        if expected_storage_provider and provider != expected_storage_provider:
+            return _result("API /health", "fail", f"esperado {expected_storage_provider}; {message}")
+        if configured is False:
+            return _result("API /health", "fail", message)
+        return _result("API /health", "ok", message)
     except Exception as exc:
         return _result("API /health", "fail", str(exc))
 
@@ -177,6 +184,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Verifica readiness de Mobiliti SaaS")
     parser.add_argument("--api-url", default=os.environ.get("MOBILITI_SMOKE_API_URL", "http://127.0.0.1:8000"))
     parser.add_argument("--bucket", default=os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files"))
+    parser.add_argument("--expect-storage-provider", choices=["supabase", "r2"], default=None)
     parser.add_argument("--dev", action="store_true", help="Modo local: no exige env vars de Supabase/JWT")
     parser.add_argument("--skip-supabase", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
@@ -188,7 +196,7 @@ def main() -> None:
         results.append(_result("dev mode", "ok", "checks de produccion omitidos"))
     else:
         results.extend(check_env(os.environ))
-    results.append(check_api(args.api_url))
+    results.append(check_api(args.api_url, args.expect_storage_provider))
     if not args.skip_supabase:
         results.extend(check_supabase(os.environ, args.bucket))
 

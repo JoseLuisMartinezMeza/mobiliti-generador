@@ -73,6 +73,16 @@ For Cloudflare R2 storage, also set S3-compatible R2 credentials:
 
 Do not commit real secrets.
 
+Antes de activar R2 en el worker, valida desde tu maquina local o desde el
+servidor sin imprimir secretos:
+
+```bash
+python scripts/r2_doctor.py --bucket quote-files --origin https://web-lemon-one-45.vercel.app --probe-object
+```
+
+Solo cambia `QUOTE_STORAGE_PROVIDER=r2` cuando `s3_ready=true`,
+`cors_ready=true` y `probe_ready=true`.
+
 ## Deploy
 
 ```bash

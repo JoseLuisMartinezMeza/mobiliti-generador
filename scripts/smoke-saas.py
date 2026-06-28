@@ -4,7 +4,7 @@ Smoke test SaaS: login -> upload -> submit -> wait -> download.
 Uses only stdlib plus openpyxl to create a small Quotation.xlsx fixture.
 Env:
   MOBILITI_SMOKE_API_URL, MOBILITI_SMOKE_EMAIL, MOBILITI_SMOKE_PASSWORD
-  SUPABASE_URL/VITE_SUPABASE_URL + SUPABASE_ANON_KEY/VITE_SUPABASE_ANON_KEY for prod upload
+  SUPABASE_URL/VITE_SUPABASE_URL + SUPABASE_ANON_KEY/VITE_SUPABASE_ANON_KEY only for legacy Supabase signed-token upload
 """
 
 from __future__ import annotations
@@ -65,6 +65,14 @@ def _signed_storage_upload(supabase_url: str, anon_key: str, bucket: str, path: 
     req.add_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     req.add_header("x-upsert", "true")
     with urllib.request.urlopen(req, timeout=90) as resp:
+        body = resp.read().decode("utf-8")
+        return json.loads(body) if body else {}
+
+
+def _direct_signed_upload(url: str, file_path: Path) -> dict:
+    req = urllib.request.Request(url, data=file_path.read_bytes(), method="PUT")
+    req.add_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    with urllib.request.urlopen(req, timeout=120) as resp:
         body = resp.read().decode("utf-8")
         return json.loads(body) if body else {}
 
@@ -135,6 +143,8 @@ def main() -> None:
         if upload_url.startswith("/"):
             upload_url = f"{api_url}{upload_url}"
         _multipart_upload(upload_url, source, token)
+    elif init.get("signed_upload_url"):
+        _direct_signed_upload(init["signed_upload_url"], source)
     else:
         supabase_url = os.environ.get("SUPABASE_URL") or os.environ.get("VITE_SUPABASE_URL")
         anon_key = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY")

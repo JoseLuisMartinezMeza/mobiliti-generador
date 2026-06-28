@@ -61,6 +61,21 @@ R2_REGION=auto
 R2_ENDPOINT_URL=https://[CLOUDFLARE_ACCOUNT_ID].r2.cloudflarestorage.com
 ```
 
+Antes de activar R2, verifica configuracion sin imprimir secretos:
+
+```powershell
+python scripts\r2_doctor.py `
+  --cloudflare-env-file "C:\ruta\.env Cloudflare.txt" `
+  --bucket quote-files `
+  --origin https://TU-WEB.vercel.app `
+  --probe-object
+```
+
+No configures `QUOTE_STORAGE_PROVIDER=r2` en produccion hasta que el reporte
+muestre `s3_ready=true`, `cors_ready=true` y `probe_ready=true`. Para uploads
+desde navegador, R2 necesita CORS con origen de la web, metodos `GET`, `PUT`,
+`HEAD` y header `Content-Type`.
+
 ## 2. API en Vercel
 
 Root del proyecto: `vercel_deploy`.
