@@ -23,6 +23,34 @@ def test_load_cloudflare_env_file_extracts_expected_labels(tmp_path):
     assert values == {"R2_ACCOUNT_ID": "abc123", "CLOUDFLARE_API_TOKEN": "tok_456"}
 
 
+def test_load_cloudflare_env_file_accepts_human_and_env_r2_labels(tmp_path):
+    source = tmp_path / "cloudflare.txt"
+    source.write_text(
+        "\n".join(
+            [
+                'ACCOUNT ID: "acct_123"',
+                "API TOKEN: Bearer cf_token",
+                "endpoint S3: https://acct_123.r2.cloudflarestorage.com",
+                "Access Key ID: key_123",
+                "Secret Access Key: secret_456",
+                "R2_BUCKET=quote-files",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    values = r2_doctor._load_kv_file(source)
+
+    assert values == {
+        "R2_ACCOUNT_ID": "acct_123",
+        "CLOUDFLARE_API_TOKEN": "cf_token",
+        "R2_ENDPOINT_URL": "https://acct_123.r2.cloudflarestorage.com",
+        "R2_ACCESS_KEY_ID": "key_123",
+        "R2_SECRET_ACCESS_KEY": "secret_456",
+        "R2_BUCKET": "quote-files",
+    }
+
+
 def test_derive_r2_credentials_uses_token_id_and_sha256_secret():
     derived = r2_doctor.derive_r2_s3_credentials("secret-token-value", "token-id-123")
 

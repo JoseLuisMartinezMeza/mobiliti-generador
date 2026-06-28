@@ -29,14 +29,45 @@ def _load_kv_file(path: Path) -> dict[str, str]:
         return {}
     text = path.read_text(encoding="utf-8", errors="replace")
     data: dict[str, str] = {}
-    patterns = {
-        "R2_ACCOUNT_ID": r"ACCOUNT\s+ID\s*:\s*(\S+)",
-        "CLOUDFLARE_API_TOKEN": r"API\s+TOKEN\s*:\s*(\S+)",
+    aliases = {
+        "ACCOUNT ID": "R2_ACCOUNT_ID",
+        "API TOKEN": "CLOUDFLARE_API_TOKEN",
+        "CLOUDFLARE API TOKEN": "CLOUDFLARE_API_TOKEN",
+        "ACCESS KEY ID": "R2_ACCESS_KEY_ID",
+        "R2 ACCESS KEY ID": "R2_ACCESS_KEY_ID",
+        "SECRET ACCESS KEY": "R2_SECRET_ACCESS_KEY",
+        "R2 SECRET ACCESS KEY": "R2_SECRET_ACCESS_KEY",
+        "ENDPOINT S3": "R2_ENDPOINT_URL",
+        "S3 ENDPOINT": "R2_ENDPOINT_URL",
+        "BUCKET": "R2_BUCKET",
     }
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text, re.I)
-        if match:
-            data[key] = match.group(1).strip()
+    env_keys = {
+        "R2_ACCOUNT_ID",
+        "CLOUDFLARE_API_TOKEN",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+        "R2_ENDPOINT_URL",
+        "R2_BUCKET",
+    }
+    for line in text.splitlines():
+        raw = line.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        sep = "=" if "=" in raw else ":" if ":" in raw else ""
+        if not sep:
+            continue
+        left, right = raw.split(sep, 1)
+        label = re.sub(r"\s+", " ", left.strip()).upper()
+        key = aliases.get(label)
+        if not key and label in env_keys:
+            key = label
+        if not key:
+            continue
+        value = right.strip().strip("\"'")
+        if key == "CLOUDFLARE_API_TOKEN" and value.lower().startswith("bearer "):
+            value = value.split(None, 1)[1].strip()
+        if value:
+            data[key] = value
     return data
 
 
@@ -73,7 +104,7 @@ def derive_r2_s3_credentials(api_token: str, token_id: str | None) -> tuple[str,
     return token_id, hashlib.sha256(api_token.encode("utf-8")).hexdigest()
 
 
-def _s3_client(account_id: str, access_key_id: str, secret_access_key: str):
+def _s3_client(account_id: str, access_key_id: str, secret_access_key: str, endpoint_url: str = ""):
     try:
         import boto3
         from botocore.config import Config
@@ -81,7 +112,7 @@ def _s3_client(account_id: str, access_key_id: str, secret_access_key: str):
         raise RuntimeError("missing_boto3") from exc
     return boto3.client(
         "s3",
-        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        endpoint_url=endpoint_url or f"https://{account_id}.r2.cloudflarestorage.com",
         aws_access_key_id=access_key_id,
         aws_secret_access_key=secret_access_key,
         region_name="auto",
@@ -89,11 +120,17 @@ def _s3_client(account_id: str, access_key_id: str, secret_access_key: str):
     )
 
 
-def check_s3_bucket(account_id: str, access_key_id: str, secret_access_key: str, bucket: str) -> dict:
+def check_s3_bucket(
+    account_id: str,
+    access_key_id: str,
+    secret_access_key: str,
+    bucket: str,
+    endpoint_url: str = "",
+) -> dict:
     if not all([account_id, access_key_id, secret_access_key, bucket]):
         return {"s3_ready": False, "error": "missing_s3_config"}
     try:
-        client = _s3_client(account_id, access_key_id, secret_access_key)
+        client = _s3_client(account_id, access_key_id, secret_access_key, endpoint_url)
         client.head_bucket(Bucket=bucket)
         return {"s3_ready": True}
     except Exception as exc:
@@ -139,9 +176,10 @@ def get_bucket_cors(
     secret_access_key: str,
     bucket: str,
     origins: list[str],
+    endpoint_url: str = "",
 ) -> dict:
     try:
-        client = _s3_client(account_id, access_key_id, secret_access_key)
+        client = _s3_client(account_id, access_key_id, secret_access_key, endpoint_url)
         data = client.get_bucket_cors(Bucket=bucket)
         rules = data.get("CORSRules") or []
         return evaluate_cors_rules(rules, origins)
@@ -155,6 +193,7 @@ def apply_bucket_cors(
     secret_access_key: str,
     bucket: str,
     origins: list[str],
+    endpoint_url: str = "",
 ) -> dict:
     if not origins:
         return {"cors_applied": False, "cors_error": "missing_origins"}
@@ -168,18 +207,24 @@ def apply_bucket_cors(
         }
     ]
     try:
-        client = _s3_client(account_id, access_key_id, secret_access_key)
+        client = _s3_client(account_id, access_key_id, secret_access_key, endpoint_url)
         client.put_bucket_cors(Bucket=bucket, CORSConfiguration={"CORSRules": rules})
         return {"cors_applied": True, "cors_rules_count": len(rules)}
     except Exception as exc:
         return {"cors_applied": False, "cors_error": exc.__class__.__name__}
 
 
-def probe_s3_object(account_id: str, access_key_id: str, secret_access_key: str, bucket: str) -> dict:
+def probe_s3_object(
+    account_id: str,
+    access_key_id: str,
+    secret_access_key: str,
+    bucket: str,
+    endpoint_url: str = "",
+) -> dict:
     key = f"_diagnostics/r2-doctor-{uuid.uuid4().hex}.txt"
     body = b"mobiliti-r2-doctor"
     try:
-        client = _s3_client(account_id, access_key_id, secret_access_key)
+        client = _s3_client(account_id, access_key_id, secret_access_key, endpoint_url)
         client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="text/plain")
         downloaded = client.get_object(Bucket=bucket, Key=key)["Body"].read()
         client.delete_object(Bucket=bucket, Key=key)
@@ -204,8 +249,10 @@ def main(argv: list[str] | None = None) -> int:
     file_values = _load_kv_file(args.cloudflare_env_file) if args.cloudflare_env_file else {}
     account_id = _env_or_file("R2_ACCOUNT_ID", file_values)
     api_token = _env_or_file("CLOUDFLARE_API_TOKEN", file_values)
-    access_key_id = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
-    secret_access_key = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+    access_key_id = _env_or_file("R2_ACCESS_KEY_ID", file_values)
+    secret_access_key = _env_or_file("R2_SECRET_ACCESS_KEY", file_values)
+    endpoint_url = _env_or_file("R2_ENDPOINT_URL", file_values)
+    bucket = args.bucket or file_values.get("R2_BUCKET", "quote-files")
 
     token_ok, token_id, token_error = verify_cloudflare_token(api_token)
     derived = None
@@ -216,7 +263,8 @@ def main(argv: list[str] | None = None) -> int:
 
     report = {
         "account_id_present": bool(account_id),
-        "bucket": args.bucket,
+        "bucket": bucket,
+        "endpoint_url_present": bool(endpoint_url),
         "cloudflare_token_present": bool(api_token),
         "cloudflare_token_valid": token_ok,
         "cloudflare_token_error": token_error,
@@ -224,13 +272,13 @@ def main(argv: list[str] | None = None) -> int:
         "s3_credentials_present": bool(access_key_id and secret_access_key),
         "s3_credentials_derived_from_token": bool(derived),
     }
-    report.update(check_s3_bucket(account_id, access_key_id, secret_access_key, args.bucket))
+    report.update(check_s3_bucket(account_id, access_key_id, secret_access_key, bucket, endpoint_url))
     if report.get("s3_ready"):
         if args.apply_cors:
-            report.update(apply_bucket_cors(account_id, access_key_id, secret_access_key, args.bucket, args.origin))
-        report.update(get_bucket_cors(account_id, access_key_id, secret_access_key, args.bucket, args.origin))
+            report.update(apply_bucket_cors(account_id, access_key_id, secret_access_key, bucket, args.origin, endpoint_url))
+        report.update(get_bucket_cors(account_id, access_key_id, secret_access_key, bucket, args.origin, endpoint_url))
         if args.probe_object:
-            report.update(probe_s3_object(account_id, access_key_id, secret_access_key, args.bucket))
+            report.update(probe_s3_object(account_id, access_key_id, secret_access_key, bucket, endpoint_url))
 
     print(json.dumps(report, sort_keys=True))
     ready = bool(report.get("s3_ready"))
