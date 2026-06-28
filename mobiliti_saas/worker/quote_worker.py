@@ -21,6 +21,13 @@ import urllib.request
 
 
 BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
+STORAGE_PROVIDER = os.environ.get("QUOTE_STORAGE_PROVIDER", "supabase").strip().lower()
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "").strip()
+R2_ENDPOINT_URL = os.environ.get("R2_ENDPOINT_URL", "").strip().rstrip("/")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+R2_BUCKET = os.environ.get("R2_BUCKET", BUCKET).strip() or BUCKET
+R2_REGION = os.environ.get("R2_REGION", "auto").strip() or "auto"
 POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "10"))
 STALE_MINUTES = int(os.environ.get("WORKER_STALE_MINUTES", "30"))
 MAX_QUOTE_OUTPUT_MB = int(os.environ.get("MAX_QUOTE_OUTPUT_MB", "100"))
@@ -54,6 +61,58 @@ def _validate_output_size(source: Path) -> None:
             "Cotizacion generada pesa "
             f"{_format_size_mb(size)} y supera el limite de Storage de {MAX_QUOTE_OUTPUT_MB} MB"
         )
+
+
+_R2_CLIENT = None
+
+
+def _use_r2_storage() -> bool:
+    return STORAGE_PROVIDER in {"r2", "cloudflare-r2", "cloudflare"}
+
+
+def _r2_endpoint_url() -> str:
+    if R2_ENDPOINT_URL:
+        return R2_ENDPOINT_URL
+    if R2_ACCOUNT_ID:
+        return f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+    return ""
+
+
+def _r2_configured() -> bool:
+    return bool(_r2_endpoint_url() and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET)
+
+
+def _r2_client():
+    global _R2_CLIENT
+    if _R2_CLIENT is not None:
+        return _R2_CLIENT
+    if not _r2_configured():
+        raise RuntimeError(
+            "Cloudflare R2 no configurado: define R2_ACCOUNT_ID/R2_ENDPOINT_URL, "
+            "R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY y R2_BUCKET"
+        )
+    try:
+        import boto3
+        from botocore.config import Config
+    except ImportError as exc:
+        raise RuntimeError("Falta dependencia boto3 para Cloudflare R2") from exc
+    _R2_CLIENT = boto3.client(
+        "s3",
+        endpoint_url=_r2_endpoint_url(),
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        region_name=R2_REGION,
+        config=Config(signature_version="s3v4"),
+    )
+    return _R2_CLIENT
+
+
+def _quote_object_content_type(path: str) -> str:
+    return (
+        "application/pdf"
+        if str(path or "").lower().endswith(".pdf")
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 
 class SupabaseClient:
@@ -90,6 +149,14 @@ class SupabaseClient:
             raise RuntimeError(f"Supabase REST {exc.code}: {body}") from exc
 
     def storage_download(self, object_path: str, dest: Path) -> None:
+        if _use_r2_storage():
+            try:
+                obj = _r2_client().get_object(Bucket=R2_BUCKET, Key=str(object_path).strip("/"))
+                dest.write_bytes(obj["Body"].read())
+            except Exception as exc:
+                raise RuntimeError(f"R2 download error: {exc.__class__.__name__}") from exc
+            return
+
         encoded = urllib.parse.quote(object_path, safe="/")
         url = f"{self.base_url}/storage/v1/object/{BUCKET}/{encoded}"
         req = urllib.request.Request(url, method="GET")
@@ -103,6 +170,18 @@ class SupabaseClient:
             raise RuntimeError(f"Storage download {exc.code}: {body}") from exc
 
     def storage_upload(self, object_path: str, source: Path) -> None:
+        if _use_r2_storage():
+            try:
+                _r2_client().put_object(
+                    Bucket=R2_BUCKET,
+                    Key=str(object_path).strip("/"),
+                    Body=source.read_bytes(),
+                    ContentType=_quote_object_content_type(object_path),
+                )
+            except Exception as exc:
+                raise RuntimeError(f"R2 upload error: {exc.__class__.__name__}") from exc
+            return
+
         encoded = urllib.parse.quote(object_path, safe="/")
         url = f"{self.base_url}/storage/v1/object/{BUCKET}/{encoded}"
         req = urllib.request.Request(url, data=source.read_bytes(), method="PUT")
@@ -120,6 +199,13 @@ class SupabaseClient:
         clean_path = str(object_path or "").strip().lstrip("/")
         if not clean_path:
             return
+        if _use_r2_storage():
+            try:
+                _r2_client().delete_object(Bucket=R2_BUCKET, Key=clean_path)
+            except Exception as exc:
+                raise RuntimeError(f"R2 delete error: {exc.__class__.__name__}") from exc
+            return
+
         url = f"{self.base_url}/storage/v1/object/{BUCKET}"
         req = urllib.request.Request(url, data=json.dumps({"prefixes": [clean_path]}).encode("utf-8"), method="DELETE")
         for key, value in self._headers().items():

@@ -48,6 +48,13 @@ WORKER_WAKE_URL = os.environ.get("WORKER_WAKE_URL") if WORKER_WAKE_ENABLED else 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
 QUOTE_STORAGE_BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
+QUOTE_STORAGE_PROVIDER = os.environ.get("QUOTE_STORAGE_PROVIDER", "supabase").strip().lower()
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "").strip()
+R2_ENDPOINT_URL = os.environ.get("R2_ENDPOINT_URL", "").strip().rstrip("/")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+R2_BUCKET = os.environ.get("R2_BUCKET", QUOTE_STORAGE_BUCKET).strip() or QUOTE_STORAGE_BUCKET
+R2_REGION = os.environ.get("R2_REGION", "auto").strip() or "auto"
 MAX_QUOTE_UPLOAD_MB = int(os.environ.get("MAX_QUOTE_UPLOAD_MB", "25"))
 MAX_QUOTE_HISTORY_PER_USER = int(os.environ.get("MAX_QUOTE_HISTORY_PER_USER", "3"))
 QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS = int(os.environ.get("QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS", "14"))
@@ -178,6 +185,70 @@ def _dev_next_id(rows: list[dict]) -> int:
 
 def _storage_key() -> str:
     return SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY or ""
+
+
+_R2_CLIENT = None
+
+
+def _use_r2_storage() -> bool:
+    return QUOTE_STORAGE_PROVIDER in {"r2", "cloudflare-r2", "cloudflare"}
+
+
+def _storage_bucket_name() -> str:
+    return R2_BUCKET if _use_r2_storage() else QUOTE_STORAGE_BUCKET
+
+
+def _r2_endpoint_url() -> str:
+    if R2_ENDPOINT_URL:
+        return R2_ENDPOINT_URL
+    if R2_ACCOUNT_ID:
+        return f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+    return ""
+
+
+def _r2_configured() -> bool:
+    return bool(_r2_endpoint_url() and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET)
+
+
+def _storage_configured() -> bool:
+    if DEV_MODE:
+        return True
+    if _use_r2_storage():
+        return _r2_configured()
+    return bool(SUPABASE_URL and _storage_key())
+
+
+def _r2_client():
+    global _R2_CLIENT
+    if _R2_CLIENT is not None:
+        return _R2_CLIENT
+    if not _r2_configured():
+        raise RuntimeError(
+            "Cloudflare R2 no configurado: define R2_ACCOUNT_ID/R2_ENDPOINT_URL, "
+            "R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY y R2_BUCKET"
+        )
+    try:
+        import boto3
+        from botocore.config import Config
+    except ImportError as exc:
+        raise RuntimeError("Falta dependencia boto3 para Cloudflare R2") from exc
+    _R2_CLIENT = boto3.client(
+        "s3",
+        endpoint_url=_r2_endpoint_url(),
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        region_name=R2_REGION,
+        config=Config(signature_version="s3v4"),
+    )
+    return _R2_CLIENT
+
+
+def _quote_object_content_type(path: str) -> str:
+    return (
+        "application/pdf"
+        if str(path or "").lower().endswith(".pdf")
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 
 def _get_supabase_headers():
@@ -351,7 +422,14 @@ def _storage_req(method: str, path: str, json_data=None):
 
 
 def _storage_download_bytes(path: str) -> bytes:
-    """Descarga un objeto privado de Supabase Storage desde backend."""
+    """Descarga un objeto privado del proveedor de storage desde backend."""
+    if _use_r2_storage():
+        try:
+            obj = _r2_client().get_object(Bucket=R2_BUCKET, Key=path.strip("/"))
+            return obj["Body"].read()
+        except Exception as exc:
+            raise RuntimeError(f"Cloudflare R2 download error: {exc.__class__.__name__}") from exc
+
     if not SUPABASE_URL:
         raise RuntimeError("SUPABASE_URL no configurada")
     if not _storage_key():
@@ -739,6 +817,14 @@ def _delete_storage_paths(paths: list[str]) -> None:
         for path in clean_paths:
             _dev_storage_file(path).unlink(missing_ok=True)
         return
+    if _use_r2_storage():
+        try:
+            client = _r2_client()
+            for path in list(dict.fromkeys(clean_paths)):
+                client.delete_object(Bucket=R2_BUCKET, Key=path)
+        except Exception as exc:
+            raise RuntimeError(f"Cloudflare R2 delete error: {exc.__class__.__name__}") from exc
+        return
     _storage_req("DELETE", f"/object/{QUOTE_STORAGE_BUCKET}", json_data={"prefixes": list(dict.fromkeys(clean_paths))})
 
 
@@ -791,6 +877,33 @@ def _storage_list_prefix(bucket: str, prefix: str) -> list[dict]:
 
 
 def _storage_list_recursive(bucket: str, prefix: str) -> list[dict]:
+    if _use_r2_storage():
+        found = []
+        clean_prefix = prefix.strip("/")
+        try:
+            paginator = _r2_client().get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=R2_BUCKET, Prefix=clean_prefix):
+                for obj in page.get("Contents", []):
+                    key = str(obj.get("Key") or "").strip("/")
+                    if not key:
+                        continue
+                    updated_at = obj.get("LastModified")
+                    if hasattr(updated_at, "isoformat"):
+                        updated_at = updated_at.isoformat()
+                    found.append(
+                        {
+                            "id": str(obj.get("ETag") or key),
+                            "name": key.rsplit("/", 1)[-1],
+                            "_full_name": key,
+                            "created_at": updated_at,
+                            "updated_at": updated_at,
+                            "metadata": {"size": obj.get("Size") or 0},
+                        }
+                    )
+        except Exception as exc:
+            raise RuntimeError(f"Cloudflare R2 list error: {exc.__class__.__name__}") from exc
+        return found
+
     found = []
     pending = [prefix.strip("/")]
     seen = set()
@@ -1133,6 +1246,20 @@ def _validate_metadata(body: dict) -> dict:
 def _create_signed_upload(path: str):
     if DEV_MODE:
         return {"token": "dev-upload-token"}
+    if _use_r2_storage():
+        try:
+            signed_url = _r2_client().generate_presigned_url(
+                "put_object",
+                Params={
+                    "Bucket": R2_BUCKET,
+                    "Key": path.strip("/"),
+                    "ContentType": _quote_object_content_type(path),
+                },
+                ExpiresIn=SIGNED_UPLOAD_TTL_SECONDS,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Cloudflare R2 signed upload error: {exc.__class__.__name__}") from exc
+        return {"provider": "r2", "signed_upload_url": signed_url}
     encoded_path = quote(path, safe="/")
     return _storage_req(
         "POST",
@@ -1142,6 +1269,8 @@ def _create_signed_upload(path: str):
 
 
 def _signed_upload_url(path: str, token: str) -> str:
+    if _use_r2_storage():
+        raise RuntimeError("Cloudflare R2 usa signed_upload_url directo, no token Supabase")
     encoded_path = quote(path, safe="/")
     return f"{SUPABASE_URL}/storage/v1/object/upload/sign/{QUOTE_STORAGE_BUCKET}/{encoded_path}?token={quote(token, safe='')}"
 
@@ -1160,6 +1289,15 @@ def _wake_worker():
 def _create_signed_download(path: str):
     if DEV_MODE:
         return f"{DEV_PUBLIC_BASE_URL}/dev/storage/{quote(path, safe='')}"
+    if _use_r2_storage():
+        try:
+            return _r2_client().generate_presigned_url(
+                "get_object",
+                Params={"Bucket": R2_BUCKET, "Key": path.strip("/")},
+                ExpiresIn=SIGNED_DOWNLOAD_TTL_SECONDS,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Cloudflare R2 signed download error: {exc.__class__.__name__}") from exc
     encoded_path = quote(path, safe="/")
     data = _storage_req(
         "POST",
@@ -1253,7 +1391,8 @@ def health():
     return {
         "status": "ok",
         "db_backend": "postgres" if _use_postgres() else "supabase_rest",
-        "storage_configured": bool(SUPABASE_URL and _storage_key()),
+        "storage_provider": "r2" if _use_r2_storage() else "supabase",
+        "storage_configured": _storage_configured(),
     }
 
 
@@ -1501,7 +1640,7 @@ def admin_storage_retention_emergency(body: dict | None = None, _authorized: boo
                 raise RuntimeError("Confirmacion requerida")
             paths = _validate_emergency_delete_paths(body.get("paths") or [])
             summary = {
-                "bucket": QUOTE_STORAGE_BUCKET,
+                "bucket": _storage_bucket_name(),
                 "dry_run": dry_run,
                 "mode": "explicit_paths",
                 "objects_planned": len(paths),
@@ -1521,7 +1660,7 @@ def admin_storage_retention_emergency(body: dict | None = None, _authorized: boo
         plan = _build_storage_retention_plan(objects, max_per_user, min_age_days=min_age_days)
         summary = {
             **plan["summary"],
-            "bucket": QUOTE_STORAGE_BUCKET,
+            "bucket": _storage_bucket_name(),
             "dry_run": dry_run,
             "max_per_user": max_per_user,
             "min_age_days": min_age_days,
@@ -1572,15 +1711,19 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
         pass
 
     token = upload.get("token") or upload.get("signedToken")
-    if not token:
-        raise HTTPException(status_code=500, detail="Supabase no devolvio token de carga")
+    signed_upload_url = upload.get("signed_upload_url")
+    if not signed_upload_url and token and not DEV_MODE:
+        signed_upload_url = _signed_upload_url(input_path, token)
+    if not signed_upload_url and not token and not DEV_MODE:
+        raise HTTPException(status_code=500, detail="El storage no devolvio URL de carga")
 
     return {
         "job_id": job["id"],
-        "bucket": QUOTE_STORAGE_BUCKET,
+        "bucket": _storage_bucket_name(),
+        "storage_provider": "r2" if _use_r2_storage() else "supabase",
         "path": input_path,
         "token": token,
-        "signed_upload_url": _signed_upload_url(input_path, token) if not DEV_MODE else None,
+        "signed_upload_url": signed_upload_url if not DEV_MODE else None,
         "upload_url": f"/cotizaciones/{job['id']}/dev-upload" if DEV_MODE else None,
         "max_size_mb": MAX_QUOTE_UPLOAD_MB,
         "allowed_extensions": list(ALLOWED_QUOTE_INPUT_EXTENSIONS),
@@ -1712,7 +1855,7 @@ def cotizaciones_download(job_id: str, current_user: dict = Depends(get_current_
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error preparando descarga: {e}")
     if not signed_url:
-        raise HTTPException(status_code=500, detail="Supabase no devolvio URL de descarga")
+        raise HTTPException(status_code=500, detail="El storage no devolvio URL de descarga")
     try:
         _mark_quote_downloaded(job)
     except RuntimeError:

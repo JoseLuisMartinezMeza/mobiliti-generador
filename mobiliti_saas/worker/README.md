@@ -18,12 +18,27 @@ $env:SUPABASE_SERVICE_KEY="REPLACE_WITH_SUPABASE_SERVICE_ROLE_KEY"
 Variables opcionales:
 
 ```powershell
+$env:QUOTE_STORAGE_PROVIDER="supabase"
 $env:QUOTE_STORAGE_BUCKET="quote-files"
 $env:QUOTE_ENGINE="python"
 $env:MAX_QUOTE_OUTPUT_MB="100"
 $env:TEMPLATE_PATH="C:\ruta\Formato Cotizacion 2026 GDL (1).xlsx"
 $env:WORKER_POLL_SECONDS="10"
 $env:WORKER_STALE_MINUTES="30"
+```
+
+Para guardar inputs/outputs en Cloudflare R2 en lugar de Supabase Storage,
+usa credenciales S3 de R2, no el API token general de Cloudflare:
+
+```powershell
+$env:QUOTE_STORAGE_PROVIDER="r2"
+$env:R2_ACCOUNT_ID="REPLACE_WITH_CLOUDFLARE_ACCOUNT_ID"
+$env:R2_ACCESS_KEY_ID="REPLACE_WITH_R2_S3_ACCESS_KEY_ID"
+$env:R2_SECRET_ACCESS_KEY="REPLACE_WITH_R2_S3_SECRET_ACCESS_KEY"
+$env:R2_BUCKET="quote-files"
+$env:R2_REGION="auto"
+# Opcional si usas un endpoint custom:
+$env:R2_ENDPOINT_URL="https://REPLACE_WITH_ACCOUNT_ID.r2.cloudflarestorage.com"
 ```
 
 Proveedor de mejora de imagenes:

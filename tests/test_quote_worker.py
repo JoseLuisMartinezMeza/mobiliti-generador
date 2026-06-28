@@ -61,6 +61,46 @@ def test_process_job_marks_completed(monkeypatch):
     assert completed_payload["metadata"]["generation_seconds"] >= 0
 
 
+def test_supabase_client_storage_methods_route_to_r2(monkeypatch, tmp_path):
+    calls = []
+
+    class Body:
+        def read(self):
+            return b"r2-input"
+
+    class FakeR2Client:
+        def get_object(self, **kwargs):
+            calls.append(("GET", kwargs))
+            return {"Body": Body()}
+
+        def put_object(self, **kwargs):
+            calls.append(("PUT", {**kwargs, "Body": b"<body>"}))
+
+        def delete_object(self, **kwargs):
+            calls.append(("DELETE", kwargs))
+
+    monkeypatch.setattr(quote_worker, "STORAGE_PROVIDER", "r2")
+    monkeypatch.setattr(quote_worker, "R2_BUCKET", "mobiliti-quotes")
+    monkeypatch.setattr(quote_worker, "_r2_client", lambda: FakeR2Client())
+
+    client = quote_worker.SupabaseClient.__new__(quote_worker.SupabaseClient)
+    downloaded = tmp_path / "input.xlsx"
+    upload_source = tmp_path / "output.xlsx"
+    upload_source.write_bytes(b"generated")
+
+    client.storage_download("users/7/jobs/job-1/input.xlsx", downloaded)
+    client.storage_upload("users/7/jobs/job-1/output.xlsx", upload_source)
+    client.storage_delete("users/7/jobs/job-1/input.xlsx")
+
+    assert downloaded.read_bytes() == b"r2-input"
+    assert calls[0] == ("GET", {"Bucket": "mobiliti-quotes", "Key": "users/7/jobs/job-1/input.xlsx"})
+    assert calls[1][0] == "PUT"
+    assert calls[1][1]["Bucket"] == "mobiliti-quotes"
+    assert calls[1][1]["Key"] == "users/7/jobs/job-1/output.xlsx"
+    assert calls[1][1]["ContentType"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert calls[2] == ("DELETE", {"Bucket": "mobiliti-quotes", "Key": "users/7/jobs/job-1/input.xlsx"})
+
+
 def test_process_job_converts_pdf_before_generator(monkeypatch):
     client = FakeClient()
     client.claim_input_path = "users/7/jobs/job-1/input.pdf"

@@ -5,6 +5,10 @@ The worker runs in pull mode: it polls Supabase for queued jobs, processes XLSX
 files, and uploads results back to Supabase Storage. No public HTTP endpoint is
 required.
 
+When `QUOTE_STORAGE_PROVIDER=r2`, the worker keeps Supabase for job metadata
+and stores quote input/output files in Cloudflare R2 instead of Supabase
+Storage.
+
 ## Server
 
 Recommended server:
@@ -57,6 +61,15 @@ Required values:
 - `SUPABASE_ANON_KEY`
 - `MOBILITI_REST_SECRET`
 - `QUOTE_STORAGE_BUCKET=quote-files`
+
+For Cloudflare R2 storage, also set S3-compatible R2 credentials:
+
+- `QUOTE_STORAGE_PROVIDER=r2`
+- `R2_ACCOUNT_ID`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+- `R2_BUCKET=quote-files`
+- `R2_REGION=auto`
 
 Do not commit real secrets.
 

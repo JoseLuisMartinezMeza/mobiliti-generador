@@ -93,6 +93,41 @@ def test_init_upload_creates_signed_upload(monkeypatch):
     assert data["path"] == f"users/7/jobs/{data['job_id']}/input.xlsx"
 
 
+def test_init_upload_accepts_r2_signed_upload_without_supabase_token(monkeypatch):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(index, "_use_r2_storage", lambda: True, raising=False)
+    monkeypatch.setattr(index, "_storage_bucket_name", lambda: "mobiliti-quotes", raising=False)
+    monkeypatch.setattr(
+        index,
+        "_create_signed_upload",
+        lambda path: {"provider": "r2", "signed_upload_url": "https://r2.example/upload"},
+    )
+    monkeypatch.setattr(
+        index,
+        "db_create_quote_job",
+        lambda usuario_id, template, metadata, input_path, job_id=None: {
+            "id": job_id or "job-1",
+            "usuario_id": usuario_id,
+            "template": template,
+            "metadata": metadata,
+            "input_path": input_path,
+        },
+    )
+
+    resp = _client().post(
+        "/cotizaciones/init-upload",
+        headers=_auth_headers(),
+        json={"filename": "quotation.xlsx", "size": 1024, "template": "Template.xlsx"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["bucket"] == "mobiliti-quotes"
+    assert data["storage_provider"] == "r2"
+    assert data["token"] is None
+    assert data["signed_upload_url"] == "https://r2.example/upload"
+
+
 def test_init_upload_accepts_pdf(monkeypatch):
     _mock_user(monkeypatch)
     created = {}
