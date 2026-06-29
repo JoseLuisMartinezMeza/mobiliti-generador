@@ -33,7 +33,7 @@ if [[ "${#missing[@]}" -gt 0 ]]; then
 fi
 
 git -C "${APP_DIR}" fetch origin "${GIT_REF}"
-git -C "${APP_DIR}" reset --hard "origin/${GIT_REF}"
+git -C "${APP_DIR}" reset --hard FETCH_HEAD
 
 docker compose -f "${COMPOSE_FILE}" build
 docker compose -f "${COMPOSE_FILE}" up -d
