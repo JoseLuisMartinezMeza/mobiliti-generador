@@ -446,16 +446,63 @@ def test_retry_rejects_non_failed_job(monkeypatch):
 
 def test_download_returns_signed_url(monkeypatch):
     _mock_user(monkeypatch)
+    captured = {}
     monkeypatch.setattr(
         index,
         "db_get_quote_job",
-        lambda job_id: {"id": job_id, "usuario_id": 7, "status": "completed", "output_path": "users/7/jobs/job-1/output.xlsx"},
+        lambda job_id: {
+            "id": job_id,
+            "usuario_id": 7,
+            "status": "completed",
+            "output_path": "users/7/jobs/job-1/output.xlsx",
+            "metadata": {"proyecto": "IZA Reforma", "cotizacion": "300-00010"},
+        },
     )
-    monkeypatch.setattr(index, "_create_signed_download", lambda path: f"https://example.test/{path}")
+
+    def fake_signed_download(path, filename=None):
+        captured["path"] = path
+        captured["filename"] = filename
+        return f"https://example.test/{path}?X-Amz-Signature=signed"
+
+    monkeypatch.setattr(index, "_create_signed_download", fake_signed_download)
 
     resp = _client().get("/cotizaciones/job-1/download", headers=_auth_headers())
     assert resp.status_code == 200
-    assert resp.json()["download_url"].endswith("output.xlsx")
+    assert resp.json()["download_url"].endswith("X-Amz-Signature=signed")
+    assert resp.json()["filename"] == "Cotizacion_IZA_Reforma_300-00010.xlsx"
+    assert captured == {
+        "path": "users/7/jobs/job-1/output.xlsx",
+        "filename": "Cotizacion_IZA_Reforma_300-00010.xlsx",
+    }
+
+
+def test_r2_download_filename_is_signed_in_presigned_params(monkeypatch):
+    captured = {}
+
+    class FakeR2Client:
+        def generate_presigned_url(self, operation, Params, ExpiresIn):
+            captured["operation"] = operation
+            captured["params"] = Params
+            captured["expires_in"] = ExpiresIn
+            return "https://r2.example/output.xlsx?X-Amz-Signature=signed"
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "QUOTE_STORAGE_PROVIDER", "r2")
+    monkeypatch.setattr(index, "R2_BUCKET", "quote-files")
+    monkeypatch.setattr(index, "_r2_client", lambda: FakeR2Client())
+
+    signed = index._create_signed_download("users/7/jobs/job-1/output.xlsx", filename="Cotizacion_IZA_300-00010.xlsx")
+
+    assert signed.endswith("X-Amz-Signature=signed")
+    assert captured == {
+        "operation": "get_object",
+        "params": {
+            "Bucket": "quote-files",
+            "Key": "users/7/jobs/job-1/output.xlsx",
+            "ResponseContentDisposition": 'attachment; filename="Cotizacion_IZA_300-00010.xlsx"',
+        },
+        "expires_in": index.SIGNED_DOWNLOAD_TTL_SECONDS,
+    }
 
 
 def test_file_download_returns_xlsx_attachment(monkeypatch):

@@ -1286,14 +1286,17 @@ def _wake_worker():
         pass
 
 
-def _create_signed_download(path: str):
+def _create_signed_download(path: str, filename: str | None = None):
     if DEV_MODE:
         return f"{DEV_PUBLIC_BASE_URL}/dev/storage/{quote(path, safe='')}"
     if _use_r2_storage():
+        params = {"Bucket": R2_BUCKET, "Key": path.strip("/")}
+        if filename:
+            params["ResponseContentDisposition"] = f'attachment; filename="{filename}"'
         try:
             return _r2_client().generate_presigned_url(
                 "get_object",
-                Params={"Bucket": R2_BUCKET, "Key": path.strip("/")},
+                Params=params,
                 ExpiresIn=SIGNED_DOWNLOAD_TTL_SECONDS,
             )
         except Exception as exc:
@@ -1850,8 +1853,9 @@ def cotizaciones_download(job_id: str, current_user: dict = Depends(get_current_
     job = _quote_job_for_user(job_id, current_user["id"])
     if job["status"] != "completed" or not job.get("output_path"):
         raise HTTPException(status_code=409, detail="La cotizacion aun no esta lista")
+    filename = _safe_quote_filename(job)
     try:
-        signed_url = _create_signed_download(job["output_path"])
+        signed_url = _create_signed_download(job["output_path"], filename=filename)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error preparando descarga: {e}")
     if not signed_url:
@@ -1860,7 +1864,7 @@ def cotizaciones_download(job_id: str, current_user: dict = Depends(get_current_
         _mark_quote_downloaded(job)
     except RuntimeError:
         print(json.dumps({"event": "quote_download_mark_failed", "job_id": job_id}, separators=(",", ":")))
-    return {"download_url": signed_url, "expires_in": SIGNED_DOWNLOAD_TTL_SECONDS}
+    return {"download_url": signed_url, "filename": filename, "expires_in": SIGNED_DOWNLOAD_TTL_SECONDS}
 
 
 @app.get("/cotizaciones/{job_id}/file")

@@ -311,7 +311,12 @@ def test_download_marks_job_as_downloaded(monkeypatch):
     _mock_user(monkeypatch)
     updates = []
     monkeypatch.setattr(index, "db_get_quote_job", lambda job_id: _job(job_id), raising=False)
-    monkeypatch.setattr(index, "_create_signed_download", lambda path: "https://example.test/download.xlsx", raising=False)
+    monkeypatch.setattr(
+        index,
+        "_create_signed_download",
+        lambda path, filename=None: "https://example.test/download.xlsx",
+        raising=False,
+    )
     monkeypatch.setattr(index, "db_update_quote_job", lambda job_id, update: updates.append((job_id, update)) or {"id": job_id, **update}, raising=False)
 
     resp = _client().get("/cotizaciones/job-1/download", headers=_auth_headers())

@@ -89,17 +89,6 @@ function quoteDownloadFallbackName(job) {
   return `Cotizacion_${name.slice(0, 140)}.xlsx`;
 }
 
-function withDownloadFilename(url, filename) {
-  try {
-    const parsed = new URL(url);
-    parsed.searchParams.set("download", filename);
-    return parsed.toString();
-  } catch {
-    const separator = String(url).includes("?") ? "&" : "?";
-    return `${url}${separator}download=${encodeURIComponent(filename)}`;
-  }
-}
-
 async function downloadJobFile(job, token) {
   if (!job?.id) return "";
   const res = await fetch(apiUrl(`/cotizaciones/${job.id}/download`), {
@@ -117,9 +106,9 @@ async function downloadJobFile(job, token) {
   const data = await res.json();
   const signedUrl = data.download_url;
   if (!signedUrl) throw new ApiError("La API no devolvio una URL de descarga", res.status);
-  const filename = quoteDownloadFallbackName(job);
+  const filename = data.filename || quoteDownloadFallbackName(job);
   const link = document.createElement("a");
-  link.href = withDownloadFilename(signedUrl, filename);
+  link.href = signedUrl;
   link.download = filename.endsWith(".xlsx") ? filename : `${filename}.xlsx`;
   document.body.appendChild(link);
   link.click();

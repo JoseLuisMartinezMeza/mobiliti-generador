@@ -60,3 +60,13 @@ def test_history_exposes_delete_quote_action():
     assert 'method: "DELETE"' in source
     assert "Eliminar" in source
     assert ".danger-action" in styles
+
+
+def test_download_does_not_mutate_signed_url_query():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+
+    assert "withDownloadFilename" not in source
+    assert "searchParams.set(\"download\"" not in source
+    assert "download=${encodeURIComponent" not in source
+    assert "const filename = data.filename || quoteDownloadFallbackName(job);" in source
+    assert "link.href = signedUrl;" in source
