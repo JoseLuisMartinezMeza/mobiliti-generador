@@ -178,7 +178,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     assert cot["B4"].value is None
     assert cot["A16"].value == "=Quotation!A8"
     assert cot["D17"].value == "=Quotation!E9"
-    assert str(cot["F17"].value).startswith(("=Mobiliti!W", "=IFERROR((Mobiliti!X"))
+    assert str(cot["F17"].value).startswith(("=Mobiliti!X", "=IFERROR((Mobiliti!X"))
     assert (cot.row_dimensions[19].height or 0) >= 300
     merged_ranges = {str(rng) for rng in cot.merged_cells.ranges}
     assert "D58:G58" in merged_ranges
@@ -190,7 +190,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     assert cot["C20"].alignment.vertical == "top"
     assert cot["C32"].alignment.vertical == "top"
     assert any(
-        isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!X" in cot.cell(row, 6).value
+        isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!Y" in cot.cell(row, 6).value
         for row in range(1, cot.max_row + 1)
     )
     assert any(
@@ -199,7 +199,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
         for img in cot._images
     )
     assert cot["F32"].value == (
-        "=IFERROR((Mobiliti!X155+Mobiliti!X156+Mobiliti!X157+Mobiliti!X158)/Mobiliti!H155,0)"
+        "=IFERROR((Mobiliti!X155*Mobiliti!H155+Mobiliti!Y156+Mobiliti!Y157+Mobiliti!Y158)/Mobiliti!H155,0)"
     )
     mob = wb["Mobiliti"]
     assert mob["J6"].value == "USD/MXN"
@@ -254,15 +254,15 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     assert populated_rows
     for row in populated_rows:
         assert mob.cell(row, 16).value == "Centro"
-        assert mob.cell(row, 26).value == f"=MIN(0.4,Y{row})"
-        assert "ERROR" not in str(mob.cell(row, 28).value or "")
-        assert str(mob.cell(row, 29).value or "") == f"=AB{row}*H{row}"
+        assert mob.cell(row, 27).value == f"=MIN(0.4,Z{row})"
+        assert "ERROR" not in str(mob.cell(row, 29).value or "")
+        assert str(mob.cell(row, 30).value or "") == f"=AC{row}*H{row}"
     blank_formula_errors = []
     for start in [14, 49, 84, 119, 154, 189, 224, 259, 294, 329, 364, 398, 432]:
         for row in range(start, start + 32):
             if any(mob.cell(row, col).value for col in (4, 5, 6)):
                 continue
-            values = [str(mob.cell(row, col).value or "") for col in range(11, 32)]
+            values = [str(mob.cell(row, col).value or "") for col in range(11, 36)]
             if any("#REF!" in value or "ERROR" in value for value in values):
                 blank_formula_errors.append(row)
     assert blank_formula_errors == []
@@ -323,11 +323,15 @@ def test_python_engine_generates_cummins_large_quote(tmp_path):
     assert "Cotizacion" in wb.sheetnames
     assert "Mobiliti" in wb.sheetnames
     assert wb["Mobiliti"]["D399"].value
+    assert wb["Mobiliti"].column_dimensions["W"].hidden is True
+    assert wb["Mobiliti"]["W12"].value == "Precio Unitario Base (Aux)"
+    assert wb["Mobiliti"]["X12"].value == "Precio Unitario de Lista (Carátula)"
+    assert wb["Mobiliti"]["Y14"].value == "=X14*H14"
     cot = wb["Cotizacion"]
     collapsed_lumbro_formulas = [
         cot.cell(row, 6).value
         for row in range(1, cot.max_row + 1)
-        if isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!X" in cot.cell(row, 6).value
+        if isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!Y" in cot.cell(row, 6).value
     ]
     assert collapsed_lumbro_formulas
     assert all("/Mobiliti!H" in formula for formula in collapsed_lumbro_formulas)

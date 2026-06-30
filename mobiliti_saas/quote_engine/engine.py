@@ -60,15 +60,22 @@ DEFAULT_MOBILITI_REGION = "Centro"
 MOBILITI_REGION_COL = 16
 MOBILITI_PROVIDER_COL = 6
 MOBILITI_PRODUCT_CATEGORY_COL = 5
-MOBILITI_MAX_DISCOUNT_COL = 25
-MOBILITI_COVER_DISCOUNT_COL = 26
-MOBILITI_DISCOUNT_AMOUNT_COL = 27
-MOBILITI_FINAL_PRICE_COL = 28
-MOBILITI_COMMERCIAL_TOTAL_COL = 29
-MOBILITI_STATUS_COL = 34
+MOBILITI_UNIT_PRICE_COL = 23
+MOBILITI_MIN_UNIT_PRICE_COL = 24
+MOBILITI_LIST_TOTAL_COL = 25
+MOBILITI_MAX_DISCOUNT_COL = 26
+MOBILITI_COVER_DISCOUNT_COL = 27
+MOBILITI_DISCOUNT_AMOUNT_COL = 28
+MOBILITI_FINAL_PRICE_COL = 29
+MOBILITI_COMMERCIAL_TOTAL_COL = 30
+MOBILITI_CLIENT_DISCOUNT_COL = 31
+MOBILITI_CLIENT_PRICE_COL = 32
+MOBILITI_PROJECT_TOTAL_COL = 33
+MOBILITI_GP_COL = 34
+MOBILITI_STATUS_COL = 35
 MOBILITI_CLEAR_COLS = tuple(range(4, MOBILITI_STATUS_COL + 1))
 MOBILITI_AUX_START_COL = 44
-MOBILITI_AUX_END_COL = 48
+MOBILITI_AUX_END_COL = 49
 MOBILITI_AUX_PRESERVE_MAX_ROW = 18
 MOBILITI_PROVIDER_LIST_NAME = "Lista_Proveedores_Mobiliti"
 MOBILITI_SUBTOTAL_FILL_RGB = "FF404040"
@@ -224,9 +231,45 @@ def _find_mobiliti_total_row(ws) -> int | None:
 
 def _find_provider_discount_start(ws) -> int | None:
     for row in range(1, ws.max_row + 1):
-        if str(ws.cell(row, 35).value or "").strip() == "Sunon Inc":
-            return row
+        for col in (36, 35):
+            if str(ws.cell(row, col).value or "").strip() == "Sunon Inc":
+                return row
     return None
+
+
+def _ensure_mobiliti_formula_layout(ws) -> None:
+    if str(ws.cell(12, MOBILITI_MIN_UNIT_PRICE_COL).value or "").strip() != "Precio Unitario de Lista (Car\u00e1tula)":
+        source_letter = get_column_letter(MOBILITI_UNIT_PRICE_COL)
+        target_letter = get_column_letter(MOBILITI_MIN_UNIT_PRICE_COL)
+        source_width = ws.column_dimensions[source_letter].width
+        ws.insert_cols(MOBILITI_MIN_UNIT_PRICE_COL)
+        if source_width is not None:
+            ws.column_dimensions[target_letter].width = source_width
+        for row in range(1, ws.max_row + 1):
+            _copy_cell_style(
+                ws.cell(row, MOBILITI_UNIT_PRICE_COL),
+                ws.cell(row, MOBILITI_MIN_UNIT_PRICE_COL),
+            )
+
+    headers = {
+        MOBILITI_UNIT_PRICE_COL: "Precio Unitario Base (Aux)",
+        MOBILITI_MIN_UNIT_PRICE_COL: "Precio Unitario de Lista (Car\u00e1tula)",
+        MOBILITI_LIST_TOTAL_COL: "Precio Lista",
+        MOBILITI_MAX_DISCOUNT_COL: "Descuento M\u00e1ximo",
+        MOBILITI_COVER_DISCOUNT_COL: "Descuento Car\u00e1tula",
+        MOBILITI_DISCOUNT_AMOUNT_COL: "Precio Descontado",
+        MOBILITI_FINAL_PRICE_COL: "Precio Final c/ Descuento ",
+        MOBILITI_COMMERCIAL_TOTAL_COL: "Precio Total Comercial",
+        MOBILITI_CLIENT_DISCOUNT_COL: "Descuento Car\u00e1tula Cliente Final",
+        MOBILITI_CLIENT_PRICE_COL: "Precio Cliente con Ajuste",
+        MOBILITI_PROJECT_TOTAL_COL: "Precio Total Proyecto",
+        MOBILITI_GP_COL: "GP COMERCIAL",
+    }
+    for col, value in headers.items():
+        cell = ws.cell(12, col)
+        if not isinstance(cell, MergedCell):
+            cell.value = value
+    ws.column_dimensions[get_column_letter(MOBILITI_UNIT_PRICE_COL)].hidden = True
 
 
 def _snapshot_mobiliti_value(value: Any) -> Any:
@@ -309,10 +352,15 @@ def _restore_mobiliti_auxiliary_area(
         cell.number_format = data["number_format"]
         cell.alignment = copy(data["alignment"])
 
-    ws["AS15"] = f"=AC{total_row}"
-    ws["AS16"] = f"=AF{total_row}"
-    ws["AS17"] = "=AS16-AS15"
-    ws["AS18"] = "=(AS16/AS15)-1"
+    ws["AR14"] = "TABLA DE ESQUEMA COMISION INTERMEDIARIO"
+    ws["AS15"] = "Precio de Venta Base"
+    ws["AS16"] = "Precio de Venta Final"
+    ws["AS17"] = "Monto Comisi\u00f3n"
+    ws["AS18"] = "% Resultante"
+    ws["AT15"] = f"=AD{total_row}"
+    ws["AT16"] = f"=AG{total_row}"
+    ws["AT17"] = "=AT16-AT15"
+    ws["AT18"] = "=(AT16/AT15)-1"
 
     for merge in snapshot["merges"]:
         try:
@@ -367,6 +415,84 @@ def _copy_mobiliti_row_from_snapshot(
             ws.merge_cells(str(shifted))
         except ValueError:
             pass
+
+
+def _mobiliti_landed_cost_formula(row: int, total_row: int, discount_start: int | None) -> str:
+    threshold_base = discount_start or 577
+    small_m3_row = threshold_base + 1
+    medium_m3_row = threshold_base + 2
+    large_m3_row = threshold_base + 3
+    excluded = [
+        "Sunon Inc",
+        "Alma - Exterior",
+        "Yabo - Hoteler\u00eda",
+        "OSJ - Medical",
+        "Seezo - Home",
+        "A&D -Home",
+        "Encore Alfombras Hoteleria Asia",
+        "Zhong Xian - Leds",
+        "Tarkett Europa",
+        "2tec2",
+        "Balsan Europa",
+        "Armstrong Pisos USA",
+        "Tarkett USA",
+        "Tarkett Brasil",
+    ]
+    provider_checks = ",".join(f'F{row}<>"{provider}"' for provider in excluded)
+    return (
+        f'=IF(F{row}="Offiho", J{row}*0.55, '
+        f'IF(AND({provider_checks}),J{row},'
+        f'IFERROR(IF(K{total_row}<=$AP${small_m3_row},J{row}*2.14,'
+        f'IF(K{total_row}<=$AO${medium_m3_row},J{row}*1.8,'
+        f'IF(K{total_row}>$AO${large_m3_row},J{row}*1.5))),J{row}))*1.1)'
+    )
+
+
+def _mobiliti_provider_discount_formula(row: int, discount_start: int | None) -> str:
+    if not discount_start:
+        return "=0.5"
+    discount_end = discount_start + 30
+    return f'=IFERROR(VLOOKUP(F{row},$AJ${discount_start}:$AK${discount_end},2,FALSE),0.5)'
+
+
+def _write_mobiliti_row_formulas(ws, row: int, total_row: int, discount_start: int | None) -> None:
+    product_end = max(14, total_row - 3)
+    formulas = {
+        12: f"=K{row}*H{row}",
+        13: _mobiliti_landed_cost_formula(row, total_row, discount_start),
+        14: f"=M{row}*H{row}",
+        15: f'=IFERROR(VLOOKUP(G{row},Proveedores!B:D,3,0)," ")',
+        17: f"=IFERROR(IF(H{row}=0,0,VLOOKUP(E{row},Tabla_Fletes,3,FALSE)/H{row}),0)",
+        19: f"=IFERROR(IF(H{row}=0,0,VLOOKUP(E{row},Tabla_Instalacion,2,FALSE)/H{row}),0)",
+        21: f'=IF(F{row}="Offiho",0,R{row}+T{row})',
+        22: (
+            f"=IFERROR(IF(OR(K{row}=0,L{row}=0),U{row}/$H${total_row},"
+            f"U{row}*(K{row}/L{row}))*H{row},0)"
+        ),
+        MOBILITI_UNIT_PRICE_COL: (
+            f'=IF(F{row}="Offiho",J{row},'
+            f'IF(_xlfn.XLOOKUP(F{row},Proveedores!A$2:A$50,Proveedores!E$2:E$50,"")="Nacional",'
+            f'(J{row}/0.5)+IF(H{row}<=30,U{row},0),'
+            f'((J{row}/0.3/0.5)*IF(H{row}<=25,1+O{row},1))+IF(H{row}<=25,U{row},0)))'
+        ),
+        MOBILITI_MIN_UNIT_PRICE_COL: f"=_xlfn.MINIFS($W$14:$W${product_end},$D$14:$D${product_end},D{row})",
+        MOBILITI_LIST_TOTAL_COL: f"=X{row}*H{row}",
+        MOBILITI_MAX_DISCOUNT_COL: _mobiliti_provider_discount_formula(row, discount_start),
+        MOBILITI_DISCOUNT_AMOUNT_COL: f"=X{row}*AA{row}",
+        MOBILITI_FINAL_PRICE_COL: f'=IF(AA{row}>Z{row},"ERROR",(X{row}-AB{row}))',
+        MOBILITI_COMMERCIAL_TOTAL_COL: f"=AC{row}*H{row}",
+        MOBILITI_CLIENT_DISCOUNT_COL: f'=IF(A{row + 1}=TRUE,MAX(0,1-(AF{row}/X{row})),"NA")',
+        MOBILITI_CLIENT_PRICE_COL: f'=IF(A{row - 1}=FALSE,"NO APLICA",AC{row}*1.2)',
+        MOBILITI_PROJECT_TOTAL_COL: f"=AF{row}*H{row}",
+        MOBILITI_GP_COL: f"=(AD{row}-N{row})/AD{row}",
+        MOBILITI_STATUS_COL: f'=IF(AH{row}<30%,"ERROR","OK")',
+    }
+    for col, formula in formulas.items():
+        cell = ws.cell(row, col)
+        if not isinstance(cell, MergedCell):
+            cell.value = formula
+    for col in (MOBILITI_MAX_DISCOUNT_COL, MOBILITI_COVER_DISCOUNT_COL):
+        ws.cell(row, col).number_format = PERCENT_FORMAT
 
 
 def _set_mobiliti_row_fill(
@@ -491,7 +617,7 @@ def _normalize_mobiliti_row_formulas(ws, row: int, total_row: int, discount_star
         provider_cell.fill = copy(product_cell.fill)
         provider_cell.border = copy(product_cell.border)
 
-    for col in range(1, min(ws.max_column, 48) + 1):
+    for col in range(1, min(ws.max_column, 49) + 1):
         cell = ws.cell(row, col)
         value = cell.value
         if not isinstance(value, str) or not value.startswith("="):
@@ -509,17 +635,7 @@ def _normalize_mobiliti_row_formulas(ws, row: int, total_row: int, discount_star
             value = value.replace("$AN$580", f"$AN${580 + offset}")
         cell.value = value
 
-    ws.cell(row, 22).value = (
-        f"=IFERROR(IF(OR(K{row}=0,L{row}=0),U{row}/$H${total_row},"
-        f"U{row}*(K{row}/L{row}))*H{row},0)"
-    )
-
-    if discount_start:
-        discount_end = discount_start + 30
-        ws.cell(row, MOBILITI_MAX_DISCOUNT_COL).value = (
-            f'=IFERROR(VLOOKUP(F{row},$AI${discount_start}:$AJ${discount_end},2,FALSE),0.5)'
-        )
-        ws.cell(row, MOBILITI_MAX_DISCOUNT_COL).number_format = PERCENT_FORMAT
+    _write_mobiliti_row_formulas(ws, row, total_row, discount_start)
 
 
 def _set_mobiliti_subtotal_formulas(
@@ -531,11 +647,11 @@ def _set_mobiliti_subtotal_formulas(
 ) -> None:
     product_end = product_start + capacity - 1
     ws.cell(row, 1).value = f"Subtotales Sección {section_number}"
-    for col in (8, 12, 14, 24, 29, 32):
+    for col in (8, 12, 14, MOBILITI_LIST_TOTAL_COL, MOBILITI_COMMERCIAL_TOTAL_COL, MOBILITI_PROJECT_TOTAL_COL):
         letter = get_column_letter(col)
         ws.cell(row, col).value = f"=SUM({letter}{product_start}:{letter}{product_end})"
-    ws.cell(row, 30).value = f"=IFERROR(AVERAGE(AD{product_start}:AD{product_end}),0)"
-    ws.cell(row, 33).value = f"=IFERROR(1-(N{row}/AC{row}),0)"
+    ws.cell(row, MOBILITI_CLIENT_DISCOUNT_COL).value = f"=IFERROR(AVERAGE(AE{product_start}:AE{product_end}),0)"
+    ws.cell(row, MOBILITI_GP_COL).value = f"=IFERROR(1-(N{row}/AD{row}),0)"
 
 
 def _set_mobiliti_total_formulas(
@@ -547,10 +663,10 @@ def _set_mobiliti_total_formulas(
     ws.cell(row, 8).value = "=" + "+".join(f"H{subtotal}" for subtotal in subtotal_rows)
     ws.cell(row, 11).value = "=" + "+".join(f"L{subtotal}" for subtotal in subtotal_rows)
     ws.cell(row, 13).value = "=" + "+".join(f"N{subtotal}" for subtotal in subtotal_rows)
-    ws.cell(row, 24).value = "=" + "+".join(f"X{subtotal}" for subtotal in subtotal_rows)
-    ws.cell(row, 29).value = "=" + "+".join(f"AC{subtotal}" for subtotal in subtotal_rows)
-    ws.cell(row, 32).value = "=" + "+".join(f"AF{subtotal}" for subtotal in subtotal_rows)
-    ws.cell(row, 33).value = f"=AVERAGE({','.join(f'AG{subtotal}' for subtotal in subtotal_rows)})"
+    ws.cell(row, MOBILITI_LIST_TOTAL_COL).value = "=" + "+".join(f"Y{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, MOBILITI_COMMERCIAL_TOTAL_COL).value = "=" + "+".join(f"AD{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, MOBILITI_PROJECT_TOTAL_COL).value = "=" + "+".join(f"AG{subtotal}" for subtotal in subtotal_rows)
+    ws.cell(row, MOBILITI_GP_COL).value = f"=AVERAGE({','.join(f'AH{subtotal}' for subtotal in subtotal_rows)})"
 
 
 def _cell_has_conditional_format(ws, coordinate: str) -> bool:
@@ -564,9 +680,41 @@ def _cell_has_conditional_format(ws, coordinate: str) -> bool:
 def _mobiliti_status_conditional_rules(ws) -> list[Any]:
     for cf, rules in getattr(ws.conditional_formatting, "_cf_rules", {}).items():
         for cell_range in str(cf.sqref).split():
-            if "AH49" in CellRange(cell_range):
+            if "AI49" in CellRange(cell_range) or "AH49" in CellRange(cell_range):
                 return [deepcopy(rule) for rule in rules]
     return []
+
+
+def _remove_mobiliti_status_conditional_formatting(ws) -> None:
+    cf_rules = getattr(ws.conditional_formatting, "_cf_rules", None)
+    if not cf_rules:
+        return
+
+    old_status_col = MOBILITI_STATUS_COL - 1
+    status_cols = {old_status_col, MOBILITI_STATUS_COL}
+    updated_rules = OrderedDict()
+    for conditional_formatting, rules in cf_rules.items():
+        kept_ranges = [
+            str(cell_range)
+            for cell_range in conditional_formatting.sqref.ranges
+            if not any(cell_range.min_col <= col <= cell_range.max_col for col in status_cols)
+        ]
+        if kept_ranges:
+            updated_rules[ConditionalFormatting(sqref=" ".join(kept_ranges))] = rules
+
+    cf_rules.clear()
+    cf_rules.update(updated_rules)
+
+
+def _status_rule_for_range(rule: Any, status_letter: str, start_row: int) -> Any:
+    copied = deepcopy(rule)
+    formulas = getattr(copied, "formula", None)
+    if formulas:
+        copied.formula = [
+            re.sub(r"\b(?:AH|AI)\$?\d+\b", f"{status_letter}{start_row}", formula)
+            for formula in formulas
+        ]
+    return copied
 
 
 def _apply_mobiliti_status_conditional_formatting(ws) -> None:
@@ -574,13 +722,13 @@ def _apply_mobiliti_status_conditional_formatting(ws) -> None:
     if not rules:
         return
 
+    _remove_mobiliti_status_conditional_formatting(ws)
+    status_letter = get_column_letter(MOBILITI_STATUS_COL)
     for start_row, capacity in _mobiliti_product_ranges(ws):
         end_row = start_row + capacity - 1
-        if all(_cell_has_conditional_format(ws, f"AH{row}") for row in range(start_row, end_row + 1)):
-            continue
-        target_range = f"AH{start_row}:AH{end_row}"
+        target_range = f"{status_letter}{start_row}:{status_letter}{end_row}"
         for rule in rules:
-            ws.conditional_formatting.add(target_range, deepcopy(rule))
+            ws.conditional_formatting.add(target_range, _status_rule_for_range(rule, status_letter, start_row))
 
 
 def _clear_mobiliti_row_values(ws, row: int) -> None:
@@ -648,10 +796,11 @@ def _write_mobiliti_section_title(
 
 
 def _ensure_mobiliti_capacity_legacy(ws) -> None:
+    _ensure_mobiliti_formula_layout(ws)
     if ws.max_row >= MOBILITI_TOTAL_ROW and str(ws.cell(MOBILITI_TOTAL_ROW, 6).value or "") == "TOTAL PIEZAS":
         return
 
-    max_col = max(ws.max_column, 48)
+    max_col = max(ws.max_column, 49)
     original_total_row = _find_mobiliti_total_row(ws)
     if not original_total_row:
         return
@@ -716,14 +865,15 @@ def _ensure_mobiliti_capacity_legacy(ws) -> None:
 
     _set_mobiliti_total_formulas(ws, MOBILITI_TOTAL_ROW)
     _restore_mobiliti_auxiliary_area(ws, auxiliary_snapshot, MOBILITI_TOTAL_ROW)
-    ws["E4"] = f"=AC{MOBILITI_TOTAL_ROW}"
+    ws["E4"] = f"=AD{MOBILITI_TOTAL_ROW}"
     ws["E6"] = f"=E4*E5"
-    ws["E8"] = f"=(AC{MOBILITI_TOTAL_ROW}-M{MOBILITI_TOTAL_ROW})/AC{MOBILITI_TOTAL_ROW}"
+    ws["E8"] = f"=(AD{MOBILITI_TOTAL_ROW}-M{MOBILITI_TOTAL_ROW})/AD{MOBILITI_TOTAL_ROW}"
 
 
 def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSectionLayout]:
+    _ensure_mobiliti_formula_layout(ws)
     capacities = _normalize_mobiliti_section_capacities(capacities)
-    max_col = max(ws.max_column, 48)
+    max_col = max(ws.max_column, 49)
     original_total_row = _find_mobiliti_total_row(ws)
     if not original_total_row:
         layouts = [
@@ -857,9 +1007,9 @@ def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSection
 
     _set_mobiliti_total_formulas(ws, total_row, subtotal_rows)
     _restore_mobiliti_auxiliary_area(ws, auxiliary_snapshot, total_row)
-    ws["E4"] = f"=AC{total_row}"
+    ws["E4"] = f"=AD{total_row}"
     ws["E6"] = f"=E4*E5"
-    ws["E8"] = f"=(AC{total_row}-M{total_row})/AC{total_row}"
+    ws["E8"] = f"=(AD{total_row}-M{total_row})/AD{total_row}"
     ws._mobiliti_product_ranges = [(layout.product_start, layout.capacity) for layout in layouts]
     _apply_mobiliti_status_conditional_formatting(ws)
     _exclude_mobiliti_separator_rows_from_conditional_formatting(ws, layouts)
@@ -1424,9 +1574,9 @@ def _write_mobiliti(
             f"=MIN({_excel_decimal(discount_rate)},"
             f"{get_column_letter(MOBILITI_MAX_DISCOUNT_COL)}{row_number})"
         )
-        ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).value = f"=W{row_number}*Z{row_number}"
-        ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).value = f"=W{row_number}*(1-Z{row_number})"
-        ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).value = f"=AB{row_number}*H{row_number}"
+        ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).value = f"=X{row_number}*AA{row_number}"
+        ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).value = f'=IF(AA{row_number}>Z{row_number},"ERROR",(X{row_number}-AB{row_number}))'
+        ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).value = f"=AC{row_number}*H{row_number}"
         written_rows.add(row_number)
 
     def write_lumbro_row(row_number: int, code: str, quantity: int, region: str = DEFAULT_MOBILITI_REGION) -> None:
@@ -1764,11 +1914,14 @@ def _write_cotizacion(
             ws.cell(current_row, 5).value = f"=Mobiliti!H{mob_row}"
             lumbro_rows = lumbro_row_map.get(item.row, [])
             if lumbro_rows:
-                price_rows = [mob_row, *lumbro_rows]
-                total_formula = "+".join(f"Mobiliti!X{row}" for row in price_rows)
+                price_terms = [
+                    f"Mobiliti!X{mob_row}*Mobiliti!H{mob_row}",
+                    *(f"Mobiliti!Y{row}" for row in lumbro_rows),
+                ]
+                total_formula = "+".join(price_terms)
                 ws.cell(current_row, 6).value = f"=IFERROR(({total_formula})/Mobiliti!H{mob_row},0)"
             else:
-                ws.cell(current_row, 6).value = f"=Mobiliti!W{mob_row}"
+                ws.cell(current_row, 6).value = f"=Mobiliti!X{mob_row}"
         else:
             ws.cell(current_row, 5).value = item.cantidad
             ws.cell(current_row, 6).value = item.precio

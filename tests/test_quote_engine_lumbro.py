@@ -71,8 +71,9 @@ def test_mobiliti_lumbro_rows_use_safe_discount_and_region_formulas():
 
         for row in lumbro_rows:
             assert ws.cell(row, 16).value == "Centro"
-            assert ws.cell(row, 26).value == f"=MIN(0.4,Y{row})"
-            assert "ERROR" not in str(ws.cell(row, 28).value or "")
-            assert ws.cell(row, 29).value == f"=AB{row}*H{row}"
+            assert ws.cell(row, 27).value == f"=MIN(0.4,Z{row})"
+            assert ws.cell(row, 28).value == f"=X{row}*AA{row}"
+            assert ws.cell(row, 29).value == f'=IF(AA{row}>Z{row},"ERROR",(X{row}-AB{row}))'
+            assert ws.cell(row, 30).value == f"=AC{row}*H{row}"
     finally:
         wb.close()

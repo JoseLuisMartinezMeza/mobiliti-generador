@@ -11,8 +11,15 @@ sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine.engine import (  # noqa: E402
     MAX_PROD_PER_SECTION,
+    MOBILITI_DISCOUNT_AMOUNT_COL,
+    MOBILITI_FINAL_PRICE_COL,
+    MOBILITI_GP_COL,
+    MOBILITI_LIST_TOTAL_COL,
+    MOBILITI_MIN_UNIT_PRICE_COL,
     MOBILITI_PROVIDER_LIST_NAME,
+    MOBILITI_STATUS_COL,
     MOBILITI_TOTAL_ROW,
+    MOBILITI_UNIT_PRICE_COL,
     SECTION_CATS,
     SECTION_PROD_STARTS,
     _apply_mobiliti_provider_validation,
@@ -244,7 +251,7 @@ def test_mobiliti_appended_sections_keep_template_visual_skeleton():
         for source_row, target_row in checks:
             assert ws.row_dimensions[source_row].height == ws.row_dimensions[target_row].height
             assert _row_merges(ws, source_row) == _row_merges(ws, target_row)
-            for col in range(1, 34):
+            for col in range(1, MOBILITI_STATUS_COL):
                 assert _visual_signature(ws, source_row, col) == _visual_signature(ws, target_row, col)
     finally:
         wb.close()
@@ -386,7 +393,7 @@ def test_mobiliti_overflow_section_keeps_product_row_format_and_formulas():
         assert "J49" not in str(ws.cell(first_overflow_row, 13).value)
         assert f"F{first_overflow_row}" in str(ws.cell(first_overflow_row, 13).value)
         assert f"J{first_overflow_row}" in str(ws.cell(first_overflow_row, 13).value)
-        assert ws.cell(first_overflow_row, 33).value == f"=(AC{first_overflow_row}-N{first_overflow_row})/AC{first_overflow_row}"
+        assert ws.cell(first_overflow_row, MOBILITI_GP_COL).value == f"=(AD{first_overflow_row}-N{first_overflow_row})/AD{first_overflow_row}"
     finally:
         wb.close()
 
@@ -401,13 +408,13 @@ def test_mobiliti_overflow_intersection_rows_use_explicit_original_visual_colors
             {"m3": "H", "cantidad": "G", "unit_price": "J"},
         )
 
-        for col in range(1, 34):
+        for col in range(1, MOBILITI_STATUS_COL):
             if not isinstance(ws.cell(79, col), MergedCell):
                 assert _fill_signature(ws, 79, col) == ("solid", "rgb", "FF404040")
         for col in range(1, 11):
             if not isinstance(ws.cell(80, col), MergedCell):
                 assert _fill_signature(ws, 80, col) == ("solid", "rgb", "FF3E2500")
-        for col in range(11, 34):
+        for col in range(11, MOBILITI_STATUS_COL):
             assert _fill_signature(ws, 80, col) == ("solid", "rgb", "FF262626")
     finally:
         wb.close()
@@ -439,9 +446,9 @@ def test_mobiliti_overflow_subtotals_do_not_keep_stale_array_formula_refs():
             {"m3": "H", "cantidad": "G", "unit_price": "J"},
         )
 
-        assert not isinstance(ws["AD79"].value, ArrayFormula)
-        assert ws["AD79"].value == "=IFERROR(AVERAGE(AD14:AD77),0)"
-        assert "AD79" not in ws.array_formulae
+        assert not isinstance(ws["AE79"].value, ArrayFormula)
+        assert ws["AE79"].value == "=IFERROR(AVERAGE(AE14:AE77),0)"
+        assert "AE79" not in ws.array_formulae
     finally:
         wb.close()
 
@@ -457,9 +464,9 @@ def test_mobiliti_appended_sections_do_not_keep_stale_blank_row_formulas():
         )
 
         first_appended_blank_row = SECTION_CATS[16] + 33
-        for col in range(4, 34):
+        for col in range(4, MOBILITI_STATUS_COL):
             assert ws.cell(first_appended_blank_row, col).value is None
-        assert ws.cell(first_appended_blank_row, 34).value is None
+        assert ws.cell(first_appended_blank_row, MOBILITI_STATUS_COL).value is None
     finally:
         wb.close()
 
@@ -522,11 +529,11 @@ def test_mobiliti_appended_ok_status_keeps_conditional_formatting():
 
         first_appended_product_row = SECTION_PROD_STARTS[16]
         first_appended_blank_row = SECTION_CATS[16] + 33
-        assert ws.cell(first_appended_product_row, 34).value == (
-            f'=IF(AG{first_appended_product_row}<30%,"ERROR","OK")'
+        assert ws.cell(first_appended_product_row, MOBILITI_STATUS_COL).value == (
+            f'=IF(AH{first_appended_product_row}<30%,"ERROR","OK")'
         )
-        assert _cell_has_conditional_format(ws, f"AH{first_appended_product_row}")
-        assert ws.cell(first_appended_blank_row, 34).value is None
+        assert _cell_has_conditional_format(ws, f"AI{first_appended_product_row}")
+        assert ws.cell(first_appended_blank_row, MOBILITI_STATUS_COL).value is None
     finally:
         wb.close()
 
@@ -557,6 +564,27 @@ def test_mobiliti_provider_validation_uses_named_single_column_range_for_excel()
         wb.close()
 
 
+def test_mobiliti_uses_visible_new_caratula_price_for_totals():
+    wb = load_workbook(TEMPLATE, data_only=False, keep_links=False)
+    ws = wb["Mobiliti"]
+    try:
+        _write_mobiliti(
+            ws,
+            _many_products(1),
+            {"m3": "H", "cantidad": "G", "unit_price": "J"},
+        )
+
+        assert ws.column_dimensions["W"].hidden is True
+        assert ws.cell(12, MOBILITI_UNIT_PRICE_COL).value == "Precio Unitario Base (Aux)"
+        assert ws.cell(12, MOBILITI_MIN_UNIT_PRICE_COL).value == "Precio Unitario de Lista (Carátula)"
+        assert ws.cell(14, MOBILITI_LIST_TOTAL_COL).value == "=X14*H14"
+        assert ws.cell(14, MOBILITI_DISCOUNT_AMOUNT_COL).value == "=X14*AA14"
+        assert ws.cell(14, MOBILITI_FINAL_PRICE_COL).value == '=IF(AA14>Z14,"ERROR",(X14-AB14))'
+        assert ws["AE14"].value == '=IF(A15=TRUE,MAX(0,1-(AF14/X14)),"NA")'
+    finally:
+        wb.close()
+
+
 def test_mobiliti_status_conditional_formatting_covers_inner_overflow_gaps():
     wb = load_workbook(TEMPLATE, data_only=False, keep_links=False)
     ws = wb["Mobiliti"]
@@ -568,8 +596,8 @@ def test_mobiliti_status_conditional_formatting_covers_inner_overflow_gaps():
         )
 
         for row in (47, 48):
-            assert ws.cell(row, 34).value == f'=IF(AG{row}<30%,"ERROR","OK")'
-            assert _cell_has_conditional_format(ws, f"AH{row}")
+            assert ws.cell(row, MOBILITI_STATUS_COL).value == f'=IF(AH{row}<30%,"ERROR","OK")'
+            assert _cell_has_conditional_format(ws, f"AI{row}")
     finally:
         wb.close()
 
@@ -602,11 +630,11 @@ def test_mobiliti_appended_section_formulas_use_dynamic_total_and_zero_guards():
         second_landed_cost_formula = ws.cell(second_appended_product_row, 13).value
         freight_formula = ws.cell(first_appended_product_row, 22).value
 
+        assert f"K{MOBILITI_TOTAL_ROW}<=$AP$" in landed_cost_formula
         assert f"K{MOBILITI_TOTAL_ROW}<=$AO$" in landed_cost_formula
-        assert f"K{MOBILITI_TOTAL_ROW}<=$AN$" in landed_cost_formula
-        assert "K608<=$AN$" not in landed_cost_formula
-        assert f"K{MOBILITI_TOTAL_ROW}<=$AN$" in second_landed_cost_formula
-        assert "K1134<=$AN$" not in second_landed_cost_formula
+        assert "K608<=$AO$" not in landed_cost_formula
+        assert f"K{MOBILITI_TOTAL_ROW}<=$AO$" in second_landed_cost_formula
+        assert "K1134<=$AO$" not in second_landed_cost_formula
         assert freight_formula == (
             f"=IFERROR(IF(OR(K{first_appended_product_row}=0,L{first_appended_product_row}=0),"
             f"U{first_appended_product_row}/$H${MOBILITI_TOTAL_ROW},"
