@@ -1866,7 +1866,6 @@ def _write_cotizacion(
     current_row = 16
     first_product = None
     last_product = None
-    discount_row = None
     discount_rate = _discount_rate(metadata)
     quote_to_cot: dict[int, int] = {}
     category_by_quote_row: dict[int, str] = {}
@@ -1883,7 +1882,6 @@ def _write_cotizacion(
 
         if first_product is None:
             first_product = current_row
-            discount_row = current_row
         last_product = current_row
         quote_to_cot[item.row] = current_row
         mob_row = row_map.get(item.row)
@@ -1910,6 +1908,7 @@ def _write_cotizacion(
             description_language,
         )
         ws.cell(current_row, 4).value = _formula("Quotation", f"E{item.row}")
+        mobiliti_final_total_formula = None
         if mob_row:
             ws.cell(current_row, 5).value = f"=Mobiliti!H{mob_row}"
             lumbro_rows = lumbro_row_map.get(item.row, [])
@@ -1920,15 +1919,25 @@ def _write_cotizacion(
                 ]
                 total_formula = "+".join(price_terms)
                 ws.cell(current_row, 6).value = f"=IFERROR(({total_formula})/Mobiliti!H{mob_row},0)"
+                mobiliti_final_total_formula = "+".join(
+                    [f"Mobiliti!AD{mob_row}", *(f"Mobiliti!AD{row}" for row in lumbro_rows)]
+                )
             else:
                 ws.cell(current_row, 6).value = f"=Mobiliti!X{mob_row}"
+                mobiliti_final_total_formula = f"Mobiliti!AD{mob_row}"
         else:
             ws.cell(current_row, 5).value = item.cantidad
             ws.cell(current_row, 6).value = item.precio
-        ws.cell(current_row, 7).value = discount_rate if current_row == discount_row else f"=G${discount_row}"
-        ws.cell(current_row, 8).value = f"=F{current_row}*G{current_row}"
-        ws.cell(current_row, 9).value = f"=F{current_row}-H{current_row}"
-        ws.cell(current_row, 10).value = f"=I{current_row}*E{current_row}"
+        if mobiliti_final_total_formula:
+            ws.cell(current_row, 9).value = f"=IFERROR(({mobiliti_final_total_formula})/E{current_row},0)"
+            ws.cell(current_row, 8).value = f"=F{current_row}-I{current_row}"
+            ws.cell(current_row, 7).value = f"=IFERROR(H{current_row}/F{current_row},0)"
+            ws.cell(current_row, 10).value = f"={mobiliti_final_total_formula}"
+        else:
+            ws.cell(current_row, 7).value = discount_rate
+            ws.cell(current_row, 8).value = f"=F{current_row}*G{current_row}"
+            ws.cell(current_row, 9).value = f"=F{current_row}-H{current_row}"
+            ws.cell(current_row, 10).value = f"=I{current_row}*E{current_row}"
         ws.cell(current_row, 7).number_format = PERCENT_FORMAT
         for col in [6, 8, 9, 10]:
             ws.cell(current_row, col).number_format = MONEY_FORMAT

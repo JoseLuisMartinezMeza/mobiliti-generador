@@ -201,6 +201,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     assert cot["F32"].value == (
         "=IFERROR((Mobiliti!X155*Mobiliti!H155+Mobiliti!Y156+Mobiliti!Y157+Mobiliti!Y158)/Mobiliti!H155,0)"
     )
+    assert cot["J32"].value == "=Mobiliti!AD155+Mobiliti!AD156+Mobiliti!AD157+Mobiliti!AD158"
     mob = wb["Mobiliti"]
     assert mob["J6"].value == "USD/MXN"
     assert mob["K6"].value == 20
@@ -266,7 +267,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
             if any("#REF!" in value or "ERROR" in value for value in values):
                 blank_formula_errors.append(row)
     assert blank_formula_errors == []
-    assert wb["Cotizacion"]["G17"].value == 0.4
+    assert wb["Cotizacion"]["G17"].value == "=IFERROR(H17/F17,0)"
     quotation = wb["Quotation"]
     assert len(quotation._images) >= 30
     assert quotation.freeze_panes is None
@@ -337,6 +338,10 @@ def test_python_engine_generates_cummins_large_quote(tmp_path):
     assert all("/Mobiliti!H" in formula for formula in collapsed_lumbro_formulas)
     assert not any(
         isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!W" in cot.cell(row, 6).value
+        for row in range(1, cot.max_row + 1)
+    )
+    assert any(
+        isinstance(cot.cell(row, 10).value, str) and "+Mobiliti!AD" in cot.cell(row, 10).value
         for row in range(1, cot.max_row + 1)
     )
     assert wb["Cotizacion"].print_area
