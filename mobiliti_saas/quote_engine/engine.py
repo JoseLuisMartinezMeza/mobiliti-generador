@@ -5,13 +5,16 @@ from copy import copy, deepcopy
 from dataclasses import dataclass
 from io import BytesIO
 import hashlib
+import json
 import math
 import os
 import posixpath
 from pathlib import Path
 import re
 import shutil
+import time
 from typing import Any
+from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -55,6 +58,9 @@ SECTION_SUBTOTAL_ROWS = [row + BASE_PROD_PER_SECTION + 2 for row in SECTION_CATS
 MOBILITI_TOTAL_ROW = SECTION_SUBTOTAL_ROWS[-1] + 1
 DEFAULT_EXCHANGE_RATE = 20.0
 DEFAULT_DELIVERY_PLACE = "Guadalajara"
+FRANKFURTER_USD_MXN_URL = "https://api.frankfurter.app/latest?from=USD&to=MXN"
+EXCHANGE_RATE_CACHE_SECONDS = 60 * 60
+EXCHANGE_RATE_CACHE_PATH = Path(os.environ.get("TEMP", "/tmp")) / "mobiliti_usd_mxn_rate.json"
 DEFAULT_DISCOUNT_PERCENT = 40.0
 DEFAULT_MOBILITI_REGION = "Centro"
 MOBILITI_REGION_COL = 16
@@ -111,6 +117,12 @@ class MobilitiSectionLayout:
     subtotal_row: int
 
 
+@dataclass(frozen=True)
+class LumbroPriceRef:
+    row: int
+    price_mxn: float
+
+
 def _sheet_name(name: str) -> str:
     return "'{}'".format(name.replace("'", "''")) if any(ch in name for ch in " :!'-*[]?/\\") else name
 
@@ -129,6 +141,72 @@ def _num(value: Any, default: float = 0.0) -> float:
         return float(text)
     except ValueError:
         return default
+
+
+def _positive_num(value: Any) -> float | None:
+    number = _num(value, 0)
+    return number if number > 0 else None
+
+
+def _extract_usd_mxn_rate(payload: bytes | str) -> float | None:
+    try:
+        data = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else payload)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+    rates = data.get("rates") if isinstance(data, dict) else None
+    if not isinstance(rates, dict):
+        return None
+    return _positive_num(rates.get("MXN"))
+
+
+def _read_cached_usd_mxn_rate(now: float | None = None) -> float | None:
+    try:
+        data = json.loads(EXCHANGE_RATE_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    timestamp = _num(data.get("timestamp"), 0) if isinstance(data, dict) else 0
+    rate = _positive_num(data.get("rate")) if isinstance(data, dict) else None
+    if not rate:
+        return None
+    if (now or time.time()) - timestamp > EXCHANGE_RATE_CACHE_SECONDS:
+        return None
+    return rate
+
+
+def _write_cached_usd_mxn_rate(rate: float) -> None:
+    try:
+        EXCHANGE_RATE_CACHE_PATH.write_text(
+            json.dumps({"timestamp": time.time(), "rate": rate}),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _fetch_usd_mxn_exchange_rate() -> float | None:
+    request = Request(
+        FRANKFURTER_USD_MXN_URL,
+        headers={"User-Agent": "mobiliti-quote-engine/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return _extract_usd_mxn_rate(response.read())
+    except OSError:
+        return None
+
+
+def _exchange_rate(metadata: dict[str, Any]) -> float:
+    explicit_rate = _positive_num(metadata.get("tipo_cambio", metadata.get("exchange_rate")))
+    if explicit_rate:
+        return explicit_rate
+    cached_rate = _read_cached_usd_mxn_rate()
+    if cached_rate:
+        return cached_rate
+    fetched_rate = _fetch_usd_mxn_exchange_rate()
+    if fetched_rate:
+        _write_cached_usd_mxn_rate(fetched_rate)
+        return fetched_rate
+    return DEFAULT_EXCHANGE_RATE
 
 
 def _discount_rate(metadata: dict[str, Any]) -> float:
@@ -785,6 +863,10 @@ def _mobiliti_product_ranges(ws) -> list[tuple[int, int]]:
     return [(start_row, BASE_PROD_PER_SECTION) for start_row in SECTION_PROD_STARTS]
 
 
+def _set_mobiliti_auxiliary_total_references(ws, total_row: int) -> None:
+    ws["P9"] = f"=P8/H{total_row}"
+
+
 def _write_mobiliti_section_title(
     ws,
     layout: MobilitiSectionLayout,
@@ -865,6 +947,7 @@ def _ensure_mobiliti_capacity_legacy(ws) -> None:
 
     _set_mobiliti_total_formulas(ws, MOBILITI_TOTAL_ROW)
     _restore_mobiliti_auxiliary_area(ws, auxiliary_snapshot, MOBILITI_TOTAL_ROW)
+    _set_mobiliti_auxiliary_total_references(ws, MOBILITI_TOTAL_ROW)
     ws["E4"] = f"=AD{MOBILITI_TOTAL_ROW}"
     ws["E6"] = f"=E4*E5"
     ws["E8"] = f"=(AD{MOBILITI_TOTAL_ROW}-M{MOBILITI_TOTAL_ROW})/AD{MOBILITI_TOTAL_ROW}"
@@ -1007,6 +1090,7 @@ def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSection
 
     _set_mobiliti_total_formulas(ws, total_row, subtotal_rows)
     _restore_mobiliti_auxiliary_area(ws, auxiliary_snapshot, total_row)
+    _set_mobiliti_auxiliary_total_references(ws, total_row)
     ws["E4"] = f"=AD{total_row}"
     ws["E6"] = f"=E4*E5"
     ws["E8"] = f"=(AD{total_row}-M{total_row})/AD{total_row}"
@@ -1152,7 +1236,7 @@ def _load_template(template_path: str | Path | None) -> Workbook:
     return _default_template()
 
 
-def _load_lumbro_prices(template_path: str | Path | None) -> dict[str, float]:
+def _load_lumbro_prices(template_path: str | Path | None) -> dict[str, LumbroPriceRef]:
     if not template_path:
         return {}
     path = Path(template_path)
@@ -1164,9 +1248,9 @@ def _load_lumbro_prices(template_path: str | Path | None) -> dict[str, float]:
         if "SPEC-GUIDE-LUMBRO" not in wb.sheetnames:
             return {}
         ws = wb["SPEC-GUIDE-LUMBRO"]
-        prices: dict[str, float] = {}
+        prices: dict[str, LumbroPriceRef] = {}
         for code, row in LUMBRO_PRICE_ROWS.items():
-            prices[code] = _num(ws.cell(row, 5).value, 0)
+            prices[code] = LumbroPriceRef(row=row, price_mxn=_num(ws.cell(row, 5).value, 0))
         return prices
     finally:
         wb.close()
@@ -1524,7 +1608,7 @@ def _write_mobiliti(
     ws,
     items: list[QuoteItem],
     column_map: dict[str, str],
-    lumbro_prices: dict[str, float] | None = None,
+    lumbro_prices: dict[str, LumbroPriceRef] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> tuple[dict[int, int], dict[int, list[int]]]:
     q_sheet = "Quotation"
@@ -1580,12 +1664,15 @@ def _write_mobiliti(
         written_rows.add(row_number)
 
     def write_lumbro_row(row_number: int, code: str, quantity: int, region: str = DEFAULT_MOBILITI_REGION) -> None:
-        price_mxn = lumbro_prices.get(code, 0)
+        price_ref = lumbro_prices.get(code)
         ws.cell(row_number, 4).value = code
         ws.cell(row_number, 5).value = LUMBRO_CATEGORY
         ws.cell(row_number, 6).value = LUMBRO_PROVIDER
         ws.cell(row_number, 8).value = quantity
-        ws.cell(row_number, 10).value = f"={price_mxn}/$K$6"
+        if price_ref:
+            ws.cell(row_number, 10).value = f"='SPEC-GUIDE-LUMBRO'!E{price_ref.row}/$K$6"
+        else:
+            ws.cell(row_number, 10).value = "=0/$K$6"
         ws.cell(row_number, 11).value = 0
         mark_written_row(row_number, region)
 
@@ -1690,10 +1777,7 @@ def _write_fletes(ws, mobiliti_total_row: int | None = None) -> None:
 
 
 def _write_mobiliti_settings(ws, metadata: dict[str, Any]) -> None:
-    exchange_rate = _num(
-        metadata.get("tipo_cambio", metadata.get("exchange_rate")),
-        DEFAULT_EXCHANGE_RATE,
-    )
+    exchange_rate = _exchange_rate(metadata)
     delivery_place = (
         metadata.get("lugar_entrega")
         or metadata.get("delivery_place")
@@ -1908,7 +1992,6 @@ def _write_cotizacion(
             description_language,
         )
         ws.cell(current_row, 4).value = _formula("Quotation", f"E{item.row}")
-        mobiliti_final_total_formula = None
         if mob_row:
             ws.cell(current_row, 5).value = f"=Mobiliti!H{mob_row}"
             lumbro_rows = lumbro_row_map.get(item.row, [])
@@ -1919,25 +2002,15 @@ def _write_cotizacion(
                 ]
                 total_formula = "+".join(price_terms)
                 ws.cell(current_row, 6).value = f"=IFERROR(({total_formula})/Mobiliti!H{mob_row},0)"
-                mobiliti_final_total_formula = "+".join(
-                    [f"Mobiliti!AD{mob_row}", *(f"Mobiliti!AD{row}" for row in lumbro_rows)]
-                )
             else:
                 ws.cell(current_row, 6).value = f"=Mobiliti!X{mob_row}"
-                mobiliti_final_total_formula = f"Mobiliti!AD{mob_row}"
         else:
             ws.cell(current_row, 5).value = item.cantidad
             ws.cell(current_row, 6).value = item.precio
-        if mobiliti_final_total_formula:
-            ws.cell(current_row, 9).value = f"=IFERROR(({mobiliti_final_total_formula})/E{current_row},0)"
-            ws.cell(current_row, 8).value = f"=F{current_row}-I{current_row}"
-            ws.cell(current_row, 7).value = f"=IFERROR(H{current_row}/F{current_row},0)"
-            ws.cell(current_row, 10).value = f"={mobiliti_final_total_formula}"
-        else:
-            ws.cell(current_row, 7).value = discount_rate
-            ws.cell(current_row, 8).value = f"=F{current_row}*G{current_row}"
-            ws.cell(current_row, 9).value = f"=F{current_row}-H{current_row}"
-            ws.cell(current_row, 10).value = f"=I{current_row}*E{current_row}"
+        ws.cell(current_row, 7).value = discount_rate if current_row == first_product else f"=G${first_product}"
+        ws.cell(current_row, 8).value = f"=F{current_row}*G{current_row}"
+        ws.cell(current_row, 9).value = f"=F{current_row}-H{current_row}"
+        ws.cell(current_row, 10).value = f"=E{current_row}*I{current_row}"
         ws.cell(current_row, 7).number_format = PERCENT_FORMAT
         for col in [6, 8, 9, 10]:
             ws.cell(current_row, col).number_format = MONEY_FORMAT

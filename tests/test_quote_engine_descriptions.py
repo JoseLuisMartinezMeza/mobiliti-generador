@@ -354,6 +354,7 @@ def test_python_engine_writes_spanish_description_in_cotizacion(tmp_path):
             "proyecto": "Golden",
             "cliente": "Cliente",
             "description_language": "es",
+            "tipo_cambio": 20,
         },
         TEMPLATE,
     )

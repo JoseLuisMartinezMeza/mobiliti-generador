@@ -85,6 +85,7 @@ def test_generate_online_quote_creates_valid_xlsx(tmp_path):
             "proyecto": "Demo",
             "cliente": "Cliente Test",
             "descuento": "30",
+            "tipo_cambio": "20",
         },
     )
 
@@ -100,7 +101,9 @@ def test_generate_online_quote_creates_valid_xlsx(tmp_path):
     assert ws["A17"].value == "=Quotation!B9"
     assert ws["D17"].value == "=Quotation!E9"
     assert ws["G17"].value == 0.3
-    assert ws["J17"].value == "=I17*E17"
+    assert ws["H17"].value == "=F17*G17"
+    assert ws["I17"].value == "=F17-H17"
+    assert ws["J17"].value == "=E17*I17"
     assert mob["K14"].value == "=Quotation!E9"
     assert mob["D14"].value == "=Quotation!B9"
     wb.close()
@@ -133,6 +136,7 @@ def test_generate_online_quote_inserts_dezgo_enhanced_image_not_original(monkeyp
             "image_provider": "dezgo",
             "image_background": "white",
             "image_prompt": "Mejora la calidad de imagen y que este en fondo blanco",
+            "tipo_cambio": "20",
         },
     )
 
@@ -169,7 +173,7 @@ def test_generate_online_quote_uses_vol_for_mobiliti_m3(tmp_path):
     ws.cell(row=9, column=10, value=500)
     wb.save(source)
 
-    generate_online_quote(source, output, {})
+    generate_online_quote(source, output, {"tipo_cambio": "20"})
 
     out = load_workbook(output, data_only=False)
     assert out["Cotizacion"]["D17"].value == "=Quotation!E9"

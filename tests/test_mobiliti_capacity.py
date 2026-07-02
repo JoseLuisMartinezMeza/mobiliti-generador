@@ -517,6 +517,22 @@ def test_fletes_total_muebles_references_dynamic_mobiliti_total_row():
         wb.close()
 
 
+def test_mobiliti_p9_references_dynamic_total_row():
+    wb = load_workbook(TEMPLATE, data_only=False, keep_links=False)
+    ws = wb["Mobiliti"]
+    try:
+        _write_mobiliti(
+            ws,
+            _one_product_per_section(17),
+            {"m3": "H", "cantidad": "G", "unit_price": "J"},
+        )
+
+        assert ws["P9"].value == f"=P8/H{MOBILITI_TOTAL_ROW}"
+        assert ws["P9"].value == "=P8/H1133"
+    finally:
+        wb.close()
+
+
 def test_mobiliti_appended_ok_status_keeps_conditional_formatting():
     wb = load_workbook(TEMPLATE, data_only=False, keep_links=False)
     ws = wb["Mobiliti"]

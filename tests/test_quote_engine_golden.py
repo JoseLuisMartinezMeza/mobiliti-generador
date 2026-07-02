@@ -51,7 +51,7 @@ def test_python_engine_generates_golden_structure(source, tmp_path):
     generate_quote(
         source,
         output,
-        {"cotizacion": "GOLDEN", "proyecto": "Golden", "cliente": "Cliente"},
+        {"cotizacion": "GOLDEN", "proyecto": "Golden", "cliente": "Cliente", "tipo_cambio": 20},
         TEMPLATE,
     )
 
@@ -132,7 +132,7 @@ def test_python_engine_passes_image_provider_metadata(monkeypatch, tmp_path):
     generate_quote(
         source,
         tmp_path / "out.xlsx",
-        {"cotizacion": "GOLDEN", "image_provider": "dezgo"},
+        {"cotizacion": "GOLDEN", "image_provider": "dezgo", "tipo_cambio": 20},
         TEMPLATE,
     )
 
@@ -164,7 +164,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     generate_quote(
         source,
         output,
-        {"cotizacion": "GOLDEN", "proyecto": "Golden", "cliente": "Cliente"},
+        {"cotizacion": "GOLDEN", "proyecto": "Golden", "cliente": "Cliente", "tipo_cambio": 20},
         TEMPLATE,
     )
 
@@ -201,7 +201,26 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     assert cot["F32"].value == (
         "=IFERROR((Mobiliti!X155*Mobiliti!H155+Mobiliti!Y156+Mobiliti!Y157+Mobiliti!Y158)/Mobiliti!H155,0)"
     )
-    assert cot["J32"].value == "=Mobiliti!AD155+Mobiliti!AD156+Mobiliti!AD157+Mobiliti!AD158"
+    product_rows = [
+        row
+        for row in range(1, cot.max_row + 1)
+        if str(cot.cell(row, 4).value or "").startswith("=Quotation!E")
+    ]
+    assert product_rows
+    first_product_row = product_rows[0]
+    assert cot.cell(first_product_row, 7).value == 0.4
+    assert cot.cell(first_product_row, 8).value == f"=F{first_product_row}*G{first_product_row}"
+    assert cot.cell(first_product_row, 9).value == f"=F{first_product_row}-H{first_product_row}"
+    assert cot.cell(first_product_row, 10).value == f"=E{first_product_row}*I{first_product_row}"
+    for row in product_rows[1:]:
+        assert cot.cell(row, 7).value == f"=G${first_product_row}"
+        assert cot.cell(row, 8).value == f"=F{row}*G{row}"
+        assert cot.cell(row, 9).value == f"=F{row}-H{row}"
+        assert cot.cell(row, 10).value == f"=E{row}*I{row}"
+    assert not any(
+        isinstance(cot.cell(row, 10).value, str) and "Mobiliti!AD" in cot.cell(row, 10).value
+        for row in product_rows
+    )
     mob = wb["Mobiliti"]
     assert mob["J6"].value == "USD/MXN"
     assert mob["K6"].value == 20
@@ -267,7 +286,10 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
             if any("#REF!" in value or "ERROR" in value for value in values):
                 blank_formula_errors.append(row)
     assert blank_formula_errors == []
-    assert wb["Cotizacion"]["G17"].value == "=IFERROR(H17/F17,0)"
+    assert wb["Cotizacion"]["G17"].value == 0.4
+    assert wb["Cotizacion"]["H17"].value == "=F17*G17"
+    assert wb["Cotizacion"]["I17"].value == "=F17-H17"
+    assert wb["Cotizacion"]["J17"].value == "=E17*I17"
     quotation = wb["Quotation"]
     assert len(quotation._images) >= 30
     assert quotation.freeze_panes is None
@@ -316,6 +338,7 @@ def test_python_engine_generates_cummins_large_quote(tmp_path):
             "proyecto": "Cummins",
             "cliente": "Cummins",
             "image_provider": "pillow",
+            "tipo_cambio": 20,
         },
         template,
     )
@@ -340,8 +363,8 @@ def test_python_engine_generates_cummins_large_quote(tmp_path):
         isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!W" in cot.cell(row, 6).value
         for row in range(1, cot.max_row + 1)
     )
-    assert any(
-        isinstance(cot.cell(row, 10).value, str) and "+Mobiliti!AD" in cot.cell(row, 10).value
+    assert not any(
+        isinstance(cot.cell(row, 10).value, str) and "Mobiliti!AD" in cot.cell(row, 10).value
         for row in range(1, cot.max_row + 1)
     )
     assert wb["Cotizacion"].print_area
