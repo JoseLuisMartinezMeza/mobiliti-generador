@@ -70,6 +70,10 @@ def _use_r2_storage() -> bool:
     return STORAGE_PROVIDER in {"r2", "cloudflare-r2", "cloudflare"}
 
 
+def _provider_uses_r2(provider: str | None) -> bool:
+    return str(provider or "").strip().lower() in {"r2", "cloudflare-r2", "cloudflare"}
+
+
 def _r2_endpoint_url() -> str:
     if R2_ENDPOINT_URL:
         return R2_ENDPOINT_URL
@@ -149,7 +153,10 @@ class SupabaseClient:
             raise RuntimeError(f"Supabase REST {exc.code}: {body}") from exc
 
     def storage_download(self, object_path: str, dest: Path) -> None:
-        if _use_r2_storage():
+        self.storage_download_from_provider(object_path, dest, STORAGE_PROVIDER)
+
+    def storage_download_from_provider(self, object_path: str, dest: Path, provider: str | None) -> None:
+        if _provider_uses_r2(provider):
             try:
                 obj = _r2_client().get_object(Bucket=R2_BUCKET, Key=str(object_path).strip("/"))
                 dest.write_bytes(obj["Body"].read())
@@ -196,10 +203,13 @@ class SupabaseClient:
             raise RuntimeError(f"Storage upload {exc.code}: {body}") from exc
 
     def storage_delete(self, object_path: str) -> None:
+        self.storage_delete_from_provider(object_path, STORAGE_PROVIDER)
+
+    def storage_delete_from_provider(self, object_path: str, provider: str | None) -> None:
         clean_path = str(object_path or "").strip().lstrip("/")
         if not clean_path:
             return
-        if _use_r2_storage():
+        if _provider_uses_r2(provider):
             try:
                 _r2_client().delete_object(Bucket=R2_BUCKET, Key=clean_path)
             except Exception as exc:
@@ -395,6 +405,9 @@ class LocalDevClient:
             raise RuntimeError(f"Archivo no existe en storage dev: {object_path}")
         dest.write_bytes(source.read_bytes())
 
+    def storage_download_from_provider(self, object_path: str, dest: Path, provider: str | None) -> None:
+        self.storage_download(object_path, dest)
+
     def storage_upload(self, object_path: str, source: Path) -> None:
         dest = self._storage_file(object_path)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -402,6 +415,9 @@ class LocalDevClient:
 
     def storage_delete(self, object_path: str) -> None:
         self._storage_file(object_path).unlink(missing_ok=True)
+
+    def storage_delete_from_provider(self, object_path: str, provider: str | None) -> None:
+        self.storage_delete(object_path)
 
 
 def _utc_now() -> str:
@@ -431,7 +447,11 @@ def _template_path() -> str:
 
 def _input_extension_for_job(job: dict) -> str:
     input_path = str(job.get("input_path") or "").lower()
-    original_filename = str((job.get("metadata") or {}).get("original_filename") or "").lower()
+    metadata = job.get("metadata") or {}
+    original_filename = str(metadata.get("original_filename") or "").lower()
+    metadata_extension = str(metadata.get("input_extension") or "").lower()
+    if input_path.endswith(".json") or original_filename.endswith(".json") or metadata_extension == ".json":
+        return ".json"
     if input_path.endswith(".pdf") or original_filename.endswith(".pdf"):
         return ".pdf"
     return ".xlsx"
@@ -443,8 +463,29 @@ def _convert_pdf_to_quotation(source_pdf: Path, output_xlsx: Path, reference_xls
     convert_pdf_to_quotation(source_pdf, output_xlsx, reference_xlsx=reference_xlsx)
 
 
+def _convert_tarkett_cart_to_quotation(source_json: Path, output_xlsx: Path) -> None:
+    from mobiliti_saas.quote_engine.tarkett_catalog import (
+        TARKETT_CART_SOURCE_TYPE,
+        create_tarkett_quotation_workbook,
+    )
+
+    payload = json.loads(source_json.read_text(encoding="utf-8"))
+    if payload.get("source_type") != TARKETT_CART_SOURCE_TYPE:
+        raise RuntimeError("JSON de entrada no es un carrito Tarkett")
+    create_tarkett_quotation_workbook(payload, output_xlsx)
+
+
 def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Path:
-    if _input_extension_for_job(job) != ".pdf":
+    input_extension = _input_extension_for_job(job)
+    if input_extension == ".json":
+        converted_input = tmp_dir / "quotation_from_tarkett.xlsx"
+        _convert_tarkett_cart_to_quotation(local_input, converted_input)
+        metadata = job.get("metadata") or {}
+        metadata["input_extension"] = ".json"
+        metadata["tarkett_converted"] = True
+        job["metadata"] = metadata
+        return converted_input
+    if input_extension != ".pdf":
         return local_input
 
     converted_input = tmp_dir / "quotation_from_pdf.xlsx"
@@ -454,6 +495,71 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
     metadata["pdf_converted"] = True
     job["metadata"] = metadata
     return converted_input
+
+
+def _job_input_storage_provider(job: dict) -> str:
+    metadata = job.get("metadata") or {}
+    return str(
+        metadata.get("resolved_input_storage_provider")
+        or metadata.get("input_storage_provider")
+        or metadata.get("storage_provider")
+        or metadata.get("quote_storage_provider")
+        or STORAGE_PROVIDER
+    ).strip().lower()
+
+
+def _job_input_storage_provider_candidates(job: dict) -> list[str]:
+    metadata = job.get("metadata") or {}
+    explicit = (
+        metadata.get("resolved_input_storage_provider")
+        or metadata.get("input_storage_provider")
+        or metadata.get("storage_provider")
+        or metadata.get("quote_storage_provider")
+    )
+    primary = str(explicit or STORAGE_PROVIDER).strip().lower()
+    candidates = [primary]
+    if not explicit:
+        if _provider_uses_r2(primary):
+            candidates.append("supabase")
+        elif _r2_configured():
+            candidates.append("r2")
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for provider in candidates:
+        if provider and provider not in seen:
+            seen.add(provider)
+            unique.append(provider)
+    return unique or [STORAGE_PROVIDER]
+
+
+def _set_resolved_input_storage_provider(job: dict, provider: str) -> None:
+    metadata = job.get("metadata") or {}
+    metadata["resolved_input_storage_provider"] = provider
+    job["metadata"] = metadata
+
+
+def _download_job_input(client: SupabaseClient, job: dict, dest: Path) -> None:
+    if hasattr(client, "storage_download_from_provider"):
+        errors: list[str] = []
+        for provider in _job_input_storage_provider_candidates(job):
+            try:
+                client.storage_download_from_provider(job["input_path"], dest, provider)
+                _set_resolved_input_storage_provider(job, provider)
+                return
+            except Exception as exc:
+                errors.append(f"{provider}: {exc.__class__.__name__}")
+        raise RuntimeError(f"No se pudo descargar input desde storage providers: {', '.join(errors)}")
+    client.storage_download(job["input_path"], dest)
+    _set_resolved_input_storage_provider(job, _job_input_storage_provider(job))
+
+
+def _delete_job_input(client: SupabaseClient, job: dict) -> None:
+    provider = _job_input_storage_provider(job)
+    if hasattr(client, "storage_delete_from_provider"):
+        client.storage_delete_from_provider(job.get("input_path") or "", provider)
+        return
+    client.storage_delete(job.get("input_path") or "")
 
 
 def _run_generator(job: dict, input_path: Path, output_path: Path) -> None:
@@ -540,7 +646,7 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
         started_at = time.perf_counter()
         try:
             update_progress(client, job, 45)
-            client.storage_download(job["input_path"], local_input)
+            _download_job_input(client, job, local_input)
             update_progress(client, job, 55)
             generator_input = _prepare_generator_input(job, local_input, tmp_dir)
             _run_generator(job, generator_input, local_output)
@@ -550,7 +656,7 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
             client.storage_upload(output_path, local_output)
             input_deleted = False
             try:
-                client.storage_delete(job.get("input_path") or "")
+                _delete_job_input(client, job)
                 input_deleted = True
             except Exception as exc:
                 print(f"WARN: no se pudo borrar input de job {job_id}: {exc}")

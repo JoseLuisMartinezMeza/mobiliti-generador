@@ -136,6 +136,117 @@ def test_process_job_converts_pdf_before_generator(monkeypatch):
     assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
 
 
+def test_process_job_converts_tarkett_json_before_generator(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    seen = {}
+
+    def fake_convert(source_json, output_xlsx):
+        seen["source_json"] = source_json.name
+        output_xlsx.write_bytes(b"converted")
+
+    def fake_generator(job, input_path, output_path):
+        seen["generator_input"] = input_path.name
+        seen["metadata"] = dict(job.get("metadata") or {})
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(quote_worker, "_convert_tarkett_cart_to_quotation", fake_convert)
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+
+    quote_worker.process_job(
+        client,
+        {
+            "id": "job-1",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-1/input.json",
+            "metadata": {"source_type": "tarkett_cart", "input_extension": ".json", "original_filename": "tarkett-cart.json"},
+        },
+    )
+
+    assert seen["source_json"] == "input.json"
+    assert seen["generator_input"] == "quotation_from_tarkett.xlsx"
+    assert seen["metadata"]["input_extension"] == ".json"
+    assert seen["metadata"]["tarkett_converted"] is True
+    assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
+
+
+def test_process_job_downloads_input_from_job_storage_provider(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    seen = {}
+
+    def fake_download(client_arg, job, dest):
+        assert client_arg is client
+        seen["job_storage_provider"] = job["metadata"].get("storage_provider")
+        seen["dest"] = dest.name
+        dest.write_text('{"source_type":"tarkett_cart","items":[{"code":"25731726"}]}', encoding="utf-8")
+
+    def fake_convert(source_json, output_xlsx):
+        seen["converted_input"] = source_json.name
+        output_xlsx.write_bytes(b"converted")
+
+    def fake_generator(job, input_path, output_path):
+        seen["generator_input"] = input_path.name
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(quote_worker, "_download_job_input", fake_download)
+    monkeypatch.setattr(quote_worker, "_convert_tarkett_cart_to_quotation", fake_convert)
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+
+    quote_worker.process_job(
+        client,
+        {
+            "id": "job-1",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-1/input.json",
+            "metadata": {
+                "source_type": "tarkett_cart",
+                "input_extension": ".json",
+                "original_filename": "tarkett-cart.json",
+                "storage_provider": "supabase",
+            },
+        },
+    )
+
+    assert seen["job_storage_provider"] == "supabase"
+    assert seen["dest"] == "input.json"
+    assert seen["converted_input"] == "input.json"
+    assert seen["generator_input"] == "quotation_from_tarkett.xlsx"
+
+
+def test_download_job_input_falls_back_for_legacy_jobs_without_provider(monkeypatch, tmp_path):
+    monkeypatch.setattr(quote_worker, "STORAGE_PROVIDER", "r2")
+
+    class LegacyStorageClient:
+        def __init__(self):
+            self.download_calls = []
+            self.delete_calls = []
+
+        def storage_download_from_provider(self, object_path, dest, provider):
+            self.download_calls.append((object_path, provider))
+            if provider == "r2":
+                raise RuntimeError("R2 download error: NoSuchKey")
+            Path(dest).write_bytes(b"legacy input")
+
+        def storage_delete_from_provider(self, object_path, provider):
+            self.delete_calls.append((object_path, provider))
+
+    client = LegacyStorageClient()
+    job = {"id": "job-legacy", "input_path": "users/7/jobs/job-legacy/input.json", "metadata": {}}
+    dest = tmp_path / "input.json"
+
+    quote_worker._download_job_input(client, job, dest)
+    quote_worker._delete_job_input(client, job)
+
+    assert dest.read_bytes() == b"legacy input"
+    assert client.download_calls == [
+        ("users/7/jobs/job-legacy/input.json", "r2"),
+        ("users/7/jobs/job-legacy/input.json", "supabase"),
+    ]
+    assert client.delete_calls == [("users/7/jobs/job-legacy/input.json", "supabase")]
+    assert job["metadata"]["resolved_input_storage_provider"] == "supabase"
+
+
 def test_process_job_skips_when_not_claimed(monkeypatch):
     client = FakeClient()
     monkeypatch.setattr(client, "rest", lambda method, path, params=None, data=None: [])
