@@ -133,3 +133,39 @@ CREATE TABLE IF NOT EXISTS saas_quote_jobs (
 CREATE INDEX IF NOT EXISTS idx_quote_jobs_usuario ON saas_quote_jobs(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_quote_jobs_status ON saas_quote_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_quote_jobs_updated ON saas_quote_jobs(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS saas_tarkett_reservations (
+    id UUID PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES saas_usuarios(id) ON DELETE CASCADE,
+    quote_job_id UUID NOT NULL REFERENCES saas_quote_jobs(id) ON DELETE CASCADE,
+    product_code TEXT NOT NULL,
+    quantity NUMERIC NOT NULL CHECK (quantity > 0),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','released')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tarkett_reservations_product_status
+    ON saas_tarkett_reservations(product_code, status);
+CREATE INDEX IF NOT EXISTS idx_tarkett_reservations_usuario
+    ON saas_tarkett_reservations(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_tarkett_reservations_quote_job
+    ON saas_tarkett_reservations(quote_job_id);
+
+CREATE TABLE IF NOT EXISTS saas_offiho_reservations (
+    id UUID PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES saas_usuarios(id) ON DELETE CASCADE,
+    quote_job_id UUID NOT NULL REFERENCES saas_quote_jobs(id) ON DELETE CASCADE,
+    product_code TEXT NOT NULL,
+    quantity NUMERIC NOT NULL CHECK (quantity > 0),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','released')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_offiho_reservations_product_status
+    ON saas_offiho_reservations(product_code, status);
+CREATE INDEX IF NOT EXISTS idx_offiho_reservations_usuario
+    ON saas_offiho_reservations(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_offiho_reservations_quote_job
+    ON saas_offiho_reservations(quote_job_id);

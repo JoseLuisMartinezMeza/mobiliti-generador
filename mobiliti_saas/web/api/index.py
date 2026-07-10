@@ -12,6 +12,7 @@ import os
 import json
 import time
 import uuid
+import sys
 import urllib.request
 import urllib.error
 from urllib.parse import quote, unquote
@@ -23,6 +24,22 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Request, File, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from mangum import Mangum
+
+
+for _root in (Path(__file__).resolve().parents[2], Path(__file__).resolve().parents[3] if len(Path(__file__).resolve().parents) > 3 else None):
+    if _root and str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+
+from mobiliti_saas.quote_engine.tarkett_catalog import (  # noqa: E402
+    CATALOG_PATH,
+    build_tarkett_cart_payload,
+    load_tarkett_catalog,
+)
+from mobiliti_saas.quote_engine.offiho_catalog import (  # noqa: E402
+    CATALOG_PATH as OFFIHO_DEFAULT_CATALOG_PATH,
+    build_offiho_cart_payload,
+    load_offiho_catalog,
+)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -69,6 +86,8 @@ DEV_STORE_DIR = Path(os.environ.get("MOBILITI_DEV_STORE_DIR", DEV_PROJECT_ROOT /
 DEV_PUBLIC_BASE_URL = os.environ.get("MOBILITI_DEV_PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 DEV_USER_EMAIL = os.environ.get("MOBILITI_DEV_USER_EMAIL", "dev@mobiliti.local")
 DEV_USER_PASSWORD = os.environ.get("MOBILITI_DEV_USER_PASSWORD", "dev12345")
+TARKETT_CATALOG_PATH = os.environ.get("TARKETT_CATALOG_PATH")
+OFFIHO_CATALOG_PATH = os.environ.get("OFFIHO_CATALOG_PATH")
 DEFAULT_CORS_ORIGINS = (
     "https://web-lemon-one-45.vercel.app",
     "http://localhost:5173",
@@ -170,6 +189,8 @@ def _dev_load() -> dict:
             }
         ],
         "quote_jobs": [],
+        "tarkett_reservations": [],
+        "offiho_reservations": [],
     }
     _dev_save(data)
     return data
@@ -196,6 +217,10 @@ def _use_r2_storage() -> bool:
 
 def _storage_bucket_name() -> str:
     return R2_BUCKET if _use_r2_storage() else QUOTE_STORAGE_BUCKET
+
+
+def _storage_provider_name() -> str:
+    return "r2" if _use_r2_storage() else "supabase"
 
 
 def _r2_endpoint_url() -> str:
@@ -454,6 +479,47 @@ def _storage_download_bytes(path: str) -> bytes:
 # ═══════════════════════════════════════════════════════════════
 # AUTH HELPERS
 # ═══════════════════════════════════════════════════════════════
+
+def _storage_upload_bytes(path: str, content: bytes, content_type: str = "application/octet-stream") -> None:
+    """Sube un objeto interno al proveedor de storage desde backend."""
+    clean_path = str(path or "").strip().lstrip("/")
+    if not clean_path:
+        raise RuntimeError("Ruta de storage invalida")
+    if DEV_MODE:
+        dest = _dev_storage_file(clean_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+        return
+    if _use_r2_storage():
+        try:
+            _r2_client().put_object(Bucket=R2_BUCKET, Key=clean_path, Body=content, ContentType=content_type)
+            return
+        except Exception as exc:
+            raise RuntimeError(f"Cloudflare R2 upload error: {exc.__class__.__name__}") from exc
+    if not SUPABASE_URL:
+        raise RuntimeError("SUPABASE_URL no configurada")
+    if not _storage_key():
+        raise RuntimeError("Falta SUPABASE_SERVICE_KEY o SUPABASE_ANON_KEY para storage")
+
+    encoded_path = quote(clean_path, safe="/")
+    url = f"{SUPABASE_URL}/storage/v1/object/{QUOTE_STORAGE_BUCKET}/{encoded_path}"
+    req = urllib.request.Request(
+        url,
+        data=content,
+        headers={"Content-Type": content_type, "x-upsert": "true"},
+        method="PUT",
+    )
+    for key, value in _get_supabase_headers().items():
+        req.add_header(key, value)
+    try:
+        with urllib.request.urlopen(req, timeout=60):
+            return
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        raise RuntimeError(_safe_http_error("Supabase Storage", e.code, body)) from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Supabase Storage connection error: {e.reason}") from e
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return _verify_password(plain_password, hashed_password)
@@ -777,6 +843,292 @@ def db_delete_quote_job(job_id: str):
     return rows[0] if isinstance(rows, list) and rows else {}
 
 
+def db_list_tarkett_reservations(status: str = "active"):
+    if DEV_MODE:
+        data = _dev_load()
+        rows = data.setdefault("tarkett_reservations", [])
+        return [row for row in rows if row.get("status") == status]
+    if _use_postgres():
+        return _pg_rows(
+            "SELECT * FROM saas_tarkett_reservations WHERE status = %s ORDER BY created_at DESC",
+            (status,),
+        )
+    return _supabase_req(
+        "GET",
+        "/saas_tarkett_reservations",
+        params={"status": f"eq.{status}", "select": "*", "order": "created_at.desc"},
+    )
+
+
+def db_create_tarkett_reservations(usuario_id: int, quote_job_id: str, lines: list[dict]):
+    now = _iso(datetime.now(timezone.utc))
+    rows = [
+        {
+            "id": str(uuid.uuid4()),
+            "usuario_id": usuario_id,
+            "quote_job_id": quote_job_id,
+            "product_code": str(line["code"]),
+            "quantity": float(line["quantity"]),
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        for line in lines
+    ]
+    if DEV_MODE:
+        data = _dev_load()
+        data.setdefault("tarkett_reservations", []).extend(rows)
+        _dev_save(data)
+        return rows
+    if _use_postgres():
+        created = []
+        for row in rows:
+            created.extend(
+                _pg_write(
+                    """
+                    INSERT INTO saas_tarkett_reservations
+                        (id, usuario_id, quote_job_id, product_code, quantity, status, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        row["id"],
+                        row["usuario_id"],
+                        row["quote_job_id"],
+                        row["product_code"],
+                        row["quantity"],
+                        row["status"],
+                        row["created_at"],
+                        row["updated_at"],
+                    ),
+                )
+            )
+        return created
+    return _supabase_req("POST", "/saas_tarkett_reservations", json_data=rows)
+
+
+def db_release_tarkett_reservations(quote_job_id: str):
+    now = _iso(datetime.now(timezone.utc))
+    if DEV_MODE:
+        data = _dev_load()
+        released = []
+        for row in data.setdefault("tarkett_reservations", []):
+            if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
+                row["status"] = "released"
+                row["updated_at"] = now
+                released.append(row)
+        _dev_save(data)
+        return released
+    if _use_postgres():
+        return _pg_rows(
+            """
+            UPDATE saas_tarkett_reservations
+            SET status = 'released', updated_at = %s
+            WHERE quote_job_id = %s AND status = 'active'
+            RETURNING *
+            """,
+            (now, quote_job_id),
+        )
+    return _supabase_req(
+        "PATCH",
+        f"/saas_tarkett_reservations?quote_job_id=eq.{quote_job_id}&status=eq.active",
+        json_data={"status": "released", "updated_at": now},
+    )
+
+
+def db_list_offiho_reservations(status: str = "active"):
+    if DEV_MODE:
+        data = _dev_load()
+        rows = data.setdefault("offiho_reservations", [])
+        return [row for row in rows if row.get("status") == status]
+    if _use_postgres():
+        return _pg_rows(
+            "SELECT * FROM saas_offiho_reservations WHERE status = %s ORDER BY created_at DESC",
+            (status,),
+        )
+    return _supabase_req(
+        "GET",
+        "/saas_offiho_reservations",
+        params={"status": f"eq.{status}", "select": "*", "order": "created_at.desc"},
+    )
+
+
+def db_create_offiho_reservations(usuario_id: int, quote_job_id: str, lines: list[dict]):
+    now = _iso(datetime.now(timezone.utc))
+    rows = [
+        {
+            "id": str(uuid.uuid4()),
+            "usuario_id": usuario_id,
+            "quote_job_id": quote_job_id,
+            "product_code": str(line["inventory_key"]),
+            "quantity": float(line["quantity"]),
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        for line in lines
+    ]
+    if DEV_MODE:
+        data = _dev_load()
+        data.setdefault("offiho_reservations", []).extend(rows)
+        _dev_save(data)
+        return rows
+    if _use_postgres():
+        created = []
+        for row in rows:
+            created.extend(
+                _pg_write(
+                    """
+                    INSERT INTO saas_offiho_reservations
+                        (id, usuario_id, quote_job_id, product_code, quantity, status, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        row["id"],
+                        row["usuario_id"],
+                        row["quote_job_id"],
+                        row["product_code"],
+                        row["quantity"],
+                        row["status"],
+                        row["created_at"],
+                        row["updated_at"],
+                    ),
+                )
+            )
+        return created
+    return _supabase_req("POST", "/saas_offiho_reservations", json_data=rows)
+
+
+def db_release_offiho_reservations(quote_job_id: str):
+    now = _iso(datetime.now(timezone.utc))
+    if DEV_MODE:
+        data = _dev_load()
+        released = []
+        for row in data.setdefault("offiho_reservations", []):
+            if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
+                row["status"] = "released"
+                row["updated_at"] = now
+                released.append(row)
+        _dev_save(data)
+        return released
+    if _use_postgres():
+        return _pg_rows(
+            """
+            UPDATE saas_offiho_reservations
+            SET status = 'released', updated_at = %s
+            WHERE quote_job_id = %s AND status = 'active'
+            RETURNING *
+            """,
+            (now, quote_job_id),
+        )
+    return _supabase_req(
+        "PATCH",
+        f"/saas_offiho_reservations?quote_job_id=eq.{quote_job_id}&status=eq.active",
+        json_data={"status": "released", "updated_at": now},
+    )
+
+
+_TARKETT_CATALOG_CACHE = {"path": None, "mtime": None, "catalog": None}
+
+
+def _load_tarkett_catalog_cached() -> dict:
+    catalog_path = Path(TARKETT_CATALOG_PATH) if TARKETT_CATALOG_PATH else CATALOG_PATH
+    if not catalog_path.exists():
+        raise RuntimeError(f"Catalogo Tarkett no encontrado: {catalog_path}")
+    mtime = catalog_path.stat().st_mtime
+    if (
+        _TARKETT_CATALOG_CACHE["catalog"] is None
+        or _TARKETT_CATALOG_CACHE["path"] != str(catalog_path)
+        or _TARKETT_CATALOG_CACHE["mtime"] != mtime
+    ):
+        _TARKETT_CATALOG_CACHE["catalog"] = load_tarkett_catalog(catalog_path)
+        _TARKETT_CATALOG_CACHE["path"] = str(catalog_path)
+        _TARKETT_CATALOG_CACHE["mtime"] = mtime
+    return _TARKETT_CATALOG_CACHE["catalog"]
+
+
+def _tarkett_catalog_response(usuario_id: int) -> dict:
+    catalog = _load_tarkett_catalog_cached()
+    reservations = db_list_tarkett_reservations("active")
+    totals: dict[str, float] = {}
+    reserved_by_others: set[str] = set()
+    for row in reservations:
+        code = str(row.get("product_code") or "").strip()
+        if not code:
+            continue
+        qty = float(row.get("quantity") or 0)
+        totals[code] = totals.get(code, 0) + qty
+        if int(row.get("usuario_id") or 0) != int(usuario_id):
+            reserved_by_others.add(code)
+    items = [
+        item.to_public_dict(
+            reserved_quantity=totals.get(item.code, 0),
+            reserved_by_others=item.code in reserved_by_others,
+        )
+        for item in catalog["items"]
+    ]
+    return {
+        "source_hash": catalog["source_hash"],
+        "generated_at": catalog["generated_at"],
+        "total": len(items),
+        "items": items,
+    }
+
+
+_OFFIHO_CATALOG_CACHE = {"path": None, "mtime": None, "source_hash": None, "catalog": None}
+
+
+def _load_offiho_catalog_cached() -> dict:
+    catalog_path = Path(OFFIHO_CATALOG_PATH).resolve() if OFFIHO_CATALOG_PATH else OFFIHO_DEFAULT_CATALOG_PATH.resolve()
+    if not catalog_path.exists():
+        raise RuntimeError("Catalogo Offiho no encontrado")
+    mtime = catalog_path.stat().st_mtime
+    if (
+        _OFFIHO_CATALOG_CACHE["catalog"] is None
+        or _OFFIHO_CATALOG_CACHE["path"] != str(catalog_path)
+        or _OFFIHO_CATALOG_CACHE["mtime"] != mtime
+    ):
+        catalog = load_offiho_catalog(catalog_path)
+        _OFFIHO_CATALOG_CACHE["catalog"] = catalog
+        _OFFIHO_CATALOG_CACHE["path"] = str(catalog_path)
+        _OFFIHO_CATALOG_CACHE["mtime"] = mtime
+        _OFFIHO_CATALOG_CACHE["source_hash"] = catalog["source_hash"]
+    return _OFFIHO_CATALOG_CACHE["catalog"]
+
+
+def _offiho_catalog_response(usuario_id: int) -> dict:
+    catalog = _load_offiho_catalog_cached()
+    reservations = db_list_offiho_reservations("active")
+    totals: dict[str, float] = {}
+    reserved_by_others: set[str] = set()
+    for row in reservations:
+        inventory_key = str(row.get("product_code") or "").strip()
+        if not inventory_key:
+            continue
+        quantity = float(row.get("quantity") or 0)
+        totals[inventory_key] = totals.get(inventory_key, 0) + quantity
+        if int(row.get("usuario_id") or 0) != int(usuario_id):
+            reserved_by_others.add(inventory_key)
+    items = []
+    for item in catalog["items"]:
+        payload = item.to_public_dict()
+        payload.update(
+            {
+                "is_out_of_stock": item.available_quantity <= 0,
+                "reserved_quantity": totals.get(item.inventory_key, 0),
+                "reserved_by_others": item.inventory_key in reserved_by_others,
+            }
+        )
+        items.append(payload)
+    return {
+        "source_hash": catalog["source_hash"],
+        "generated_at": catalog["generated_at"],
+        "total": len(items),
+        "items": items,
+    }
+
+
 def _require_active_subscription(usuario_id: int):
     suscripcion = db_get_suscripcion_by_usuario(usuario_id)
     now = datetime.now(timezone.utc)
@@ -1088,6 +1440,8 @@ def _run_quote_retention(usuario_id: int, jobs: list[dict] | None = None, dry_ru
         deleted_job_ids.add(str(job["id"]))
         if not dry_run:
             _delete_quote_storage(job)
+            db_release_tarkett_reservations(job["id"])
+            db_release_offiho_reservations(job["id"])
             db_delete_quote_job(job["id"])
             summary["storage_objects_deleted"] += len(paths)
 
@@ -1216,8 +1570,14 @@ def _validate_metadata(body: dict) -> dict:
         "flux": "dezgo",
         "flux2": "dezgo",
         "flux_2": "dezgo",
+        "sunon": "sunon_web",
+        "sunon-web": "sunon_web",
+        "web_sunon": "sunon_web",
+        "catalogo_sunon": "sunon_catalog",
+        "sunon-catalog": "sunon_catalog",
+        "sunon_precise": "sunon_catalog",
     }.get(image_provider, image_provider)
-    if image_provider not in {"pillow", "dezgo"}:
+    if image_provider not in {"pillow", "dezgo", "sunon_web", "sunon_catalog"}:
         raise HTTPException(status_code=400, detail="Proveedor de imagen invalido")
     clean["image_provider"] = image_provider
     cleanup_strength = str(body.get("image_cleanup_strength", body.get("limpieza_imagen", "balanced"))).strip().lower()
@@ -1239,7 +1599,7 @@ def _validate_metadata(body: dict) -> dict:
         body.get("image_prompt", body.get("prompt_imagen", "Mejora la calidad de imagen y que este en fondo blanco"))
     ).strip()
     clean["image_prompt"] = (image_prompt or "Mejora la calidad de imagen y que este en fondo blanco")[:1000]
-    clean["estimated_duration_seconds"] = 360 if image_provider == "dezgo" else 90
+    clean["estimated_duration_seconds"] = 360 if image_provider == "dezgo" else 180 if image_provider in {"sunon_web", "sunon_catalog"} else 90
     return clean
 
 
@@ -1682,6 +2042,180 @@ def admin_storage_retention_emergency(body: dict | None = None, _authorized: boo
 
 # COTIZACIONES WEB
 
+@app.get("/tarkett/catalog")
+def tarkett_catalog(current_user: dict = Depends(get_current_user)):
+    try:
+        _require_active_subscription(current_user["id"])
+        return _tarkett_catalog_response(current_user["id"])
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Error leyendo catalogo Tarkett: {e}")
+
+
+@app.post("/tarkett/quote")
+def tarkett_quote(body: dict, current_user: dict = Depends(get_current_user)):
+    try:
+        _require_active_subscription(current_user["id"])
+        catalog = _load_tarkett_catalog_cached()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"Error preparando catalogo Tarkett: {e}")
+
+    raw_items = body.get("items") or []
+    if not isinstance(raw_items, list):
+        raise HTTPException(status_code=400, detail="Items Tarkett debe ser una lista")
+
+    try:
+        cart_payload = build_tarkett_cart_payload(raw_items, catalog=catalog)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    metadata_body = {**body, "image_provider": body.get("image_provider") or "pillow"}
+    metadata = _validate_metadata(metadata_body)
+    metadata.update(
+        {
+            "source_type": "tarkett_cart",
+            "original_filename": "tarkett-cart.json",
+            "input_extension": ".json",
+            "storage_provider": _storage_provider_name(),
+            "input_storage_provider": _storage_provider_name(),
+            "catalog_source_hash": cart_payload["catalog_source_hash"],
+            "tarkett_item_count": len(cart_payload["items"]),
+            "estimated_duration_seconds": 120,
+        }
+    )
+    assigned_quote_number = _next_quote_number_for_user(current_user)
+    if assigned_quote_number:
+        metadata["cotizacion"] = assigned_quote_number
+    elif not metadata.get("cotizacion"):
+        metadata["cotizacion"] = metadata["proyecto"]
+
+    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
+    if not template:
+        raise HTTPException(status_code=400, detail="Template requerido")
+
+    job_id = str(uuid.uuid4())
+    input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
+    content = json.dumps(cart_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    try:
+        _storage_upload_bytes(input_path, content, "application/json")
+        job = db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
+        db_create_tarkett_reservations(current_user["id"], job_id, cart_payload["items"])
+        updated = db_update_quote_job(
+            job_id,
+            {
+                "status": "queued",
+                "metadata": metadata,
+                "error_message": None,
+            },
+        )
+    except RuntimeError as e:
+        try:
+            db_release_tarkett_reservations(job_id)
+        except RuntimeError:
+            pass
+        raise HTTPException(status_code=503, detail=f"Error creando cotizacion Tarkett: {e}")
+
+    _wake_worker()
+    try:
+        _enforce_quote_history_limit(current_user["id"])
+    except RuntimeError:
+        pass
+    return {"mensaje": "Cotizacion Tarkett en cola", "job": updated or job}
+
+
+@app.get("/offiho/catalog")
+def offiho_catalog(current_user: dict = Depends(get_current_user)):
+    try:
+        _require_active_subscription(current_user["id"])
+        return _offiho_catalog_response(current_user["id"])
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Error leyendo catalogo Offiho")
+
+
+@app.post("/offiho/quote")
+def offiho_quote(body: dict, current_user: dict = Depends(get_current_user)):
+    try:
+        _require_active_subscription(current_user["id"])
+        catalog = _load_offiho_catalog_cached()
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Error preparando catalogo Offiho")
+
+    raw_items = body.get("items") or []
+    if not isinstance(raw_items, list):
+        raise HTTPException(status_code=400, detail="Items Offiho debe ser una lista")
+
+    try:
+        cart_payload = build_offiho_cart_payload(raw_items, catalog=catalog)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    metadata_body = {**body, "image_provider": body.get("image_provider") or "pillow"}
+    metadata = _validate_metadata(metadata_body)
+    metadata.update(
+        {
+            "source_type": "offiho_cart",
+            "original_filename": "offiho-cart.json",
+            "input_extension": ".json",
+            "storage_provider": _storage_provider_name(),
+            "input_storage_provider": _storage_provider_name(),
+            "catalog_source_hash": cart_payload["catalog_source_hash"],
+            "offiho_item_count": len(cart_payload["items"]),
+            "estimated_duration_seconds": 120,
+        }
+    )
+    assigned_quote_number = _next_quote_number_for_user(current_user)
+    if assigned_quote_number:
+        metadata["cotizacion"] = assigned_quote_number
+    elif not metadata.get("cotizacion"):
+        metadata["cotizacion"] = metadata["proyecto"]
+
+    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
+    if not template:
+        raise HTTPException(status_code=400, detail="Template requerido")
+
+    job_id = str(uuid.uuid4())
+    input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
+    content = json.dumps(cart_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    input_uploaded = False
+    job_created = False
+    try:
+        _storage_upload_bytes(input_path, content, "application/json")
+        input_uploaded = True
+        job = db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
+        job_created = True
+        db_create_offiho_reservations(current_user["id"], job_id, cart_payload["items"])
+        updated = db_update_quote_job(
+            job_id,
+            {
+                "status": "queued",
+                "metadata": metadata,
+                "error_message": None,
+            },
+        )
+    except RuntimeError as exc:
+        try:
+            db_release_offiho_reservations(job_id)
+        except RuntimeError:
+            pass
+        if job_created:
+            try:
+                db_delete_quote_job(job_id)
+            except RuntimeError:
+                pass
+        if input_uploaded:
+            try:
+                _delete_storage_paths([input_path])
+            except RuntimeError:
+                pass
+        raise HTTPException(status_code=503, detail="No fue posible crear cotizacion Offiho") from exc
+
+    _wake_worker()
+    try:
+        _enforce_quote_history_limit(current_user["id"])
+    except RuntimeError:
+        pass
+    return {"mensaje": "Cotizacion Offiho en cola", "job": updated or job}
+
+
 @app.post("/cotizaciones/init-upload")
 def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_current_user)):
     try:
@@ -1701,7 +2235,13 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
 
     job_id = str(uuid.uuid4())
     input_path = f"users/{current_user['id']}/jobs/{job_id}/input{input_extension}"
-    metadata = {"original_filename": filename, "file_size": file_size, "input_extension": input_extension}
+    metadata = {
+        "original_filename": filename,
+        "file_size": file_size,
+        "input_extension": input_extension,
+        "storage_provider": _storage_provider_name(),
+        "input_storage_provider": _storage_provider_name(),
+    }
 
     try:
         upload = _create_signed_upload(input_path)
@@ -1723,7 +2263,7 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
     return {
         "job_id": job["id"],
         "bucket": _storage_bucket_name(),
-        "storage_provider": "r2" if _use_r2_storage() else "supabase",
+        "storage_provider": _storage_provider_name(),
         "path": input_path,
         "token": token,
         "signed_upload_url": signed_upload_url if not DEV_MODE else None,
@@ -1842,6 +2382,8 @@ def cotizaciones_delete(job_id: str, current_user: dict = Depends(get_current_us
     job = _quote_job_for_user(job_id, current_user["id"])
     try:
         _delete_quote_storage(job)
+        db_release_tarkett_reservations(job_id)
+        db_release_offiho_reservations(job_id)
         db_delete_quote_job(job_id)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error eliminando cotizacion: {e}")
