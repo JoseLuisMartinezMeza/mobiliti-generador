@@ -463,26 +463,67 @@ def _convert_pdf_to_quotation(source_pdf: Path, output_xlsx: Path, reference_xls
     convert_pdf_to_quotation(source_pdf, output_xlsx, reference_xlsx=reference_xlsx)
 
 
-def _convert_tarkett_cart_to_quotation(source_json: Path, output_xlsx: Path) -> None:
-    from mobiliti_saas.quote_engine.tarkett_catalog import (
-        TARKETT_CART_SOURCE_TYPE,
-        create_tarkett_quotation_workbook,
-    )
+def _convert_tarkett_cart_to_quotation(source_json: Path, output_xlsx: Path, payload: dict) -> None:
+    from mobiliti_saas.quote_engine.tarkett_catalog import create_tarkett_quotation_workbook
 
-    payload = json.loads(source_json.read_text(encoding="utf-8"))
-    if payload.get("source_type") != TARKETT_CART_SOURCE_TYPE:
-        raise RuntimeError("JSON de entrada no es un carrito Tarkett")
     create_tarkett_quotation_workbook(payload, output_xlsx)
+
+
+def _convert_offiho_cart_to_quotation(source_json: Path, output_xlsx: Path, payload: dict) -> None:
+    from mobiliti_saas.quote_engine.offiho_catalog import create_offiho_quotation_workbook
+
+    create_offiho_quotation_workbook(payload, output_xlsx)
+
+
+def _read_cart_payload(source_json: Path) -> dict:
+    try:
+        payload = json.loads(source_json.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("JSON de entrada invalido") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("JSON de entrada debe ser un objeto")
+    return payload
+
+
+def _json_job_source_type(job: dict) -> str | None:
+    metadata = job.get("metadata") or {}
+    value = metadata.get("source_type")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _is_json_cart_job(job: dict) -> bool:
+    return _input_extension_for_job(job) == ".json" or "source_type" in (job.get("metadata") or {})
 
 
 def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Path:
     input_extension = _input_extension_for_job(job)
-    if input_extension == ".json":
-        converted_input = tmp_dir / "quotation_from_tarkett.xlsx"
-        _convert_tarkett_cart_to_quotation(local_input, converted_input)
+    if _is_json_cart_job(job):
+        payload = _read_cart_payload(local_input)
+        source_type = payload.get("source_type")
+        if not isinstance(source_type, str) or not source_type.strip():
+            raise RuntimeError("JSON de entrada sin source_type")
+        source_type = source_type.strip()
+
         metadata = job.get("metadata") or {}
+        metadata_source_type = _json_job_source_type(job)
+        if metadata_source_type is None:
+            raise RuntimeError("source_type de metadata ausente para JSON de entrada")
+        if metadata_source_type != source_type:
+            raise RuntimeError("source_type de metadata no coincide con JSON de entrada")
+
+        conversions = {
+            "tarkett_cart": ("quotation_from_tarkett.xlsx", _convert_tarkett_cart_to_quotation, "tarkett_converted"),
+            "offiho_cart": ("quotation_from_offiho.xlsx", _convert_offiho_cart_to_quotation, "offiho_converted"),
+        }
+        conversion = conversions.get(source_type)
+        if conversion is None:
+            raise RuntimeError("Tipo de fuente JSON no soportado")
+
+        output_name, converter, conversion_flag = conversion
+        converted_input = tmp_dir / output_name
+        converter(local_input, converted_input, payload)
         metadata["input_extension"] = ".json"
-        metadata["tarkett_converted"] = True
+        metadata[conversion_flag] = True
         job["metadata"] = metadata
         return converted_input
     if input_extension != ".pdf":

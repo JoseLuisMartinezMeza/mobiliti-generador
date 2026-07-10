@@ -1,6 +1,9 @@
 import os
 import sys
+import json
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mobiliti_saas", "worker"))
 
@@ -18,6 +21,7 @@ class FakeClient:
     def __init__(self):
         self.calls = []
         self.claim_input_path = "users/7/jobs/job-1/input.xlsx"
+        self.input_content = b"input"
 
     def rest(self, method, path, params=None, data=None):
         self.calls.append((method, path, data))
@@ -28,7 +32,7 @@ class FakeClient:
         return []
 
     def storage_download(self, object_path, dest):
-        Path(dest).write_bytes(b"input")
+        Path(dest).write_bytes(self.input_content)
         self.calls.append(("DOWNLOAD", object_path, None))
 
     def storage_upload(self, object_path, source):
@@ -139,10 +143,12 @@ def test_process_job_converts_pdf_before_generator(monkeypatch):
 def test_process_job_converts_tarkett_json_before_generator(monkeypatch):
     client = FakeClient()
     client.claim_input_path = "users/7/jobs/job-1/input.json"
+    client.input_content = json.dumps({"source_type": "tarkett_cart", "items": []}).encode("utf-8")
     seen = {}
 
-    def fake_convert(source_json, output_xlsx):
+    def fake_convert(source_json, output_xlsx, payload):
         seen["source_json"] = source_json.name
+        seen["source_type"] = payload["source_type"]
         output_xlsx.write_bytes(b"converted")
 
     def fake_generator(job, input_path, output_path):
@@ -164,10 +170,163 @@ def test_process_job_converts_tarkett_json_before_generator(monkeypatch):
     )
 
     assert seen["source_json"] == "input.json"
+    assert seen["source_type"] == "tarkett_cart"
     assert seen["generator_input"] == "quotation_from_tarkett.xlsx"
     assert seen["metadata"]["input_extension"] == ".json"
     assert seen["metadata"]["tarkett_converted"] is True
     assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
+
+
+def test_process_job_converts_offiho_json_before_generator(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    client.input_content = json.dumps({"source_type": "offiho_cart", "items": []}).encode("utf-8")
+    seen = {}
+
+    def fake_convert(source_json, output_xlsx, payload):
+        seen["converted_input"] = source_json.name
+        seen["source_type"] = payload["source_type"]
+        output_xlsx.write_bytes(b"converted")
+
+    def fake_generator(job, input_path, output_path):
+        seen["generator_input"] = input_path.name
+        seen["metadata"] = dict(job["metadata"])
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(quote_worker, "_convert_offiho_cart_to_quotation", fake_convert)
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+
+    quote_worker.process_job(
+        client,
+        {
+            "id": "job-1",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-1/input.json",
+            "metadata": {"source_type": "offiho_cart", "input_extension": ".json"},
+        },
+    )
+
+    assert seen["converted_input"] == "input.json"
+    assert seen["source_type"] == "offiho_cart"
+    assert seen["generator_input"] == "quotation_from_offiho.xlsx"
+    assert seen["metadata"]["offiho_converted"] is True
+
+
+def test_process_job_uses_source_type_when_input_name_is_not_json(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/upload.bin"
+    client.input_content = json.dumps({"source_type": "offiho_cart", "items": []}).encode("utf-8")
+    seen = {}
+
+    def fake_convert(source_json, output_xlsx, payload):
+        seen["converted_input"] = source_json.name
+        output_xlsx.write_bytes(b"converted")
+
+    def fake_generator(job, input_path, output_path):
+        seen["generator_input"] = input_path.name
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(quote_worker, "_convert_offiho_cart_to_quotation", fake_convert)
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+
+    quote_worker.process_job(
+        client,
+        {
+            "id": "job-1",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-1/upload.bin",
+            "metadata": {"source_type": "offiho_cart"},
+        },
+    )
+
+    assert seen["converted_input"] == "input.xlsx"
+    assert seen["generator_input"] == "quotation_from_offiho.xlsx"
+
+
+@pytest.mark.parametrize(
+    ("payload", "metadata_source_type", "error"),
+    [
+        ({"source_type": "unknown_cart", "items": []}, "unknown_cart", "Tipo de fuente JSON no soportado"),
+        ({"items": []}, "tarkett_cart", "JSON de entrada sin source_type"),
+        ({"source_type": "offiho_cart", "items": []}, "tarkett_cart", "source_type de metadata no coincide"),
+        ({"source_type": "offiho_cart", "items": []}, None, "source_type de metadata ausente"),
+        (["offiho_cart"], "offiho_cart", "JSON de entrada debe ser un objeto"),
+    ],
+)
+def test_process_job_rejects_invalid_json_cart_before_generator(monkeypatch, payload, metadata_source_type, error):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    client.input_content = json.dumps(payload).encode("utf-8")
+    generator_called = False
+
+    def fake_generator(job, input_path, output_path):
+        nonlocal generator_called
+        generator_called = True
+
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+    metadata = {"input_extension": ".json"}
+    if metadata_source_type is not None:
+        metadata["source_type"] = metadata_source_type
+
+    with pytest.raises(RuntimeError, match=error):
+        quote_worker.process_job(
+            client,
+            {
+                "id": "job-1",
+                "usuario_id": 7,
+                "input_path": "users/7/jobs/job-1/input.json",
+                "metadata": metadata,
+            },
+        )
+
+    assert generator_called is False
+
+
+def test_process_job_rejects_invalid_json_without_exposing_content(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    client.input_content = b'{"source_type": "offiho_cart", "secret": "do-not-expose"'
+    monkeypatch.setattr(quote_worker, "_run_generator", lambda *args: pytest.fail("generator should not run"))
+
+    with pytest.raises(RuntimeError, match="JSON de entrada invalido") as exc_info:
+        quote_worker.process_job(
+            client,
+            {
+                "id": "job-1",
+                "usuario_id": 7,
+                "input_path": "users/7/jobs/job-1/input.json",
+                "metadata": {"source_type": "offiho_cart", "input_extension": ".json"},
+            },
+        )
+
+    assert "do-not-expose" not in str(exc_info.value)
+
+
+def test_prepare_generator_input_reads_cart_json_once(monkeypatch, tmp_path):
+    source = tmp_path / "input.json"
+    source.write_text('{"source_type":"offiho_cart","items":[]}', encoding="utf-8")
+    reads = []
+
+    original_read_text = Path.read_text
+
+    def record_read_text(path, *args, **kwargs):
+        if path == source:
+            reads.append(path)
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", record_read_text)
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_offiho_cart_to_quotation",
+        lambda source_json, output_xlsx, payload: output_xlsx.write_bytes(b"converted"),
+    )
+
+    output = quote_worker._prepare_generator_input(
+        {"metadata": {"source_type": "offiho_cart", "input_extension": ".json"}}, source, tmp_path
+    )
+
+    assert output.name == "quotation_from_offiho.xlsx"
+    assert reads == [source]
 
 
 def test_process_job_downloads_input_from_job_storage_provider(monkeypatch):
@@ -181,8 +340,9 @@ def test_process_job_downloads_input_from_job_storage_provider(monkeypatch):
         seen["dest"] = dest.name
         dest.write_text('{"source_type":"tarkett_cart","items":[{"code":"25731726"}]}', encoding="utf-8")
 
-    def fake_convert(source_json, output_xlsx):
+    def fake_convert(source_json, output_xlsx, payload):
         seen["converted_input"] = source_json.name
+        seen["source_type"] = payload["source_type"]
         output_xlsx.write_bytes(b"converted")
 
     def fake_generator(job, input_path, output_path):
@@ -211,6 +371,7 @@ def test_process_job_downloads_input_from_job_storage_provider(monkeypatch):
     assert seen["job_storage_provider"] == "supabase"
     assert seen["dest"] == "input.json"
     assert seen["converted_input"] == "input.json"
+    assert seen["source_type"] == "tarkett_cart"
     assert seen["generator_input"] == "quotation_from_tarkett.xlsx"
 
 
