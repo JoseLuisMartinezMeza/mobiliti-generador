@@ -62,6 +62,12 @@ def test_extract_identity_separates_model_name_and_variant():
     assert identity.code == "OHE-405"
     assert identity.name == "ALUFSEN"
     assert identity.variant == "NEGRO"
+
+
+def test_parse_inventory_removes_materially_identical_duplicate_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(build.xlrd, "open_workbook", lambda path: duplicate_workbook())
+    rows = parse_inventory_xls(tmp_path / "offiho-duplicates.xls")
+    assert len(rows) == 2
 ```
 
 - [ ] **Step 3: Run the focused tests and verify the expected failure**
@@ -123,7 +129,7 @@ def test_site_match_requires_expected_model_code():
 
 - [ ] **Step 6: Implement PDF and website indexing with cache**
 
-Implement `extract_pdf_pages` with `pypdf.PdfReader`, strict code/variant regexes, an official-host allowlist, category discovery from links on `offiho.com`, `offiho.com/econosillas`, and `offihoblack.com`, and a `.cache/offiho-products.json` cache containing source timestamps and resolved code lists. Website matches must require the expected code in page text or metadata.
+Implement `extract_pdf_pages` with `pypdf.PdfReader`, strict code/variant regexes, an official-host allowlist, category discovery from links on `offiho.com`, `offiho.com/econosillas`, and `offihoblack.com`, and a `.cache/offiho-products.json` cache containing source timestamps and resolved code lists. Website matches must require the expected code in page text or metadata. Deduplicate only materially identical normalized inventory keys and fail explicitly when any substantive fields differ.
 
 - [ ] **Step 7: Generate and validate the real catalog**
 
@@ -138,7 +144,7 @@ python scripts\build_offiho_catalog.py `
   --output mobiliti_saas\quote_engine\data\offiho_catalog.json
 ```
 
-Expected: `total=1286`, `out_of_stock=192`, `inventory_prices=779`, no duplicate `inventory_key`, and a printed coverage summary for PDF prices and official images.
+Expected: `total=1206`, `source_row_count=1286`, `duplicate_row_count=80`, `unique_item_count=1206`, `out_of_stock=189`, `inventory_prices=778`, no duplicate `inventory_key`, and a printed coverage summary for PDF prices and official images.
 
 - [ ] **Step 8: Run tests and commit only the indexer deliverable**
 
@@ -479,7 +485,7 @@ Copy the three quote-engine modules and Offiho JSON byte-for-byte from `mobiliti
 
 - [ ] **Step 2: Verify packaged equality and catalog load**
 
-Compare SHA-256 hashes and run a Python import from the `mobiliti_saas/web` working directory. Expected catalog total is 1,286 and both available and exhausted items load.
+Compare SHA-256 hashes and run a Python import from the `mobiliti_saas/web` working directory. Expected visible catalog total is 1,206 with source audit metadata `1286/80/1206`, and both available and exhausted items load.
 
 - [ ] **Step 3: Run the full focused suite**
 
@@ -539,7 +545,7 @@ Push the current branch, deploy it to `/opt/mobiliti-worker/app` on Hetzner thro
 
 - [ ] **Step 5: Execute production smoke tests**
 
-Authenticate without logging credentials or tokens. Verify `GET /offiho/catalog` returns 1,286 products, create an available and an exhausted quote, observe `queued -> processing -> completed`, download both XLSX files, verify required sheets and warning text, then create one Tarkett smoke quote to confirm regression safety.
+Authenticate without logging credentials or tokens. Verify `GET /offiho/catalog` returns 1,206 unique visible products and preserves source audit metadata `1286/80/1206`, create an available and an exhausted quote, observe `queued -> processing -> completed`, download both XLSX files, verify required sheets and warning text, then create one Tarkett smoke quote to confirm regression safety.
 
 - [ ] **Step 6: Update Obsidian and final status**
 

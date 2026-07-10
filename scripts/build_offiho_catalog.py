@@ -119,34 +119,53 @@ def extract_offiho_identity(inventory_key: str) -> OffihoIdentity:
 
 
 def parse_inventory_xls(path: Path) -> list[dict[str, Any]]:
+    items, _ = _parse_inventory_xls(path)
+    return items
+
+
+def _parse_inventory_xls(path: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
     workbook = xlrd.open_workbook(path)
     try:
         sheet = workbook.sheet_by_name("Publicaci\u00f3n")
     except xlrd.biffh.XLRDError:
         raise RuntimeError("No se encontro la hoja Publicaci\u00f3n") from None
     items: list[dict[str, Any]] = []
+    by_inventory_key: dict[str, dict[str, Any]] = {}
+    source_row_count = 0
+    duplicate_row_count = 0
     for row in range(5, sheet.nrows):
         inventory_key = normalize_space(sheet.cell_value(row, 1)).upper()
         stock = decimal_value(sheet.cell_value(row, 2))
         if not inventory_key or stock is None:
             continue
+        source_row_count += 1
         identity = extract_offiho_identity(inventory_key)
         pieces_per_box = decimal_value(sheet.cell_value(row, 3)) or Decimal("1")
         unit_price = decimal_value(sheet.cell_value(row, 4))
-        items.append(
-            {
-                "inventory_key": inventory_key,
-                "code": identity.code,
-                "name": identity.name,
-                "variant": identity.variant,
-                "unit": "PZA",
-                "pieces_per_box": json_number(pieces_per_box),
-                "available_quantity": json_number(stock),
-                "unit_price": json_number(unit_price or Decimal("0")),
-                "price_source": "inventory" if unit_price is not None else "missing",
-            }
-        )
-    return items
+        item = {
+            "inventory_key": inventory_key,
+            "code": identity.code,
+            "name": identity.name,
+            "variant": identity.variant,
+            "unit": "PZA",
+            "pieces_per_box": json_number(pieces_per_box),
+            "available_quantity": json_number(stock),
+            "unit_price": json_number(unit_price or Decimal("0")),
+            "price_source": "inventory" if unit_price is not None else "missing",
+        }
+        existing = by_inventory_key.get(inventory_key)
+        if existing is not None:
+            if existing == item:
+                duplicate_row_count += 1
+                continue
+            raise RuntimeError(f"La clave {inventory_key} aparece con datos distintos")
+        by_inventory_key[inventory_key] = item
+        items.append(item)
+    return items, {
+        "source_row_count": source_row_count,
+        "duplicate_row_count": duplicate_row_count,
+        "unique_item_count": len(items),
+    }
 
 
 def normalize_variant(value: str) -> str:
@@ -361,7 +380,7 @@ def build_catalog(
 ) -> dict[str, Any]:
     cache = _load_cache(cache_path)
     inventory_bytes = inventory_path.read_bytes()
-    items = parse_inventory_xls(inventory_path)
+    items, inventory_audit = _parse_inventory_xls(inventory_path)
     pdf_prices = parse_pdf_price_index(pdf_paths)
     site_index = build_site_product_index(cache)
     site_candidates = [
@@ -389,6 +408,7 @@ def build_catalog(
             "pdfs": [path.name for path in pdf_paths],
         },
         "total": len(items),
+        **inventory_audit,
         "out_of_stock": sum(item["available_quantity"] == 0 for item in items),
         "inventory_prices": sum(item["price_source"] == "inventory" for item in items),
         "pdf_prices": sum(item["price_source"] == "pdf_exact" for item in items),

@@ -16,6 +16,7 @@ The implementation must preserve the existing Tarkett production flow and reuse 
 - Use the official inventory at `https://www.offiho.com/existencias.xls` as the product and stock source of truth.
 - Include all inventory rows with a product code, including rows with zero stock.
 - Use `Precio Lista 1` from the inventory as the primary price.
+- Keep one row when duplicate normalized `inventory_key` records are materially identical; fail indexing when duplicate keys differ in stock, box quantity, price, or other substantive fields.
 - Use the July 2026 Offiho and Black/Colos price-list PDFs as an exact-code fallback for missing prices.
 - Use official Offiho, Econosillas, and Offiho Black product pages for product URLs and images.
 - Use official PDF imagery only as a fallback when no trustworthy website match exists.
@@ -26,12 +27,14 @@ The implementation must preserve the existing Tarkett production flow and reuse 
 
 ## Validated source characteristics
 
-The inventory downloaded on 2026-07-09 is a binary Excel `.xls` file with one `Publicacion` sheet and 1,684 used rows. The validated product population is:
+The inventory downloaded on 2026-07-09 is a binary Excel `.xls` file with one `Publicacion` sheet and 1,684 used rows. The validated source and visible product populations are:
 
-- 1,286 rows with a product code and numeric stock.
-- 1,094 rows with positive stock.
-- 192 rows with zero stock.
-- 779 rows with `Precio Lista 1` populated.
+- 1,286 source rows with a product code and numeric stock.
+- 80 materially identical duplicate rows across 39 normalized inventory keys.
+- 1,206 unique visible products after exact deduplication.
+- 1,017 unique products with positive stock.
+- 189 unique products with zero stock.
+- 778 unique products with `Precio Lista 1` populated.
 - `Precio Lista 2` through `Precio Lista 7` are empty in the current file.
 
 The supplied PDFs contain 47 pages in total:
@@ -59,11 +62,12 @@ Create an offline catalog builder that performs these stages:
 
 1. Download or read `existencias.xls`.
 2. Parse the `Publicacion` sheet and normalize product identity, stock, pieces per box, and price.
-3. Extract model code, product name, and variant from the inventory description while retaining the original inventory key.
-4. Parse both supplied PDF price lists into exact normalized model/variant price records.
-5. Crawl official Offiho-family product indexes and product pages to build a code-to-page/image index.
-6. Match in strict precedence order and record the reason for every match.
-7. Write a deterministic JSON catalog and a coverage report.
+3. Deduplicate materially identical rows by normalized `inventory_key`; fail explicitly if substantive fields differ.
+4. Extract model code, product name, and variant from the inventory description while retaining the original inventory key.
+5. Parse both supplied PDF price lists into exact normalized model/variant price records.
+6. Crawl official Offiho-family product indexes and product pages to build a code-to-page/image index.
+7. Match in strict precedence order and record the reason for every match.
+8. Write a deterministic JSON catalog and a coverage report.
 
 Each catalog item contains:
 
@@ -81,7 +85,7 @@ Each catalog item contains:
 - `match_status`.
 - `source_updated_at`.
 
-The catalog root contains `source_hash`, `generated_at`, source metadata, item count, and enrichment coverage totals.
+The catalog root contains `source_hash`, `generated_at`, source metadata, `source_row_count=1286`, `duplicate_row_count=80`, `unique_item_count=1206`, visible item count, and enrichment coverage totals recalculated after deduplication.
 
 ## Matching rules
 
@@ -163,7 +167,10 @@ Returns:
 {
   "source_hash": "sha256-example",
   "generated_at": "2026-07-09T18:00:00Z",
-  "total": 1286,
+  "total": 1206,
+  "source_row_count": 1286,
+  "duplicate_row_count": 80,
+  "unique_item_count": 1206,
   "items": [
     {
       "inventory_key": "OHE-405 NEGRO ALUFSEN",
