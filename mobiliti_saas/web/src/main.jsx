@@ -891,7 +891,7 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
   }
 
   return (
-    <section className="main-card full tarkett-shell">
+    <section className="tarkett-shell">
       <div className="card-head tarkett-head">
         <div>
           <h2>Tarkett</h2>
@@ -1247,7 +1247,7 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
   }
 
   return (
-    <section className="main-card full tarkett-shell offiho-shell">
+    <section className="tarkett-shell offiho-shell">
       <div className="card-head tarkett-head">
         <div><h2>Offiho</h2><p>{catalog.total || catalog.items.length} productos indexados{catalog.generated_at ? ` - ${formatDate(catalog.generated_at)}` : ""}</p></div>
         <button className="ghost-action" type="button" onClick={() => { sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY); setReloadKey((value) => value + 1); }}><RefreshCw size={16} />Refrescar</button>

@@ -152,3 +152,20 @@ def test_offiho_quantity_price_and_submit_guard_contracts_are_present():
     assert "isSubmittingRef.current = false;" in source
     assert 'role="status"' in source
     assert 'aria-live="polite"' in source
+
+
+def test_catalog_shell_is_unframed_and_intermediate_breakpoint_prevents_overlap():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert 'className="tarkett-shell"' in source
+    assert 'className="tarkett-shell offiho-shell"' in source
+    assert 'main-card full tarkett-shell' not in source
+    assert ".tarkett-shell {\n  margin: 18px;\n  overflow: visible;\n  background: transparent;\n  border: 0;\n  border-radius: 0;\n  box-shadow: none;" in styles
+    assert "@media (max-width: 1390px)" in styles
+    intermediate = styles.split("@media (max-width: 1390px)", 1)[1].split("@media (max-width: 1120px)", 1)[0]
+    assert ".tarkett-toolbar,\n  .offiho-toolbar" in intermediate
+    assert "grid-template-columns: 1fr;" in intermediate
+    assert ".tarkett-grid" in intermediate
+    assert "text-align: left;" in intermediate
+    assert ".product-actions {\n  min-width: 0;" in styles
