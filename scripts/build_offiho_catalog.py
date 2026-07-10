@@ -33,16 +33,41 @@ SITE_SEEDS = (
     "https://www.offihoblack.com/",
 )
 USER_AGENT = "Mobiliti Offiho Catalog Builder/1.0"
-CACHE_VERSION = 2
+CACHE_VERSION = 10
 CACHE_TTL_SECONDS = 24 * 60 * 60
 LEGACY_CACHE_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 SOURCE_MANIFEST_VERSION = 1
 MAX_INVENTORY_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_VALIDATION_TIMEOUT = 10
+MAX_DISCOVERED_PAGES = 500
+FIRST_LEVEL_DISCOVERY_LIMIT = 100
 CODE_RE = re.compile(r"\b[A-Z]{2,}(?:-\d+[A-Z0-9]*)+", re.ASCII)
 PRICE_RE = re.compile(r"\$\s*([\d][\d,]*)")
 IMAGE_EXTENSIONS = frozenset({".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
+NON_PRODUCT_IMAGE_TOKENS = frozenset(
+    {
+        "accessor",
+        "arrow",
+        "banner",
+        "box",
+        "caja",
+        "cart",
+        "facebook",
+        "garantia",
+        "guarantee",
+        "icon",
+        "instagram",
+        "logo",
+        "menu",
+        "precio",
+        "price",
+        "social",
+        "twitter",
+        "whatsapp",
+    }
+)
+PRODUCT_IMAGE_TOKENS = frozenset({"frente", "front", "principal", "producto", "product"})
 NON_QUANTITATIVE_STOCK_STATUSES = frozenset({"CONSULTAR EXISTENCIAS", "SOBRE PEDIDO"})
 VARIANT_WORDS = frozenset(
     {
@@ -428,6 +453,7 @@ def _trusted_cached_image(value: dict[str, Any]) -> dict[str, Any]:
     if not (
         value.get("image_verified") is True
         and is_official_image_url(image_url)
+        and _product_image_score("", image_url, ()) is not None
         and content_type.startswith("image/")
         and 0 < content_length <= MAX_IMAGE_BYTES
     ):
@@ -504,8 +530,12 @@ class _PageParser(HTMLParser):
         values = {name.lower(): value or "" for name, value in attrs}
         if tag == "a" and values.get("href"):
             self.links.append(values["href"])
-        elif tag == "img" and values.get("src"):
-            self.images.append(values["src"])
+        elif tag in {"img", "source"}:
+            for name in ("src", "data-src", "data-original", "data-image", "data-zoom-image"):
+                if values.get(name):
+                    self.images.append(values[name])
+            if values.get("srcset"):
+                self.images.extend(_srcset_urls(values["srcset"]))
         elif tag == "meta":
             key = values.get("property", values.get("name", "")).lower()
             content = values.get("content", "")
@@ -516,15 +546,50 @@ class _PageParser(HTMLParser):
         self.text.append(data)
 
 
-def _extract_official_image_url(page_url: str, parser: _PageParser) -> str:
-    for raw_candidate in (parser.meta.get("og:image", ""), *parser.images):
+def _srcset_urls(value: str) -> list[str]:
+    return [candidate.strip().split(" ", 1)[0] for candidate in value.split(",") if candidate.strip()]
+
+
+def _extract_official_image_url(
+    page_url: str,
+    parser: _PageParser,
+    *,
+    codes: Sequence[str] = (),
+    extra_candidates: Sequence[str] = (),
+) -> str:
+    ranked: list[tuple[int, int, str]] = []
+    for index, raw_candidate in enumerate((parser.meta.get("og:image", ""), *parser.images, *extra_candidates)):
         candidate = normalize_space(raw_candidate)
-        if not candidate:
+        if not candidate or "{" in candidate or "}" in candidate:
             continue
         resolved = urllib.parse.urljoin(page_url, candidate)
-        if resolved != page_url and is_official_image_url(resolved):
-            return resolved
-    return ""
+        if resolved == page_url or not is_official_image_url(resolved):
+            continue
+        score = _product_image_score(page_url, resolved, codes)
+        if score is not None:
+            ranked.append((score, -index, resolved))
+    return max(ranked)[2] if ranked else ""
+
+
+def _product_image_score(page_url: str, image_url: str, codes: Sequence[str]) -> int | None:
+    image_path = urllib.parse.unquote(urllib.parse.urlsplit(image_url).path).casefold()
+    image_tokens = set(re.findall(r"[a-z0-9]+", image_path))
+    if any(token in image_path for token in NON_PRODUCT_IMAGE_TOKENS):
+        return None
+
+    score = 0
+    compact_path = re.sub(r"[^a-z0-9]", "", image_path)
+    for code in codes:
+        compact_code = re.sub(r"[^a-z0-9]", "", str(code).casefold())
+        if compact_code and compact_code in compact_path:
+            score += 100
+    page_leaf = urllib.parse.unquote(urllib.parse.urlsplit(page_url).path).rstrip("/").rsplit("/", 1)[-1]
+    for token in re.findall(r"[a-z0-9]+", page_leaf.casefold()):
+        if len(token) > 2 and token in image_tokens:
+            score += 35
+    if any(token in image_tokens for token in PRODUCT_IMAGE_TOKENS):
+        score += 25
+    return score
 
 
 def build_site_product_index(
@@ -576,23 +641,32 @@ def build_site_product_index(
         if record:
             records.append(record)
 
-    discovered = sorted(
+    discovered = _prioritize_product_pages(
         {
             link
             for record in records
             for link in record.get("links", [])
-            if is_official_url(link) and link not in SITE_SEEDS
+            if _is_official_page_url(link) and link not in SITE_SEEDS
         }
-    )[:500]
-    pending = [url for url in discovered if not isinstance(pages.get(url), dict)]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        for url, record in zip(pending, executor.map(_fetch_official_page, pending)):
-            pages[url] = record
-    for url in discovered:
-        record = pages.get(url)
-        if isinstance(record, dict):
-            if record:
-                records.append(record)
+    )
+    first_level = discovered[:FIRST_LEVEL_DISCOVERY_LIMIT]
+    _fetch_discovered_pages(first_level, pages, records)
+
+    for _ in range(2):
+        remaining = max(0, MAX_DISCOVERED_PAGES - len(pages))
+        if not remaining:
+            break
+        next_level = _prioritize_product_pages(
+            {
+                link
+                for record in records
+                for link in record.get("links", [])
+                if _is_official_page_url(link) and link not in SITE_SEEDS and link not in pages
+            }
+        )
+        if not next_level:
+            break
+        _fetch_discovered_pages(next_level[:remaining], pages, records)
 
     index: dict[str, dict[str, Any]] = {}
     for record in records:
@@ -611,6 +685,62 @@ def build_site_product_index(
     cache["site_index_created_at"] = current_time.isoformat()
     cache["site_index_expires_at"] = (current_time + timedelta(seconds=CACHE_TTL_SECONDS)).isoformat()
     return index
+
+
+def _fetch_discovered_pages(
+    urls: Sequence[str],
+    pages: dict[str, Any],
+    records: list[dict[str, Any]],
+) -> None:
+    pending = [url for url in urls if not isinstance(pages.get(url), dict)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        for url, record in zip(pending, executor.map(_fetch_official_page, pending)):
+            pages[url] = record
+    for url in urls:
+        record = pages.get(url)
+        if isinstance(record, dict) and record:
+            records.append(record)
+
+
+def _prioritize_product_pages(urls: set[str]) -> list[str]:
+    canonical_urls = {_canonical_product_url(url) for url in urls}
+    return sorted(canonical_urls, key=lambda url: (_product_page_priority(url), url))
+
+
+def _canonical_product_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    path = parsed.path.rstrip("/") or "/"
+    marker = "/products/"
+    if (
+        parsed.hostname in {"offihoblack.com", "www.offihoblack.com"}
+        and path.startswith("/collections/")
+        and marker in path
+    ):
+        path = path[path.index(marker) :]
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _product_page_priority(url: str) -> int:
+    path = urllib.parse.urlsplit(url).path.casefold()
+    if "/products/" in path:
+        return 0
+    if "modelo-" in path or "/galeria/" in path:
+        return 1
+    return 2
+
+
+def _is_official_page_url(url: str) -> bool:
+    if not is_official_url(url):
+        return False
+    suffix = Path(urllib.parse.urlsplit(url).path).suffix.casefold()
+    return suffix not in IMAGE_EXTENSIONS | {".css", ".csv", ".doc", ".docx", ".dwg", ".obj", ".pdf", ".xls", ".xlsx"}
+
+
+def _normalize_official_link(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    path = urllib.parse.quote(urllib.parse.unquote(parsed.path), safe="/%:@!$&'()*+,;=-._~")
+    query = urllib.parse.quote(urllib.parse.unquote(parsed.query), safe="=&?/:@!$'()*+,;%-._~")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, query, ""))
 
 
 def _sanitize_site_index(index: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -669,19 +799,25 @@ def _fetch_official_page(url: str) -> dict[str, Any]:
     parser.feed(payload)
     links = sorted(
         {
-            urllib.parse.urldefrag(urllib.parse.urljoin(url, link))[0]
+            _normalize_official_link(urllib.parse.urldefrag(urllib.parse.urljoin(url, link))[0])
             for link in parser.links
             if is_official_url(urllib.parse.urldefrag(urllib.parse.urljoin(url, link))[0])
         }
     )
-    image_url = _extract_official_image_url(url, parser)
-    image_metadata = _verify_official_image(image_url) if image_url else _empty_image_metadata()
     page_text = " ".join(parser.text)
     metadata_text = " ".join(parser.meta.values())
+    codes = sorted(set(CODE_RE.findall(unescape(f"{page_text} {metadata_text}"))))
+    image_url = _extract_official_image_url(
+        url,
+        parser,
+        codes=codes,
+        extra_candidates=[link for link in links if is_official_image_url(link)],
+    )
+    image_metadata = _verify_official_image(image_url) if image_url else _empty_image_metadata()
     return {
         "url": url,
         "links": links,
-        "codes": sorted(set(CODE_RE.findall(unescape(f"{page_text} {metadata_text}")))),
+        "codes": codes,
         **image_metadata,
         "source_updated_at": source_updated_at,
         "fetched_at": datetime.now(timezone.utc).isoformat(),

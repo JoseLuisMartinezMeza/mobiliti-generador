@@ -145,10 +145,13 @@ def _description_for_item(
         parts.append(f"Variante: {variant}")
     if url:
         parts.append(f"URL: {url}")
-    warning = _stock_warning(item, quantity)
-    if warning:
-        parts.append(warning)
-    return " | ".join(part for part in parts if part), warning
+    warnings = [
+        warning
+        for warning in (_stock_warning(item, quantity), _price_warning(item))
+        if warning
+    ]
+    parts.extend(warnings)
+    return " | ".join(part for part in parts if part), " | ".join(warnings)
 
 
 def _stock_warning(item: dict[str, Any], quantity: Decimal) -> str:
@@ -162,6 +165,12 @@ def _stock_warning(item: dict[str, Any], quantity: Decimal) -> str:
             "ADVERTENCIA: EXISTENCIA INSUFICIENTE"
             f" - SOLICITADO {quantity_number} - DISPONIBLE {available}"
         )
+    return ""
+
+
+def _price_warning(item: dict[str, Any]) -> str:
+    if str(item.get("price_source", "") or "").strip().casefold() == "missing":
+        return "ADVERTENCIA: PRECIO POR CONFIRMAR"
     return ""
 
 

@@ -14,7 +14,13 @@ from scripts.build_offiho_catalog import parse_inventory_xls
 from scripts.build_offiho_catalog import parse_pdf_price_index
 
 
-def fake_runtime_catalog(*, available_quantity: int, unit_price: int, image_url: str = ""):
+def fake_runtime_catalog(
+    *,
+    available_quantity: int,
+    unit_price: int,
+    image_url: str = "",
+    price_source: str = "inventory",
+):
     from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
 
     item = OffihoCatalogItem(
@@ -26,6 +32,7 @@ def fake_runtime_catalog(*, available_quantity: int, unit_price: int, image_url:
         pieces_per_box=Decimal("1"),
         available_quantity=Decimal(str(available_quantity)),
         unit_price=Decimal(str(unit_price)),
+        price_source=price_source,
         product_url="https://www.offiho.com/productos/alufsen",
         image_url=image_url,
     )
@@ -438,6 +445,45 @@ def test_offiho_workbook_writes_price_and_warning(tmp_path):
     wb.close()
 
 
+def test_offiho_missing_price_warns_in_temporary_and_final_workbooks(tmp_path):
+    from mobiliti_saas.quote_engine.offiho_catalog import (
+        build_offiho_cart_payload,
+        create_offiho_quotation_workbook,
+    )
+    from mobiliti_saas.worker.online_quote_generator import generate_online_quote
+
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 1}],
+        catalog=fake_runtime_catalog(
+            available_quantity=2,
+            unit_price=0,
+            price_source="missing",
+        ),
+    )
+    assert payload["items"][0]["price_source"] == "missing"
+    source = create_offiho_quotation_workbook(payload, tmp_path / "offiho-price-pending.xlsx")
+    temporary = load_workbook(source)
+    assert temporary["Quotation"]["J9"].value == 0
+    assert "ADVERTENCIA: PRECIO POR CONFIRMAR" in temporary["Quotation"]["D9"].value
+    assert temporary["Quotation"]["D9"].fill.fgColor.rgb.endswith("FFF2CC")
+    temporary.close()
+
+    output = tmp_path / "cotizacion-price-pending.xlsx"
+    generate_online_quote(source, output, {"tipo_cambio": "20"})
+    final = load_workbook(output, data_only=False)
+    assert any(
+        "ADVERTENCIA: PRECIO POR CONFIRMAR" in str(cell.value or "")
+        for row in final["Cotizacion"].iter_rows()
+        for cell in row
+    )
+    assert any(
+        cell.value == 0
+        for row in final["Quotation"].iter_rows()
+        for cell in row
+    )
+    final.close()
+
+
 def test_offiho_warning_survives_online_quote_generation(tmp_path):
     from mobiliti_saas.quote_engine.offiho_catalog import (
         build_offiho_cart_payload,
@@ -831,6 +877,108 @@ def test_image_extraction_accepts_realistic_relative_og_image():
     image_url = build._extract_official_image_url(page_url, parser)
 
     assert image_url == "https://www.offiho.com/wp-content/uploads/2026/07/alufsen-negra.jpg?size=large"
+
+
+def test_image_extraction_prefers_ciao_product_front_over_branding_assets():
+    page_url = "https://www.offiho.com/econosillas/ciao"
+    parser = build._PageParser()
+    parser.feed(
+        '<img src="/images/logo-econosillas.png">'
+        '<img src="/images/logociao.jpg">'
+        '<img src="/uploads/precios-lista.jpg">'
+        '<img src="/uploads/OHS-12CB/OHS-12B-Negro-frente.jpg">'
+        '<img src="/uploads/OHS-12CB/OHS-12B-Negro-lateral.jpg">'
+    )
+
+    image_url = build._extract_official_image_url(page_url, parser, codes=["OHS-12B"])
+
+    assert image_url == "https://www.offiho.com/uploads/OHS-12CB/OHS-12B-Negro-frente.jpg"
+
+
+def test_image_extraction_rejects_logo_menu_social_and_accessory_candidates():
+    page_url = "https://www.offiho.com/econosillas/ciao"
+    parser = build._PageParser()
+    parser.feed(
+        '<img src="/images/logo.png">'
+        '<img src="/images/menu-icon.png">'
+        '<img src="/images/instagram-social.png">'
+        '<img src="/images/garantia.jpg">'
+        '<img src="/images/caja-accesorio.jpg">'
+    )
+
+    assert build._extract_official_image_url(page_url, parser, codes=["OHS-12B"]) == ""
+
+
+def test_image_extraction_uses_shopify_product_srcset_over_header_logo():
+    page_url = "https://www.offihoblack.com/products/vanto-ohe-75"
+    parser = build._PageParser()
+    parser.feed(
+        '<img src="/cdn/shop/files/OffihoBlack_Logo.png">'
+        '<source srcset="/cdn/shop/products/VantoEFrente_1800x1800.jpg?v=1 1800w">'
+    )
+
+    image_url = build._extract_official_image_url(page_url, parser, codes=["OHE-75"])
+
+    assert image_url == "https://www.offihoblack.com/cdn/shop/products/VantoEFrente_1800x1800.jpg?v=1"
+
+
+def test_discovery_prioritizes_canonical_shopify_product_pages():
+    urls = build._prioritize_product_pages(
+        {
+            "https://www.offihoblack.com/collections/all",
+            "https://www.offihoblack.com/collections/all/products/vanto-ohe-75?variant=123",
+            "https://www.offihoblack.com/products/shine-ohv-80",
+            "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
+        }
+    )
+
+    assert urls[:3] == [
+        "https://www.offihoblack.com/products/shine-ohv-80",
+        "https://www.offihoblack.com/products/vanto-ohe-75",
+        "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
+    ]
+
+
+def test_official_link_normalization_escapes_spaces_before_fetching():
+    assert build._normalize_official_link("https://www.offiho.com/3d/WAY OHV-58_DWG.dwg") == (
+        "https://www.offiho.com/3d/WAY%20OHV-58_DWG.dwg"
+    )
+
+
+def test_shopify_asset_path_is_not_canonicalized_or_crawled_as_product_page():
+    asset = "https://www.offihoblack.com/cdn/shop/products/VantoEFrente_1800x1800.jpg"
+
+    assert build._canonical_product_url(asset) == asset
+    assert build._is_official_page_url(asset) is False
+
+
+def test_image_extraction_ranks_shopify_gallery_link_as_product_image():
+    page_url = "https://www.offihoblack.com/products/amelia-ohm-41001"
+    parser = build._PageParser()
+    parser.feed('<img src="/cdn/shop/files/OffihoBlack_Logo.png">')
+    gallery_url = "https://www.offihoblack.com/cdn/shop/files/Amelia-Frente41001_1800x1800.jpg?v=1"
+
+    image_url = build._extract_official_image_url(
+        page_url,
+        parser,
+        codes=["OHM-41001"],
+        extra_candidates=[gallery_url],
+    )
+
+    assert image_url == gallery_url
+
+
+def test_image_extraction_rejects_shopify_width_template_before_real_photo():
+    page_url = "https://www.offihoblack.com/products/amelia-ohm-41001"
+    parser = build._PageParser()
+    parser.feed(
+        '<meta property="og:image" content="/cdn/shop/files/AMELIA_OHM-41001_{width}x.jpg">'
+        '<img src="/cdn/shop/files/Amelia-Frente41001_1800x1800.jpg">'
+    )
+
+    image_url = build._extract_official_image_url(page_url, parser, codes=["OHM-41001"])
+
+    assert image_url == "https://www.offihoblack.com/cdn/shop/files/Amelia-Frente41001_1800x1800.jpg"
 
 
 def _mock_image_response(url, content_type, content_length):

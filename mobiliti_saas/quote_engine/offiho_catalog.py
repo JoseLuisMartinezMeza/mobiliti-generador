@@ -184,6 +184,7 @@ def build_offiho_cart_payload(
                 "unit": item.unit,
                 "quantity": _json_number(quantity),
                 "unit_price": _json_number(item.unit_price),
+                "price_source": item.price_source,
                 "available_quantity": _json_number(item.available_quantity),
                 "stock_status": status,
                 "product_url": item.product_url,
