@@ -148,6 +148,18 @@ def test_offiho_quantity_price_and_submit_guard_contracts_are_present():
     assert "Total con precios disponibles" in source
     assert "precios por confirmar" in source
     assert "onBlur" in source
+
+
+def test_completed_quotes_disclose_local_image_fallback():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert "function ImageProviderWarning" in source
+    assert "image_ai_failed_count" in source
+    assert "image_ai_missing_failed_count" in source
+    assert "IA no disponible" in source
+    assert 'role="status"' in source
+    assert ".image-provider-warning" in styles
     assert "rawQuantity" in source
     assert "1." in source
     assert "isSubmittingRef" in source

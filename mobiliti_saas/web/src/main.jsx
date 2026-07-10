@@ -1342,6 +1342,21 @@ function JobDuration({ job, tone = "" }) {
   );
 }
 
+function ImageProviderWarning({ job }) {
+  const metadata = job?.metadata || {};
+  const existingFailures = Number(metadata.image_ai_failed_count);
+  const missingFailures = Number(metadata.image_ai_missing_failed_count);
+  const count = (Number.isFinite(existingFailures) ? existingFailures : 0)
+    + (Number.isFinite(missingFailures) ? missingFailures : 0);
+  if (job?.status !== "completed" || count <= 0) return null;
+
+  return (
+    <small className="image-provider-warning" role="status">
+      IA no disponible en {count} {count === 1 ? "producto" : "productos"}; la cotizacion continuo con las imagenes locales disponibles.
+    </small>
+  );
+}
+
 function DownloadButton({ job, onDownload, downloadState, className = "ghost-action" }) {
   const isCurrent = downloadState?.jobId === job?.id;
   const downloading = isCurrent && downloadState.status === "downloading";
@@ -1415,6 +1430,7 @@ function StatusPanel({ job }) {
         </div>
         <JobDuration job={job} tone="panel" />
       </div>
+      <ImageProviderWarning job={job} />
       <div className="timeline">
         {steps.map(([key, title, desc], index) => {
           const done = key === "failed" ? false : index <= activeIndex;
@@ -1449,6 +1465,7 @@ function RecentOutputs({ jobs, onDownload, onRetry, onOpenHistory, downloadState
               <strong>{job.metadata?.cotizacion || job.metadata?.original_filename || "Cotizacion"}</strong>
               <span>{statusLabels[job.status] || job.status} - {formatDate(job.updated_at)}</span>
               <JobDuration job={job} />
+              <ImageProviderWarning job={job} />
               <div className="mini-progress-track">
                 <div className={`mini-progress-fill ${job.status}`} style={{ width: `${jobProgress(job)}%` }} />
               </div>
@@ -1545,6 +1562,7 @@ function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downl
               <strong>{job.metadata?.proyecto || job.metadata?.cliente || "Cotizacion Mobiliti"}</strong>
               <small>{formatDate(job.updated_at || job.created_at)}</small>
               <JobDuration job={job} />
+              <ImageProviderWarning job={job} />
             </div>
             <div className="quote-status">
               <em className={`status ${job.status}`}>{statusLabels[job.status] || job.status}</em>
