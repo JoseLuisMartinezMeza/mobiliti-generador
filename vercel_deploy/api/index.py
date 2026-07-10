@@ -75,6 +75,7 @@ R2_BUCKET = os.environ.get("R2_BUCKET", QUOTE_STORAGE_BUCKET).strip() or QUOTE_S
 R2_REGION = os.environ.get("R2_REGION", "auto").strip() or "auto"
 MAX_QUOTE_UPLOAD_MB = int(os.environ.get("MAX_QUOTE_UPLOAD_MB", "25"))
 MAX_QUOTE_HISTORY_PER_USER = int(os.environ.get("MAX_QUOTE_HISTORY_PER_USER", "3"))
+MAX_ACTIVE_QUOTE_JOBS_PER_USER = max(1, min(20, int(os.environ.get("MAX_ACTIVE_QUOTE_JOBS_PER_USER", "3"))))
 QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS = int(os.environ.get("QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS", "14"))
 DELETE_COMPLETED_QUOTE_INPUTS = _env_bool("DELETE_COMPLETED_QUOTE_INPUTS", True)
 QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS = int(os.environ.get("QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS", "1"))
@@ -1524,6 +1525,24 @@ def _enforce_quote_history_limit(usuario_id: int, jobs: list[dict] | None = None
     return _run_quote_retention(usuario_id, jobs, dry_run=False)["remaining_jobs"]
 
 
+def _enforce_active_quote_limit(usuario_id: int, *, exclude_job_id: str | None = None) -> None:
+    try:
+        jobs = db_list_quote_jobs(usuario_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Error leyendo cotizaciones activas") from exc
+    active = [
+        job
+        for job in jobs
+        if str(job.get("id")) != str(exclude_job_id)
+        and str(job.get("status") or "").strip().lower() in {"draft", "queued", "processing"}
+    ]
+    if len(active) >= MAX_ACTIVE_QUOTE_JOBS_PER_USER:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Limite de {MAX_ACTIVE_QUOTE_JOBS_PER_USER} cotizaciones activas por usuario",
+        )
+
+
 def _safe_filename_part(value: object, limit: int = 80) -> str:
     raw = str(value or "").strip()
     name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
@@ -2132,6 +2151,7 @@ def tarkett_quote(body: dict, current_user: dict = Depends(get_current_user)):
     if not template:
         raise HTTPException(status_code=400, detail="Template requerido")
 
+    _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
     input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
     content = json.dumps(cart_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -2211,6 +2231,7 @@ def offiho_quote(body: dict, current_user: dict = Depends(get_current_user)):
     if not template:
         raise HTTPException(status_code=400, detail="Template requerido")
 
+    _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
     input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
     content = json.dumps(cart_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -2257,6 +2278,7 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
     if file_size > MAX_QUOTE_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(status_code=400, detail=f"Archivo mayor a {MAX_QUOTE_UPLOAD_MB} MB")
 
+    _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
     input_path = f"users/{current_user['id']}/jobs/{job_id}/input{input_extension}"
     metadata = {
@@ -2338,6 +2360,7 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
     if not template:
         raise HTTPException(status_code=400, detail="Template requerido")
 
+    _enforce_active_quote_limit(current_user["id"], exclude_job_id=job_id)
     try:
         updated = db_update_quote_job(
             job_id,
@@ -2368,6 +2391,7 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
     if not job.get("input_path"):
         raise HTTPException(status_code=400, detail="La cotizacion no tiene archivo de entrada")
 
+    _enforce_active_quote_limit(current_user["id"], exclude_job_id=job_id)
     try:
         updated = db_update_quote_job(
             job_id,

@@ -72,6 +72,9 @@ EXCHANGE_RATE_CACHE_SECONDS = 60 * 60
 EXCHANGE_RATE_CACHE_PATH = Path(os.environ.get("TEMP", "/tmp")) / "mobiliti_usd_mxn_rate.json"
 DEFAULT_DISCOUNT_PERCENT = 40.0
 DEFAULT_MOBILITI_REGION = "Centro"
+DEFAULT_SUNON_LOOKUP_LIMIT = 40
+DEFAULT_SUNON_LOOKUP_TIMEOUT_SECONDS = 6
+DEFAULT_SUNON_LOOKUP_BUDGET_SECONDS = 180
 MOBILITI_REGION_COL = 16
 MOBILITI_PROVIDER_COL = 6
 MOBILITI_PRODUCT_CATEGORY_COL = 5
@@ -2184,18 +2187,38 @@ def _resolve_sunon_web_images(
 
     result = dict(image_map)
     sunon_dir = Path(temp_dir) / "sunon"
+    lookup_limit, timeout_seconds, deadline = _sunon_lookup_controls()
+    lookup_cache: dict[str, Path | None] = {}
+    lookup_count = 0
     for item in items:
         if item.tipo != "producto":
             continue
         code = extract_product_code(str(item.nombre or ""))
         if not code:
             continue
+        cache_key = normalize_sunon_code(code)
+        if cache_key in lookup_cache:
+            _bump_image_stat(stats, "image_sunon_cache_hit_count")
+            image_path = lookup_cache[cache_key]
+            if image_path:
+                result[item.row] = str(image_path)
+            continue
+        if lookup_count >= lookup_limit or time.monotonic() >= deadline:
+            _bump_image_stat(stats, "image_sunon_skipped_limit_count")
+            continue
+        lookup_count += 1
         _bump_image_stat(stats, "image_sunon_attempted_count")
         try:
-            image_path = fetch_sunon_product_image(str(item.nombre or ""), sunon_dir)
+            image_path = fetch_sunon_product_image(
+                str(item.nombre or ""),
+                sunon_dir,
+                timeout_seconds=timeout_seconds,
+            )
         except Exception:
             _bump_image_stat(stats, "image_sunon_failed_count")
+            lookup_cache[cache_key] = None
             continue
+        lookup_cache[cache_key] = image_path
         if not image_path:
             _bump_image_stat(stats, "image_sunon_not_found_count")
             continue
@@ -2218,21 +2241,11 @@ def _resolve_sunon_catalog_images(
 
     result = dict(image_map)
     sunon_dir = Path(temp_dir) / "sunon_catalog"
-    timeout_seconds = max(
-        2,
-        min(
-            18,
-            int(
-                _num(
-                    metadata.get("sunon_timeout_seconds", os.environ.get("SUNON_CATALOG_TIMEOUT_SECONDS")),
-                    8,
-                )
-            ),
-        ),
-    )
+    lookup_limit, timeout_seconds, deadline = _sunon_lookup_controls(catalog=True)
     live_lookup_value = str(metadata.get("sunon_live_lookup", os.environ.get("SUNON_CATALOG_LIVE_LOOKUP_ENABLED", "")))
     live_lookup = live_lookup_value.strip().lower() in {"1", "true", "yes", "on"}
     lookup_cache: dict[str, Path | None] = {}
+    lookup_count = 0
     for item in items:
         if item.tipo != "producto":
             continue
@@ -2242,10 +2255,15 @@ def _resolve_sunon_catalog_images(
             continue
         _entry, matched_candidate, match_type = find_sunon_catalog_match(code)
         cache_key = normalize_sunon_code(matched_candidate or code)
-        _bump_image_stat(stats, "image_sunon_catalog_attempted_count")
         if cache_key in lookup_cache:
+            _bump_image_stat(stats, "image_sunon_catalog_cache_hit_count")
             image_path = lookup_cache[cache_key]
         else:
+            if lookup_count >= lookup_limit or time.monotonic() >= deadline:
+                _bump_image_stat(stats, "image_sunon_catalog_skipped_limit_count")
+                continue
+            lookup_count += 1
+            _bump_image_stat(stats, "image_sunon_catalog_attempted_count")
             try:
                 image_path = fetch_sunon_catalog_product_image(
                     str(item.nombre or ""),
@@ -2268,6 +2286,32 @@ def _resolve_sunon_catalog_images(
             _bump_image_stat(stats, "image_sunon_catalog_exact_code_count")
         result[item.row] = str(image_path)
     return result
+
+
+def _sunon_lookup_controls(*, catalog: bool = False) -> tuple[int, int, float]:
+    limit = max(
+        1,
+        min(
+            100,
+            int(_num(os.environ.get("SUNON_MAX_LOOKUPS_PER_JOB"), DEFAULT_SUNON_LOOKUP_LIMIT)),
+        ),
+    )
+    timeout_name = "SUNON_CATALOG_TIMEOUT_SECONDS" if catalog else "SUNON_LOOKUP_TIMEOUT_SECONDS"
+    timeout_seconds = max(
+        2,
+        min(
+            12,
+            int(_num(os.environ.get(timeout_name), DEFAULT_SUNON_LOOKUP_TIMEOUT_SECONDS)),
+        ),
+    )
+    budget_seconds = max(
+        30,
+        min(
+            300,
+            int(_num(os.environ.get("SUNON_LOOKUP_BUDGET_SECONDS"), DEFAULT_SUNON_LOOKUP_BUDGET_SECONDS)),
+        ),
+    )
+    return limit, timeout_seconds, time.monotonic() + budget_seconds
 
 
 def _bump_image_stat(stats: dict[str, Any] | None, key: str, amount: int = 1) -> None:

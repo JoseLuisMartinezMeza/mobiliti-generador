@@ -54,6 +54,7 @@ def _mock_user(monkeypatch, user_id=7, active=True, email="cliente@example.com")
             "fecha_fin": "2099-01-01T00:00:00+00:00",
         },
     )
+    monkeypatch.setattr(index, "_enforce_active_quote_limit", lambda *_args, **_kwargs: None)
 
 
 def test_init_upload_requires_token():
@@ -227,11 +228,45 @@ def test_catalog_routes_reject_expired_subscription(monkeypatch, path):
             "fecha_fin": "2020-01-01T00:00:00+00:00",
         },
     )
-
+    monkeypatch.setattr(index, "_enforce_active_quote_limit", lambda *_args, **_kwargs: None)
     resp = _client().get(path, headers=_auth_headers())
 
     assert resp.status_code == 403
     assert resp.json()["detail"] == "Suscripcion no activa"
+
+
+def test_active_quote_limit_uses_persisted_jobs(monkeypatch):
+    monkeypatch.setattr(index, "MAX_ACTIVE_QUOTE_JOBS_PER_USER", 3)
+    monkeypatch.setattr(
+        index,
+        "db_list_quote_jobs",
+        lambda _usuario_id: [
+            {"id": "draft-1", "status": "draft"},
+            {"id": "queued-1", "status": "queued"},
+            {"id": "processing-1", "status": "processing"},
+            {"id": "completed-1", "status": "completed"},
+        ],
+    )
+
+    with pytest.raises(index.HTTPException) as exc:
+        index._enforce_active_quote_limit(7)
+
+    assert exc.value.status_code == 429
+
+
+def test_active_quote_limit_excludes_current_job(monkeypatch):
+    monkeypatch.setattr(index, "MAX_ACTIVE_QUOTE_JOBS_PER_USER", 3)
+    monkeypatch.setattr(
+        index,
+        "db_list_quote_jobs",
+        lambda _usuario_id: [
+            {"id": "job-1", "status": "draft"},
+            {"id": "queued-1", "status": "queued"},
+            {"id": "processing-1", "status": "processing"},
+        ],
+    )
+
+    index._enforce_active_quote_limit(7, exclude_job_id="job-1")
 
 
 @pytest.mark.parametrize("supplier", ["tarkett", "offiho"])

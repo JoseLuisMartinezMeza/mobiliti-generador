@@ -146,7 +146,7 @@ def test_sunon_web_provider_replaces_local_image_by_product_code(monkeypatch, tm
 
     monkeypatch.setattr(
         "mobiliti_saas.quote_engine.engine.fetch_sunon_product_image",
-        lambda _name, _output_dir: sunon,
+        lambda _name, _output_dir, **_kwargs: sunon,
     )
 
     stats = {}
@@ -161,6 +161,73 @@ def test_sunon_web_provider_replaces_local_image_by_product_code(monkeypatch, tm
     assert result[9] == str(sunon)
     assert stats["image_sunon_attempted_count"] == 1
     assert stats["image_sunon_found_count"] == 1
+
+
+def test_sunon_web_provider_deduplicates_codes(monkeypatch, tmp_path):
+    sunon = tmp_path / "sunon.png"
+    _image(sunon, (40, 40))
+    items = [
+        QuoteItem(tipo="producto", row=9, nombre="CHJ80SW H7 Task Chair"),
+        QuoteItem(tipo="producto", row=13, nombre="CHJ80SW H7 Task Chair duplicate"),
+    ]
+    calls = []
+
+    def fake_fetch(name, _output_dir, **_kwargs):
+        calls.append(name)
+        return sunon
+
+    monkeypatch.setattr("mobiliti_saas.quote_engine.engine.fetch_sunon_product_image", fake_fetch)
+    stats = {}
+
+    result = _resolve_sunon_web_images({}, items, tmp_path, {"image_provider": "sunon_web"}, stats=stats)
+
+    assert len(calls) == 1
+    assert result == {9: str(sunon), 13: str(sunon)}
+    assert stats["image_sunon_attempted_count"] == 1
+    assert stats["image_sunon_cache_hit_count"] == 1
+
+
+def test_sunon_web_provider_caps_remote_lookups(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUNON_MAX_LOOKUPS_PER_JOB", "2")
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.fetch_sunon_product_image",
+        lambda *_args, **_kwargs: None,
+    )
+    items = [
+        QuoteItem(tipo="producto", row=9, nombre="AAA1 Product"),
+        QuoteItem(tipo="producto", row=13, nombre="BBB2 Product"),
+        QuoteItem(tipo="producto", row=17, nombre="CCC3 Product"),
+    ]
+    stats = {}
+
+    _resolve_sunon_web_images({}, items, tmp_path, {"image_provider": "sunon_web"}, stats=stats)
+
+    assert stats["image_sunon_attempted_count"] == 2
+    assert stats["image_sunon_skipped_limit_count"] == 1
+
+
+def test_sunon_catalog_provider_obeys_job_time_budget(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUNON_LOOKUP_BUDGET_SECONDS", "30")
+    clock = iter([0.0, 0.0, 31.0])
+    monkeypatch.setattr("mobiliti_saas.quote_engine.engine.time.monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.find_sunon_catalog_match",
+        lambda code: ({"code": code}, code, "exact_code"),
+    )
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.fetch_sunon_catalog_product_image",
+        lambda *_args, **_kwargs: None,
+    )
+    items = [
+        QuoteItem(tipo="producto", row=9, nombre="AAA1 Product"),
+        QuoteItem(tipo="producto", row=13, nombre="BBB2 Product"),
+    ]
+    stats = {}
+
+    _resolve_sunon_catalog_images({}, items, tmp_path, {"image_provider": "sunon_catalog"}, stats=stats)
+
+    assert stats["image_sunon_catalog_attempted_count"] == 1
+    assert stats["image_sunon_catalog_skipped_limit_count"] == 1
 
 
 def test_sunon_catalog_provider_replaces_only_exact_catalog_matches(monkeypatch, tmp_path):
