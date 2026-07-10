@@ -188,7 +188,7 @@ def build_offiho_cart_payload(
             {
                 "inventory_key": item.inventory_key,
                 "code": item.code,
-                "name": item.name,
+                "name": _quote_item_name(item),
                 "variant": item.variant,
                 "unit": item.unit,
                 "quantity": _json_number(quantity),
@@ -225,6 +225,14 @@ def create_offiho_quotation_workbook(
         category_label="Offiho",
         image_dir=image_dir,
     )
+
+
+def _quote_item_name(item: OffihoCatalogItem) -> str:
+    if item.name:
+        return item.name
+    if "/" in item.code:
+        return " ".join(part for part in (item.code.split("/", 1)[0], item.variant) if part).strip()
+    return item.inventory_key
 
 
 def _required_text(raw: dict[str, Any], field: str) -> str:

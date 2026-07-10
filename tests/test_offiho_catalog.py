@@ -126,6 +126,44 @@ def test_offiho_description_reaches_cart_and_quotation_workbook(tmp_path):
         for cell in row
     )
     final.close()
+
+
+def test_offiho_cart_uses_inventory_key_when_variant_name_is_blank(tmp_path):
+    from mobiliti_saas.quote_engine.offiho_catalog import (
+        OffihoCatalogItem,
+        build_offiho_cart_payload,
+        create_offiho_quotation_workbook,
+    )
+    from mobiliti_saas.worker.online_quote_generator import generate_online_quote
+
+    item = OffihoCatalogItem(
+        inventory_key="VESPER/05 NEGRA",
+        code="VESPER/05",
+        name="",
+        variant="NEGRA",
+        unit="PZA",
+        pieces_per_box=Decimal("1"),
+        available_quantity=Decimal("312"),
+        unit_price=Decimal("2799"),
+        description="Estructura de acero tubular y asiento de polipropileno.",
+    )
+    catalog = {
+        "source_hash": "hash",
+        "items": [item],
+        "by_inventory_key": {item.inventory_key: item},
+    }
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": item.inventory_key, "quantity": 1}],
+        catalog=catalog,
+    )
+    source = create_offiho_quotation_workbook(payload, tmp_path / "vesper-source.xlsx")
+    final_path = tmp_path / "vesper-final.xlsx"
+    generate_online_quote(source, final_path, {"tipo_cambio": "20"})
+
+    final = load_workbook(final_path, read_only=True)
+    assert final["Quotation"]["B9"].value == "VESPER NEGRA"
+    assert "modelo VESPER NEGRA" in final["Cotizacion"]["C17"].value
+    final.close()
     with pytest.raises(ValueError, match="Cantidad invalida"):
         build_offiho_cart_payload(
             [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": "NaN"}],
