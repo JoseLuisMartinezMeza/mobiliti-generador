@@ -259,7 +259,7 @@ function estimatedJobDurationMs(job, now = Date.now()) {
   const provider = String(metadata.image_provider || "").toLowerCase();
   const sourceImages = Number(metadata.image_source_count);
   const generatedImages = Number(metadata.image_ai_missing_attempted_count || metadata.image_ai_generated_count);
-  const baseline = provider === "dezgo" ? 360000 : 90000;
+  const baseline = provider === "dezgo" ? 360000 : ["sunon_web", "sunon_catalog"].includes(provider) ? 180000 : 90000;
   const imageBudget = provider === "dezgo"
     ? (Number.isFinite(sourceImages) ? sourceImages * 22000 : 0) + (Number.isFinite(generatedImages) ? generatedImages * 35000 : 0)
     : 0;
@@ -676,6 +676,8 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
             </select>
             <select value={form.image_provider} onChange={(event) => updateField("image_provider", event.target.value)}>
               <option value="dezgo">IA Dezgo recomendado - genera faltantes realistas</option>
+              <option value="sunon_catalog">Catalogo Sunon preciso - solo codigo exacto</option>
+              <option value="sunon_web">Sunon web experimental - buscar por codigo</option>
               <option value="pillow">Local sin IA - no inventa imagenes faltantes</option>
             </select>
             <select value={form.image_cleanup_strength} onChange={(event) => updateField("image_cleanup_strength", event.target.value)}>
@@ -686,7 +688,13 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
             <div className="render-summary">
               <Sparkles size={18} />
               <span>
-                {form.image_provider === "dezgo" ? "IA Dezgo mejora y genera faltantes" : "Render local solo mejora imagenes existentes"} - Fondo {form.image_background === "white" ? "blanco" : "transparente"}
+                {form.image_provider === "dezgo"
+                  ? "IA Dezgo mejora y genera faltantes"
+                  : form.image_provider === "sunon_catalog"
+                    ? "Catalogo Sunon usa solo matches exactos"
+                  : form.image_provider === "sunon_web"
+                    ? "Sunon web busca imagen oficial y cae a local"
+                    : "Render local solo mejora imagenes existentes"} - Fondo {form.image_background === "white" ? "blanco" : "transparente"}
               </span>
             </div>
             <label className="prompt-field">

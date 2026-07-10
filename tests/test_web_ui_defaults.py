@@ -14,7 +14,9 @@ def test_quote_form_recommends_dezgo_by_default():
     assert 'image_prompt: DEFAULT_IMAGE_PROMPT' in source
     assert 'const DEFAULT_IMAGE_PROMPT = "Mejora la calidad de imagen y que este en fondo blanco";' in source
     assert "IA Dezgo recomendado - genera faltantes realistas" in source
+    assert "Sunon web experimental - buscar por codigo" in source
     assert "Local sin IA - no inventa imagenes faltantes" in source
+    assert "Sunon web busca imagen oficial y cae a local" in source
     assert "Prompt para imagenes" in source
     assert "MAX_QUOTE_INPUT_MB = 25" in source
     assert "El archivo supera el limite" in source

@@ -24,6 +24,8 @@ dist/
 temp_images/
 salidas/
 outputs/
+.cache/
+mobiliti_saas/.mobiliti_dev_store/
 *.tmp
 *.temp
 
