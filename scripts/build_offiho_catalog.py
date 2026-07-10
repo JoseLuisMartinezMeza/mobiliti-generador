@@ -11,6 +11,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import os
 import re
 import unicodedata
 import urllib.parse
@@ -36,6 +37,9 @@ CACHE_VERSION = 2
 CACHE_TTL_SECONDS = 24 * 60 * 60
 LEGACY_CACHE_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 SOURCE_MANIFEST_VERSION = 1
+MAX_INVENTORY_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+IMAGE_VALIDATION_TIMEOUT = 10
 CODE_RE = re.compile(r"\b[A-Z]{2,}(?:-\d+[A-Z0-9]*)+", re.ASCII)
 PRICE_RE = re.compile(r"\$\s*([\d][\d,]*)")
 IMAGE_EXTENSIONS = frozenset({".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
@@ -374,11 +378,11 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
     matches = []
     for candidate in candidates:
         url = str(candidate.get("url", ""))
-        image_url = str(candidate.get("image_url", ""))
+        image_url = _trusted_cached_image(candidate)["image_url"]
         codes = {str(code).upper() for code in candidate.get("codes", [])}
         if identity.code not in codes or not is_official_url(url):
             continue
-        if image_url == url or not is_official_image_url(image_url):
+        if image_url == url:
             image_url = ""
         matches.append(
             {
@@ -403,6 +407,64 @@ def is_official_image_url(value: str) -> bool:
         return False
     suffix = Path(urllib.parse.urlparse(value).path).suffix.lower()
     return suffix in IMAGE_EXTENSIONS
+
+
+def _empty_image_metadata() -> dict[str, Any]:
+    return {
+        "image_url": "",
+        "image_verified": False,
+        "image_content_type": "",
+        "image_content_length": 0,
+    }
+
+
+def _trusted_cached_image(value: dict[str, Any]) -> dict[str, Any]:
+    image_url = str(value.get("image_url", ""))
+    content_type = str(value.get("image_content_type", "")).split(";", 1)[0].strip().lower()
+    try:
+        content_length = int(value.get("image_content_length", 0))
+    except (TypeError, ValueError):
+        return _empty_image_metadata()
+    if not (
+        value.get("image_verified") is True
+        and is_official_image_url(image_url)
+        and content_type.startswith("image/")
+        and 0 < content_length <= MAX_IMAGE_BYTES
+    ):
+        return _empty_image_metadata()
+    return {
+        "image_url": image_url,
+        "image_verified": True,
+        "image_content_type": content_type,
+        "image_content_length": content_length,
+    }
+
+
+def _verify_official_image(image_url: str) -> dict[str, Any]:
+    if not is_official_image_url(image_url):
+        return _empty_image_metadata()
+    request = urllib.request.Request(
+        image_url,
+        headers={"User-Agent": USER_AGENT, "Accept": "image/*"},
+        method="HEAD",
+    )
+    try:
+        with _open_official(request, timeout=IMAGE_VALIDATION_TIMEOUT) as response:
+            resolved_url = response.geturl()
+            content_type = response.headers.get_content_type().lower()
+            try:
+                content_length = int(response.headers.get("Content-Length", ""))
+            except (TypeError, ValueError):
+                return _empty_image_metadata()
+    except (OSError, ValueError, urllib.error.URLError):
+        return _empty_image_metadata()
+    metadata = {
+        "image_url": resolved_url,
+        "image_verified": True,
+        "image_content_type": content_type,
+        "image_content_length": content_length,
+    }
+    return _trusted_cached_image(metadata)
 
 
 class _OfficialRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -470,7 +532,7 @@ def build_site_product_index(
     *,
     no_network: bool = False,
     now: datetime | None = None,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, Any]]:
     current_time = now or datetime.now(timezone.utc)
     cache_version = cache.get("cache_version")
     if no_network:
@@ -486,7 +548,9 @@ def build_site_product_index(
         cached = cache.get("site_index")
         if not isinstance(cached, dict):
             raise RuntimeError("El cache Offiho no contiene un indice web para el modo sin red")
-        return _sanitize_site_index(cached)
+        sanitized = _sanitize_site_index(cached)
+        cache["site_index"] = sanitized
+        return sanitized
 
     if cache_version != CACHE_VERSION:
         cache.clear()
@@ -495,7 +559,9 @@ def build_site_product_index(
     cached = cache.get("site_index")
     expires_at = _parse_cache_datetime(cache.get("site_index_expires_at"))
     if isinstance(cached, dict) and expires_at is not None and expires_at > current_time:
-        return _sanitize_site_index(cached)
+        sanitized = _sanitize_site_index(cached)
+        cache["site_index"] = sanitized
+        return sanitized
 
     cache.pop("site_index", None)
     cache["site_pages"] = {}
@@ -528,16 +594,16 @@ def build_site_product_index(
             if record:
                 records.append(record)
 
-    index: dict[str, dict[str, str]] = {}
+    index: dict[str, dict[str, Any]] = {}
     for record in records:
         for code in record.get("codes", []):
-            candidate = {
+            candidate: dict[str, Any] = {
                 "url": str(record.get("url", "")),
-                "image_url": str(record.get("image_url", "")),
                 "source_updated_at": str(record.get("source_updated_at", "")),
+                **_trusted_cached_image(record),
             }
-            if candidate["image_url"] == candidate["url"] or not is_official_image_url(candidate["image_url"]):
-                candidate["image_url"] = ""
+            if candidate["image_url"] == candidate["url"]:
+                candidate.update(_empty_image_metadata())
             existing = index.get(code)
             if existing is None or (not existing.get("image_url") and candidate["image_url"]):
                 index[code] = candidate
@@ -547,19 +613,21 @@ def build_site_product_index(
     return index
 
 
-def _sanitize_site_index(index: dict[str, Any]) -> dict[str, dict[str, str]]:
-    sanitized: dict[str, dict[str, str]] = {}
+def _sanitize_site_index(index: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    sanitized: dict[str, dict[str, Any]] = {}
     for code, value in index.items():
         if not isinstance(value, dict):
             continue
         url = str(value.get("url", ""))
         if not is_official_url(url):
             continue
-        image_url = str(value.get("image_url", ""))
+        image_metadata = _trusted_cached_image(value)
+        if image_metadata["image_url"] == url:
+            image_metadata = _empty_image_metadata()
         sanitized[str(code)] = {
             "url": url,
-            "image_url": image_url if image_url != url and is_official_image_url(image_url) else "",
             "source_updated_at": str(value.get("source_updated_at", "")),
+            **image_metadata,
         }
     return sanitized
 
@@ -607,13 +675,14 @@ def _fetch_official_page(url: str) -> dict[str, Any]:
         }
     )
     image_url = _extract_official_image_url(url, parser)
+    image_metadata = _verify_official_image(image_url) if image_url else _empty_image_metadata()
     page_text = " ".join(parser.text)
     metadata_text = " ".join(parser.meta.values())
     return {
         "url": url,
         "links": links,
         "codes": sorted(set(CODE_RE.findall(unescape(f"{page_text} {metadata_text}")))),
-        "image_url": image_url,
+        **image_metadata,
         "source_updated_at": source_updated_at,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -626,6 +695,38 @@ def _sha256_bytes(payload: bytes) -> str:
 def _canonical_hash(value: Any) -> str:
     payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return _sha256_bytes(payload)
+
+
+def _deterministic_generated_at(pdf_paths: Sequence[Path]) -> tuple[str, str]:
+    source_date_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if source_date_epoch is not None:
+        try:
+            value = datetime.fromtimestamp(int(source_date_epoch), tz=timezone.utc)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("SOURCE_DATE_EPOCH debe ser un entero Unix valido") from exc
+        return value.isoformat(), "SOURCE_DATE_EPOCH"
+
+    source_dates: list[datetime] = []
+    for path in pdf_paths:
+        try:
+            metadata = PdfReader(path).metadata
+        except Exception:
+            continue
+        if metadata is None:
+            continue
+        for attribute in ("modification_date", "creation_date"):
+            try:
+                value = getattr(metadata, attribute)
+            except (AttributeError, ValueError):
+                continue
+            if not isinstance(value, datetime):
+                continue
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            source_dates.append(value.astimezone(timezone.utc))
+    if source_dates:
+        return max(source_dates).isoformat(), "pdf_metadata"
+    return LEGACY_CACHE_TIMESTAMP, "fixed_epoch"
 
 
 def build_catalog(
@@ -656,12 +757,15 @@ def build_catalog(
     pdf_prices = parse_pdf_price_index(ordered_pdf_paths)
     site_index = build_site_product_index(cache, no_network=no_network)
     site_index_sha256 = _canonical_hash(site_index)
+    generated_at, generated_at_source = _deterministic_generated_at(ordered_pdf_paths)
     source_manifest = {
         "manifest_version": SOURCE_MANIFEST_VERSION,
         "inventory_sha256": inventory_sha256,
         "pdf_sha256": sorted(source["sha256"] for source in pdf_sources),
         "site_index_sha256": site_index_sha256,
         "site_cache_version": CACHE_VERSION,
+        "generated_at": generated_at,
+        "generated_at_source": generated_at_source,
     }
     site_candidates = [
         {"codes": [code], **product}
@@ -682,9 +786,10 @@ def build_catalog(
 
     result = {
         "source_hash": _canonical_hash(source_manifest),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at,
         "sources": {
             "manifest_version": SOURCE_MANIFEST_VERSION,
+            "generated_at_source": generated_at_source,
             "inventory": {
                 "name": inventory_path.name,
                 "sha256": inventory_sha256,
@@ -739,14 +844,30 @@ def download_inventory(url: str, output_path: Path) -> Path:
     with _open_official(request, timeout=30) as response:
         if not is_official_url(response.geturl()):
             raise ValueError("La descarga de inventario redirigio fuera de los hosts oficiales")
-        if response.headers.get_content_type() not in {"application/vnd.ms-excel", "application/octet-stream"}:
+        content_type = response.headers.get_content_type()
+        if content_type not in {"application/vnd.ms-excel", "application/octet-stream", "text/html"}:
             raise ValueError("La URL de inventario no devolvio un archivo XLS")
-        payload = response.read(10 * 1024 * 1024 + 1)
-    if len(payload) > 10 * 1024 * 1024:
+        payload = response.read(MAX_INVENTORY_BYTES + 1)
+    if len(payload) > MAX_INVENTORY_BYTES:
         raise ValueError("El inventario excede el limite permitido")
+    is_html = _is_html_payload(payload)
+    if content_type == "text/html" or is_html:
+        if not is_html:
+            raise ValueError("La respuesta HTML no contiene una tabla valida de inventario")
+        try:
+            html_rows = _html_inventory_rows(payload)
+        except RuntimeError as exc:
+            raise ValueError("La respuesta HTML no contiene una tabla valida de inventario") from exc
+        if not any(normalize_space(row[1]) for row in html_rows):
+            raise ValueError("La respuesta HTML no contiene filas de inventario")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(payload)
     return output_path
+
+
+def _is_html_payload(payload: bytes) -> bool:
+    stripped = payload.lstrip(b"\xef\xbb\xbf\x00\t\r\n ").lower()
+    return stripped.startswith((b"<!doctype html", b"<html"))
 
 
 def main() -> int:

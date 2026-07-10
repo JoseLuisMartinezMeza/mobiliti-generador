@@ -1,8 +1,9 @@
 {
-  "source_hash": "ebef398fb1b100bd8c0d7ba91e4d68d1ec4b2f98da1e3c6f739315f450ebb0a5",
-  "generated_at": "2026-07-10T02:31:34.896132+00:00",
+  "source_hash": "3534425b7ca96c4c41f1ae473cdd1ca878ab5d63cd1987c4715eb5a8ed77b2e1",
+  "generated_at": "2026-07-01T00:22:42+00:00",
   "sources": {
     "manifest_version": 1,
+    "generated_at_source": "pdf_metadata",
     "inventory": {
       "name": "offiho-existencias.xls",
       "sha256": "f6f2025bb6ae25afaba4c24a0f1877c2d6b577d6827ef9da12967b039371dcff",
@@ -21,7 +22,7 @@
       }
     ],
     "site_index": {
-      "sha256": "e5742cbfe2aeb956c4e25243265aa59bd10dab408ae61661f5e67f6e89c0bd20",
+      "sha256": "303977125d6846f4bb9b5f18147a733611503992053cf80dab7ce8aca4f38c47",
       "cache_version": 2,
       "record_count": 103,
       "created_at": "1970-01-01T00:00:00+00:00",

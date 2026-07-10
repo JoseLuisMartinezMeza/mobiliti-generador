@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import datetime
 from email.message import Message
 
 import pytest
@@ -290,6 +291,7 @@ def test_site_match_requires_expected_model_code():
     )
 
     assert product["url"].endswith("/directivos/alufsen")
+    assert product["image_url"] == ""
 
 
 def test_image_extraction_never_uses_page_url_for_empty_candidate():
@@ -313,6 +315,60 @@ def test_image_extraction_accepts_realistic_relative_og_image():
     image_url = build._extract_official_image_url(page_url, parser)
 
     assert image_url == "https://www.offiho.com/wp-content/uploads/2026/07/alufsen-negra.jpg?size=large"
+
+
+def _mock_image_response(url, content_type, content_length):
+    class _Response:
+        def __init__(self):
+            self.headers = Message()
+            self.headers["Content-Type"] = content_type
+            self.headers["Content-Length"] = str(content_length)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def geturl(self):
+            return url
+
+    return _Response()
+
+
+def test_image_verification_rejects_jpg_served_as_html(monkeypatch):
+    image_url = "https://www.offiho.com/uploads/product.jpg"
+    monkeypatch.setattr(
+        build,
+        "_open_official",
+        lambda request, timeout: _mock_image_response(image_url, "text/html", 512),
+    )
+
+    verification = build._verify_official_image(image_url)
+
+    assert verification["image_verified"] is False
+    assert verification["image_url"] == ""
+
+
+def test_image_verification_accepts_valid_image_content_type_and_size(monkeypatch):
+    image_url = "https://www.offiho.com/uploads/product.jpg"
+    seen = []
+
+    def fake_open(request, *, timeout):
+        seen.append((request.get_method(), request.full_url, timeout))
+        return _mock_image_response(image_url, "image/jpeg", 2048)
+
+    monkeypatch.setattr(build, "_open_official", fake_open)
+
+    verification = build._verify_official_image(image_url)
+
+    assert verification == {
+        "image_url": image_url,
+        "image_verified": True,
+        "image_content_type": "image/jpeg",
+        "image_content_length": 2048,
+    }
+    assert seen == [("HEAD", image_url, 10)]
 
 
 def test_redirect_handler_blocks_external_location_before_request():
@@ -368,6 +424,75 @@ def test_download_inventory_uses_validated_mocked_response(monkeypatch, tmp_path
     assert result == output
     assert output.read_bytes() == payload
     assert seen == [("https://www.offiho.com/existencias.xls", 30)]
+
+
+def _mock_download_response(payload, content_type):
+    class _Response:
+        def __init__(self):
+            self.headers = Message()
+            self.headers["Content-Type"] = content_type
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def geturl(self):
+            return "https://www.offiho.com/existencias.xls"
+
+        def read(self, size):
+            return payload if len(payload) <= size else payload[:size]
+
+    return _Response()
+
+
+def test_download_inventory_accepts_valid_html_table_mime(monkeypatch, tmp_path):
+    payload = b"""<!DOCTYPE html><html><body><table>
+<tr><th>CODIGO</th><th>Existencia</th><th>Piezas por Caja</th><th>Precio Lista 1</th></tr>
+<tr><td>OHE-405 NEGRO ALUFSEN</td><td>252</td><td>1</td><td>7999</td></tr>
+</table></body></html>"""
+    monkeypatch.setattr(
+        build,
+        "_open_official",
+        lambda request, timeout: _mock_download_response(payload, "text/html; charset=utf-8"),
+    )
+    output = tmp_path / "inventory-html.xls"
+
+    build.download_inventory("https://www.offiho.com/existencias.xls", output)
+
+    assert output.read_bytes() == payload
+    assert parse_inventory_xls(output)[0]["available_quantity"] == 252
+
+
+def test_download_inventory_rejects_arbitrary_html_landing(monkeypatch, tmp_path):
+    payload = b"<html><body><h1>Maintenance</h1></body></html>"
+    monkeypatch.setattr(
+        build,
+        "_open_official",
+        lambda request, timeout: _mock_download_response(payload, "text/html"),
+    )
+    output = tmp_path / "landing.xls"
+
+    with pytest.raises(ValueError, match="HTML.*inventario"):
+        build.download_inventory("https://www.offiho.com/existencias.xls", output)
+
+    assert not output.exists()
+
+
+def test_download_inventory_rejects_payload_over_limit(monkeypatch, tmp_path):
+    payload = b"x" * (10 * 1024 * 1024 + 1)
+    monkeypatch.setattr(
+        build,
+        "_open_official",
+        lambda request, timeout: _mock_download_response(payload, "application/vnd.ms-excel"),
+    )
+    output = tmp_path / "oversized.xls"
+
+    with pytest.raises(ValueError, match="excede el limite"):
+        build.download_inventory("https://www.offiho.com/existencias.xls", output)
+
+    assert not output.exists()
 
 
 def _build_catalog_with_sources(monkeypatch, tmp_path, label, *, pdf_payload, site_index):
@@ -434,10 +559,42 @@ def test_source_hash_covers_pdf_and_site_snapshot_with_provenance(monkeypatch, t
     assert first["sources"]["site_index"]["cache_version"] == build.CACHE_VERSION
 
 
+def test_build_catalog_is_byte_reproducible_for_identical_sources(monkeypatch, tmp_path):
+    inventory = tmp_path / "inventory.xls"
+    inventory.write_bytes(b"identical inventory")
+    item = {
+        "inventory_key": "OHE-405 NEGRO ALUFSEN",
+        "code": "OHE-405",
+        "name": "ALUFSEN",
+        "variant": "NEGRO",
+        "unit": "PZA",
+        "pieces_per_box": 1,
+        "available_quantity": 252,
+        "unit_price": 7999,
+        "price_source": "inventory",
+    }
+    audit = {"source_row_count": 1, "duplicate_row_count": 0, "unique_item_count": 1}
+    monkeypatch.setattr(build, "_parse_inventory_xls", lambda path: ([dict(item)], dict(audit)))
+    monkeypatch.setattr(build, "parse_pdf_price_index", lambda paths: {})
+    monkeypatch.setattr(build, "build_site_product_index", lambda cache, **kwargs: {})
+    first_path = tmp_path / "first.json"
+    second_path = tmp_path / "second.json"
+
+    first = build.build_catalog(inventory, [], tmp_path / "cache.json", first_path)
+    second = build.build_catalog(inventory, [], tmp_path / "cache.json", second_path)
+
+    assert first_path.read_bytes() == second_path.read_bytes()
+    assert first["generated_at"] == second["generated_at"]
+    assert datetime.fromisoformat(first["generated_at"]).tzinfo is not None
+
+
 def test_no_network_uses_compatible_cache_without_refresh(monkeypatch):
     product = {
         "url": "https://www.offiho.com/directivos/alufsen",
         "image_url": "https://www.offiho.com/uploads/alufsen.jpg",
+        "image_verified": True,
+        "image_content_type": "image/jpeg",
+        "image_content_length": 2048,
         "source_updated_at": "Wed, 08 Jul 2026 12:00:00 GMT",
     }
     cache = {
@@ -456,13 +613,34 @@ def test_no_network_uses_compatible_cache_without_refresh(monkeypatch):
     assert index["OHE-405"] == product
 
 
+def test_no_network_discards_unverified_cache_image():
+    cache = {
+        "cache_version": build.CACHE_VERSION,
+        "site_index": {
+            "OHE-405": {
+                "url": "https://www.offiho.com/directivos/alufsen",
+                "image_url": "https://www.offiho.com/uploads/alufsen.jpg",
+                "source_updated_at": "",
+            }
+        },
+        "site_index_expires_at": "2000-01-01T00:00:00+00:00",
+    }
+
+    index = build.build_site_product_index(cache, no_network=True)
+
+    assert index["OHE-405"]["image_url"] == ""
+    assert index["OHE-405"]["image_verified"] is False
+    assert cache["site_index"]["OHE-405"]["image_verified"] is False
+    assert cache["site_index"]["OHE-405"]["image_content_type"] == ""
+
+
 def test_no_network_deterministically_migrates_legacy_snapshot(monkeypatch):
     page_url = "https://www.offiho.com/directivos/alufsen"
     cache = {
         "site_index": {
             "OHE-405": {
                 "url": page_url,
-                "image_url": page_url,
+                "image_url": "https://www.offiho.com/uploads/unverified.jpg",
                 "source_updated_at": "",
             }
         }
