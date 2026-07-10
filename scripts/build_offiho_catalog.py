@@ -27,22 +27,38 @@ DEFAULT_INVENTORY_PATH = PROJECT_ROOT / ".cache" / "offiho-existencias.xls"
 DEFAULT_CACHE_PATH = PROJECT_ROOT / ".cache" / "offiho-products.json"
 DEFAULT_OUTPUT = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" / "data" / "offiho_catalog.json"
 OFFICIAL_HOSTS = frozenset({"offiho.com", "www.offiho.com", "offihoblack.com", "www.offihoblack.com"})
+OFFIHO_CATALOG_SECTIONS = (
+    "directivos",
+    "ejecutivos",
+    "operativos",
+    "industrial",
+    "accesorios",
+    "visitantes-interior",
+    "visitantes-exterior",
+    "mesas",
+    "bancos",
+    "confortables",
+    "bancas",
+    "escolar",
+    "nuevos-productos",
+)
 SITE_SEEDS = (
     "https://www.offiho.com/",
+    *(f"https://www.offiho.com/{section}/" for section in OFFIHO_CATALOG_SECTIONS),
     "https://www.offiho.com/econosillas/",
     "https://www.offihoblack.com/",
 )
 USER_AGENT = "Mobiliti Offiho Catalog Builder/1.0"
-CACHE_VERSION = 10
+CACHE_VERSION = 13
 CACHE_TTL_SECONDS = 24 * 60 * 60
 LEGACY_CACHE_TIMESTAMP = "1970-01-01T00:00:00+00:00"
-SOURCE_MANIFEST_VERSION = 1
+SOURCE_MANIFEST_VERSION = 2
 MAX_INVENTORY_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_VALIDATION_TIMEOUT = 10
-MAX_DISCOVERED_PAGES = 500
-FIRST_LEVEL_DISCOVERY_LIMIT = 100
-CODE_RE = re.compile(r"\b[A-Z]{2,}(?:-\d+[A-Z0-9]*)+", re.ASCII)
+MAX_DISCOVERED_PAGES = 800
+FIRST_LEVEL_DISCOVERY_LIMIT = 250
+CODE_RE = re.compile(r"\b[A-Z]{2,}(?:-\d+[A-Z0-9]*)+", re.ASCII | re.IGNORECASE)
 PRICE_RE = re.compile(r"\$\s*([\d][\d,]*)")
 IMAGE_EXTENSIONS = frozenset({".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
 NON_PRODUCT_IMAGE_TOKENS = frozenset(
@@ -68,6 +84,32 @@ NON_PRODUCT_IMAGE_TOKENS = frozenset(
     }
 )
 PRODUCT_IMAGE_TOKENS = frozenset({"frente", "front", "principal", "producto", "product"})
+PAGE_NAME_STOP_WORDS = frozenset(
+    {
+        "ACCESORIOS",
+        "BANCAS",
+        "BANCOS",
+        "CATALOGO",
+        "COLLECTION",
+        "CONFORTABLES",
+        "DIRECTIVOS",
+        "ECONOSILLAS",
+        "EJECUTIVOS",
+        "ESCOLAR",
+        "EXTERIOR",
+        "HOME",
+        "INDUSTRIAL",
+        "INTERIOR",
+        "MESAS",
+        "MODELO",
+        "NUEVOS",
+        "OFFIHO",
+        "OPERATIVOS",
+        "PRODUCTO",
+        "PRODUCTOS",
+        "VISITANTES",
+    }
+)
 NON_QUANTITATIVE_STOCK_STATUSES = frozenset({"CONSULTAR EXISTENCIAS", "SOBRE PEDIDO"})
 VARIANT_WORDS = frozenset(
     {
@@ -374,7 +416,7 @@ def parse_pdf_price_index(paths: Sequence[Path]) -> dict[str, Decimal]:
     prices: dict[str, Decimal] = {}
     for page in extract_pdf_pages(paths):
         for match in CODE_RE.finditer(page):
-            code = match.group(0)
+            code = match.group(0).upper()
             window = page[match.end() : match.end() + 220]
             next_code = CODE_RE.search(window)
             if next_code:
@@ -398,28 +440,128 @@ def _variant_from_pdf_text(value: str) -> str:
 
 
 def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[str, Any]]) -> dict[str, str]:
-    if not identity.code:
+    if not identity.code and not identity.name:
         return {"url": "", "image_url": "", "match_status": "unmatched", "source_updated_at": ""}
-    matches = []
+    code_matches = []
     for candidate in candidates:
         url = str(candidate.get("url", ""))
         image_url = _trusted_cached_image(candidate)["image_url"]
         codes = {str(code).upper() for code in candidate.get("codes", [])}
-        if identity.code not in codes or not is_official_url(url):
+        if not any(_official_code_matches(identity, code) for code in codes) or not is_official_url(url):
             continue
         if image_url == url:
             image_url = ""
-        matches.append(
+        code_matches.append(
             {
                 "url": url,
                 "image_url": image_url,
-                "match_status": "official_code_match",
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
             }
         )
-    if not matches:
+    if code_matches:
+        return _select_official_product(identity, code_matches, "official_code_match")
+
+    name_keys = _identity_name_keys(identity)
+    if not name_keys:
         return {"url": "", "image_url": "", "match_status": "unmatched", "source_updated_at": ""}
-    return sorted(matches, key=lambda product: (not bool(product["image_url"]), product["url"]))[0]
+    name_matches = []
+    for candidate in candidates:
+        url = str(candidate.get("url", ""))
+        names = {_product_name_key(name) for name in candidate.get("names", [])}
+        matched_name = next((name for name in name_keys if name in names), "")
+        if not matched_name or not is_official_url(url):
+            continue
+        name_matches.append(
+            {
+                "url": url,
+                "image_url": _trusted_cached_image(candidate)["image_url"],
+                "source_updated_at": str(candidate.get("source_updated_at", "")),
+                "matched_name": matched_name,
+            }
+        )
+    if name_matches:
+        return _select_official_product(identity, name_matches, "official_name_match")
+    return {"url": "", "image_url": "", "match_status": "unmatched", "source_updated_at": ""}
+
+
+def _official_code_matches(identity: OffihoIdentity, candidate_code: str) -> bool:
+    candidate = str(candidate_code or "").upper()
+    target = str(identity.code or "").upper()
+    if not target or not candidate:
+        return False
+    if candidate == target:
+        return True
+    if not candidate.startswith(target):
+        return False
+    suffix = re.sub(r"[^A-Z0-9]", "", candidate[len(target) :])
+    variant_tokens = {
+        re.sub(r"[^A-Z0-9]", "", token)
+        for token in str(identity.variant or "").upper().split()
+    }
+    return bool(suffix and suffix in variant_tokens)
+
+
+def _select_official_product(
+    identity: OffihoIdentity,
+    matches: Sequence[dict[str, str]],
+    match_status: str,
+) -> dict[str, str]:
+    def url_rank(product: dict[str, str]) -> tuple[int, int, int, str]:
+        url = product["url"]
+        path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
+        compact_path = re.sub(r"[^A-Z0-9]", "", path.upper())
+        compact_code = re.sub(r"[^A-Z0-9]", "", identity.code.upper())
+        leaf_name = _product_name_key(path.rstrip("/").rsplit("/", 1)[-1], codes=[identity.code])
+        name_key = product.get("matched_name") or _product_name_key(identity.name)
+        if match_status == "official_code_match":
+            primary = int(bool(compact_code and compact_code in compact_path))
+            secondary = int("/products/" in path.casefold() or "modelo-" in path.casefold())
+            depth = path.count("/")
+        else:
+            primary = int(bool(name_key and leaf_name == name_key))
+            secondary = -path.count("/")
+            depth = int(bool(product.get("image_url")))
+        return primary, secondary, depth, url
+
+    url_product = max(matches, key=url_rank)
+    image_products = [product for product in matches if product.get("image_url")]
+    image_url = max(image_products, key=url_rank)["image_url"] if image_products else ""
+    return {
+        "url": url_product["url"],
+        "image_url": image_url,
+        "match_status": match_status,
+        "source_updated_at": url_product["source_updated_at"],
+    }
+
+
+def _identity_name_keys(identity: OffihoIdentity) -> list[str]:
+    keys: list[str] = []
+
+    def add(value: str) -> None:
+        key = _product_name_key(value)
+        if len(key) >= 3 and key not in keys:
+            keys.append(key)
+
+    add(identity.name)
+    if identity.code and CODE_RE.fullmatch(identity.code) is None:
+        add(identity.code)
+    return keys
+
+
+def _product_name_key(value: str, *, codes: Sequence[str] = ()) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "").upper())
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    code_parts = {
+        part
+        for code in codes
+        for part in re.findall(r"[A-Z0-9]+", str(code or "").upper())
+    }
+    tokens = [
+        token
+        for token in re.findall(r"[A-Z0-9]+", ascii_text)
+        if token not in PAGE_NAME_STOP_WORDS and token not in code_parts
+    ]
+    return " ".join(tokens)
 
 
 def is_official_url(value: str) -> bool:
@@ -525,6 +667,9 @@ class _PageParser(HTMLParser):
         self.images: list[str] = []
         self.meta: dict[str, str] = {}
         self.text: list[str] = []
+        self.names: list[str] = []
+        self._name_tag = ""
+        self._name_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {name.lower(): value or "" for name, value in attrs}
@@ -541,9 +686,22 @@ class _PageParser(HTMLParser):
             content = values.get("content", "")
             if key and content:
                 self.meta[key] = content
+        if tag in {"title", "h1", "h2"} and not self._name_tag:
+            self._name_tag = tag
+            self._name_parts = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == self._name_tag:
+            value = normalize_space(" ".join(self._name_parts))
+            if value:
+                self.names.append(value)
+            self._name_tag = ""
+            self._name_parts = []
 
     def handle_data(self, data: str) -> None:
         self.text.append(data)
+        if self._name_tag:
+            self._name_parts.append(data)
 
 
 def _srcset_urls(value: str) -> list[str]:
@@ -670,17 +828,21 @@ def build_site_product_index(
 
     index: dict[str, dict[str, Any]] = {}
     for record in records:
-        for code in record.get("codes", []):
-            candidate: dict[str, Any] = {
-                "url": str(record.get("url", "")),
-                "source_updated_at": str(record.get("source_updated_at", "")),
-                **_trusted_cached_image(record),
-            }
-            if candidate["image_url"] == candidate["url"]:
-                candidate.update(_empty_image_metadata())
-            existing = index.get(code)
-            if existing is None or (not existing.get("image_url") and candidate["image_url"]):
-                index[code] = candidate
+        codes = sorted({str(code).upper() for code in record.get("codes", []) if str(code).strip()})
+        names = sorted({_product_name_key(name) for name in record.get("names", []) if _product_name_key(name)})
+        candidate: dict[str, Any] = {
+            "url": str(record.get("url", "")),
+            "codes": codes,
+            "names": names,
+            "source_updated_at": str(record.get("source_updated_at", "")),
+            **_trusted_cached_image(record),
+        }
+        if candidate["image_url"] == candidate["url"]:
+            candidate.update(_empty_image_metadata())
+        for key in (*codes, *(f"name:{name}" for name in names)):
+            existing = index.get(key)
+            if existing is None or _site_candidate_rank(key, candidate) > _site_candidate_rank(key, existing):
+                index[key] = candidate
     cache["site_index"] = index
     cache["site_index_created_at"] = current_time.isoformat()
     cache["site_index_expires_at"] = (current_time + timedelta(seconds=CACHE_TTL_SECONDS)).isoformat()
@@ -709,15 +871,30 @@ def _prioritize_product_pages(urls: set[str]) -> list[str]:
 
 def _canonical_product_url(url: str) -> str:
     parsed = urllib.parse.urlsplit(url)
-    path = parsed.path.rstrip("/") or "/"
+    path = parsed.path or "/"
     marker = "/products/"
     if (
         parsed.hostname in {"offihoblack.com", "www.offihoblack.com"}
         and path.startswith("/collections/")
         and marker in path
     ):
-        path = path[path.index(marker) :]
+        path = path[path.index(marker) :].rstrip("/")
+    elif parsed.hostname in {"offihoblack.com", "www.offihoblack.com"} and path.startswith("/products/"):
+        path = path.rstrip("/")
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _site_candidate_rank(key: str, candidate: dict[str, Any]) -> tuple[int, int, int, str]:
+    url = str(candidate.get("url", ""))
+    path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
+    lookup = key.removeprefix("name:")
+    compact_lookup = re.sub(r"[^A-Z0-9]", "", lookup.upper())
+    compact_path = re.sub(r"[^A-Z0-9]", "", path.upper())
+    leaf_name = _product_name_key(path.rstrip("/").rsplit("/", 1)[-1], codes=candidate.get("codes", []))
+    product_page = int("/products/" in path.casefold() or "modelo-" in path.casefold())
+    if key.startswith("name:"):
+        return int(leaf_name == lookup), int(not product_page), int(bool(candidate.get("image_url"))), url
+    return int(compact_lookup in compact_path), int(bool(candidate.get("image_url"))), product_page, url
 
 
 def _product_page_priority(url: str) -> int:
@@ -759,6 +936,14 @@ def _sanitize_site_index(index: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "source_updated_at": str(value.get("source_updated_at", "")),
             **image_metadata,
         }
+        if isinstance(value.get("codes"), list):
+            sanitized[str(code)]["codes"] = sorted(
+                {str(item).upper() for item in value["codes"] if str(item).strip()}
+            )
+        if isinstance(value.get("names"), list):
+            sanitized[str(code)]["names"] = sorted(
+                {_product_name_key(item) for item in value["names"] if _product_name_key(item)}
+            )
     return sanitized
 
 
@@ -785,7 +970,8 @@ def _fetch_official_page(url: str) -> dict[str, Any]:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
     try:
         with _open_official(request, timeout=15) as response:
-            if not is_official_url(response.geturl()):
+            page_url = _normalize_official_link(response.geturl())
+            if not is_official_url(page_url):
                 return {}
             content_type = response.headers.get_content_type()
             if content_type not in {"text/html", "application/xhtml+xml"}:
@@ -799,29 +985,42 @@ def _fetch_official_page(url: str) -> dict[str, Any]:
     parser.feed(payload)
     links = sorted(
         {
-            _normalize_official_link(urllib.parse.urldefrag(urllib.parse.urljoin(url, link))[0])
+            _normalize_official_link(urllib.parse.urldefrag(urllib.parse.urljoin(page_url, link))[0])
             for link in parser.links
-            if is_official_url(urllib.parse.urldefrag(urllib.parse.urljoin(url, link))[0])
+            if is_official_url(urllib.parse.urldefrag(urllib.parse.urljoin(page_url, link))[0])
         }
     )
     page_text = " ".join(parser.text)
     metadata_text = " ".join(parser.meta.values())
-    codes = sorted(set(CODE_RE.findall(unescape(f"{page_text} {metadata_text}"))))
+    codes = sorted({code.upper() for code in CODE_RE.findall(unescape(f"{page_text} {metadata_text}"))})
+    names = _page_names(page_url, parser, codes)
     image_url = _extract_official_image_url(
-        url,
+        page_url,
         parser,
         codes=codes,
         extra_candidates=[link for link in links if is_official_image_url(link)],
     )
     image_metadata = _verify_official_image(image_url) if image_url else _empty_image_metadata()
     return {
-        "url": url,
+        "url": page_url,
         "links": links,
         "codes": codes,
+        "names": names,
         **image_metadata,
         "source_updated_at": source_updated_at,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _page_names(page_url: str, parser: _PageParser, codes: Sequence[str]) -> list[str]:
+    raw_names = [
+        *parser.names,
+        parser.meta.get("og:title", ""),
+        parser.meta.get("twitter:title", ""),
+        urllib.parse.unquote(urllib.parse.urlsplit(page_url).path).rstrip("/").rsplit("/", 1)[-1],
+    ]
+    names = {_product_name_key(name, codes=codes) for name in raw_names}
+    return sorted(name for name in names if name)
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -903,10 +1102,21 @@ def build_catalog(
         "generated_at": generated_at,
         "generated_at_source": generated_at_source,
     }
-    site_candidates = [
-        {"codes": [code], **product}
-        for code, product in site_index.items()
-    ]
+    site_candidates = []
+    for key, product in site_index.items():
+        codes = list(product.get("codes", []))
+        names = list(product.get("names", []))
+        if key.startswith("name:"):
+            names.append(key.removeprefix("name:"))
+        else:
+            codes.append(key)
+        site_candidates.append(
+            {
+                **product,
+                "codes": sorted({str(code).upper() for code in codes if str(code).strip()}),
+                "names": sorted({_product_name_key(name) for name in names if _product_name_key(name)}),
+            }
+        )
     for item in items:
         identity = OffihoIdentity(item["code"], item["name"], item["variant"])
         if item["price_source"] == "missing":

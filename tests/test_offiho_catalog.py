@@ -1,7 +1,8 @@
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
+from urllib.parse import urlsplit
 import json
 
 import pytest
@@ -165,6 +166,23 @@ def test_load_offiho_catalog_propagates_inventory_audit():
     assert catalog["source_row_count"] == 1286
     assert catalog["duplicate_row_count"] == 80
     assert catalog["unique_item_count"] == 1206
+
+
+def test_checked_in_offiho_catalog_keeps_official_media_coverage():
+    raw = _runtime_catalog_raw()
+    items = raw["items"]
+    matched = [item for item in items if item.get("product_url") or item.get("image_url")]
+    official_hosts = {"offiho.com", "www.offiho.com", "offihoblack.com", "www.offihoblack.com"}
+
+    assert len(items) == 1206
+    assert len(matched) >= 700
+    assert all(item.get("product_url") and item.get("image_url") for item in matched)
+    for item in matched:
+        for field in ("product_url", "image_url"):
+            parsed = urlsplit(item[field])
+            assert parsed.scheme == "https"
+            assert parsed.hostname in official_hosts
+        assert item["product_url"] != item["image_url"]
 
 
 @pytest.mark.parametrize(
@@ -923,6 +941,91 @@ def test_site_match_requires_expected_model_code():
     assert product["image_url"] == ""
 
 
+def test_site_match_falls_back_to_exact_normalized_product_name():
+    product = match_official_product(
+        extract_offiho_identity("OHE-405 NEGRO ALUFSEN"),
+        [
+            {
+                "codes": ["OHE-999"],
+                "names": ["Alufsen"],
+                "url": "https://www.offiho.com/directivos/alufsen/",
+                "image_url": "https://www.offiho.com/images/alufsen-frente.jpg",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            }
+        ],
+    )
+
+    assert product["url"] == "https://www.offiho.com/directivos/alufsen/"
+    assert product["image_url"] == "https://www.offiho.com/images/alufsen-frente.jpg"
+    assert product["match_status"] == "official_name_match"
+
+
+def test_site_match_prefers_exact_code_over_name_fallback():
+    product = match_official_product(
+        extract_offiho_identity("OHE-405 NEGRO ALUFSEN"),
+        [
+            {
+                "codes": ["OHE-999"],
+                "names": ["ALUFSEN"],
+                "url": "https://www.offiho.com/directivos/alufsen/",
+            },
+            {
+                "codes": ["OHE-405"],
+                "names": ["ALUFSEN"],
+                "url": "https://www.offiho.com/directivos/alufsen/directivos-alufsen-modelo-OHE-405",
+            },
+        ],
+    )
+
+    assert product["url"].endswith("modelo-OHE-405")
+    assert product["match_status"] == "official_code_match"
+
+
+def test_site_match_accepts_official_code_with_inventory_variant_suffix():
+    product = match_official_product(
+        extract_offiho_identity("OHE-165 NEGRO FENIX"),
+        [
+            {
+                "codes": ["OHE-165NEGRO"],
+                "names": ["FENIX"],
+                "url": "https://www.offiho.com/directivos/fenix/directivos-fenix-modelo-OHE-165negro",
+                "image_url": "https://www.offiho.com/directivos/fenix/OHE-165/OHE-165negroFrente.jpg",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            }
+        ],
+    )
+
+    assert product["url"].endswith("modelo-OHE-165negro")
+    assert product["image_url"].endswith("OHE-165negroFrente.jpg")
+    assert product["match_status"] == "official_code_match"
+
+
+@pytest.mark.parametrize("inventory_key", ["RIMINI NEGRO", "FESTINA PERLA"])
+def test_site_match_uses_unstructured_inventory_identifier_as_name(inventory_key):
+    identity = extract_offiho_identity(inventory_key)
+    product = match_official_product(
+        identity,
+        [
+            {
+                "codes": [],
+                "names": [identity.code],
+                "url": f"https://www.offiho.com/econosillas/{identity.code.casefold()}/",
+                "image_url": f"https://www.offiho.com/images/{identity.code.casefold()}.jpg",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            }
+        ],
+    )
+
+    assert product["url"].endswith(f"/{identity.code.casefold()}/")
+    assert product["match_status"] == "official_name_match"
+
+
 def test_image_extraction_never_uses_page_url_for_empty_candidate():
     page_url = "https://www.offiho.com/directivos/alufsen"
     parser = build._PageParser()
@@ -1004,6 +1107,144 @@ def test_discovery_prioritizes_canonical_shopify_product_pages():
         "https://www.offihoblack.com/products/vanto-ohe-75",
         "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
     ]
+
+
+def test_canonical_product_url_preserves_offiho_directory_trailing_slash():
+    category = "https://www.offiho.com/directivos/"
+
+    assert build._canonical_product_url(category) == category
+
+
+def test_fetch_page_resolves_relative_links_from_redirected_directory(monkeypatch):
+    payload = b'<html><head><title>Directivos - Offiho</title></head><body><a href="alufsen/">ALUFSEN</a></body></html>'
+
+    class _Response:
+        def __init__(self):
+            self.headers = Message()
+            self.headers["Content-Type"] = "text/html; charset=utf-8"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def geturl(self):
+            return "https://www.offiho.com/directivos/"
+
+        def read(self, size):
+            return payload[:size]
+
+    monkeypatch.setattr(build, "_open_official", lambda request, timeout: _Response())
+
+    record = build._fetch_official_page("https://www.offiho.com/directivos")
+
+    assert record["url"] == "https://www.offiho.com/directivos/"
+    assert "https://www.offiho.com/directivos/alufsen/" in record["links"]
+
+
+def test_fetch_page_normalizes_mixed_case_product_codes(monkeypatch):
+    payload = b"<html><body><h1>KYOS</h1><p>Modelo OHP-325cr</p></body></html>"
+
+    class _Response:
+        def __init__(self):
+            self.headers = Message()
+            self.headers["Content-Type"] = "text/html"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def geturl(self):
+            return "https://www.offiho.com/escolar/kyos-collection/modelo-OHP-325cr"
+
+        def read(self, size):
+            return payload[:size]
+
+    monkeypatch.setattr(build, "_open_official", lambda request, timeout: _Response())
+
+    record = build._fetch_official_page("https://www.offiho.com/escolar/kyos-collection/modelo-OHP-325cr")
+
+    assert record["codes"] == ["OHP-325CR"]
+
+
+def test_page_names_do_not_treat_category_card_headings_as_page_name():
+    parser = build._PageParser()
+    parser.feed("<html><head><title>Visitantes Interior - Offiho</title></head><body><h3>KYOS</h3></body></html>")
+
+    assert "KYOS" not in build._page_names("https://www.offiho.com/visitantes-interior/", parser, [])
+
+
+def test_page_names_normalize_collection_family_slug():
+    parser = build._PageParser()
+
+    assert build._page_names(
+        "https://www.offiho.com/visitantes-interior/kyos-collection/", parser, []
+    ) == ["KYOS"]
+
+
+def test_site_index_keeps_name_only_official_product_pages(monkeypatch):
+    page_url = "https://www.offiho.com/directivos/alufsen/"
+    record = {
+        "url": page_url,
+        "links": [],
+        "codes": [],
+        "names": ["ALUFSEN"],
+        "image_url": "https://www.offiho.com/images/alufsen-frente.jpg",
+        "image_verified": True,
+        "image_content_type": "image/jpeg",
+        "image_content_length": 2048,
+        "source_updated_at": "",
+    }
+    monkeypatch.setattr(build, "SITE_SEEDS", (page_url,))
+    monkeypatch.setattr(build, "_cached_or_fetch_page", lambda url, pages: record)
+
+    index = build.build_site_product_index({}, now=datetime(2026, 7, 10, tzinfo=timezone.utc))
+
+    assert index["name:ALUFSEN"]["url"] == page_url
+    assert index["name:ALUFSEN"]["names"] == ["ALUFSEN"]
+
+
+def test_name_index_prefers_family_page_over_different_model_page():
+    family = {
+        "url": "https://www.offiho.com/directivos/alufsen/",
+        "codes": ["OHE-405", "OHV-408"],
+        "names": ["ALUFSEN"],
+        "image_url": "https://www.offiho.com/images/alufsen.jpg",
+    }
+    model = {
+        "url": "https://www.offiho.com/directivos/alufsen/directivos-alufsen-modelo-OHE-405",
+        "codes": ["OHE-405"],
+        "names": ["ALUFSEN"],
+        "image_url": "https://www.offiho.com/images/ohe-405.jpg",
+    }
+
+    assert build._site_candidate_rank("name:ALUFSEN", family) > build._site_candidate_rank(
+        "name:ALUFSEN", model
+    )
+
+
+def test_site_seeds_include_each_offiho_catalog_section():
+    expected = {
+        "directivos",
+        "ejecutivos",
+        "operativos",
+        "industrial",
+        "accesorios",
+        "visitantes-interior",
+        "visitantes-exterior",
+        "mesas",
+        "bancos",
+        "confortables",
+        "bancas",
+        "escolar",
+        "nuevos-productos",
+    }
+    paths = {urlsplit(url).path.strip("/") for url in build.SITE_SEEDS}
+
+    assert expected <= paths
 
 
 def test_official_link_normalization_escapes_spaces_before_fetching():

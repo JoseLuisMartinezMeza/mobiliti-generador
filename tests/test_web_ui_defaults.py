@@ -112,6 +112,8 @@ def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
     assert "numeric > 1000000" in source
     assert "maximumFractionDigits: 2" in source
     assert "rel=\"noreferrer noopener\"" in source
+    assert 'aria-label={`Abrir sitio oficial de ${item.name || item.code}`}' in source
+    assert 'title="Abrir sitio oficial"' in source
     assert '"/offiho/:path*"' in vercel
     assert ".offiho-product" in styles
     assert ".offiho-warning" in styles
