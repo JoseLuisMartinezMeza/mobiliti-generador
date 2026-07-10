@@ -1,21 +1,46 @@
 {
-  "source_hash": "f6f2025bb6ae25afaba4c24a0f1877c2d6b577d6827ef9da12967b039371dcff",
-  "generated_at": "2026-07-10T02:06:21.645263+00:00",
+  "source_hash": "ebef398fb1b100bd8c0d7ba91e4d68d1ec4b2f98da1e3c6f739315f450ebb0a5",
+  "generated_at": "2026-07-10T02:31:34.896132+00:00",
   "sources": {
-    "inventory": "offiho-existencias.xls",
+    "manifest_version": 1,
+    "inventory": {
+      "name": "offiho-existencias.xls",
+      "sha256": "f6f2025bb6ae25afaba4c24a0f1877c2d6b577d6827ef9da12967b039371dcff",
+      "size_bytes": 298496
+    },
     "pdfs": [
-      "LP OFFIHO®️ ECONO SILLAS®️ JUL2026.pdf",
-      "LP BLACK®️ & COLOS®️ JUL2026.pdf"
-    ]
+      {
+        "name": "LP BLACK®️ & COLOS®️ JUL2026.pdf",
+        "sha256": "2a8122d4484ac4c851ef906b1d5748bbfb3c24ba975c41a2d33abb5da74f281b",
+        "size_bytes": 7460450
+      },
+      {
+        "name": "LP OFFIHO®️ ECONO SILLAS®️ JUL2026.pdf",
+        "sha256": "d36e291dde6a2d19d9d03994f993804d46a62adef6b9be916a3da7a42e8d8f15",
+        "size_bytes": 7698788
+      }
+    ],
+    "site_index": {
+      "sha256": "e5742cbfe2aeb956c4e25243265aa59bd10dab408ae61661f5e67f6e89c0bd20",
+      "cache_version": 2,
+      "record_count": 103,
+      "created_at": "1970-01-01T00:00:00+00:00",
+      "expires_at": "1970-01-01T00:00:00+00:00",
+      "offline": true
+    }
   },
   "total": 1206,
   "source_row_count": 1286,
   "duplicate_row_count": 80,
   "unique_item_count": 1206,
+  "excluded_stock_status_count": 324,
+  "excluded_header_row_count": 3,
+  "defaulted_pieces_status_count": 2,
+  "excluded_blank_stock_count": 54,
   "out_of_stock": 189,
   "inventory_prices": 778,
   "pdf_prices": 0,
-  "official_images": 191,
+  "official_images": 0,
   "items": [
     {
       "inventory_key": "OHE-405 NEGRO ALUFSEN",
@@ -1078,7 +1103,7 @@
       "unit_price": 4399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
-      "image_url": "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1093,7 +1118,7 @@
       "unit_price": 4199,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
-      "image_url": "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1108,7 +1133,7 @@
       "unit_price": 3999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
-      "image_url": "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1123,7 +1148,7 @@
       "unit_price": 3699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
-      "image_url": "https://www.offiho.com/operativos/ciao/operativos-ciao-modelo-OHS-12CB",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1513,7 +1538,7 @@
       "unit_price": 3399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
-      "image_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1528,7 +1553,7 @@
       "unit_price": 3399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
-      "image_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1543,7 +1568,7 @@
       "unit_price": 3399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
-      "image_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1558,7 +1583,7 @@
       "unit_price": 3399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
-      "image_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1573,7 +1598,7 @@
       "unit_price": 2999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
-      "image_url": "https://www.offiho.com/operativos/rainbow/operativos-rainbow-modelo-OHE-101",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1828,7 +1853,7 @@
       "unit_price": 2699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/industrial/",
-      "image_url": "https://www.offiho.com/industrial/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1843,7 +1868,7 @@
       "unit_price": 2299,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/industrial/",
-      "image_url": "https://www.offiho.com/industrial/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -1858,7 +1883,7 @@
       "unit_price": 1299,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/industrial/",
-      "image_url": "https://www.offiho.com/industrial/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4453,7 +4478,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4468,7 +4493,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4483,7 +4508,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4498,7 +4523,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4513,7 +4538,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4543,7 +4568,7 @@
       "unit_price": 3298,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4558,7 +4583,7 @@
       "unit_price": 3298,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4573,7 +4598,7 @@
       "unit_price": 3298,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4588,7 +4613,7 @@
       "unit_price": 3298,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4603,7 +4628,7 @@
       "unit_price": 3298,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4618,7 +4643,7 @@
       "unit_price": 3298,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4648,7 +4673,7 @@
       "unit_price": 1999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4663,7 +4688,7 @@
       "unit_price": 1999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4678,7 +4703,7 @@
       "unit_price": 1999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4693,7 +4718,7 @@
       "unit_price": 1999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4708,7 +4733,7 @@
       "unit_price": 1999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4723,7 +4748,7 @@
       "unit_price": 1999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4798,7 +4823,7 @@
       "unit_price": 2699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4813,7 +4838,7 @@
       "unit_price": 2699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4828,7 +4853,7 @@
       "unit_price": 2699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4843,7 +4868,7 @@
       "unit_price": 2699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4858,7 +4883,7 @@
       "unit_price": 2699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4873,7 +4898,7 @@
       "unit_price": 2699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4888,7 +4913,7 @@
       "unit_price": 2699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4903,7 +4928,7 @@
       "unit_price": 1699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4918,7 +4943,7 @@
       "unit_price": 1699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4933,7 +4958,7 @@
       "unit_price": 1699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4948,7 +4973,7 @@
       "unit_price": 1699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4963,7 +4988,7 @@
       "unit_price": 1699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4978,7 +5003,7 @@
       "unit_price": 1699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -4993,7 +5018,7 @@
       "unit_price": 1699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5008,7 +5033,7 @@
       "unit_price": 2599,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5023,7 +5048,7 @@
       "unit_price": 2599,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5038,7 +5063,7 @@
       "unit_price": 2599,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5053,7 +5078,7 @@
       "unit_price": 2599,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5068,7 +5093,7 @@
       "unit_price": 2599,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5083,7 +5108,7 @@
       "unit_price": 2599,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5098,7 +5123,7 @@
       "unit_price": 2599,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5113,7 +5138,7 @@
       "unit_price": 1499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5128,7 +5153,7 @@
       "unit_price": 1499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5143,7 +5168,7 @@
       "unit_price": 1499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5158,7 +5183,7 @@
       "unit_price": 1499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5173,7 +5198,7 @@
       "unit_price": 1499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5188,7 +5213,7 @@
       "unit_price": 1499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -5203,7 +5228,7 @@
       "unit_price": 1499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/bancos/",
-      "image_url": "https://www.offiho.com/bancos/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -6013,7 +6038,7 @@
       "unit_price": 1599,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -6028,7 +6053,7 @@
       "unit_price": 1599,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -6043,7 +6068,7 @@
       "unit_price": 1599,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -6058,7 +6083,7 @@
       "unit_price": 1399,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -7153,7 +7178,7 @@
       "unit_price": 1199,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-folding-modelo-OHV-137",
-      "image_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-folding-modelo-OHV-137",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -7168,7 +7193,7 @@
       "unit_price": 1199,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-folding-modelo-OHV-137",
-      "image_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-folding-modelo-OHV-137",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -7183,7 +7208,7 @@
       "unit_price": 1199,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-folding-modelo-OHV-137",
-      "image_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-folding-modelo-OHV-137",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -7198,7 +7223,7 @@
       "unit_price": 1069,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-teksi-modelo-OHV-19",
-      "image_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-teksi-modelo-OHV-19",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -7213,7 +7238,7 @@
       "unit_price": 1069,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-teksi-modelo-OHV-19",
-      "image_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-teksi-modelo-OHV-19",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -7228,7 +7253,7 @@
       "unit_price": 1069,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-teksi-modelo-OHV-19",
-      "image_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-teksi-modelo-OHV-19",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -7243,7 +7268,7 @@
       "unit_price": 1069,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-teksi-modelo-OHV-19",
-      "image_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-teksi-modelo-OHV-19",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9133,7 +9158,7 @@
       "unit_price": 1699,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/OHS-10",
-      "image_url": "https://www.offiho.com/econosillas/OHS-10",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9283,7 +9308,7 @@
       "unit_price": 1299,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/aprendista-modelo-OHP-2502",
-      "image_url": "https://www.offiho.com/econosillas/aprendista-modelo-OHP-2502",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9298,7 +9323,7 @@
       "unit_price": 1299,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/aprendista-modelo-OHP-2502",
-      "image_url": "https://www.offiho.com/econosillas/aprendista-modelo-OHP-2502",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9313,7 +9338,7 @@
       "unit_price": 2999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/banca-ellitico/",
-      "image_url": "https://www.offiho.com/econosillas/banca-ellitico/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9328,7 +9353,7 @@
       "unit_price": 4999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/banca-ellitico/",
-      "image_url": "https://www.offiho.com/econosillas/banca-ellitico/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9343,7 +9368,7 @@
       "unit_price": 53999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/banca-ellitico/",
-      "image_url": "https://www.offiho.com/econosillas/banca-ellitico/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9358,7 +9383,7 @@
       "unit_price": 64999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/banca-ellitico/",
-      "image_url": "https://www.offiho.com/econosillas/banca-ellitico/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9373,7 +9398,7 @@
       "unit_price": 2999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/banca-ellitico/",
-      "image_url": "https://www.offiho.com/econosillas/banca-ellitico/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9388,7 +9413,7 @@
       "unit_price": 4999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/banca-ellitico/",
-      "image_url": "https://www.offiho.com/econosillas/banca-ellitico/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9403,7 +9428,7 @@
       "unit_price": 5399,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/banca-ellitico/",
-      "image_url": "https://www.offiho.com/econosillas/banca-ellitico/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9418,7 +9443,7 @@
       "unit_price": 6499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/banca-ellitico/",
-      "image_url": "https://www.offiho.com/econosillas/banca-ellitico/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9433,7 +9458,7 @@
       "unit_price": 1999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/stanza/",
-      "image_url": "https://www.offiho.com/econosillas/stanza/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9463,7 +9488,7 @@
       "unit_price": 1189,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
-      "image_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9478,7 +9503,7 @@
       "unit_price": 1189,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
-      "image_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9493,7 +9518,7 @@
       "unit_price": 1189,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
-      "image_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9508,7 +9533,7 @@
       "unit_price": 1189,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
-      "image_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9523,7 +9548,7 @@
       "unit_price": 1189,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
-      "image_url": "https://www.offiho.com/econosillas/delta-modelo-OHV-14",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9568,7 +9593,7 @@
       "unit_price": 899,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/heron-modelo-OHV-124",
-      "image_url": "https://www.offiho.com/econosillas/heron-modelo-OHV-124",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9583,7 +9608,7 @@
       "unit_price": 899,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/heron-modelo-OHV-124",
-      "image_url": "https://www.offiho.com/econosillas/heron-modelo-OHV-124",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9598,7 +9623,7 @@
       "unit_price": 899,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/heron-modelo-OHV-124",
-      "image_url": "https://www.offiho.com/econosillas/heron-modelo-OHV-124",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9613,7 +9638,7 @@
       "unit_price": 899,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/heron-modelo-OHV-124",
-      "image_url": "https://www.offiho.com/econosillas/heron-modelo-OHV-124",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9703,7 +9728,7 @@
       "unit_price": 2199,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/stanza/",
-      "image_url": "https://www.offiho.com/econosillas/stanza/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9718,7 +9743,7 @@
       "unit_price": 1089,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/oliver-modelo-OHV-141",
-      "image_url": "https://www.offiho.com/econosillas/oliver-modelo-OHV-141",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9733,7 +9758,7 @@
       "unit_price": 999,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/way-modelo-OHV-58alto",
-      "image_url": "https://www.offiho.com/econosillas/way-modelo-OHV-58alto",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9748,7 +9773,7 @@
       "unit_price": 549,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/arne-modelo-OHV-121",
-      "image_url": "https://www.offiho.com/econosillas/arne-modelo-OHV-121",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9763,7 +9788,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/eqqus-modelo-OHV-117",
-      "image_url": "https://www.offiho.com/econosillas/eqqus-modelo-OHV-117",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9778,7 +9803,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/eqqus-modelo-OHV-117",
-      "image_url": "https://www.offiho.com/econosillas/eqqus-modelo-OHV-117",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9793,7 +9818,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/eqqus-modelo-OHV-117",
-      "image_url": "https://www.offiho.com/econosillas/eqqus-modelo-OHV-117",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9808,7 +9833,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/nordik-modelo-OHV-118",
-      "image_url": "https://www.offiho.com/econosillas/nordik-modelo-OHV-118",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9823,7 +9848,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/nordik-modelo-OHV-118",
-      "image_url": "https://www.offiho.com/econosillas/nordik-modelo-OHV-118",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9838,7 +9863,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/nordik-modelo-OHV-118",
-      "image_url": "https://www.offiho.com/econosillas/nordik-modelo-OHV-118",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9853,7 +9878,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/bistrot-modelo-OHV-119",
-      "image_url": "https://www.offiho.com/econosillas/bistrot-modelo-OHV-119",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9868,7 +9893,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/bistrot-modelo-OHV-119",
-      "image_url": "https://www.offiho.com/econosillas/bistrot-modelo-OHV-119",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -9883,7 +9908,7 @@
       "unit_price": 869,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/bistrot-modelo-OHV-119",
-      "image_url": "https://www.offiho.com/econosillas/bistrot-modelo-OHV-119",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10078,7 +10103,7 @@
       "unit_price": 729,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
-      "image_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10093,7 +10118,7 @@
       "unit_price": 729,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
-      "image_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10108,7 +10133,7 @@
       "unit_price": 729,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
-      "image_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10123,7 +10148,7 @@
       "unit_price": 729,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
-      "image_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10138,7 +10163,7 @@
       "unit_price": 729,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
-      "image_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10153,7 +10178,7 @@
       "unit_price": 729,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
-      "image_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10168,7 +10193,7 @@
       "unit_price": 729,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
-      "image_url": "https://www.offiho.com/econosillas/ocean-modelo-OHV-61",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10183,7 +10208,7 @@
       "unit_price": 729,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/reef-modelo-OHV-62gris",
-      "image_url": "https://www.offiho.com/econosillas/reef-modelo-OHV-62gris",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10213,7 +10238,7 @@
       "unit_price": 499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/reef-modelo-OHV-62gris",
-      "image_url": "https://www.offiho.com/econosillas/reef-modelo-OHV-62gris",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10243,7 +10268,7 @@
       "unit_price": 499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
-      "image_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10258,7 +10283,7 @@
       "unit_price": 499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
-      "image_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10273,7 +10298,7 @@
       "unit_price": 499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
-      "image_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10288,7 +10313,7 @@
       "unit_price": 499,
       "price_source": "inventory",
       "product_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
-      "image_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10303,7 +10328,7 @@
       "unit_price": 0,
       "price_source": "missing",
       "product_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
-      "image_url": "https://www.offiho.com/econosillas/bimba-modelo-OHV-67",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10318,7 +10343,7 @@
       "unit_price": 15399,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10333,7 +10358,7 @@
       "unit_price": 9999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10348,7 +10373,7 @@
       "unit_price": 8999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10378,7 +10403,7 @@
       "unit_price": 8999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/sillas-de-oficina",
-      "image_url": "https://www.offihoblack.com/collections/sillas-de-oficina",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10393,7 +10418,7 @@
       "unit_price": 7999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10408,7 +10433,7 @@
       "unit_price": 0,
       "price_source": "missing",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10423,7 +10448,7 @@
       "unit_price": 7499,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10438,7 +10463,7 @@
       "unit_price": 0,
       "price_source": "missing",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10453,7 +10478,7 @@
       "unit_price": 7027,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10468,7 +10493,7 @@
       "unit_price": 7027,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10498,7 +10523,7 @@
       "unit_price": 5999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10513,7 +10538,7 @@
       "unit_price": 9899,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10528,7 +10553,7 @@
       "unit_price": 6299,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10543,7 +10568,7 @@
       "unit_price": 6299,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10558,7 +10583,7 @@
       "unit_price": 5999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10573,7 +10598,7 @@
       "unit_price": 5999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10588,7 +10613,7 @@
       "unit_price": 5999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10603,7 +10628,7 @@
       "unit_price": 5899,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10618,7 +10643,7 @@
       "unit_price": 5699,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10648,7 +10673,7 @@
       "unit_price": 9899,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10663,7 +10688,7 @@
       "unit_price": 6199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10678,7 +10703,7 @@
       "unit_price": 6199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10693,7 +10718,7 @@
       "unit_price": 5199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10708,7 +10733,7 @@
       "unit_price": 13999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10723,7 +10748,7 @@
       "unit_price": 13999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10738,7 +10763,7 @@
       "unit_price": 13999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10753,7 +10778,7 @@
       "unit_price": 13999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10768,7 +10793,7 @@
       "unit_price": 13999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10783,7 +10808,7 @@
       "unit_price": 13999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10798,7 +10823,7 @@
       "unit_price": 8799,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10813,7 +10838,7 @@
       "unit_price": 8799,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10828,7 +10853,7 @@
       "unit_price": 8799,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10843,7 +10868,7 @@
       "unit_price": 8799,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10858,7 +10883,7 @@
       "unit_price": 8799,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10873,7 +10898,7 @@
       "unit_price": 8799,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10888,7 +10913,7 @@
       "unit_price": 7999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10903,7 +10928,7 @@
       "unit_price": 7999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10918,7 +10943,7 @@
       "unit_price": 7999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10933,7 +10958,7 @@
       "unit_price": 7999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10948,7 +10973,7 @@
       "unit_price": 7999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10963,7 +10988,7 @@
       "unit_price": 7999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10978,7 +11003,7 @@
       "unit_price": 6999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -10993,7 +11018,7 @@
       "unit_price": 6999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11008,7 +11033,7 @@
       "unit_price": 6999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11023,7 +11048,7 @@
       "unit_price": 6999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11038,7 +11063,7 @@
       "unit_price": 6999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11053,7 +11078,7 @@
       "unit_price": 6999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11068,7 +11093,7 @@
       "unit_price": 5699,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11083,7 +11108,7 @@
       "unit_price": 5699,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11098,7 +11123,7 @@
       "unit_price": 5699,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11113,7 +11138,7 @@
       "unit_price": 5699,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11128,7 +11153,7 @@
       "unit_price": 5699,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11143,7 +11168,7 @@
       "unit_price": 5699,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11158,7 +11183,7 @@
       "unit_price": 2899,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11173,7 +11198,7 @@
       "unit_price": 2799,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/bancos",
-      "image_url": "https://www.offihoblack.com/collections/bancos",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11188,7 +11213,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11203,7 +11228,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11218,7 +11243,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11233,7 +11258,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11248,7 +11273,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11263,7 +11288,7 @@
       "unit_price": 2399,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/offiho-black",
-      "image_url": "https://www.offihoblack.com/collections/offiho-black",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11278,7 +11303,7 @@
       "unit_price": 17999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11293,7 +11318,7 @@
       "unit_price": 10199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11308,7 +11333,7 @@
       "unit_price": 17999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11323,7 +11348,7 @@
       "unit_price": 10999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/",
-      "image_url": "https://www.offihoblack.com/",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11338,7 +11363,7 @@
       "unit_price": 12999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11353,7 +11378,7 @@
       "unit_price": 6999,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11368,7 +11393,7 @@
       "unit_price": 5199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11383,7 +11408,7 @@
       "unit_price": 5199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11398,7 +11423,7 @@
       "unit_price": 5199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11413,7 +11438,7 @@
       "unit_price": 5199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11428,7 +11453,7 @@
       "unit_price": 5199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11443,7 +11468,7 @@
       "unit_price": 5199,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11458,7 +11483,7 @@
       "unit_price": 3499,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/bancos",
-      "image_url": "https://www.offihoblack.com/collections/bancos",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
@@ -11713,7 +11738,7 @@
       "unit_price": 6799,
       "price_source": "inventory",
       "product_url": "https://www.offihoblack.com/collections/all",
-      "image_url": "https://www.offihoblack.com/collections/all",
+      "image_url": "",
       "match_status": "official_code_match",
       "source_updated_at": ""
     },
