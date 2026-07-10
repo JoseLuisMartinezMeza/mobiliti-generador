@@ -20,6 +20,7 @@ def fake_runtime_catalog(
     available_quantity: int,
     unit_price: int,
     image_url: str = "",
+    description: str = "",
     price_source: str = "inventory",
 ):
     from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
@@ -36,6 +37,7 @@ def fake_runtime_catalog(
         price_source=price_source,
         product_url="https://www.offiho.com/productos/alufsen",
         image_url=image_url,
+        description=description,
     )
     return {"source_hash": "hash", "items": [item], "by_inventory_key": {item.inventory_key: item}}
 
@@ -88,6 +90,42 @@ def test_offiho_cart_uses_catalog_owned_values_and_rejects_non_positive_quantity
             [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 0}],
             catalog=fake_runtime_catalog(available_quantity=252, unit_price=7999),
         )
+
+
+def test_offiho_description_reaches_cart_and_quotation_workbook(tmp_path):
+    from mobiliti_saas.quote_engine.offiho_catalog import (
+        build_offiho_cart_payload,
+        create_offiho_quotation_workbook,
+    )
+
+    description = "Estructura de acero tubular y asiento de polipropileno de alta resistencia."
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 2}],
+        catalog=fake_runtime_catalog(
+            available_quantity=5,
+            unit_price=7999,
+            description=description,
+        ),
+    )
+    output = tmp_path / "offiho-description.xlsx"
+    create_offiho_quotation_workbook(payload, output)
+
+    assert payload["items"][0]["description"] == description
+    workbook = load_workbook(output, read_only=True)
+    assert description in workbook["Quotation"]["D9"].value
+    workbook.close()
+
+    from mobiliti_saas.worker.online_quote_generator import generate_online_quote
+
+    final_output = tmp_path / "offiho-description-final.xlsx"
+    generate_online_quote(output, final_output, {"tipo_cambio": "20"})
+    final = load_workbook(final_output, read_only=True)
+    assert any(
+        description in str(cell.value or "")
+        for row in final["Cotizacion"].iter_rows()
+        for cell in row
+    )
+    final.close()
     with pytest.raises(ValueError, match="Cantidad invalida"):
         build_offiho_cart_payload(
             [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": "NaN"}],
@@ -163,18 +201,24 @@ def test_load_offiho_catalog_propagates_inventory_audit():
 
     catalog = load_offiho_catalog()
 
-    assert catalog["source_row_count"] == 1286
+    assert catalog["source_row_count"] == 1287
     assert catalog["duplicate_row_count"] == 80
-    assert catalog["unique_item_count"] == 1206
+    assert catalog["unique_item_count"] == 1207
 
 
 def test_checked_in_offiho_catalog_keeps_official_media_coverage():
     raw = _runtime_catalog_raw()
     items = raw["items"]
     matched = [item for item in items if item.get("product_url") or item.get("image_url")]
-    official_hosts = {"offiho.com", "www.offiho.com", "offihoblack.com", "www.offihoblack.com"}
+    official_hosts = {
+        "offiho.com",
+        "www.offiho.com",
+        "offihoblack.com",
+        "www.offihoblack.com",
+        "web-lemon-one-45.vercel.app",
+    }
 
-    assert len(items) == 1206
+    assert len(items) == 1207
     assert len(matched) >= 700
     assert all(item.get("product_url") and item.get("image_url") for item in matched)
     for item in matched:
@@ -182,6 +226,8 @@ def test_checked_in_offiho_catalog_keeps_official_media_coverage():
             parsed = urlsplit(item[field])
             assert parsed.scheme == "https"
             assert parsed.hostname in official_hosts
+            if parsed.hostname == "web-lemon-one-45.vercel.app":
+                assert parsed.path.startswith("/catalog-assets/offiho/")
         assert item["product_url"] != item["image_url"]
 
 
@@ -245,6 +291,24 @@ def test_offiho_catalog_item_rejects_non_official_https_url(field, url):
     raw[field] = url
 
     with pytest.raises(ValueError, match=field):
+        OffihoCatalogItem.from_dict(raw)
+
+
+def test_offiho_catalog_accepts_only_production_pdf_asset_prefix():
+    from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+
+    raw = _runtime_catalog_raw()["items"][0]
+    raw["product_url"] = (
+        "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/"
+        "lp-black-colos-jul2026.pdf#page=15"
+    )
+    raw["image_url"] = (
+        "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/images/vesper-1-15.jpg"
+    )
+    assert OffihoCatalogItem.from_dict(raw).image_url.endswith("vesper-1-15.jpg")
+
+    raw["image_url"] = "https://web-lemon-one-45.vercel.app/arbitrary/user-content.jpg"
+    with pytest.raises(ValueError, match="image_url"):
         OffihoCatalogItem.from_dict(raw)
 
 
@@ -821,6 +885,7 @@ def test_parse_inventory_rejects_duplicate_key_with_different_data(monkeypatch, 
 def test_build_catalog_reports_deduplicated_inventory_audit(monkeypatch, tmp_path):
     monkeypatch.setattr(build.xlrd, "open_workbook", lambda path: _DuplicateWorkbook())
     monkeypatch.setattr(build, "parse_pdf_price_index", lambda paths: {})
+    monkeypatch.setattr(build, "parse_pdf_product_index", lambda paths, items, assets, base_url: {})
     monkeypatch.setattr(build, "build_site_product_index", lambda cache, **kwargs: {})
     inventory = tmp_path / "offiho-duplicates.xls"
     inventory.write_bytes(b"xls")
@@ -925,6 +990,62 @@ def test_pdf_price_index_normalizes_compact_variant(monkeypatch, tmp_path):
     assert prices["OHE-405 NEGRO"] == Decimal("7999")
 
 
+def test_page_description_extracts_only_official_product_description():
+    page_text = """
+    FENIX OHE-165 NEGRO
+    DESCRIPCIÓN
+    base: de nylon con rodajas.
+    elevación: pistón neumático.
+    mecanismo: reclinable.
+    Accesorios opcionales
+    Cabecera
+    Modelados 3D
+    Descargar
+    """
+
+    description = build._page_description(page_text)
+
+    assert description == "base: de nylon con rodajas. elevación: pistón neumático. mecanismo: reclinable."
+
+
+def test_real_black_pdf_index_maps_vesper_family_to_pdf_asset(tmp_path):
+    project = Path(__file__).resolve().parents[1]
+    pdf_path = project / "LP BLACK®️ & COLOS®️ JUL2026.pdf"
+    if not pdf_path.exists():
+        pytest.skip("El PDF BLACK/COLOS no esta disponible en este checkout")
+    items = [
+        {
+            "inventory_key": "VESPER 1",
+            "code": "VESPER",
+            "name": "1",
+            "variant": "",
+        },
+        {
+            "inventory_key": "VESPER/05 NEGRA",
+            "code": "VESPER/05",
+            "name": "VESPER/05 NEGRA",
+            "variant": "NEGRA",
+        },
+    ]
+
+    index = build.parse_pdf_product_index(
+        [pdf_path],
+        items,
+        tmp_path / "assets",
+        "https://web-lemon-one-45.vercel.app/catalog-assets/offiho",
+    )
+
+    product = index["VESPER/05 NEGRA"]
+    assert product["unit_price"] == Decimal("2799")
+    assert "acero tubular" in product["description"].casefold()
+    assert product["image_url"].startswith(
+        "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/images/"
+    )
+    assert product["product_url"].endswith("lp-black-colos-jul2026.pdf#page=15")
+    assert (tmp_path / "assets" / "lp-black-colos-jul2026.pdf").exists()
+    assert list((tmp_path / "assets" / "images").glob("vesper-1*"))
+
+
 def test_site_match_requires_expected_model_code():
     product = match_official_product(
         extract_offiho_identity("OHE-405 NEGRO ALUFSEN"),
@@ -953,6 +1074,7 @@ def test_site_match_falls_back_to_exact_normalized_product_name():
                 "image_verified": True,
                 "image_content_type": "image/jpeg",
                 "image_content_length": 2048,
+                "description": "Respaldo de malla y asiento tapizado.",
             }
         ],
     )
@@ -960,6 +1082,7 @@ def test_site_match_falls_back_to_exact_normalized_product_name():
     assert product["url"] == "https://www.offiho.com/directivos/alufsen/"
     assert product["image_url"] == "https://www.offiho.com/images/alufsen-frente.jpg"
     assert product["match_status"] == "official_name_match"
+    assert product["description"] == "Respaldo de malla y asiento tapizado."
 
 
 def test_site_match_prefers_exact_code_over_name_fallback():
@@ -1489,6 +1612,7 @@ def _build_catalog_with_sources(monkeypatch, tmp_path, label, *, pdf_payload, si
         lambda path: ([dict(item)], {"source_row_count": 1, "duplicate_row_count": 0, "unique_item_count": 1}),
     )
     monkeypatch.setattr(build, "parse_pdf_price_index", lambda paths: {})
+    monkeypatch.setattr(build, "parse_pdf_product_index", lambda paths, items, assets, base_url: {})
     monkeypatch.setattr(build, "build_site_product_index", lambda cache, **kwargs: site_index)
     return build.build_catalog(
         inventory,

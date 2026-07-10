@@ -10,14 +10,18 @@ from typing import Any, Sequence
 import argparse
 import concurrent.futures
 import hashlib
+import io
 import json
 import os
 import re
+import shutil
 import unicodedata
 import urllib.parse
 import urllib.request
 
 import xlrd
+import pdfplumber
+from PIL import Image
 from pypdf import PdfReader
 
 
@@ -26,6 +30,8 @@ DEFAULT_INVENTORY_URL = "https://www.offiho.com/existencias.xls"
 DEFAULT_INVENTORY_PATH = PROJECT_ROOT / ".cache" / "offiho-existencias.xls"
 DEFAULT_CACHE_PATH = PROJECT_ROOT / ".cache" / "offiho-products.json"
 DEFAULT_OUTPUT = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" / "data" / "offiho_catalog.json"
+DEFAULT_ASSETS_DIR = PROJECT_ROOT / "mobiliti_saas" / "web" / "public" / "catalog-assets" / "offiho"
+DEFAULT_ASSET_BASE_URL = "https://web-lemon-one-45.vercel.app/catalog-assets/offiho"
 OFFICIAL_HOSTS = frozenset({"offiho.com", "www.offiho.com", "offihoblack.com", "www.offihoblack.com"})
 OFFIHO_CATALOG_SECTIONS = (
     "directivos",
@@ -49,10 +55,10 @@ SITE_SEEDS = (
     "https://www.offihoblack.com/",
 )
 USER_AGENT = "Mobiliti Offiho Catalog Builder/1.0"
-CACHE_VERSION = 13
+CACHE_VERSION = 14
 CACHE_TTL_SECONDS = 24 * 60 * 60
 LEGACY_CACHE_TIMESTAMP = "1970-01-01T00:00:00+00:00"
-SOURCE_MANIFEST_VERSION = 2
+SOURCE_MANIFEST_VERSION = 3
 MAX_INVENTORY_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_VALIDATION_TIMEOUT = 10
@@ -433,6 +439,286 @@ def parse_pdf_price_index(paths: Sequence[Path]) -> dict[str, Decimal]:
     return prices
 
 
+def parse_pdf_product_index(
+    paths: Sequence[Path],
+    inventory_items: Sequence[dict[str, Any]],
+    assets_dir: Path,
+    asset_base_url: str,
+) -> dict[str, dict[str, Any]]:
+    """Build a deterministic PDF supplement; it is never used at request time."""
+    assets_dir = Path(assets_dir)
+    records: list[dict[str, Any]] = []
+    source_readers: dict[Path, PdfReader] = {}
+    for source_path in paths:
+        source_path = Path(source_path)
+        reader = PdfReader(source_path)
+        source_readers[source_path] = reader
+        with pdfplumber.open(source_path) as pdf:
+            is_black = "BLACK" in source_path.name.upper() or any(
+                "PRECIO UNITARIO" in (page.extract_text() or "").upper() for page in pdf.pages[:3]
+            )
+            parser = _black_pdf_records if is_black else _grid_pdf_records
+            records.extend(parser(source_path, pdf.pages))
+
+    by_title: dict[str, list[dict[str, Any]]] = {}
+    by_code: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        title_key = _pdf_match_key(record.get("title", ""))
+        if title_key:
+            by_title.setdefault(title_key, []).append(record)
+        for code in record.get("codes", []):
+            by_code.setdefault(_pdf_match_key(code), []).append(record)
+
+    matches: dict[str, dict[str, Any]] = {}
+    active_family = ""
+    active_record: dict[str, Any] | None = None
+    for item in inventory_items:
+        inventory_key = normalize_space(item.get("inventory_key", ""))
+        code = normalize_space(item.get("code", ""))
+        key = _pdf_match_key(inventory_key)
+        code_key = _pdf_match_key(code)
+        direct = _best_pdf_record(by_code.get(code_key, []), item)
+        if direct is None and code_key:
+            compatible = [
+                record
+                for candidate_code, candidate_records in by_code.items()
+                if _pdf_code_matches(item, candidate_code)
+                for record in candidate_records
+            ]
+            direct = _best_pdf_record(compatible, item)
+        if direct is None:
+            direct = _best_pdf_record(by_title.get(key, []), item)
+        if direct is None:
+            direct = _title_record_for_inventory(key, records)
+        family = _pdf_family(code)
+        if direct is not None:
+            active_record = direct
+            active_family = family
+        elif "/" in code and family and active_record is not None and family == active_family:
+            direct = active_record
+        elif family != active_family:
+            active_record = None
+            active_family = ""
+        if direct is not None:
+            matches[inventory_key] = _materialize_pdf_record(
+                direct,
+                source_readers,
+                assets_dir,
+                asset_base_url.rstrip("/"),
+            )
+    return matches
+
+
+def _black_pdf_records(source_path: Path, pages: Sequence[Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for page_index, page in enumerate(pages):
+        words = page.extract_words(extra_attrs=["size"])
+        title_words = [
+            word
+            for word in words
+            if 14 <= float(word.get("size", 0)) <= 16
+            and 145 <= float(word["x0"]) <= 300
+        ]
+        if not title_words:
+            continue
+        line_tops = sorted({round(float(word["top"]), 1) for word in title_words})
+        starts: list[float] = []
+        for top in line_tops:
+            if not starts or top - starts[-1] > 30:
+                starts.append(top)
+        for position, start in enumerate(starts):
+            end = starts[position + 1] if position + 1 < len(starts) else min(float(page.height), start + 155)
+            band_words = [word for word in title_words if start - 2 <= float(word["top"]) < min(end, start + 28)]
+            title = _words_as_lines(band_words)
+            if not title:
+                continue
+            text = normalize_space(page.crop((0, max(0, start - 5), page.width, end - 2)).extract_text() or "")
+            price_match = PRICE_RE.search(text)
+            image = _largest_image_in_box(page.images, 0, max(0, start - 10), 155, end)
+            description_text = page.crop((230, max(0, start - 2), 515, end - 3)).extract_text() or ""
+            records.append(
+                {
+                    "source_path": source_path,
+                    "page_index": page_index,
+                    "title": title,
+                    "codes": sorted({match.group(0).upper() for match in CODE_RE.finditer(text)}),
+                    "description": _pdf_description(description_text),
+                    "unit_price": Decimal(price_match.group(1).replace(",", "")) if price_match else None,
+                    "image_name": str(image.get("name", "")) if image else "",
+                }
+            )
+    return records
+
+
+def _grid_pdf_records(source_path: Path, pages: Sequence[Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for page_index, page in enumerate(pages):
+        images = [
+            image for image in page.images
+            if float(image["x1"]) - float(image["x0"]) >= 45
+            and float(image["bottom"]) - float(image["top"]) >= 55
+            and float(image["bottom"]) < float(page.height) - 30
+        ]
+        if len(images) < 5:
+            continue
+        row_tops: list[float] = []
+        for top in sorted(float(image["top"]) for image in images):
+            if not row_tops or top - row_tops[-1] > 45:
+                row_tops.append(top)
+        column_width = float(page.width) / 5
+        seen_cells: set[tuple[int, int]] = set()
+        for image in sorted(images, key=lambda value: (float(value["top"]), float(value["x0"]))):
+            center_x = (float(image["x0"]) + float(image["x1"])) / 2
+            column = min(4, max(0, int(center_x / column_width)))
+            row = min(range(len(row_tops)), key=lambda index: abs(float(image["top"]) - row_tops[index]))
+            cell = (row, column)
+            if cell in seen_cells:
+                continue
+            seen_cells.add(cell)
+            left = column * column_width
+            right = (column + 1) * column_width
+            top = max(0, row_tops[row] - 8)
+            bottom = row_tops[row + 1] - 5 if row + 1 < len(row_tops) else min(float(page.height) - 25, top + 150)
+            cell_text = page.crop((left, top, right, bottom)).extract_text() or ""
+            codes = sorted({match.group(0).upper() for match in CODE_RE.finditer(cell_text)})
+            if not codes:
+                continue
+            price_match = PRICE_RE.search(cell_text)
+            title = _grid_title(cell_text, codes[0])
+            records.append(
+                {
+                    "source_path": source_path,
+                    "page_index": page_index,
+                    "title": title,
+                    "codes": codes,
+                    "description": _pdf_description(cell_text),
+                    "unit_price": Decimal(price_match.group(1).replace(",", "")) if price_match else None,
+                    "image_name": str(image.get("name", "")),
+                }
+            )
+    return records
+
+
+def _words_as_lines(words: Sequence[dict[str, Any]]) -> str:
+    lines: list[tuple[float, list[dict[str, Any]]]] = []
+    for word in sorted(words, key=lambda value: (float(value["top"]), float(value["x0"]))):
+        top = float(word["top"])
+        if not lines or abs(lines[-1][0] - top) > 2:
+            lines.append((top, [word]))
+        else:
+            lines[-1][1].append(word)
+    return normalize_space(
+        " ".join(
+            " ".join(str(word["text"]) for word in sorted(line, key=lambda value: float(value["x0"])))
+            for _, line in lines
+        )
+    )
+
+
+def _largest_image_in_box(images: Sequence[dict[str, Any]], left: float, top: float, right: float, bottom: float):
+    candidates = [
+        image for image in images
+        if left <= (float(image["x0"]) + float(image["x1"])) / 2 <= right
+        and top <= (float(image["top"]) + float(image["bottom"])) / 2 <= bottom
+    ]
+    return max(
+        candidates,
+        key=lambda image: (float(image["x1"]) - float(image["x0"])) * (float(image["bottom"]) - float(image["top"])),
+        default=None,
+    )
+
+
+def _pdf_description(value: str) -> str:
+    text = normalize_space(value.replace("•", " "))
+    text = re.sub(r"\$\s*[\d,]+(?:\s*\+\s*IVA[^|]*)?", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bPRECIO\s+UNITARIO:?\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bGARANT[IÍ]A\b.*$", "", text, flags=re.IGNORECASE)
+    return normalize_space(text)[:1500]
+
+
+def _grid_title(value: str, code: str) -> str:
+    before = value.upper().split(code.upper(), 1)[0]
+    words = re.findall(r"[A-ZÀ-ÖØ-Ý0-9-]+", before)
+    return normalize_space(" ".join(words[-3:]))
+
+
+def _pdf_match_key(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", normalize_space(value)).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^A-Z0-9]+", " ", text.upper()).strip()
+
+
+def _pdf_family(code: str) -> str:
+    return _pdf_match_key(str(code).split("/", 1)[0]).split(" ", 1)[0]
+
+
+def _best_pdf_record(records: Sequence[dict[str, Any]], item: dict[str, Any]) -> dict[str, Any] | None:
+    if not records:
+        return None
+    name_key = _pdf_match_key(item.get("name", ""))
+    return max(records, key=lambda record: int(bool(name_key and name_key in _pdf_match_key(record.get("title", "")))))
+
+
+def _pdf_code_matches(item: dict[str, Any], candidate_code: str) -> bool:
+    target = re.sub(r"[^A-Z0-9]", "", str(item.get("code", "")).upper())
+    candidate = re.sub(r"[^A-Z0-9]", "", str(candidate_code).upper())
+    if not target or not candidate.startswith(target):
+        return False
+    suffix = candidate[len(target) :]
+    if not suffix:
+        return True
+    variant = re.sub(r"[^A-Z0-9]", "", str(item.get("variant", "")).upper())
+    inventory_key = re.sub(r"[^A-Z0-9]", "", str(item.get("inventory_key", "")).upper())
+    return suffix in variant or suffix in inventory_key
+
+
+def _title_record_for_inventory(key: str, records: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = [
+        record for record in records
+        if _pdf_match_key(record.get("title", "")) == key
+    ]
+    return candidates[0] if candidates else None
+
+
+def _pdf_asset_stem(source_path: Path) -> str:
+    return "lp-black-colos-jul2026" if "BLACK" in source_path.name.upper() else "lp-offiho-econo-sillas-jul2026"
+
+
+def _materialize_pdf_record(
+    record: dict[str, Any],
+    readers: dict[Path, PdfReader],
+    assets_dir: Path,
+    asset_base_url: str,
+) -> dict[str, Any]:
+    source_path = Path(record["source_path"])
+    pdf_stem = _pdf_asset_stem(source_path)
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    target_pdf = assets_dir / f"{pdf_stem}.pdf"
+    if not target_pdf.exists() or _sha256_bytes(target_pdf.read_bytes()) != _sha256_bytes(source_path.read_bytes()):
+        shutil.copyfile(source_path, target_pdf)
+    image_url = ""
+    image_name = str(record.get("image_name", ""))
+    if image_name:
+        page = readers[source_path].pages[int(record["page_index"])]
+        raw_image = next((image for image in page.images if Path(image.name).stem == Path(image_name).stem), None)
+        if raw_image is not None:
+            image_dir = assets_dir / "images"
+            image_dir.mkdir(parents=True, exist_ok=True)
+            slug = re.sub(r"[^a-z0-9]+", "-", _pdf_match_key(record.get("title", "")).lower()).strip("-") or "producto"
+            target_image = image_dir / f"{slug}-{int(record['page_index']) + 1}.jpg"
+            if not target_image.exists():
+                with Image.open(io.BytesIO(raw_image.data)) as source:
+                    source.convert("RGB").save(target_image, format="JPEG", quality=88, optimize=True)
+            image_url = f"{asset_base_url}/images/{target_image.name}"
+    return {
+        "unit_price": record.get("unit_price"),
+        "description": str(record.get("description", "")),
+        "product_url": f"{asset_base_url}/{target_pdf.name}#page={int(record['page_index']) + 1}",
+        "image_url": image_url,
+        "match_status": "pdf_catalog_match",
+        "source_updated_at": "",
+    }
+
+
 def _variant_from_pdf_text(value: str) -> str:
     words = re.findall(r"[A-Za-z\u00c0-\u017f]+", value.upper())
     variants = [word for word in words if word in VARIANT_WORDS]
@@ -441,7 +727,7 @@ def _variant_from_pdf_text(value: str) -> str:
 
 def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[str, Any]]) -> dict[str, str]:
     if not identity.code and not identity.name:
-        return {"url": "", "image_url": "", "match_status": "unmatched", "source_updated_at": ""}
+        return {"url": "", "image_url": "", "description": "", "match_status": "unmatched", "source_updated_at": ""}
     code_matches = []
     for candidate in candidates:
         url = str(candidate.get("url", ""))
@@ -455,6 +741,7 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
             {
                 "url": url,
                 "image_url": image_url,
+                "description": str(candidate.get("description", "")),
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
             }
         )
@@ -463,7 +750,7 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
 
     name_keys = _identity_name_keys(identity)
     if not name_keys:
-        return {"url": "", "image_url": "", "match_status": "unmatched", "source_updated_at": ""}
+        return {"url": "", "image_url": "", "description": "", "match_status": "unmatched", "source_updated_at": ""}
     name_matches = []
     for candidate in candidates:
         url = str(candidate.get("url", ""))
@@ -475,13 +762,14 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
             {
                 "url": url,
                 "image_url": _trusted_cached_image(candidate)["image_url"],
+                "description": str(candidate.get("description", "")),
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
                 "matched_name": matched_name,
             }
         )
     if name_matches:
         return _select_official_product(identity, name_matches, "official_name_match")
-    return {"url": "", "image_url": "", "match_status": "unmatched", "source_updated_at": ""}
+    return {"url": "", "image_url": "", "description": "", "match_status": "unmatched", "source_updated_at": ""}
 
 
 def _official_code_matches(identity: OffihoIdentity, candidate_code: str) -> bool:
@@ -526,9 +814,12 @@ def _select_official_product(
     url_product = max(matches, key=url_rank)
     image_products = [product for product in matches if product.get("image_url")]
     image_url = max(image_products, key=url_rank)["image_url"] if image_products else ""
+    description_products = [product for product in matches if product.get("description")]
+    description = max(description_products, key=url_rank)["description"] if description_products else ""
     return {
         "url": url_product["url"],
         "image_url": image_url,
+        "description": description,
         "match_status": match_status,
         "source_updated_at": url_product["source_updated_at"],
     }
@@ -835,6 +1126,7 @@ def build_site_product_index(
             "codes": codes,
             "names": names,
             "source_updated_at": str(record.get("source_updated_at", "")),
+            "description": str(record.get("description", "")),
             **_trusted_cached_image(record),
         }
         if candidate["image_url"] == candidate["url"]:
@@ -1006,10 +1298,27 @@ def _fetch_official_page(url: str) -> dict[str, Any]:
         "links": links,
         "codes": codes,
         "names": names,
+        "description": _page_description(page_text),
         **image_metadata,
         "source_updated_at": source_updated_at,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _page_description(page_text: str) -> str:
+    normalized = normalize_space(unescape(page_text))
+    match = re.search(r"\bDESCRIPCI[OÓ]N\b", normalized, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    description = normalized[match.end() :]
+    stop = re.search(
+        r"\b(?:ACCESORIOS\s+OPCIONALES|MODELADOS\s+3D|VIDEOS|PRODUCTOS\s+RELACIONADOS)\b",
+        description,
+        flags=re.IGNORECASE,
+    )
+    if stop:
+        description = description[: stop.start()]
+    return normalize_space(description)[:2000]
 
 
 def _page_names(page_url: str, parser: _PageParser, codes: Sequence[str]) -> list[str]:
@@ -1071,6 +1380,8 @@ def build_catalog(
     output_path: Path,
     *,
     no_network: bool = False,
+    assets_dir: Path = DEFAULT_ASSETS_DIR,
+    asset_base_url: str = DEFAULT_ASSET_BASE_URL,
 ) -> dict[str, Any]:
     cache = _load_cache(cache_path)
     inventory_bytes = inventory_path.read_bytes()
@@ -1090,6 +1401,21 @@ def build_catalog(
     ordered_pdf_paths = [source["path"] for source in pdf_sources]
     items, inventory_audit = _parse_inventory_xls(inventory_path)
     pdf_prices = parse_pdf_price_index(ordered_pdf_paths)
+    pdf_products = parse_pdf_product_index(
+        ordered_pdf_paths,
+        items,
+        assets_dir,
+        asset_base_url,
+    ) if ordered_pdf_paths else {}
+    pdf_index_sha256 = _canonical_hash(
+        {
+            key: {
+                field: json_number(value) if isinstance(value, Decimal) else value
+                for field, value in product.items()
+            }
+            for key, product in sorted(pdf_products.items())
+        }
+    )
     site_index = build_site_product_index(cache, no_network=no_network)
     site_index_sha256 = _canonical_hash(site_index)
     generated_at, generated_at_source = _deterministic_generated_at(ordered_pdf_paths)
@@ -1098,6 +1424,7 @@ def build_catalog(
         "inventory_sha256": inventory_sha256,
         "pdf_sha256": sorted(source["sha256"] for source in pdf_sources),
         "site_index_sha256": site_index_sha256,
+        "pdf_index_sha256": pdf_index_sha256,
         "site_cache_version": CACHE_VERSION,
         "generated_at": generated_at,
         "generated_at_source": generated_at_source,
@@ -1125,10 +1452,22 @@ def build_catalog(
                 item["unit_price"] = json_number(amount)
                 item["price_source"] = "pdf_exact"
         product = match_official_product(identity, site_candidates)
-        item["product_url"] = product["url"]
-        item["image_url"] = product["image_url"]
-        item["match_status"] = product["match_status"]
-        item["source_updated_at"] = product["source_updated_at"]
+        pdf_product = pdf_products.get(item["inventory_key"], {})
+        if item["price_source"] == "missing" and pdf_product.get("unit_price") is not None:
+            item["unit_price"] = json_number(pdf_product["unit_price"])
+            item["price_source"] = "pdf_catalog"
+        item["product_url"] = product["url"] or str(pdf_product.get("product_url", ""))
+        item["image_url"] = product["image_url"] or str(pdf_product.get("image_url", ""))
+        item["description"] = product["description"] or str(pdf_product.get("description", "")) or _inventory_description(item)
+        item["description_source"] = (
+            "official_site"
+            if product["description"]
+            else "pdf_catalog"
+            if pdf_product.get("description")
+            else "inventory_label"
+        )
+        item["match_status"] = product["match_status"] if product["url"] or product["image_url"] else str(pdf_product.get("match_status", "unmatched"))
+        item["source_updated_at"] = product["source_updated_at"] or str(pdf_product.get("source_updated_at", ""))
 
     result = {
         "source_hash": _canonical_hash(source_manifest),
@@ -1157,13 +1496,19 @@ def build_catalog(
                 "expires_at": str(cache.get("site_index_expires_at", "")),
                 "offline": no_network,
             },
+            "pdf_index": {
+                "sha256": pdf_index_sha256,
+                "record_count": len(pdf_products),
+                "asset_base_url": asset_base_url,
+            },
         },
         "total": len(items),
         **inventory_audit,
         "out_of_stock": sum(item["available_quantity"] == 0 for item in items),
         "inventory_prices": sum(item["price_source"] == "inventory" for item in items),
-        "pdf_prices": sum(item["price_source"] == "pdf_exact" for item in items),
+        "pdf_prices": sum(str(item["price_source"]).startswith("pdf_") for item in items),
         "official_images": sum(bool(item["image_url"]) for item in items),
+        "described_items": sum(bool(item.get("description")) for item in items),
         "items": items,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1171,6 +1516,18 @@ def build_catalog(
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result
+
+
+def _inventory_description(item: dict[str, Any]) -> str:
+    name = normalize_space(item.get("name", "")) or normalize_space(item.get("code", ""))
+    variant = normalize_space(item.get("variant", ""))
+    unit = normalize_space(item.get("unit", ""))
+    parts = [f"Producto Offiho {name}." if name else "Producto Offiho."]
+    if variant:
+        parts.append(f"Variante: {variant}.")
+    if unit:
+        parts.append(f"Unidad: {unit}.")
+    return normalize_space(" ".join(parts))
 
 
 def _load_cache(path: Path) -> dict[str, Any]:
@@ -1223,6 +1580,8 @@ def main() -> int:
     parser.add_argument("--pdf", action="append", default=[])
     parser.add_argument("--cache", default=str(DEFAULT_CACHE_PATH))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--assets-dir", default=str(DEFAULT_ASSETS_DIR))
+    parser.add_argument("--asset-base-url", default=DEFAULT_ASSET_BASE_URL)
     parser.add_argument("--no-network", action="store_true")
     args = parser.parse_args()
     inventory_path = Path(args.inventory)
@@ -1237,6 +1596,8 @@ def main() -> int:
         Path(args.cache),
         Path(args.output),
         no_network=args.no_network,
+        assets_dir=Path(args.assets_dir),
+        asset_base_url=args.asset_base_url,
     )
     print(
         json.dumps(

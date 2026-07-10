@@ -13,8 +13,8 @@ from .catalog_cart import OFFICIAL_IMAGE_HOSTS, parse_commercial_quantity
 
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "offiho_catalog.json"
 OFFIHO_CART_SOURCE_TYPE = "offiho_cart"
-EXPECTED_UNIQUE_ITEM_COUNT = 1206
-EXPECTED_SOURCE_ROW_COUNT = 1286
+EXPECTED_UNIQUE_ITEM_COUNT = 1207
+EXPECTED_SOURCE_ROW_COUNT = 1287
 EXPECTED_DUPLICATE_ROW_COUNT = 80
 MAX_CART_LINES = 200
 MAX_CATALOG_DECIMAL_PLACES = 6
@@ -30,6 +30,7 @@ CATALOG_SIGNIFICANT_DIGIT_LIMITS = {
     "unit_price": 16,
 }
 MAX_JSON_NUMBER = Decimal("1000000000")
+MAX_DESCRIPTION_LENGTH = 2000
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,8 @@ class OffihoCatalogItem:
     price_source: str = "missing"
     product_url: str = ""
     image_url: str = ""
+    description: str = ""
+    description_source: str = "inventory_label"
     match_status: str = "unmatched"
     source_updated_at: str = ""
 
@@ -58,6 +61,8 @@ class OffihoCatalogItem:
         _validate_catalog_decimal("unit_price", self.unit_price)
         _validate_optional_official_url("product_url", self.product_url)
         _validate_optional_official_url("image_url", self.image_url)
+        if len(self.description) > MAX_DESCRIPTION_LENGTH:
+            raise ValueError("Campo Offiho demasiado largo: description")
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "OffihoCatalogItem":
@@ -75,6 +80,8 @@ class OffihoCatalogItem:
             price_source=_required_text(raw, "price_source"),
             product_url=str(raw.get("product_url", "") or "").strip(),
             image_url=str(raw.get("image_url", "") or "").strip(),
+            description=str(raw.get("description", "") or "").strip(),
+            description_source=str(raw.get("description_source", "inventory_label") or "inventory_label").strip(),
             match_status=_required_text(raw, "match_status"),
             source_updated_at=str(raw.get("source_updated_at", "") or "").strip(),
         )
@@ -92,6 +99,8 @@ class OffihoCatalogItem:
             "price_source": self.price_source,
             "product_url": self.product_url,
             "image_url": self.image_url,
+            "description": self.description,
+            "description_source": self.description_source,
             "match_status": self.match_status,
             "source_updated_at": self.source_updated_at,
         }
@@ -127,7 +136,7 @@ def load_offiho_catalog(path: str | Path | None = None) -> dict[str, Any]:
         "unique_item_count": EXPECTED_UNIQUE_ITEM_COUNT,
     }
     if audit != expected_audit:
-        raise ValueError("Catalogo Offiho invalido: indice unico esperado de 1206")
+        raise ValueError("Catalogo Offiho invalido: indice unico esperado de 1207")
     if len(items) != EXPECTED_UNIQUE_ITEM_COUNT or len(set(keys)) != EXPECTED_UNIQUE_ITEM_COUNT or not all(keys):
         raise ValueError("Catalogo Offiho invalido: claves de inventario no unicas")
     return {
@@ -189,6 +198,7 @@ def build_offiho_cart_payload(
                 "stock_status": status,
                 "product_url": item.product_url,
                 "image_url": item.image_url,
+                "description": item.description,
             }
         )
 
@@ -263,12 +273,17 @@ def _validate_optional_official_url(field: str, value: Any) -> None:
     except ValueError:
         raise ValueError(f"URL Offiho invalida: {field}") from None
     host = (parsed.hostname or "").lower().rstrip(".")
+    is_catalog_asset = (
+        host == "web-lemon-one-45.vercel.app"
+        and parsed.path.startswith("/catalog-assets/offiho/")
+    )
     if (
         parsed.scheme.lower() != "https"
         or parsed.username
         or parsed.password
         or port not in (None, 443)
         or host not in OFFICIAL_IMAGE_HOSTS[OFFIHO_CART_SOURCE_TYPE]
+        or (host == "web-lemon-one-45.vercel.app" and not is_catalog_asset)
     ):
         raise ValueError(f"URL Offiho no oficial: {field}")
 

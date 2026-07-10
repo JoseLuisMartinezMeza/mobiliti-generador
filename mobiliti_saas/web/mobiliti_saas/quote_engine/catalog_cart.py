@@ -31,6 +31,7 @@ OFFICIAL_IMAGE_HOSTS = {
             "www.offiho.com",
             "offihoblack.com",
             "www.offihoblack.com",
+            "web-lemon-one-45.vercel.app",
         }
     ),
     "tarkett_cart": frozenset(
@@ -139,7 +140,7 @@ def _description_for_item(
     url: str,
     quantity: Decimal,
 ) -> tuple[str, str]:
-    parts = [f"Clave: {code}" if code else ""]
+    parts = [str(item.get("description", "") or "").strip(), f"Clave: {code}" if code else ""]
     variant = str(item.get("variant", "") or "").strip()
     if variant:
         parts.append(f"Variante: {variant}")

@@ -465,9 +465,9 @@ def _mock_offiho_catalog(available_quantity=0, unit_price=7999):
     return {
         "source_hash": "offiho-catalog-hash",
         "generated_at": "2026-07-09T18:00:00+00:00",
-        "source_row_count": 1286,
+        "source_row_count": 1287,
         "duplicate_row_count": 80,
-        "unique_item_count": 1206,
+        "unique_item_count": 1207,
         "items": [item],
         "by_inventory_key": {item.inventory_key: item},
     }
@@ -486,7 +486,7 @@ def _valid_offiho_body(quantity=1):
     }
 
 
-def test_offiho_catalog_returns_1206_items_with_catalog_prices_and_reservations(monkeypatch):
+def test_offiho_catalog_returns_1207_items_with_catalog_prices_and_reservations(monkeypatch):
     _mock_user(monkeypatch)
     monkeypatch.setattr(index, "db_list_offiho_reservations", lambda status="active": [])
 
@@ -494,11 +494,11 @@ def test_offiho_catalog_returns_1206_items_with_catalog_prices_and_reservations(
 
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["total"] == 1206
-    assert len(payload["items"]) == 1206
-    assert payload["source_row_count"] == 1286
+    assert payload["total"] == 1207
+    assert len(payload["items"]) == 1207
+    assert payload["source_row_count"] == 1287
     assert payload["duplicate_row_count"] == 80
-    assert payload["unique_item_count"] == 1206
+    assert payload["unique_item_count"] == 1207
     item = payload["items"][0]
     assert {"unit_price", "available_quantity", "product_url", "image_url", "is_out_of_stock", "reserved_quantity", "reserved_by_others"} <= set(item)
 

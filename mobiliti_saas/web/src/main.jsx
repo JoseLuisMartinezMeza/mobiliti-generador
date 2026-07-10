@@ -1290,6 +1290,7 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
                     <div className="product-title-row"><span>{item.code}</span>{item.product_url ? <a href={item.product_url} target="_blank" rel="noreferrer noopener" aria-label={`Abrir sitio oficial de ${item.name || item.code}`} title="Abrir sitio oficial"><ExternalLink size={15} /></a> : null}</div>
                     <strong>{item.name || item.inventory_key}</strong>
                     <small>{item.variant || "Sin variante"} - {item.unit}</small>
+                    {item.description ? <p className="offiho-description" title={item.description}>{item.description}</p> : null}
                     <div className="offiho-meta"><span>{item.unit} - {formatOffihoQuantity(item.pieces_per_box)} pzas/caja</span><strong>{hasMissingPrice(item) ? "Precio por confirmar" : formatOffihoCurrency(item.unit_price)}</strong></div>
                     <div className="stock-row"><span>Existencia {formatOffihoQuantity(item.available_quantity)}</span>{item.reserved_by_others && reserved > 0 ? <em>Apartado {formatOffihoQuantity(reserved)}</em> : null}{stockWarning ? <b className={`offiho-warning ${stockWarning === "Agotado" ? "out" : "insufficient"}`}>{stockWarning}</b> : null}</div>
                   </div>
