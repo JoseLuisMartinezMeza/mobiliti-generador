@@ -39,6 +39,32 @@ def _sample_catalog():
     }
 
 
+@pytest.fixture
+def mocked_tarkett_network_fallbacks(monkeypatch):
+    monkeypatch.setattr(tarkett_builder, "_fetch_media", lambda term, cache, no_network=False: [])
+    monkeypatch.setattr(tarkett_builder, "_fetch_products", lambda term, cache: [])
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_professional_sitemap_urls",
+        lambda cache, no_network=False: [],
+    )
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_professional_page_snapshot",
+        lambda url, cache, no_network=False: {"codes": [], "image_url": "", "title": "", "text": ""},
+    )
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_secondary_official_page_snapshot",
+        lambda url, cache, no_network=False: {
+            "image_url": "",
+            "images": [],
+            "text": "",
+            "windows_by_code": {},
+        },
+    )
+
+
 def test_inventory_html_parser_reads_expected_tarkett_rows():
     rows = parse_inventory_html(INVENTORY)
 
@@ -107,10 +133,23 @@ def test_tarkett_cart_payload_rejects_unknown_and_excess_quantity():
         raise AssertionError("quantity over stock should fail")
 
 
-@pytest.mark.parametrize("quantity", ["1e5000", "0.0001"])
+@pytest.mark.parametrize("quantity", ["1e5000"])
 def test_tarkett_cart_rejects_extreme_or_overprecise_quantity(quantity):
     with pytest.raises(ValueError, match="Cantidad invalida"):
         build_tarkett_cart_payload([{"code": "25731726", "quantity": quantity}], catalog=_sample_catalog())
+
+
+def test_tarkett_cart_preserves_historical_four_decimal_quantity(tmp_path):
+    payload = build_tarkett_cart_payload(
+        [{"code": "25731726", "quantity": "0.0001"}],
+        catalog=_sample_catalog(),
+    )
+
+    assert payload["items"][0]["quantity"] == 0.0001
+    output = create_tarkett_quotation_workbook(payload, tmp_path / "tarkett-four-decimals.xlsx")
+    wb = load_workbook(output)
+    assert wb["Quotation"]["G9"].value == 0.0001
+    wb.close()
 
 
 def test_tarkett_cart_workbook_is_readable_by_quote_parser(tmp_path):
@@ -229,7 +268,7 @@ def test_tarkett_scraper_uses_official_media_by_sku(monkeypatch):
     assert match["image_url"].endswith("24173722-Alicante-scaled.jpg")
 
 
-def test_tarkett_scraper_uses_professional_es_sitemap_sku_match(monkeypatch):
+def test_tarkett_scraper_uses_professional_es_sitemap_sku_match(monkeypatch, mocked_tarkett_network_fallbacks):
     row = InventoryRow(
         code="711533007",
         name="Desso Ess Strct AA92 9502 B1 100x25",
@@ -257,7 +296,7 @@ def test_tarkett_scraper_uses_professional_es_sitemap_sku_match(monkeypatch):
     assert match["image_url"].endswith("TH_EssenceStructure_9502.jpg")
 
 
-def test_tarkett_professional_es_fallback_rejects_page_without_sku(monkeypatch):
+def test_tarkett_professional_es_fallback_rejects_page_without_sku(monkeypatch, mocked_tarkett_network_fallbacks):
     row = InventoryRow(
         code="711533007",
         name="Desso Ess Strct AA92 9502 B1 100x25",
@@ -284,7 +323,7 @@ def test_tarkett_professional_es_fallback_rejects_page_without_sku(monkeypatch):
     assert match["image_url"] == ""
 
 
-def test_tarkett_professional_es_collection_fallback_for_catalog_items(monkeypatch):
+def test_tarkett_professional_es_collection_fallback_for_catalog_items(monkeypatch, mocked_tarkett_network_fallbacks):
     row = InventoryRow(
         code="2102002000",
         name="CATALOGO ECLIPSE PREMIUM",
@@ -313,7 +352,7 @@ def test_tarkett_professional_es_collection_fallback_for_catalog_items(monkeypat
     assert match["image_url"].endswith("IN_HP_Eclipse_Premium.jpg")
 
 
-def test_tarkett_secondary_official_fallback_matches_line_name_variant(monkeypatch):
+def test_tarkett_secondary_official_fallback_matches_line_name_variant(monkeypatch, mocked_tarkett_network_fallbacks):
     row = InventoryRow(
         code="25731101",
         name="Aurea Tech Maiorca 6.0mm",
@@ -338,7 +377,7 @@ def test_tarkett_secondary_official_fallback_matches_line_name_variant(monkeypat
     assert match["image_url"].endswith("Aurea-Tech-Mallorca.jpg")
 
 
-def test_tarkett_secondary_official_fallback_matches_accessory_sku(monkeypatch):
+def test_tarkett_secondary_official_fallback_matches_accessory_sku(monkeypatch, mocked_tarkett_network_fallbacks):
     row = InventoryRow(
         code="666214",
         name="Ultrabond Eco 4 LVT bucket 14 kg",

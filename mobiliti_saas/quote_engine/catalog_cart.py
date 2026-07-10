@@ -19,8 +19,9 @@ from openpyxl.utils import get_column_letter
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_COMMERCIAL_QUANTITY = Decimal("1000000")
-MAX_QUANTITY_DECIMAL_PLACES = 3
-MAX_QUANTITY_SIGNIFICANT_DIGITS = 10
+DEFAULT_QUANTITY_DECIMAL_PLACES = 3
+MAX_QUANTITY_DECIMAL_PLACES = 6
+MAX_QUANTITY_INTEGER_DIGITS = 7
 MAX_QUANTITY_TEXT_LENGTH = 64
 WARNING_FILL = "FFF2CC"
 OFFICIAL_IMAGE_HOSTS = {
@@ -84,7 +85,11 @@ def create_catalog_quotation_workbook(
             name = str(item.get("name", "")).strip()
             unit = str(item.get("unit", "")).strip()
             url = str(item.get("product_url", "") or "").strip()
-            quantity = parse_commercial_quantity(item.get("quantity", 0), item_label=code or name or str(index))
+            quantity = parse_commercial_quantity(
+                item.get("quantity", 0),
+                item_label=code or name or str(index),
+                max_decimal_places=6 if source_type == "tarkett_cart" else 3,
+            )
             description, warning = _description_for_item(item, code, url, quantity)
             ws.cell(row, 1).value = index
             ws.cell(row, 2).value = name
@@ -203,7 +208,10 @@ def _download_catalog_image(url: Any, image_dir: Path, code: str, source_type: s
     try:
         _validate_official_https_url(clean_url, allowed_hosts)
         request = urllib.request.Request(clean_url, headers={"User-Agent": "Mobiliti Official Catalog/1.0"})
-        opener = urllib.request.build_opener(_OfficialRedirectHandler(allowed_hosts))
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _OfficialRedirectHandler(allowed_hosts),
+        )
         with opener.open(request, timeout=18) as response:
             _validate_connected_peer(response)
             content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -275,7 +283,14 @@ def _validate_connected_peer(response: Any) -> None:
         raise ValueError("La IP conectada no es publica")
 
 
-def parse_commercial_quantity(value: Any, *, item_label: str) -> Decimal:
+def parse_commercial_quantity(
+    value: Any,
+    *,
+    item_label: str,
+    max_decimal_places: int = DEFAULT_QUANTITY_DECIMAL_PLACES,
+) -> Decimal:
+    if not isinstance(max_decimal_places, int) or not 0 <= max_decimal_places <= MAX_QUANTITY_DECIMAL_PLACES:
+        raise ValueError("Precision de cantidad invalida")
     text = str(value).replace(",", "").strip()
     if not text or len(text) > MAX_QUANTITY_TEXT_LENGTH:
         raise ValueError(f"Cantidad invalida para {item_label}")
@@ -293,8 +308,8 @@ def parse_commercial_quantity(value: Any, *, item_label: str) -> Decimal:
         exponent += 1
     decimal_places = max(-exponent, 0)
     if (
-        len(digits) > MAX_QUANTITY_SIGNIFICANT_DIGITS
-        or decimal_places > MAX_QUANTITY_DECIMAL_PLACES
+        len(digits) > MAX_QUANTITY_INTEGER_DIGITS + max_decimal_places
+        or decimal_places > max_decimal_places
         or quantity > MAX_COMMERCIAL_QUANTITY
     ):
         raise ValueError(f"Cantidad invalida para {item_label}")

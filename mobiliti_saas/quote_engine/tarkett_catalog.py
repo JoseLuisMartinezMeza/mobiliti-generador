@@ -86,6 +86,7 @@ def build_tarkett_cart_payload(
         quantity = parse_commercial_quantity(
             raw.get("quantity", raw.get("cantidad", 0)),
             item_label=code,
+            max_decimal_places=6,
         )
         if quantity > item.available_quantity:
             raise ValueError(f"Cantidad mayor a existencia para {code}")

@@ -119,10 +119,14 @@ def _runtime_catalog_raw():
     [
         ("available_quantity", -1),
         ("available_quantity", "invalid"),
+        ("available_quantity", "1000000000.000001"),
         ("unit_price", -1),
         ("unit_price", "NaN"),
+        ("unit_price", "1e5000"),
+        ("unit_price", "0.0000001"),
         ("pieces_per_box", 0),
         ("pieces_per_box", "invalid"),
+        ("pieces_per_box", "1000000.000001"),
     ],
 )
 def test_load_offiho_catalog_rejects_corrupt_numeric_item_in_1206_index(tmp_path, field, value):
@@ -135,6 +139,13 @@ def test_load_offiho_catalog_rejects_corrupt_numeric_item_in_1206_index(tmp_path
 
     with pytest.raises(ValueError, match=field):
         load_offiho_catalog(path)
+
+
+def test_offiho_json_number_rejects_extreme_decimal_before_int_conversion():
+    from mobiliti_saas.quote_engine.offiho_catalog import _json_number
+
+    with pytest.raises(ValueError, match="fuera de rango"):
+        _json_number(Decimal("1e5000"))
 
 
 @pytest.mark.parametrize("field", ["inventory_key", "code", "unit", "price_source", "match_status"])
@@ -226,7 +237,7 @@ def _install_fake_image_opener(monkeypatch, response):
             return response
 
     monkeypatch.setattr(catalog_cart, "_resolve_public_host", lambda host: None)
-    monkeypatch.setattr(catalog_cart.urllib.request, "build_opener", lambda handler: _FakeOpener())
+    monkeypatch.setattr(catalog_cart.urllib.request, "build_opener", lambda *handlers: _FakeOpener())
     return catalog_cart
 
 
@@ -323,6 +334,42 @@ def test_catalog_image_redirect_validates_private_and_public_peers(monkeypatch):
     assert redirected.full_url == "https://www.offiho.com/uploads/alufsen.png"
     assert private_response.socket.calls == 1
     assert public_response.socket.calls == 1
+
+
+def test_catalog_image_disables_environment_proxies(monkeypatch, tmp_path):
+    import mobiliti_saas.quote_engine.catalog_cart as catalog_cart
+
+    response = _FakeImageResponse(peer_address="93.184.216.34")
+    captured_handlers = []
+
+    class _FakeOpener:
+        def open(self, request, timeout):
+            return response
+
+    def fake_build_opener(*handlers):
+        captured_handlers.extend(handlers)
+        return _FakeOpener()
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9999")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9999")
+    monkeypatch.setattr(catalog_cart, "_resolve_public_host", lambda host: None)
+    monkeypatch.setattr(catalog_cart.urllib.request, "build_opener", fake_build_opener)
+
+    result = catalog_cart._download_catalog_image(
+        "https://www.offiho.com/uploads/alufsen.png",
+        tmp_path,
+        "OHE-405",
+        "offiho_cart",
+    )
+
+    proxy_handlers = [
+        handler
+        for handler in captured_handlers
+        if isinstance(handler, catalog_cart.urllib.request.ProxyHandler)
+    ]
+    assert result is not None
+    assert len(proxy_handlers) == 1
+    assert proxy_handlers[0].proxies == {}
 
 
 def test_offiho_workbook_writes_price_and_warning(tmp_path):

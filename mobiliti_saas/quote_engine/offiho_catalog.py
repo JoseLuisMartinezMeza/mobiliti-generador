@@ -14,6 +14,19 @@ from .catalog_cart import OFFICIAL_IMAGE_HOSTS, parse_commercial_quantity
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "offiho_catalog.json"
 OFFIHO_CART_SOURCE_TYPE = "offiho_cart"
 EXPECTED_UNIQUE_ITEM_COUNT = 1206
+MAX_CATALOG_DECIMAL_PLACES = 6
+MAX_CATALOG_DECIMAL_TEXT_LENGTH = 64
+CATALOG_DECIMAL_LIMITS = {
+    "pieces_per_box": Decimal("1000000"),
+    "available_quantity": Decimal("1000000000"),
+    "unit_price": Decimal("1000000000"),
+}
+CATALOG_SIGNIFICANT_DIGIT_LIMITS = {
+    "pieces_per_box": 13,
+    "available_quantity": 16,
+    "unit_price": 16,
+}
+MAX_JSON_NUMBER = Decimal("1000000000")
 
 
 @dataclass(frozen=True)
@@ -194,8 +207,11 @@ def _required_text(raw: dict[str, Any], field: str) -> str:
 def _strict_catalog_decimal(raw: dict[str, Any], field: str, *, positive: bool = False) -> Decimal:
     if field not in raw:
         raise ValueError(f"Campo numerico Offiho faltante: {field}")
+    text = str(raw[field]).replace(",", "").strip()
+    if not text or len(text) > MAX_CATALOG_DECIMAL_TEXT_LENGTH:
+        raise ValueError(f"Campo numerico Offiho invalido: {field}")
     try:
-        value = Decimal(str(raw[field]).replace(",", "").strip())
+        value = Decimal(text)
     except (InvalidOperation, AttributeError, ValueError):
         raise ValueError(f"Campo numerico Offiho invalido: {field}") from None
     _validate_catalog_decimal(field, value, positive=positive)
@@ -206,6 +222,14 @@ def _validate_catalog_decimal(field: str, value: Any, *, positive: bool = False)
     if not isinstance(value, Decimal) or not value.is_finite():
         raise ValueError(f"Campo numerico Offiho invalido: {field}")
     if value < 0 or (positive and value <= 0):
+        raise ValueError(f"Campo numerico Offiho fuera de rango: {field}")
+    limit = CATALOG_DECIMAL_LIMITS[field]
+    significant_digits, decimal_places = _decimal_shape(value)
+    if (
+        value > limit
+        or significant_digits > CATALOG_SIGNIFICANT_DIGIT_LIMITS[field]
+        or decimal_places > MAX_CATALOG_DECIMAL_PLACES
+    ):
         raise ValueError(f"Campo numerico Offiho fuera de rango: {field}")
 
 
@@ -229,7 +253,23 @@ def _validate_optional_official_url(field: str, value: Any) -> None:
         raise ValueError(f"URL Offiho no oficial: {field}")
 
 
+def _decimal_shape(value: Decimal) -> tuple[int, int]:
+    _, digits_tuple, exponent = value.as_tuple()
+    digits = list(digits_tuple)
+    if not any(digits):
+        return 1, 0
+    while digits and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    return len(digits), max(-exponent, 0)
+
+
 def _json_number(value: Decimal) -> int | float:
+    if not isinstance(value, Decimal) or not value.is_finite() or abs(value) > MAX_JSON_NUMBER:
+        raise ValueError("Numero JSON fuera de rango")
+    significant_digits, decimal_places = _decimal_shape(value)
+    if significant_digits > 16 or decimal_places > MAX_CATALOG_DECIMAL_PLACES:
+        raise ValueError("Numero JSON fuera de rango")
     if value == value.to_integral():
         return int(value)
     return float(value)
