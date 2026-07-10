@@ -1,6 +1,9 @@
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+from openpyxl import load_workbook
+
 from mobiliti_saas.quote_engine.parser import read_items
 from mobiliti_saas.quote_engine.tarkett_catalog import (
     TarkettCatalogItem,
@@ -104,6 +107,12 @@ def test_tarkett_cart_payload_rejects_unknown_and_excess_quantity():
         raise AssertionError("quantity over stock should fail")
 
 
+@pytest.mark.parametrize("quantity", ["1e5000", "0.0001"])
+def test_tarkett_cart_rejects_extreme_or_overprecise_quantity(quantity):
+    with pytest.raises(ValueError, match="Cantidad invalida"):
+        build_tarkett_cart_payload([{"code": "25731726", "quantity": quantity}], catalog=_sample_catalog())
+
+
 def test_tarkett_cart_workbook_is_readable_by_quote_parser(tmp_path):
     payload = build_tarkett_cart_payload([{"code": "25731726", "quantity": "3.5"}], catalog=_sample_catalog())
     output = tmp_path / "tarkett.xlsx"
@@ -145,6 +154,17 @@ def test_tarkett_workbook_delegates_to_shared_catalog_adapter(monkeypatch, tmp_p
     assert seen["source_type"] == "tarkett_cart"
     assert seen["category_label"] == "Tarkett"
     assert seen["payload"]["items"][0]["unit_price"] == 0
+
+
+def test_tarkett_workbook_forces_zero_price_from_untrusted_payload(tmp_path):
+    payload = build_tarkett_cart_payload([{"code": "25731726", "quantity": "3.5"}], catalog=_sample_catalog())
+    payload["items"][0]["unit_price"] = 999
+
+    output = create_tarkett_quotation_workbook(payload, tmp_path / "tarkett-untrusted-price.xlsx")
+
+    wb = load_workbook(output)
+    assert wb["Quotation"]["J9"].value == 0
+    wb.close()
 
 
 def test_tarkett_scraper_resolves_typo_name_by_sku_index():

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 import json
 
-from .catalog_cart import create_catalog_quotation_workbook
+from .catalog_cart import create_catalog_quotation_workbook, parse_commercial_quantity
 
 
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "tarkett_catalog.json"
@@ -83,9 +83,10 @@ def build_tarkett_cart_payload(
         item = by_code.get(code)
         if item is None:
             raise ValueError(f"Producto Tarkett no encontrado: {code}")
-        quantity = _decimal(raw.get("quantity", raw.get("cantidad", 0)))
-        if quantity <= 0:
-            raise ValueError(f"Cantidad invalida para {code}")
+        quantity = parse_commercial_quantity(
+            raw.get("quantity", raw.get("cantidad", 0)),
+            item_label=code,
+        )
         if quantity > item.available_quantity:
             raise ValueError(f"Cantidad mayor a existencia para {code}")
         lines.append(
@@ -115,8 +116,15 @@ def create_tarkett_quotation_workbook(
     *,
     image_dir: str | Path | None = None,
 ) -> Path:
+    sanitized_payload = {
+        **cart_payload,
+        "items": [
+            {**item, "unit_price": 0}
+            for item in list(cart_payload.get("items") or [])
+        ],
+    }
     return create_catalog_quotation_workbook(
-        cart_payload,
+        sanitized_payload,
         output_path,
         source_type=TARKETT_CART_SOURCE_TYPE,
         category_label="Tarkett",

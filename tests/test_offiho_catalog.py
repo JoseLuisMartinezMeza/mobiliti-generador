@@ -2,6 +2,7 @@ from decimal import Decimal
 from datetime import datetime
 from email.message import Message
 from pathlib import Path
+import json
 
 import pytest
 from openpyxl import load_workbook
@@ -13,7 +14,7 @@ from scripts.build_offiho_catalog import parse_inventory_xls
 from scripts.build_offiho_catalog import parse_pdf_price_index
 
 
-def fake_runtime_catalog(*, available_quantity: int, unit_price: int):
+def fake_runtime_catalog(*, available_quantity: int, unit_price: int, image_url: str = ""):
     from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
 
     item = OffihoCatalogItem(
@@ -26,7 +27,7 @@ def fake_runtime_catalog(*, available_quantity: int, unit_price: int):
         available_quantity=Decimal(str(available_quantity)),
         unit_price=Decimal(str(unit_price)),
         product_url="https://www.offiho.com/productos/alufsen",
-        image_url="https://www.offiho.com/uploads/alufsen.jpg",
+        image_url=image_url,
     )
     return {"source_hash": "hash", "items": [item], "by_inventory_key": {item.inventory_key: item}}
 
@@ -62,7 +63,11 @@ def test_offiho_cart_uses_catalog_owned_values_and_rejects_non_positive_quantity
                 "image_url": "https://example.test/untrusted.jpg",
             }
         ],
-        catalog=fake_runtime_catalog(available_quantity=2, unit_price=7999),
+        catalog=fake_runtime_catalog(
+            available_quantity=2,
+            unit_price=7999,
+            image_url="https://www.offiho.com/uploads/alufsen.jpg",
+        ),
     )
 
     assert payload["items"][0]["stock_status"] == "available"
@@ -80,6 +85,244 @@ def test_offiho_cart_uses_catalog_owned_values_and_rejects_non_positive_quantity
             [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": "NaN"}],
             catalog=fake_runtime_catalog(available_quantity=252, unit_price=7999),
         )
+
+
+@pytest.mark.parametrize("quantity", ["1e5000", "0.0001", "1000000.001"])
+def test_offiho_cart_rejects_extreme_or_overprecise_quantity(quantity):
+    from mobiliti_saas.quote_engine.offiho_catalog import build_offiho_cart_payload
+
+    with pytest.raises(ValueError, match="Cantidad invalida"):
+        build_offiho_cart_payload(
+            [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": quantity}],
+            catalog=fake_runtime_catalog(available_quantity=0, unit_price=7999),
+        )
+
+
+def test_offiho_cart_accepts_commercial_quantity_limit_and_three_decimals():
+    from mobiliti_saas.quote_engine.offiho_catalog import build_offiho_cart_payload
+
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": "1000000.000"}],
+        catalog=fake_runtime_catalog(available_quantity=0, unit_price=7999),
+    )
+
+    assert payload["items"][0]["quantity"] == 1000000
+
+
+def _runtime_catalog_raw():
+    path = Path(__file__).resolve().parents[1] / "mobiliti_saas" / "quote_engine" / "data" / "offiho_catalog.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("available_quantity", -1),
+        ("available_quantity", "invalid"),
+        ("unit_price", -1),
+        ("unit_price", "NaN"),
+        ("pieces_per_box", 0),
+        ("pieces_per_box", "invalid"),
+    ],
+)
+def test_load_offiho_catalog_rejects_corrupt_numeric_item_in_1206_index(tmp_path, field, value):
+    from mobiliti_saas.quote_engine.offiho_catalog import load_offiho_catalog
+
+    raw = _runtime_catalog_raw()
+    raw["items"][0][field] = value
+    path = tmp_path / "offiho-corrupt.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        load_offiho_catalog(path)
+
+
+@pytest.mark.parametrize("field", ["inventory_key", "code", "unit", "price_source", "match_status"])
+def test_offiho_catalog_item_rejects_blank_required_field(field):
+    from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+
+    raw = _runtime_catalog_raw()["items"][0]
+    raw[field] = " "
+
+    with pytest.raises(ValueError, match=field):
+        OffihoCatalogItem.from_dict(raw)
+
+
+@pytest.mark.parametrize(
+    ("field", "url"),
+    [
+        ("product_url", "http://www.offiho.com/productos/alufsen"),
+        ("product_url", "https://example.com/productos/alufsen"),
+        ("image_url", "https://econosillas.com/alufsen.jpg"),
+    ],
+)
+def test_offiho_catalog_item_rejects_non_official_https_url(field, url):
+    from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+
+    raw = _runtime_catalog_raw()["items"][0]
+    raw[field] = url
+
+    with pytest.raises(ValueError, match=field):
+        OffihoCatalogItem.from_dict(raw)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_hash", ""),
+        ("source_hash", None),
+        ("generated_at", " "),
+        ("generated_at", None),
+    ],
+)
+def test_load_offiho_catalog_rejects_blank_root_metadata(tmp_path, field, value):
+    from mobiliti_saas.quote_engine.offiho_catalog import load_offiho_catalog
+
+    raw = _runtime_catalog_raw()
+    raw[field] = value
+    path = tmp_path / "offiho-blank-root.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        load_offiho_catalog(path)
+
+
+class _FakePeerSocket:
+    def __init__(self, address):
+        self.address = address
+        self.calls = 0
+
+    def getpeername(self):
+        self.calls += 1
+        return (self.address, 443)
+
+
+class _FakeImageResponse:
+    def __init__(self, *, peer_address="93.184.216.34", include_peer=True, payload=b"image-bytes"):
+        self.headers = {"content-type": "image/png", "content-length": str(len(payload))}
+        self.payload = payload
+        self.socket = _FakePeerSocket(peer_address)
+        if include_peer:
+            raw = type("Raw", (), {"_sock": self.socket})()
+            self.fp = type("Fp", (), {"raw": raw})()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self, size):
+        return self.payload[:size]
+
+
+def _install_fake_image_opener(monkeypatch, response):
+    import mobiliti_saas.quote_engine.catalog_cart as catalog_cart
+
+    class _FakeOpener:
+        def open(self, request, timeout):
+            assert request.full_url == "https://www.offiho.com/uploads/alufsen.png"
+            assert timeout == 18
+            return response
+
+    monkeypatch.setattr(catalog_cart, "_resolve_public_host", lambda host: None)
+    monkeypatch.setattr(catalog_cart.urllib.request, "build_opener", lambda handler: _FakeOpener())
+    return catalog_cart
+
+
+def test_catalog_image_write_error_is_omitted(monkeypatch, tmp_path):
+    response = _FakeImageResponse()
+    catalog_cart = _install_fake_image_opener(monkeypatch, response)
+    monkeypatch.setattr(Path, "write_bytes", lambda self, data: (_ for _ in ()).throw(OSError("disk full")))
+
+    result = catalog_cart._download_catalog_image(
+        "https://www.offiho.com/uploads/alufsen.png",
+        tmp_path,
+        "OHE-405",
+        "offiho_cart",
+    )
+
+    assert result is None
+    assert response.socket.calls == 1
+
+
+def test_catalog_image_rejects_private_connected_peer(monkeypatch, tmp_path):
+    response = _FakeImageResponse(peer_address="127.0.0.1")
+    catalog_cart = _install_fake_image_opener(monkeypatch, response)
+
+    result = catalog_cart._download_catalog_image(
+        "https://www.offiho.com/uploads/alufsen.png",
+        tmp_path,
+        "OHE-405",
+        "offiho_cart",
+    )
+
+    assert result is None
+    assert response.socket.calls == 1
+    assert not list(tmp_path.iterdir())
+
+
+def test_catalog_image_accepts_public_connected_peer(monkeypatch, tmp_path):
+    response = _FakeImageResponse(peer_address="93.184.216.34")
+    catalog_cart = _install_fake_image_opener(monkeypatch, response)
+
+    result = catalog_cart._download_catalog_image(
+        "https://www.offiho.com/uploads/alufsen.png",
+        tmp_path,
+        "OHE-405",
+        "offiho_cart",
+    )
+
+    assert response.socket.calls == 1
+    assert result is not None
+    assert result.read_bytes() == b"image-bytes"
+
+
+def test_catalog_image_rejects_uninspectable_connected_peer(monkeypatch, tmp_path):
+    response = _FakeImageResponse(include_peer=False)
+    catalog_cart = _install_fake_image_opener(monkeypatch, response)
+
+    result = catalog_cart._download_catalog_image(
+        "https://www.offiho.com/uploads/alufsen.png",
+        tmp_path,
+        "OHE-405",
+        "offiho_cart",
+    )
+
+    assert result is None
+    assert not list(tmp_path.iterdir())
+
+
+def test_catalog_image_redirect_validates_private_and_public_peers(monkeypatch):
+    import mobiliti_saas.quote_engine.catalog_cart as catalog_cart
+
+    monkeypatch.setattr(catalog_cart, "_resolve_public_host", lambda host: None)
+    handler = catalog_cart._OfficialRedirectHandler(catalog_cart.OFFICIAL_IMAGE_HOSTS["offiho_cart"])
+    request = catalog_cart.urllib.request.Request("https://www.offiho.com/start")
+    private_response = _FakeImageResponse(peer_address="10.0.0.8")
+
+    with pytest.raises(ValueError, match="publica"):
+        handler.redirect_request(
+            request,
+            private_response,
+            302,
+            "Found",
+            {},
+            "https://www.offiho.com/uploads/alufsen.png",
+        )
+
+    public_response = _FakeImageResponse(peer_address="93.184.216.34")
+    redirected = handler.redirect_request(
+        request,
+        public_response,
+        302,
+        "Found",
+        {},
+        "https://www.offiho.com/uploads/alufsen.png",
+    )
+    assert redirected.full_url == "https://www.offiho.com/uploads/alufsen.png"
+    assert private_response.socket.calls == 1
+    assert public_response.socket.calls == 1
 
 
 def test_offiho_workbook_writes_price_and_warning(tmp_path):
@@ -126,6 +369,69 @@ def test_offiho_warning_survives_online_quote_generation(tmp_path):
         for cell in row
     )
     wb.close()
+
+
+def test_offiho_insufficient_warning_preserves_available_quantity_in_final_quote(tmp_path):
+    from mobiliti_saas.quote_engine.offiho_catalog import (
+        build_offiho_cart_payload,
+        create_offiho_quotation_workbook,
+    )
+    from mobiliti_saas.worker.online_quote_generator import generate_online_quote
+
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 3}],
+        catalog=fake_runtime_catalog(available_quantity=2, unit_price=7999),
+    )
+    source = create_offiho_quotation_workbook(payload, tmp_path / "offiho-insufficient.xlsx")
+    output = tmp_path / "cotizacion-insufficient.xlsx"
+
+    generate_online_quote(source, output, {"tipo_cambio": "20"})
+
+    wb = load_workbook(output, data_only=False)
+    warning_cells = [
+        str(cell.value or "")
+        for row in wb["Cotizacion"].iter_rows()
+        for cell in row
+        if "ADVERTENCIA: EXISTENCIA INSUFICIENTE" in str(cell.value or "").upper()
+    ]
+    assert warning_cells
+    assert "DISPONIBLE 2" in warning_cells[0].upper()
+    wb.close()
+
+
+def test_catalog_workbook_closes_when_save_fails(monkeypatch, tmp_path):
+    import mobiliti_saas.quote_engine.catalog_cart as catalog_cart
+    from mobiliti_saas.quote_engine.offiho_catalog import build_offiho_cart_payload
+
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 1}],
+        catalog=fake_runtime_catalog(available_quantity=2, unit_price=7999),
+    )
+    workbook = catalog_cart.Workbook()
+    original_close = workbook.close
+    close_calls = []
+
+    def fail_save(path):
+        raise OSError("save failed")
+
+    def record_close():
+        close_calls.append(True)
+        original_close()
+
+    monkeypatch.setattr(catalog_cart, "Workbook", lambda: workbook)
+    monkeypatch.setattr(workbook, "save", fail_save)
+    monkeypatch.setattr(workbook, "close", record_close)
+
+    with pytest.raises(OSError, match="save failed"):
+        catalog_cart.create_catalog_quotation_workbook(
+            payload,
+            tmp_path / "save-failure.xlsx",
+            source_type="offiho_cart",
+            category_label="Offiho",
+            image_dir=tmp_path / "images",
+        )
+
+    assert close_calls == [True]
 
 
 class _Sheet:

@@ -6,6 +6,9 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 import json
+from urllib.parse import urlsplit
+
+from .catalog_cart import OFFICIAL_IMAGE_HOSTS, parse_commercial_quantity
 
 
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "offiho_catalog.json"
@@ -29,21 +32,34 @@ class OffihoCatalogItem:
     match_status: str = "unmatched"
     source_updated_at: str = ""
 
+    def __post_init__(self) -> None:
+        for field in ("inventory_key", "code", "unit", "price_source", "match_status"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Campo obligatorio Offiho invalido: {field}")
+        _validate_catalog_decimal("pieces_per_box", self.pieces_per_box, positive=True)
+        _validate_catalog_decimal("available_quantity", self.available_quantity)
+        _validate_catalog_decimal("unit_price", self.unit_price)
+        _validate_optional_official_url("product_url", self.product_url)
+        _validate_optional_official_url("image_url", self.image_url)
+
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "OffihoCatalogItem":
+        if not isinstance(raw, dict):
+            raise ValueError("Item Offiho invalido: se esperaba un objeto")
         return cls(
-            inventory_key=str(raw.get("inventory_key", "")).strip(),
-            code=str(raw.get("code", "")).strip(),
+            inventory_key=_required_text(raw, "inventory_key"),
+            code=_required_text(raw, "code"),
             name=str(raw.get("name", "")).strip(),
             variant=str(raw.get("variant", "")).strip(),
-            unit=str(raw.get("unit", "")).strip(),
-            pieces_per_box=_decimal(raw.get("pieces_per_box", 1)),
-            available_quantity=_decimal(raw.get("available_quantity", 0)),
-            unit_price=_decimal(raw.get("unit_price", 0)),
-            price_source=str(raw.get("price_source", "missing") or "missing").strip(),
+            unit=_required_text(raw, "unit"),
+            pieces_per_box=_strict_catalog_decimal(raw, "pieces_per_box", positive=True),
+            available_quantity=_strict_catalog_decimal(raw, "available_quantity"),
+            unit_price=_strict_catalog_decimal(raw, "unit_price"),
+            price_source=_required_text(raw, "price_source"),
             product_url=str(raw.get("product_url", "") or "").strip(),
             image_url=str(raw.get("image_url", "") or "").strip(),
-            match_status=str(raw.get("match_status", "unmatched") or "unmatched").strip(),
+            match_status=_required_text(raw, "match_status"),
             source_updated_at=str(raw.get("source_updated_at", "") or "").strip(),
         )
 
@@ -68,7 +84,21 @@ class OffihoCatalogItem:
 def load_offiho_catalog(path: str | Path | None = None) -> dict[str, Any]:
     catalog_path = Path(path or CATALOG_PATH)
     raw = json.loads(catalog_path.read_text(encoding="utf-8"))
-    items = [OffihoCatalogItem.from_dict(item) for item in raw.get("items", [])]
+    if not isinstance(raw, dict):
+        raise ValueError("Catalogo Offiho invalido: raiz no es un objeto")
+    for field in ("source_hash", "generated_at"):
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Catalogo Offiho invalido: {field} obligatorio")
+    raw_items = raw.get("items")
+    if not isinstance(raw_items, list):
+        raise ValueError("Catalogo Offiho invalido: items debe ser una lista")
+    items: list[OffihoCatalogItem] = []
+    for index, item in enumerate(raw_items):
+        try:
+            items.append(OffihoCatalogItem.from_dict(item))
+        except ValueError as exc:
+            raise ValueError(f"Catalogo Offiho invalido en item {index}: {exc}") from exc
     keys = [item.inventory_key for item in items]
     declared_count = raw.get("unique_item_count", raw.get("total"))
     if declared_count != EXPECTED_UNIQUE_ITEM_COUNT:
@@ -111,9 +141,7 @@ def build_offiho_cart_payload(
         item = by_inventory_key.get(inventory_key)
         if item is None:
             raise ValueError(f"Producto Offiho no encontrado: {inventory_key}")
-        quantity = _decimal(raw.get("quantity", 0))
-        if quantity <= 0:
-            raise ValueError(f"Cantidad invalida para {inventory_key}")
+        quantity = parse_commercial_quantity(raw.get("quantity", 0), item_label=inventory_key)
         status = stock_status(quantity, item.available_quantity)
         lines.append(
             {
@@ -156,12 +184,49 @@ def create_offiho_quotation_workbook(
     )
 
 
-def _decimal(value: Any) -> Decimal:
+def _required_text(raw: dict[str, Any], field: str) -> str:
+    value = str(raw.get(field, "") or "").strip()
+    if not value:
+        raise ValueError(f"Campo obligatorio Offiho invalido: {field}")
+    return value
+
+
+def _strict_catalog_decimal(raw: dict[str, Any], field: str, *, positive: bool = False) -> Decimal:
+    if field not in raw:
+        raise ValueError(f"Campo numerico Offiho faltante: {field}")
     try:
-        parsed = Decimal(str(value).replace(",", "").strip())
-        return parsed if parsed.is_finite() else Decimal("0")
-    except (InvalidOperation, AttributeError):
-        return Decimal("0")
+        value = Decimal(str(raw[field]).replace(",", "").strip())
+    except (InvalidOperation, AttributeError, ValueError):
+        raise ValueError(f"Campo numerico Offiho invalido: {field}") from None
+    _validate_catalog_decimal(field, value, positive=positive)
+    return value
+
+
+def _validate_catalog_decimal(field: str, value: Any, *, positive: bool = False) -> None:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValueError(f"Campo numerico Offiho invalido: {field}")
+    if value < 0 or (positive and value <= 0):
+        raise ValueError(f"Campo numerico Offiho fuera de rango: {field}")
+
+
+def _validate_optional_official_url(field: str, value: Any) -> None:
+    clean_url = str(value or "").strip()
+    if not clean_url:
+        return
+    try:
+        parsed = urlsplit(clean_url)
+        port = parsed.port
+    except ValueError:
+        raise ValueError(f"URL Offiho invalida: {field}") from None
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.username
+        or parsed.password
+        or port not in (None, 443)
+        or host not in OFFICIAL_IMAGE_HOSTS[OFFIHO_CART_SOURCE_TYPE]
+    ):
+        raise ValueError(f"URL Offiho no oficial: {field}")
 
 
 def _json_number(value: Decimal) -> int | float:

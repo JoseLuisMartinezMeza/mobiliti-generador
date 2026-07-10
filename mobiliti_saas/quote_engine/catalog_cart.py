@@ -8,7 +8,6 @@ import mimetypes
 import re
 import socket
 import tempfile
-import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -19,14 +18,16 @@ from openpyxl.utils import get_column_letter
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_COMMERCIAL_QUANTITY = Decimal("1000000")
+MAX_QUANTITY_DECIMAL_PLACES = 3
+MAX_QUANTITY_SIGNIFICANT_DIGITS = 10
+MAX_QUANTITY_TEXT_LENGTH = 64
 WARNING_FILL = "FFF2CC"
 OFFICIAL_IMAGE_HOSTS = {
     "offiho_cart": frozenset(
         {
             "offiho.com",
             "www.offiho.com",
-            "econosillas.com",
-            "www.econosillas.com",
             "offihoblack.com",
             "www.offihoblack.com",
         }
@@ -68,6 +69,7 @@ def create_catalog_quotation_workbook(
         images_root = Path(image_dir)
         images_root.mkdir(parents=True, exist_ok=True)
 
+    wb = None
     try:
         wb = Workbook()
         ws = wb.active
@@ -82,12 +84,13 @@ def create_catalog_quotation_workbook(
             name = str(item.get("name", "")).strip()
             unit = str(item.get("unit", "")).strip()
             url = str(item.get("product_url", "") or "").strip()
-            description, warning = _description_for_item(item, code, url)
+            quantity = parse_commercial_quantity(item.get("quantity", 0), item_label=code or name or str(index))
+            description, warning = _description_for_item(item, code, url, quantity)
             ws.cell(row, 1).value = index
             ws.cell(row, 2).value = name
             ws.cell(row, 4).value = description
             ws.cell(row, 5).value = unit
-            ws.cell(row, 7).value = float(_decimal(item.get("quantity", 0)))
+            ws.cell(row, 7).value = float(quantity)
             ws.cell(row, 10).value = _excel_number(_decimal(item.get("unit_price", 0)))
             ws.cell(row, 11).value = url
             if warning:
@@ -97,10 +100,13 @@ def create_catalog_quotation_workbook(
 
         _set_column_widths(ws)
         wb.save(output)
-        wb.close()
     finally:
-        if tmp_context is not None:
-            tmp_context.cleanup()
+        try:
+            if wb is not None:
+                wb.close()
+        finally:
+            if tmp_context is not None:
+                tmp_context.cleanup()
     return output
 
 
@@ -122,27 +128,35 @@ def _write_headers(ws) -> None:
         cell.fill = PatternFill("solid", fgColor="0B2F6B")
 
 
-def _description_for_item(item: dict[str, Any], code: str, url: str) -> tuple[str, str]:
+def _description_for_item(
+    item: dict[str, Any],
+    code: str,
+    url: str,
+    quantity: Decimal,
+) -> tuple[str, str]:
     parts = [f"Clave: {code}" if code else ""]
     variant = str(item.get("variant", "") or "").strip()
     if variant:
         parts.append(f"Variante: {variant}")
     if url:
         parts.append(f"URL: {url}")
-    warning = _stock_warning(item)
+    warning = _stock_warning(item, quantity)
     if warning:
         parts.append(warning)
     return " | ".join(part for part in parts if part), warning
 
 
-def _stock_warning(item: dict[str, Any]) -> str:
+def _stock_warning(item: dict[str, Any], quantity: Decimal) -> str:
     status = str(item.get("stock_status", "") or "").strip()
     if status == "out_of_stock":
         return "ADVERTENCIA: PRODUCTO AGOTADO"
     if status == "insufficient_stock":
-        quantity = _excel_number(_decimal(item.get("quantity", 0)))
+        quantity_number = _excel_number(quantity)
         available = _excel_number(_decimal(item.get("available_quantity", 0)))
-        return f"ADVERTENCIA: EXISTENCIA INSUFICIENTE (solicitado: {quantity}; disponible: {available})"
+        return (
+            "ADVERTENCIA: EXISTENCIA INSUFICIENTE"
+            f" - SOLICITADO {quantity_number} - DISPONIBLE {available}"
+        )
     return ""
 
 
@@ -176,6 +190,7 @@ class _OfficialRedirectHandler(urllib.request.HTTPRedirectHandler):
         self._allowed_hosts = allowed_hosts
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_connected_peer(fp)
         _validate_official_https_url(newurl, self._allowed_hosts)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -190,6 +205,7 @@ def _download_catalog_image(url: Any, image_dir: Path, code: str, source_type: s
         request = urllib.request.Request(clean_url, headers={"User-Agent": "Mobiliti Official Catalog/1.0"})
         opener = urllib.request.build_opener(_OfficialRedirectHandler(allowed_hosts))
         with opener.open(request, timeout=18) as response:
+            _validate_connected_peer(response)
             content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             content_length = response.headers.get("content-length")
             if not content_type.startswith("image/"):
@@ -197,15 +213,15 @@ def _download_catalog_image(url: Any, image_dir: Path, code: str, source_type: s
             if content_length and int(content_length) > MAX_IMAGE_BYTES:
                 return None
             data = response.read(MAX_IMAGE_BYTES + 1)
-    except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError, socket.gaierror):
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            return None
+        suffix = mimetypes.guess_extension(content_type) or Path(urlsplit(clean_url).path).suffix or ".jpg"
+        safe_code = re.sub(r"[^A-Za-z0-9_-]+", "_", code or "producto")
+        destination = image_dir / f"{safe_code}{suffix}"
+        destination.write_bytes(data)
+        return destination
+    except Exception:
         return None
-    if not data or len(data) > MAX_IMAGE_BYTES:
-        return None
-    suffix = mimetypes.guess_extension(content_type) or Path(urlsplit(clean_url).path).suffix or ".jpg"
-    safe_code = re.sub(r"[^A-Za-z0-9_-]+", "_", code or "producto")
-    destination = image_dir / f"{safe_code}{suffix}"
-    destination.write_bytes(data)
-    return destination
 
 
 def _validate_official_https_url(url: str, allowed_hosts: frozenset[str]) -> None:
@@ -227,6 +243,62 @@ def _resolve_public_host(host: str) -> None:
     addresses = {record[4][0] for record in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
     if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
         raise ValueError("Host de imagen no resuelve a una direccion publica")
+
+
+def _validate_connected_peer(response: Any) -> None:
+    socket_paths = (
+        ("fp", "raw", "_sock"),
+        ("fp", "raw", "_socket"),
+        ("fp", "_sock"),
+        ("raw", "_sock"),
+        ("_sock",),
+    )
+    connected_socket = None
+    for path in socket_paths:
+        candidate = response
+        for attribute in path:
+            candidate = getattr(candidate, attribute, None)
+            if candidate is None:
+                break
+        if candidate is not None and callable(getattr(candidate, "getpeername", None)):
+            connected_socket = candidate
+            break
+    if connected_socket is None:
+        raise ValueError("No se pudo inspeccionar la IP conectada")
+    try:
+        peer = connected_socket.getpeername()
+        address = str(peer[0]).split("%", 1)[0]
+        peer_ip = ipaddress.ip_address(address)
+    except (IndexError, OSError, TypeError, ValueError) as exc:
+        raise ValueError("No se pudo inspeccionar la IP conectada") from exc
+    if not peer_ip.is_global:
+        raise ValueError("La IP conectada no es publica")
+
+
+def parse_commercial_quantity(value: Any, *, item_label: str) -> Decimal:
+    text = str(value).replace(",", "").strip()
+    if not text or len(text) > MAX_QUANTITY_TEXT_LENGTH:
+        raise ValueError(f"Cantidad invalida para {item_label}")
+    try:
+        quantity = Decimal(text)
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"Cantidad invalida para {item_label}") from None
+    if not quantity.is_finite() or quantity <= 0:
+        raise ValueError(f"Cantidad invalida para {item_label}")
+
+    _, digits_tuple, exponent = quantity.as_tuple()
+    digits = list(digits_tuple)
+    while digits and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    decimal_places = max(-exponent, 0)
+    if (
+        len(digits) > MAX_QUANTITY_SIGNIFICANT_DIGITS
+        or decimal_places > MAX_QUANTITY_DECIMAL_PLACES
+        or quantity > MAX_COMMERCIAL_QUANTITY
+    ):
+        raise ValueError(f"Cantidad invalida para {item_label}")
+    return quantity
 
 
 def _decimal(value: Any) -> Decimal:
