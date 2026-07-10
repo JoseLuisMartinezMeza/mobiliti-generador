@@ -13,6 +13,7 @@ from mobiliti_saas.quote_engine.ai_image_provider import (
     dezgo_config_from_env,
     enhance_with_dezgo,
     generate_with_dezgo,
+    image_provider_failure_is_fatal,
     normalize_image_provider,
 )
 
@@ -44,6 +45,15 @@ def test_normalize_image_provider_defaults_to_pillow():
     assert normalize_image_provider("DEZGO") == "dezgo"
     assert normalize_image_provider("sunon-web") == "sunon_web"
     assert normalize_image_provider("catalogo_sunon") == "sunon_catalog"
+
+
+def test_image_provider_failure_is_nonfatal_unless_strict_opt_in(monkeypatch):
+    monkeypatch.delenv("IMAGE_PROVIDER_STRICT", raising=False)
+    assert image_provider_failure_is_fatal("dezgo") is False
+
+    monkeypatch.setenv("IMAGE_PROVIDER_STRICT", "true")
+    assert image_provider_failure_is_fatal("dezgo") is True
+    assert image_provider_failure_is_fatal("pillow") is False
 
 
 def test_default_dezgo_prompt_targets_realistic_ambient_catalog():

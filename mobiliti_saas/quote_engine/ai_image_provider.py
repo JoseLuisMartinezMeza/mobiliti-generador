@@ -62,6 +62,11 @@ def normalize_image_provider(value: str | None) -> str:
     return "pillow"
 
 
+def image_provider_failure_is_fatal(value: str | None) -> bool:
+    strict = str(os.environ.get("IMAGE_PROVIDER_STRICT", "")).strip().lower()
+    return normalize_image_provider(value) == "dezgo" and strict in {"1", "true", "yes", "on"}
+
+
 def dezgo_config_from_env() -> DezgoImageProviderConfig:
     return DezgoImageProviderConfig(
         api_key=os.environ.get("DEZGO_API_KEY"),

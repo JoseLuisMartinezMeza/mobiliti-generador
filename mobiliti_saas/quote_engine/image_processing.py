@@ -10,7 +10,13 @@ import os
 
 from PIL import Image, ImageChops, ImageFilter
 
-from .ai_image_provider import DEFAULT_DEZGO_PROMPT, dezgo_config_from_env, enhance_with_dezgo, normalize_image_provider
+from .ai_image_provider import (
+    DEFAULT_DEZGO_PROMPT,
+    dezgo_config_from_env,
+    enhance_with_dezgo,
+    image_provider_failure_is_fatal,
+    normalize_image_provider,
+)
 
 
 class _ProtectionMask:
@@ -666,4 +672,4 @@ def _cache_key(source: Path, options: ImageProcessingOptions, provider_signature
 
 
 def _strict_dezgo_requested(image_provider: str | None) -> bool:
-    return normalize_image_provider(image_provider) == "dezgo"
+    return image_provider_failure_is_fatal(image_provider)

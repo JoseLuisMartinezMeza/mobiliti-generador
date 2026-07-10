@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine.image_processing import improve_image_map, improve_product_image  # noqa: E402
+from mobiliti_saas.quote_engine.engine import _generate_missing_dezgo_images  # noqa: E402
+from mobiliti_saas.quote_engine.parser import QuoteItem  # noqa: E402
 
 
 def test_pillow_cleanup_defaults_to_normal_profile():
@@ -64,19 +66,24 @@ def test_improve_image_map_preserves_rows_and_returns_pngs(tmp_path):
     assert Path(result[9]).exists()
 
 
-def test_dezgo_image_provider_raises_without_key_when_explicit(monkeypatch, tmp_path):
+def test_dezgo_image_provider_falls_back_without_key_when_explicit(monkeypatch, tmp_path):
     monkeypatch.delenv("DEZGO_API_KEY", raising=False)
+    monkeypatch.delenv("IMAGE_PROVIDER_STRICT", raising=False)
     source = tmp_path / "product.jpg"
     _sample_product_image(source)
+    stats = {}
 
-    with pytest.raises(Exception):
-        improve_product_image(
-            source,
-            tmp_path / "out",
-            background="transparent",
-            min_size=120,
-            image_provider="dezgo",
-        )
+    output = improve_product_image(
+        source,
+        tmp_path / "out",
+        background="transparent",
+        min_size=120,
+        image_provider="dezgo",
+        stats=stats,
+    )
+
+    assert output.exists()
+    assert stats["image_ai_failed_count"] == 1
 
 
 def test_dezgo_image_provider_uses_separate_cache_from_pillow(monkeypatch, tmp_path):
@@ -132,6 +139,7 @@ def test_dezgo_image_provider_uses_user_prompt(monkeypatch, tmp_path):
 
 def test_dezgo_invalid_image_response_raises_when_explicit(monkeypatch, tmp_path):
     monkeypatch.setenv("DEZGO_API_KEY", "fake-key")
+    monkeypatch.setenv("IMAGE_PROVIDER_STRICT", "true")
     source = tmp_path / "product.jpg"
     _sample_product_image(source)
 
@@ -150,6 +158,7 @@ def test_dezgo_invalid_image_response_raises_when_explicit(monkeypatch, tmp_path
 
 def test_dezgo_image_map_raises_when_explicit_provider_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("DEZGO_API_KEY", "fake-key")
+    monkeypatch.setenv("IMAGE_PROVIDER_STRICT", "true")
     source = tmp_path / "product.jpg"
     _sample_product_image(source)
 
@@ -163,6 +172,27 @@ def test_dezgo_image_map_raises_when_explicit_provider_fails(monkeypatch, tmp_pa
 
     with pytest.raises(RuntimeError, match="dezgo unavailable"):
         improve_image_map({9: str(source)}, tmp_path, min_size=120, image_provider="dezgo")
+
+
+def test_missing_dezgo_image_failure_is_nonfatal_by_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("IMAGE_PROVIDER_STRICT", raising=False)
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.generate_with_dezgo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("payment required")),
+    )
+    stats = {}
+    item = QuoteItem(tipo="producto", row=9, nombre="Silla sin imagen")
+
+    result = _generate_missing_dezgo_images(
+        {},
+        [item],
+        tmp_path,
+        {"image_provider": "dezgo"},
+        stats,
+    )
+
+    assert result == {}
+    assert stats["image_ai_missing_failed_count"] == 1
 
 
 def test_aggressive_cleanup_removes_gray_shadow_but_keeps_enclosed_gray_detail(tmp_path):

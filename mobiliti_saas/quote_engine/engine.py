@@ -37,7 +37,12 @@ from PIL import Image as PILImage
 from .catalog_cart import WARNING_FILL
 from .classification import classify_product_name, load_category_dictionary
 from .descriptions import build_product_description, normalize_description_language
-from .ai_image_provider import dezgo_config_from_env, generate_with_dezgo, normalize_image_provider
+from .ai_image_provider import (
+    dezgo_config_from_env,
+    generate_with_dezgo,
+    image_provider_failure_is_fatal,
+    normalize_image_provider,
+)
 from .image_processing import improve_image_map
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .parser import QuoteItem, col_index, read_items
@@ -2165,7 +2170,7 @@ def _generate_missing_dezgo_images(
                 generate_with_dezgo(prompt, output, config)
             except Exception:
                 _bump_image_stat(stats, "image_ai_missing_failed_count")
-                if normalize_image_provider(requested_provider) == "dezgo":
+                if image_provider_failure_is_fatal(requested_provider):
                     raise
                 continue
         _bump_image_stat(stats, "image_ai_generated_count")
