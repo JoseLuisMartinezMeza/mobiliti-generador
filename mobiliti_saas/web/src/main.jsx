@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Armchair,
+  ExternalLink,
+  ImageOff,
+  Minus,
+  Plus,
+  ShoppingCart,
   ArrowDownToLine,
   CheckCircle2,
   Circle,
@@ -134,6 +140,8 @@ const emptyQuote = {
   image_prompt: DEFAULT_IMAGE_PROMPT,
   template: "Formato Cotizacion 2026 GDL (1).xlsx"
 };
+
+const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";
 
 const statusLabels = {
   draft: "Archivo preparado",
@@ -342,7 +350,7 @@ function Sidebar({ view, setView, isAdmin, onLogout }) {
     ["nueva", "Nueva", UploadCloud],
     ["historial", "Historial", History],
     ["clientes", "Clientes", UsersRound],
-    ["admin", "Admin", Settings]
+    ["admin", "Admin", Settings], ["offiho", "Offiho", Armchair]
   ];
   return (
     <aside className="sidebar">
@@ -674,6 +682,394 @@ function Field({ label, value, onChange, type = "text", wide = false, min, max, 
         placeholder={placeholder}
       />
     </label>
+  );
+}
+
+function OffihoView({ token, refreshJobs, onJobQueued }) {
+  const { request } = useApi(token);
+  const [catalog, setCatalog] = useState({ source_hash: "", generated_at: "", total: 0, items: [] });
+  const [query, setQuery] = useState("");
+  const [brandFilter, setBrandFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [availabilityFilter, setAvailabilityFilter] = useState("all");
+  const [cart, setCart] = useState({});
+  const [form, setForm] = useState({
+    proyecto: "",
+    cliente: "",
+    correo: "",
+    telefono: "",
+    direccion: "",
+    razon_social: "",
+    descuento: "40",
+    template: "Formato Cotizacion 2026 GDL (1).xlsx"
+  });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const offihoQuantityFormatter = useMemo(() => new Intl.NumberFormat("es-MX", { maximumFractionDigits: 3 }), []);
+  const offihoCurrencyFormatter = useMemo(() => new Intl.NumberFormat("es-MX", {
+    style: "currency",
+    currency: "MXN",
+    maximumFractionDigits: 2
+  }), []);
+
+  function normalizeOffihoText(value) {
+    return String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  }
+
+  function offihoStockLimit(item) {
+    const numeric = Number(item?.available_quantity);
+    return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+  }
+
+  function formatOffihoQuantity(value) {
+    const numeric = Number(value);
+    return offihoQuantityFormatter.format(Number.isFinite(numeric) ? numeric : 0);
+  }
+
+  function formatOffihoCurrency(value) {
+    const numeric = Number(value);
+    return offihoCurrencyFormatter.format(Number.isFinite(numeric) ? numeric : 0);
+  }
+
+  function validOffihoQuantity(value) {
+    const text = String(value ?? "").trim();
+    if (!/^\d+(?:\.\d{1,3})?$/.test(text)) return 0;
+    const numeric = Number(text);
+    return Number.isFinite(numeric) && numeric > 0 && numeric <= 1000000 ? numeric : 0;
+  }
+
+  function offihoStockWarning(item, quantity) {
+    const available = offihoStockLimit(item);
+    if (available <= 0 || item?.is_out_of_stock) return "Agotado";
+    return Number(quantity) > available ? "Stock insuficiente" : "";
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(OFFIHO_CATALOG_CACHE_KEY) || "null");
+      if (cached?.source_hash && Array.isArray(cached.items)) {
+        setCatalog(cached);
+        setLoading(false);
+      }
+    } catch {
+      sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY);
+    }
+
+    async function loadCatalog() {
+      setLoading(true);
+      setError("");
+      try {
+        const data = await request("/offiho/catalog");
+        if (cancelled) return;
+        setCatalog(data);
+        sessionStorage.setItem(OFFIHO_CATALOG_CACHE_KEY, JSON.stringify(data));
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [request, reloadKey]);
+
+  const byInventoryKey = useMemo(() => {
+    const map = new Map();
+    for (const item of catalog.items || []) map.set(item.inventory_key, item);
+    return map;
+  }, [catalog.items]);
+
+  const brandOptions = useMemo(() => Array.from(new Set(
+    (catalog.items || []).map((item) => item.brand || "Offiho")
+  )).sort((a, b) => a.localeCompare(b, "es")), [catalog.items]);
+
+  const categoryOptions = useMemo(() => Array.from(new Set(
+    (catalog.items || []).map((item) => item.category || "Sin categoria")
+  )).sort((a, b) => a.localeCompare(b, "es")), [catalog.items]);
+
+  const filteredItems = useMemo(() => {
+    const cleanQuery = normalizeOffihoText(query);
+    return (catalog.items || []).filter((item) => {
+      const brand = item.brand || "Offiho";
+      const category = item.category || "Sin categoria";
+      const available = offihoStockLimit(item);
+      const matchesBrand = brandFilter === "all" || brand === brandFilter;
+      const matchesCategory = categoryFilter === "all" || category === categoryFilter;
+      const matchesAvailability = availabilityFilter === "all"
+        || (availabilityFilter === "available" && available > 0)
+        || (availabilityFilter === "out" && available <= 0);
+      const haystack = normalizeOffihoText(
+        `${item.inventory_key} ${item.code} ${item.name} ${item.variant} ${brand} ${category}`
+      );
+      return matchesBrand && matchesCategory && matchesAvailability && (!cleanQuery || haystack.includes(cleanQuery));
+    });
+  }, [availabilityFilter, brandFilter, catalog.items, categoryFilter, query]);
+
+  const cartRows = useMemo(() => Object.values(cart)
+    .map((line) => ({ ...line, item: byInventoryKey.get(line.inventory_key) }))
+    .filter((line) => line.item), [byInventoryKey, cart]);
+  const cartUnits = cartRows.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+  const cartAmount = cartRows.reduce((sum, line) => sum + (Number(line.item.unit_price || 0) * Number(line.quantity || 0)), 0);
+  const warningRows = cartRows.filter((line) => offihoStockWarning(line.item, line.quantity));
+
+  function updateField(key, value) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateDiscount(value) {
+    if (value === "") {
+      updateField("descuento", value);
+      return;
+    }
+    const numeric = Math.max(0, Math.min(Number(value), 100));
+    updateField("descuento", Number.isFinite(numeric) ? String(numeric) : "40");
+  }
+
+  function addItem(item) {
+    setCart((current) => ({
+      ...current,
+      [item.inventory_key]: { inventory_key: item.inventory_key, quantity: current[item.inventory_key]?.quantity || 1 }
+    }));
+    setSuccess("");
+  }
+
+  function removeItem(inventoryKey) {
+    setCart((current) => {
+      const next = { ...current };
+      delete next[inventoryKey];
+      return next;
+    });
+  }
+
+  function changeQuantity(inventoryKey, value) {
+    if (value === "") {
+      removeItem(inventoryKey);
+      return;
+    }
+    const quantity = validOffihoQuantity(value);
+    if (!quantity) return;
+    setCart((current) => ({
+      ...current,
+      [inventoryKey]: { inventory_key: inventoryKey, quantity }
+    }));
+    setSuccess("");
+  }
+
+  async function createOffihoQuote(event) {
+    event.preventDefault();
+    setError("");
+    setSuccess("");
+    if (!cartRows.length) {
+      setError("Agrega al menos un producto Offiho.");
+      return;
+    }
+    const exhausted = warningRows.filter((line) => offihoStockWarning(line.item, line.quantity) === "Agotado").length;
+    const insufficient = warningRows.length - exhausted;
+    if (warningRows.length && !window.confirm(
+      `El carrito contiene ${exhausted} linea(s) agotada(s) y ${insufficient} con stock insuficiente. Deseas cotizar de todos modos?`
+    )) return;
+
+    setBusy(true);
+    try {
+      const data = await request("/offiho/quote", {
+        method: "POST",
+        body: JSON.stringify({
+          ...form,
+          items: cartRows.map((line) => ({ inventory_key: line.inventory_key, quantity: line.quantity }))
+        })
+      });
+      setCart({});
+      setSuccess(data.mensaje || "Cotizacion Offiho enviada a cola.");
+      if (data.job) onJobQueued(data.job);
+      refreshJobs();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="main-card full tarkett-shell offiho-shell">
+      <div className="card-head tarkett-head">
+        <div>
+          <h2>Offiho</h2>
+          <p>{catalog.total || catalog.items.length} productos indexados{catalog.generated_at ? ` - ${formatDate(catalog.generated_at)}` : ""}</p>
+        </div>
+        <button className="ghost-action" type="button" onClick={() => {
+          sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY);
+          setReloadKey((value) => value + 1);
+        }}>
+          <RefreshCw size={16} />
+          Refrescar
+        </button>
+      </div>
+
+      <div className="tarkett-layout">
+        <div className="tarkett-catalog">
+          <div className="tarkett-toolbar offiho-toolbar">
+            <label className="search-box">
+              <Search size={18} />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar clave, modelo, variante o producto" aria-label="Buscar catalogo Offiho" />
+            </label>
+            <select value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)} aria-label="Filtrar por marca">
+              <option value="all">Todas las marcas</option>
+              {brandOptions.map((brand) => <option key={brand} value={brand}>{brand}</option>)}
+            </select>
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="Filtrar por categoria">
+              <option value="all">Todas las categorias</option>
+              {categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
+            <select value={availabilityFilter} onChange={(event) => setAvailabilityFilter(event.target.value)} aria-label="Filtrar por disponibilidad">
+              <option value="all">Toda disponibilidad</option>
+              <option value="available">Con existencia</option>
+              <option value="out">Agotados</option>
+            </select>
+            <span>{loading ? "Cargando..." : `${filteredItems.length} visibles`}</span>
+          </div>
+
+          {error ? <div className="error-line">{error}</div> : null}
+          {success ? <div className="notice-line">{success}</div> : null}
+          {loading ? <p className="empty">Cargando catalogo Offiho...</p> : null}
+          {!loading && !filteredItems.length ? <p className="empty">No hay productos que coincidan con los filtros.</p> : null}
+
+          <div className="tarkett-grid offiho-grid">
+            {filteredItems.map((item) => {
+              const inCart = Boolean(cart[item.inventory_key]);
+              const reserved = Number(item.reserved_quantity || 0);
+              const stockWarning = offihoStockWarning(item, cart[item.inventory_key]?.quantity || 1);
+              const brand = item.brand || "Offiho";
+              const category = item.category || "Sin categoria";
+              return (
+                <article className="tarkett-product offiho-product" key={item.inventory_key}>
+                  <div className="product-media">
+                    {item.image_url ? (
+                      <img src={item.image_url} alt={`${item.name || item.inventory_key} ${item.variant || ""}`.trim()} loading="lazy" />
+                    ) : (
+                      <div className="product-placeholder" aria-label="Imagen no disponible"><ImageOff size={24} /></div>
+                    )}
+                  </div>
+                  <div className="product-info">
+                    <div className="product-title-row">
+                      <span>{item.code}</span>
+                      {item.product_url ? (
+                        <a href={item.product_url} target="_blank" rel="noreferrer noopener" aria-label={`Abrir sitio oficial de ${item.name || item.code}`} title="Abrir sitio oficial">
+                          <ExternalLink size={15} />
+                        </a>
+                      ) : null}
+                    </div>
+                    <strong>{item.name || item.inventory_key}</strong>
+                    <small>{item.variant || "Sin variante"} - {brand} / {category}</small>
+                    <div className="offiho-meta">
+                      <span>{item.unit} - {formatOffihoQuantity(item.pieces_per_box)} pzas/caja</span>
+                      <strong>{formatOffihoCurrency(item.unit_price)}</strong>
+                    </div>
+                    <div className="stock-row">
+                      <span>Existencia {formatOffihoQuantity(item.available_quantity)}</span>
+                      {item.reserved_by_others && reserved > 0 ? <em>Apartado {formatOffihoQuantity(reserved)}</em> : null}
+                      {stockWarning ? <b className={`offiho-warning ${stockWarning === "Agotado" ? "out" : "insufficient"}`}>{stockWarning}</b> : null}
+                    </div>
+                  </div>
+                  <div className="product-actions">
+                    <input
+                      type="number"
+                      min="0.001"
+                      step="0.001"
+                      max="1000000"
+                      inputMode="decimal"
+                      value={cart[item.inventory_key]?.quantity || ""}
+                      onChange={(event) => changeQuantity(item.inventory_key, event.target.value)}
+                      placeholder="Cant."
+                      aria-label={`Cantidad para ${item.name || item.inventory_key}`}
+                    />
+                    {inCart ? (
+                      <button className="ghost-action" type="button" onClick={() => removeItem(item.inventory_key)}>
+                        <Minus size={16} />
+                        Quitar
+                      </button>
+                    ) : (
+                      <button className="primary-action" type="button" onClick={() => addItem(item)}>
+                        <Plus size={16} />
+                        Agregar
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+
+        <aside className="tarkett-cart-panel offiho-cart-panel">
+          <div className="cart-head">
+            <ShoppingCart size={22} />
+            <div>
+              <h3>Carrito</h3>
+              <span>{cartRows.length} productos - {formatOffihoQuantity(cartUnits)} unidades</span>
+              <strong className="offiho-cart-total">{formatOffihoCurrency(cartAmount)}</strong>
+            </div>
+          </div>
+
+          <div className="cart-list">
+            {cartRows.map((line) => {
+              const warning = offihoStockWarning(line.item, line.quantity);
+              return (
+                <div className="cart-row offiho-cart-row" key={line.inventory_key}>
+                  <div>
+                    <strong>{line.item.name || line.inventory_key}</strong>
+                    <span>{line.item.code} - {formatOffihoCurrency(line.item.unit_price)}</span>
+                    {warning ? <b className={`offiho-warning ${warning === "Agotado" ? "out" : "insufficient"}`}>{warning}</b> : null}
+                  </div>
+                  <input
+                    type="number"
+                    min="0.001"
+                    step="0.001"
+                    max="1000000"
+                    inputMode="decimal"
+                    value={line.quantity}
+                    onChange={(event) => changeQuantity(line.inventory_key, event.target.value)}
+                    aria-label={`Cantidad para ${line.item.name || line.inventory_key}`}
+                  />
+                  <button type="button" onClick={() => removeItem(line.inventory_key)} aria-label={`Quitar ${line.item.name || line.inventory_key}`} title="Quitar del carrito">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              );
+            })}
+            {!cartRows.length ? <p className="empty">Selecciona productos del catalogo Offiho.</p> : null}
+          </div>
+
+          <form className="quote-form tarkett-form" onSubmit={createOffihoQuote}>
+            <h3>Datos de cotizacion</h3>
+            <div className="form-grid">
+              <Field label="Proyecto" value={form.proyecto} onChange={(value) => updateField("proyecto", value)} />
+              <Field label="Cliente" value={form.cliente} onChange={(value) => updateField("cliente", value)} />
+              <Field label="Correo" type="email" value={form.correo} onChange={(value) => updateField("correo", value)} />
+              <Field label="Telefono" value={form.telefono} onChange={(value) => updateField("telefono", value)} />
+              <Field label="Direccion" value={form.direccion} onChange={(value) => updateField("direccion", value)} />
+              <Field label="Descuento (%)" type="number" min="0" max="100" value={form.descuento} onChange={updateDiscount} />
+              <Field label="Razon social" value={form.razon_social} onChange={(value) => updateField("razon_social", value)} wide />
+            </div>
+            <div className="actions-row">
+              <button className="primary-action" disabled={busy || !cartRows.length}>
+                {busy ? <Loader2 className="spin" size={18} /> : <FileSpreadsheet size={18} />}
+                Cotizar
+              </button>
+            </div>
+          </form>
+        </aside>
+      </div>
+    </section>
   );
 }
 
@@ -1262,6 +1658,8 @@ function App() {
       ? quoteForm
       : view === "historial"
         ? <HistoryView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} downloadState={downloadState} deleteState={deleteState} />
+        : view === "offiho"
+          ? <OffihoView token={session.access_token} refreshJobs={refreshJobs} onJobQueued={(job) => setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])} />
         : view === "admin" || view === "clientes"
           ? <AdminView token={session.access_token} />
           : quoteForm;

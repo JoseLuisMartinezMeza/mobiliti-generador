@@ -884,6 +884,69 @@ textarea:focus {
   color: var(--danger);
 }
 
+.offiho-toolbar {
+  grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(150px, 190px)) auto;
+}
+
+.offiho-product .product-info strong {
+  min-height: 0;
+}
+
+.offiho-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.offiho-meta strong {
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.offiho-warning {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid #f0d99d;
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: #fff8e3;
+  color: #795500;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.offiho-warning.out {
+  border-color: #efc9c9;
+  background: #fff4e7;
+  color: #a63a2b;
+}
+
+.offiho-cart-total {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.offiho-cart-row .offiho-warning {
+  margin-top: 6px;
+}
+
+.offiho-product a:focus-visible,
+.offiho-product input:focus-visible,
+.offiho-cart-row input:focus-visible,
+.offiho-cart-row button:focus-visible {
+  outline: 3px solid rgba(0, 137, 119, 0.28);
+  outline-offset: 2px;
+}
+
 .login-shell {
   min-height: 100vh;
   display: grid;

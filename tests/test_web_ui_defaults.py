@@ -70,3 +70,28 @@ def test_download_does_not_mutate_signed_url_query():
     assert "download=${encodeURIComponent" not in source
     assert "const filename = data.filename || quoteDownloadFallbackName(job);" in source
     assert "link.href = signedUrl;" in source
+
+def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    vercel = Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+
+    assert 'Armchair' in source
+    assert '["tarkett", "Tarkett", PackageSearch]' in source
+    assert '["offiho", "Offiho", Armchair]' in source
+    assert source.index('["tarkett", "Tarkett", PackageSearch]') < source.index('["offiho", "Offiho", Armchair]')
+    assert "function OffihoView" in source
+    assert 'request("/offiho/catalog")' in source
+    assert 'request("/offiho/quote"' in source
+    assert 'const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";' in source
+    assert "sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY)" in source
+    assert "inventory_key" in source
+    assert "Stock insuficiente" in source
+    assert "Agotado" in source
+    assert "window.confirm" in source
+    assert "numeric <= 1000000" in source
+    assert "maximumFractionDigits: 2" in source
+    assert "rel=\"noreferrer\"" in source
+    assert '"/offiho/:path*"' in vercel
+    assert ".offiho-product" in styles
+    assert ".offiho-warning" in styles
