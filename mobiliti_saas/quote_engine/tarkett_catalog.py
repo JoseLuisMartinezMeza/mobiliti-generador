@@ -6,16 +6,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 import json
-import mimetypes
-import re
-import tempfile
-import urllib.error
-import urllib.request
 
-from openpyxl import Workbook
-from openpyxl.drawing.image import Image as XlsxImage
-from openpyxl.styles import Font, PatternFill
-from openpyxl.utils import get_column_letter
+from .catalog_cart import create_catalog_quotation_workbook
 
 
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "tarkett_catalog.json"
@@ -123,82 +115,13 @@ def create_tarkett_quotation_workbook(
     *,
     image_dir: str | Path | None = None,
 ) -> Path:
-    if cart_payload.get("source_type") != TARKETT_CART_SOURCE_TYPE:
-        raise ValueError("Payload Tarkett invalido")
-    items = list(cart_payload.get("items") or [])
-    if not items:
-        raise ValueError("Payload Tarkett sin productos")
-
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tmp_context = None
-    if image_dir is None:
-        tmp_context = tempfile.TemporaryDirectory(prefix="tarkett_images_")
-        images_root = Path(tmp_context.name)
-    else:
-        images_root = Path(image_dir)
-        images_root.mkdir(parents=True, exist_ok=True)
-
-    try:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Quotation"
-        headers = {
-            1: "No.",
-            2: "Item",
-            3: "Image",
-            4: "Description",
-            5: "Dimension",
-            7: "Qty",
-            10: "List Price",
-            11: "URL",
-        }
-        for col, title in headers.items():
-            cell = ws.cell(7, col)
-            cell.value = title
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill("solid", fgColor="0B2F6B")
-        ws.cell(8, 1).value = "- Tarkett"
-        ws.cell(8, 1).font = Font(bold=True)
-
-        for index, item in enumerate(items, start=1):
-            row = index + 8
-            code = str(item.get("code", "")).strip()
-            name = str(item.get("name", "")).strip()
-            unit = str(item.get("unit", "")).strip()
-            url = str(item.get("product_url", "") or "").strip()
-            ws.cell(row, 1).value = index
-            ws.cell(row, 2).value = name
-            ws.cell(row, 4).value = f"Clave: {code}" + (f" | URL: {url}" if url else "")
-            ws.cell(row, 5).value = unit
-            ws.cell(row, 7).value = float(_decimal(item.get("quantity", 0)))
-            ws.cell(row, 10).value = 0
-            ws.cell(row, 11).value = url
-            ws.row_dimensions[row].height = 72
-            image_path = _download_image(item.get("image_url"), images_root, code)
-            if image_path:
-                try:
-                    img = XlsxImage(str(image_path))
-                    if img.width and img.height:
-                        scale = min(90 / img.width, 66 / img.height)
-                        img.width = int(img.width * scale)
-                        img.height = int(img.height * scale)
-                    img.anchor = f"C{row}"
-                    ws.add_image(img)
-                except Exception:
-                    pass
-
-        for col in range(1, 12):
-            ws.column_dimensions[get_column_letter(col)].width = 18
-        ws.column_dimensions["B"].width = 38
-        ws.column_dimensions["D"].width = 46
-        ws.column_dimensions["K"].width = 42
-        wb.save(output)
-        wb.close()
-    finally:
-        if tmp_context is not None:
-            tmp_context.cleanup()
-    return output
+    return create_catalog_quotation_workbook(
+        cart_payload,
+        output_path,
+        source_type=TARKETT_CART_SOURCE_TYPE,
+        category_label="Tarkett",
+        image_dir=image_dir,
+    )
 
 
 def _decimal(value: Any) -> Decimal:
@@ -214,23 +137,3 @@ def _json_number(value: Any) -> int | float:
     if value == value.to_integral():
         return int(value)
     return float(value)
-
-
-def _download_image(url: Any, image_dir: Path, code: str) -> Path | None:
-    clean_url = str(url or "").strip()
-    if not re.match(r"^https?://", clean_url, flags=re.I):
-        return None
-    try:
-        req = urllib.request.Request(clean_url, headers={"User-Agent": "Mobiliti Tarkett Catalog/1.0"})
-        with urllib.request.urlopen(req, timeout=18) as response:
-            content_type = response.headers.get("content-type", "").split(";")[0].strip()
-            data = response.read(8 * 1024 * 1024)
-    except (OSError, urllib.error.URLError, TimeoutError):
-        return None
-    if not data or not content_type.startswith("image/"):
-        return None
-    suffix = mimetypes.guess_extension(content_type) or Path(clean_url.split("?", 1)[0]).suffix or ".jpg"
-    safe_code = re.sub(r"[^A-Za-z0-9_-]+", "_", code or "producto")
-    dest = image_dir / f"{safe_code}{suffix}"
-    dest.write_bytes(data)
-    return dest

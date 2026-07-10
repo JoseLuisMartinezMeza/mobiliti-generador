@@ -1,14 +1,131 @@
 from decimal import Decimal
 from datetime import datetime
 from email.message import Message
+from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
 
 import scripts.build_offiho_catalog as build
 from scripts.build_offiho_catalog import extract_offiho_identity
 from scripts.build_offiho_catalog import match_official_product
 from scripts.build_offiho_catalog import parse_inventory_xls
 from scripts.build_offiho_catalog import parse_pdf_price_index
+
+
+def fake_runtime_catalog(*, available_quantity: int, unit_price: int):
+    from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+
+    item = OffihoCatalogItem(
+        inventory_key="OHE-405 NEGRO ALUFSEN",
+        code="OHE-405",
+        name="ALUFSEN",
+        variant="NEGRO",
+        unit="PZA",
+        pieces_per_box=Decimal("1"),
+        available_quantity=Decimal(str(available_quantity)),
+        unit_price=Decimal(str(unit_price)),
+        product_url="https://www.offiho.com/productos/alufsen",
+        image_url="https://www.offiho.com/uploads/alufsen.jpg",
+    )
+    return {"source_hash": "hash", "items": [item], "by_inventory_key": {item.inventory_key: item}}
+
+
+def test_offiho_cart_accepts_exhausted_and_overstock_lines():
+    from mobiliti_saas.quote_engine.offiho_catalog import build_offiho_cart_payload
+
+    exhausted = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 3}],
+        catalog=fake_runtime_catalog(available_quantity=0, unit_price=7999),
+    )
+    insufficient = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 3}],
+        catalog=fake_runtime_catalog(available_quantity=2, unit_price=7999),
+    )
+
+    assert exhausted["items"][0]["stock_status"] == "out_of_stock"
+    assert insufficient["items"][0]["stock_status"] == "insufficient_stock"
+    assert insufficient["items"][0]["unit_price"] == 7999
+
+
+def test_offiho_cart_uses_catalog_owned_values_and_rejects_non_positive_quantity():
+    from mobiliti_saas.quote_engine.offiho_catalog import build_offiho_cart_payload
+
+    payload = build_offiho_cart_payload(
+        [
+            {
+                "inventory_key": "OHE-405 NEGRO ALUFSEN",
+                "quantity": "2",
+                "unit_price": 1,
+                "available_quantity": 999,
+                "product_url": "https://example.test/untrusted",
+                "image_url": "https://example.test/untrusted.jpg",
+            }
+        ],
+        catalog=fake_runtime_catalog(available_quantity=2, unit_price=7999),
+    )
+
+    assert payload["items"][0]["stock_status"] == "available"
+    assert payload["items"][0]["unit_price"] == 7999
+    assert payload["items"][0]["available_quantity"] == 2
+    assert payload["items"][0]["product_url"] == "https://www.offiho.com/productos/alufsen"
+    assert payload["items"][0]["image_url"] == "https://www.offiho.com/uploads/alufsen.jpg"
+    with pytest.raises(ValueError, match="Cantidad invalida"):
+        build_offiho_cart_payload(
+            [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 0}],
+            catalog=fake_runtime_catalog(available_quantity=252, unit_price=7999),
+        )
+    with pytest.raises(ValueError, match="Cantidad invalida"):
+        build_offiho_cart_payload(
+            [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": "NaN"}],
+            catalog=fake_runtime_catalog(available_quantity=252, unit_price=7999),
+        )
+
+
+def test_offiho_workbook_writes_price_and_warning(tmp_path):
+    from mobiliti_saas.quote_engine.offiho_catalog import (
+        build_offiho_cart_payload,
+        create_offiho_quotation_workbook,
+    )
+
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 1}],
+        catalog=fake_runtime_catalog(available_quantity=0, unit_price=7999),
+    )
+    output = create_offiho_quotation_workbook(payload, tmp_path / "offiho.xlsx")
+    wb = load_workbook(output)
+    ws = wb["Quotation"]
+
+    assert ws["J9"].value == 7999
+    assert "ADVERTENCIA: PRODUCTO AGOTADO" in ws["D9"].value
+    assert ws["D9"].fill.fgColor.rgb.endswith("FFF2CC")
+    wb.close()
+
+
+def test_offiho_warning_survives_online_quote_generation(tmp_path):
+    from mobiliti_saas.quote_engine.offiho_catalog import (
+        build_offiho_cart_payload,
+        create_offiho_quotation_workbook,
+    )
+    from mobiliti_saas.worker.online_quote_generator import generate_online_quote
+
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 1}],
+        catalog=fake_runtime_catalog(available_quantity=0, unit_price=7999),
+    )
+    source = create_offiho_quotation_workbook(payload, tmp_path / "offiho.xlsx")
+    output = tmp_path / "cotizacion.xlsx"
+
+    generate_online_quote(source, output, {"tipo_cambio": "20"})
+
+    wb = load_workbook(output, data_only=False)
+    assert {"Cotizacion", "Mobiliti", "Quotation"}.issubset(wb.sheetnames)
+    assert any(
+        "ADVERTENCIA: PRODUCTO AGOTADO" in str(cell.value or "")
+        for row in wb["Cotizacion"].iter_rows()
+        for cell in row
+    )
+    wb.close()
 
 
 class _Sheet:
