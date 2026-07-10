@@ -239,8 +239,18 @@ def test_process_job_uses_source_type_when_input_name_is_not_json(monkeypatch):
         },
     )
 
-    assert seen["converted_input"] == "input.xlsx"
+    assert seen["converted_input"] == "input.json"
     assert seen["generator_input"] == "quotation_from_offiho.xlsx"
+
+
+@pytest.mark.parametrize("source_type", ["tarkett_cart", "offiho_cart"])
+def test_input_extension_uses_cart_source_type_without_json_filename(source_type):
+    job = {
+        "input_path": "users/7/jobs/job-1/upload.bin",
+        "metadata": {"source_type": source_type},
+    }
+
+    assert quote_worker._input_extension_for_job(job) == ".json"
 
 
 @pytest.mark.parametrize(

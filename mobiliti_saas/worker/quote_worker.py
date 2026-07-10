@@ -36,6 +36,9 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY")
 MOBILITI_REST_SECRET = os.environ.get("MOBILITI_REST_SECRET")
 DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes"}
+TARKETT_CART_SOURCE_TYPE = "tarkett_cart"
+OFFIHO_CART_SOURCE_TYPE = "offiho_cart"
+JSON_CART_SOURCE_TYPES = frozenset({TARKETT_CART_SOURCE_TYPE, OFFIHO_CART_SOURCE_TYPE})
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -445,12 +448,29 @@ def _template_path() -> str:
     return os.environ.get("TEMPLATE_PATH") or str(_default_template())
 
 
-def _input_extension_for_job(job: dict) -> str:
+def _json_job_source_type(job: dict) -> str | None:
+    metadata = job.get("metadata") or {}
+    value = metadata.get("source_type")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _has_supported_json_cart_source_type(job: dict) -> bool:
+    return _json_job_source_type(job) in JSON_CART_SOURCE_TYPES
+
+
+def _has_json_input_hint(job: dict) -> bool:
     input_path = str(job.get("input_path") or "").lower()
     metadata = job.get("metadata") or {}
     original_filename = str(metadata.get("original_filename") or "").lower()
     metadata_extension = str(metadata.get("input_extension") or "").lower()
-    if input_path.endswith(".json") or original_filename.endswith(".json") or metadata_extension == ".json":
+    return input_path.endswith(".json") or original_filename.endswith(".json") or metadata_extension == ".json"
+
+
+def _input_extension_for_job(job: dict) -> str:
+    input_path = str(job.get("input_path") or "").lower()
+    metadata = job.get("metadata") or {}
+    original_filename = str(metadata.get("original_filename") or "").lower()
+    if _has_json_input_hint(job) or _has_supported_json_cart_source_type(job):
         return ".json"
     if input_path.endswith(".pdf") or original_filename.endswith(".pdf"):
         return ".pdf"
@@ -485,14 +505,9 @@ def _read_cart_payload(source_json: Path) -> dict:
     return payload
 
 
-def _json_job_source_type(job: dict) -> str | None:
-    metadata = job.get("metadata") or {}
-    value = metadata.get("source_type")
-    return value.strip() if isinstance(value, str) and value.strip() else None
-
-
 def _is_json_cart_job(job: dict) -> bool:
-    return _input_extension_for_job(job) == ".json" or "source_type" in (job.get("metadata") or {})
+    metadata = job.get("metadata") or {}
+    return _has_json_input_hint(job) or _has_supported_json_cart_source_type(job) or "source_type" in metadata
 
 
 def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Path:
@@ -512,8 +527,16 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
             raise RuntimeError("source_type de metadata no coincide con JSON de entrada")
 
         conversions = {
-            "tarkett_cart": ("quotation_from_tarkett.xlsx", _convert_tarkett_cart_to_quotation, "tarkett_converted"),
-            "offiho_cart": ("quotation_from_offiho.xlsx", _convert_offiho_cart_to_quotation, "offiho_converted"),
+            TARKETT_CART_SOURCE_TYPE: (
+                "quotation_from_tarkett.xlsx",
+                _convert_tarkett_cart_to_quotation,
+                "tarkett_converted",
+            ),
+            OFFIHO_CART_SOURCE_TYPE: (
+                "quotation_from_offiho.xlsx",
+                _convert_offiho_cart_to_quotation,
+                "offiho_converted",
+            ),
         }
         conversion = conversions.get(source_type)
         if conversion is None:
