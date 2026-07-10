@@ -12,6 +12,7 @@ from .catalog_cart import create_catalog_quotation_workbook, parse_commercial_qu
 
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "tarkett_catalog.json"
 TARKETT_CART_SOURCE_TYPE = "tarkett_cart"
+MAX_CART_LINES = 200
 
 
 @dataclass(frozen=True)
@@ -92,14 +93,20 @@ def build_tarkett_cart_payload(
     by_code: dict[str, TarkettCatalogItem] = loaded_catalog["by_code"]
     if not raw_items:
         raise ValueError("El carrito Tarkett esta vacio")
+    if len(raw_items) > MAX_CART_LINES:
+        raise ValueError(f"El carrito Tarkett excede el limite de {MAX_CART_LINES} productos")
 
     lines: list[dict[str, Any]] = []
+    seen_codes: set[str] = set()
     for raw in raw_items:
         if not isinstance(raw, dict):
             raise ValueError("Cada producto Tarkett debe ser un objeto")
         code = str(raw.get("code", raw.get("clave", ""))).strip()
         if not code:
             raise ValueError("Cada producto Tarkett requiere clave")
+        if code in seen_codes:
+            raise ValueError(f"Codigo Tarkett duplicado: {code}")
+        seen_codes.add(code)
         item = by_code.get(code)
         if item is None:
             raise ValueError(f"Producto Tarkett no encontrado: {code}")

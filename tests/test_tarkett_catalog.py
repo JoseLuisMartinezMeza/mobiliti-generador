@@ -187,6 +187,44 @@ def test_tarkett_cart_rejects_extreme_or_overprecise_quantity(quantity):
         build_tarkett_cart_payload([{"code": "25731726", "quantity": quantity}], catalog=_sample_catalog())
 
 
+def test_tarkett_cart_accepts_200_unique_lines_and_rejects_201():
+    from mobiliti_saas.quote_engine.tarkett_catalog import MAX_CART_LINES
+
+    items = [
+        TarkettCatalogItem(
+            code=f"TK-{index:03d}",
+            name=f"Producto Tarkett {index}",
+            unit="MTK - metro cuadrado",
+            available_quantity=Decimal("1"),
+        )
+        for index in range(MAX_CART_LINES + 1)
+    ]
+    catalog = {
+        "source_hash": "hash-limit",
+        "generated_at": "2026-07-08T00:00:00+00:00",
+        "items": items,
+        "by_code": {item.code: item for item in items},
+    }
+    raw_items = [{"code": item.code, "quantity": "0.0001"} for item in items]
+
+    payload = build_tarkett_cart_payload(raw_items[:MAX_CART_LINES], catalog=catalog)
+
+    assert len(payload["items"]) == 200
+    assert all(line["quantity"] == 0.0001 for line in payload["items"])
+    with pytest.raises(ValueError, match="200"):
+        build_tarkett_cart_payload(raw_items, catalog=catalog)
+
+
+def test_tarkett_cart_rejects_duplicate_code_before_processing_duplicate_quantity():
+    raw_items = [
+        {"code": "25731726", "quantity": "0.0001"},
+        {"code": "25731726", "quantity": "invalid"},
+    ]
+
+    with pytest.raises(ValueError, match="duplicad"):
+        build_tarkett_cart_payload(raw_items, catalog=_sample_catalog())
+
+
 def test_tarkett_cart_preserves_historical_four_decimal_quantity(tmp_path):
     payload = build_tarkett_cart_payload(
         [{"code": "25731726", "quantity": "0.0001"}],

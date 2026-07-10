@@ -151,6 +151,8 @@ CREATE INDEX IF NOT EXISTS idx_tarkett_reservations_usuario
     ON saas_tarkett_reservations(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_tarkett_reservations_quote_job
     ON saas_tarkett_reservations(quote_job_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tarkett_reservations_quote_job_product
+    ON saas_tarkett_reservations(quote_job_id, product_code);
 
 ALTER TABLE saas_tarkett_reservations ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE saas_tarkett_reservations FROM anon, authenticated;

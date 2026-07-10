@@ -234,6 +234,48 @@ def test_catalog_routes_reject_expired_subscription(monkeypatch, path):
     assert resp.json()["detail"] == "Suscripcion no activa"
 
 
+@pytest.mark.parametrize("supplier", ["tarkett", "offiho"])
+def test_catalog_quote_routes_require_token_before_upload(monkeypatch, supplier):
+    monkeypatch.setattr(
+        index,
+        "_storage_upload_bytes",
+        lambda *args: (_ for _ in ()).throw(AssertionError("unauthenticated quote must not upload")),
+    )
+    body = _valid_tarkett_body() if supplier == "tarkett" else _valid_offiho_body()
+
+    resp = _client().post(f"/{supplier}/quote", json=body)
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Token no proporcionado"
+
+
+@pytest.mark.parametrize("supplier", ["tarkett", "offiho"])
+def test_catalog_quote_routes_reject_expired_subscription_before_upload(monkeypatch, supplier):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(
+        index,
+        "db_get_suscripcion_by_usuario",
+        lambda usuario_id: {
+            "id": 1,
+            "usuario_id": usuario_id,
+            "estado": "activa",
+            "plan": "mensual",
+            "fecha_fin": "2020-01-01T00:00:00+00:00",
+        },
+    )
+    monkeypatch.setattr(
+        index,
+        "_storage_upload_bytes",
+        lambda *args: (_ for _ in ()).throw(AssertionError("expired subscription must not upload")),
+    )
+    body = _valid_tarkett_body() if supplier == "tarkett" else _valid_offiho_body()
+
+    resp = _client().post(f"/{supplier}/quote", headers=_auth_headers(), json=body)
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Suscripcion no activa"
+
+
 def test_tarkett_catalog_returns_base_stock_and_other_user_reservations(monkeypatch):
     _mock_user(monkeypatch)
     monkeypatch.setattr(index, "_load_tarkett_catalog_cached", _mock_tarkett_catalog)
@@ -797,9 +839,11 @@ def test_reservation_sql_enforces_server_only_rls_and_offiho_job_product_uniquen
             assert f"alter table {table} enable row level security" in sql
             assert f"revoke all on table {table} from anon, authenticated" in sql
             assert f"grant all on table {table} to service_role" in sql
-    for sql in (migration_paths["saas_offiho_reservations"].read_text(encoding="utf-8").lower(), create_tables):
-        assert "unique" in sql
-        assert "(quote_job_id, product_code)" in sql
+    for table, path in migration_paths.items():
+        for sql in (path.read_text(encoding="utf-8").lower(), create_tables):
+            assert f"idx_{table.removeprefix('saas_')}_quote_job_product" in sql
+            assert "unique" in sql
+            assert "(quote_job_id, product_code)" in sql
 
 
 def test_init_upload_rejects_unsupported_file(monkeypatch):
