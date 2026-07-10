@@ -71,6 +71,24 @@ def test_download_does_not_mutate_signed_url_query():
     assert "const filename = data.filename || quoteDownloadFallbackName(job);" in source
     assert "link.href = signedUrl;" in source
 
+
+def test_tarkett_tab_catalog_cache_and_cart_are_present():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    vercel = Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+
+    assert '["tarkett", "Tarkett", PackageSearch]' in source
+    assert "function TarkettView" in source
+    assert 'request("/tarkett/catalog")' in source
+    assert 'request("/tarkett/quote"' in source
+    assert 'const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";' in source
+    assert "sessionStorage.setItem(TARKETT_CATALOG_CACHE_KEY" in source
+    assert "Apartado {formatQuantity(reserved)}" in source
+    assert ".tarkett-grid" in styles
+    assert ".tarkett-cart-panel" in styles
+    assert '"/tarkett/:path*"' in vercel
+
+
 def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
     source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
     styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
@@ -89,9 +107,48 @@ def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
     assert "Stock insuficiente" in source
     assert "Agotado" in source
     assert "window.confirm" in source
-    assert "numeric <= 1000000" in source
+    assert "numeric > 1000000" in source
     assert "maximumFractionDigits: 2" in source
-    assert "rel=\"noreferrer\"" in source
+    assert "rel=\"noreferrer noopener\"" in source
     assert '"/offiho/:path*"' in vercel
     assert ".offiho-product" in styles
     assert ".offiho-warning" in styles
+
+
+def test_offiho_catalog_uses_factual_filters_cache_and_pagination_contracts():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert 'const OFFIHO_PAGE_SIZE = 24;' in source
+    assert "const pagedItems = useMemo" in source
+    assert "filteredItems.slice(pageStart, pageStart + OFFIHO_PAGE_SIZE)" in source
+    assert "pagedItems.map" in source
+    assert "ChevronLeft" in source and "ChevronRight" in source
+    assert 'aria-label="Pagina anterior"' in source
+    assert 'aria-label="Pagina siguiente"' in source
+    assert "Pagina {page} de {pageCount}" in source
+    assert "unitFilter" in source
+    assert "Todas las unidades" in source
+    assert "brandFilter" not in source
+    assert "categoryFilter" not in source
+    assert "user_id: userId" in source
+    assert "cached?.user_id === userId" in source
+    assert "clearCatalogCaches" in source
+    assert ".offiho-pagination" in styles
+
+
+def test_offiho_quantity_price_and_submit_guard_contracts_are_present():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+
+    assert "Precio por confirmar" in source
+    assert "Total con precios disponibles" in source
+    assert "precios por confirmar" in source
+    assert "onBlur" in source
+    assert "rawQuantity" in source
+    assert "1." in source
+    assert "isSubmittingRef" in source
+    assert "if (isSubmittingRef.current) return;" in source
+    assert "isSubmittingRef.current = true;" in source
+    assert "isSubmittingRef.current = false;" in source
+    assert 'role="status"' in source
+    assert 'aria-live="polite"' in source

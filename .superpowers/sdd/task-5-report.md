@@ -20,6 +20,13 @@
 - `git diff --check` passed.
 - Parsed `mobiliti_saas/web/vercel.json` successfully with PowerShell `ConvertFrom-Json`.
 
+## Follow-up Corrections
+
+- Consolidated the pre-existing Tarkett frontend so a clean checkout exposes Tarkett immediately before Offiho.
+- Replaced unsupported brand/category filters with factual unit and availability filters.
+- Added user-scoped catalog caches, cart reconciliation notices, missing-price treatment, quantity draft validation, an in-flight submit ref, and 24-item Offiho pagination.
+- Visual QA used a mocked 1,206-item catalog: 24 rendered product cards on each page, no horizontal overflow, and document heights of 2,778px at 1440x900, 3,804px at 912x791, and 5,515px at 390x844.
+
 ## Files
 
 - `mobiliti_saas/web/src/main.jsx`

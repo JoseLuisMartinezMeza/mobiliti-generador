@@ -28,6 +28,10 @@
       "destination": "/api/index"
     },
     {
+      "source": "/tarkett/:path*",
+      "destination": "/api/index"
+    },
+    {
       "source": "/offiho/:path*",
       "destination": "/api/index"
     },
