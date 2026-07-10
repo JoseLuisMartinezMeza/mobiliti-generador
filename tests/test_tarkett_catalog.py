@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,7 +19,6 @@ from scripts.build_tarkett_catalog import resolve_tarkett_product
 
 
 ROOT = Path(__file__).resolve().parents[1]
-INVENTORY = ROOT / "Inventario Tarkett- 6 Julio .xls"
 
 
 def _sample_catalog():
@@ -65,10 +65,24 @@ def mocked_tarkett_network_fallbacks(monkeypatch):
     )
 
 
-def test_inventory_html_parser_reads_expected_tarkett_rows():
-    rows = parse_inventory_html(INVENTORY)
+def test_inventory_html_parser_reads_expected_tarkett_rows(tmp_path):
+    inventory = tmp_path / "tarkett-inventory.xls"
+    inventory.write_text(
+        """
+        <table>
+          <tr><th>Clave</th><th>Producto</th><th>Unidad base</th><th>Cant disponible</th></tr>
+          <tr><td>25731726</td><td>Aurea Tech Cadiz 6.0mm</td><td>MTK - metro cuadrado</td><td>970.200</td></tr>
+          <tr><td>711533007</td><td>Desso Essence Structure</td><td>FOT - pie</td><td>12</td></tr>
+          <tr><td>2102002000</td><td>Catalogo Eclipse Premium</td><td>H87 - pieza</td><td>3</td></tr>
+          <tr><td>666214</td><td>Ultrabond Eco 4 LVT</td><td>KGM - kilogramo</td><td>14</td></tr>
+        </table>
+        """,
+        encoding="utf-8",
+    )
 
-    assert len(rows) == 125
+    rows = parse_inventory_html(inventory)
+
+    assert len(rows) == 4
     assert rows[0].code == "25731726"
     assert rows[0].name == "Aurea Tech Cadiz 6.0mm"
     assert rows[0].available_quantity == Decimal("970.200")
@@ -103,6 +117,40 @@ def test_generated_catalog_contains_cadiz_url_and_image():
     assert by_code["7100910014"].match_status == "professional_es_collection_match"
     assert by_code["666214"].match_status == "tarkett_ar_accessory_sku_match"
     assert sum(1 for item in catalog["items"] if item.image_url) >= 122
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("code", ""),
+        ("name", " "),
+        ("unit", None),
+        ("available_quantity", -1),
+        ("available_quantity", "NaN"),
+        ("available_quantity", "invalid"),
+    ],
+)
+def test_tarkett_loader_rejects_missing_fields_and_invalid_stock(tmp_path, field, value):
+    raw = json.loads((ROOT / "mobiliti_saas" / "quote_engine" / "data" / "tarkett_catalog.json").read_text(encoding="utf-8"))
+    raw["items"][0][field] = value
+    path = tmp_path / "invalid-tarkett.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        load_tarkett_catalog(path)
+
+
+def test_tarkett_loader_rejects_empty_and_duplicate_catalogs(tmp_path):
+    raw = json.loads((ROOT / "mobiliti_saas" / "quote_engine" / "data" / "tarkett_catalog.json").read_text(encoding="utf-8"))
+    empty_path = tmp_path / "empty-tarkett.json"
+    empty_path.write_text(json.dumps({**raw, "items": []}), encoding="utf-8")
+    duplicate_path = tmp_path / "duplicate-tarkett.json"
+    duplicate_path.write_text(json.dumps({**raw, "items": [raw["items"][0], raw["items"][0]]}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="vacio"):
+        load_tarkett_catalog(empty_path)
+    with pytest.raises(ValueError, match="duplicad"):
+        load_tarkett_catalog(duplicate_path)
 
 
 def test_tarkett_cart_payload_validates_stock_and_sets_zero_price():

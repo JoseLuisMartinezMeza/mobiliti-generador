@@ -14,6 +14,9 @@ from .catalog_cart import OFFICIAL_IMAGE_HOSTS, parse_commercial_quantity
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "offiho_catalog.json"
 OFFIHO_CART_SOURCE_TYPE = "offiho_cart"
 EXPECTED_UNIQUE_ITEM_COUNT = 1206
+EXPECTED_SOURCE_ROW_COUNT = 1286
+EXPECTED_DUPLICATE_ROW_COUNT = 80
+MAX_CART_LINES = 200
 MAX_CATALOG_DECIMAL_PLACES = 6
 MAX_CATALOG_DECIMAL_TEXT_LENGTH = 64
 CATALOG_DECIMAL_LIMITS = {
@@ -113,14 +116,24 @@ def load_offiho_catalog(path: str | Path | None = None) -> dict[str, Any]:
         except ValueError as exc:
             raise ValueError(f"Catalogo Offiho invalido en item {index}: {exc}") from exc
     keys = [item.inventory_key for item in items]
-    declared_count = raw.get("unique_item_count", raw.get("total"))
-    if declared_count != EXPECTED_UNIQUE_ITEM_COUNT:
+    audit = {
+        "source_row_count": raw.get("source_row_count"),
+        "duplicate_row_count": raw.get("duplicate_row_count"),
+        "unique_item_count": raw.get("unique_item_count", raw.get("total")),
+    }
+    expected_audit = {
+        "source_row_count": EXPECTED_SOURCE_ROW_COUNT,
+        "duplicate_row_count": EXPECTED_DUPLICATE_ROW_COUNT,
+        "unique_item_count": EXPECTED_UNIQUE_ITEM_COUNT,
+    }
+    if audit != expected_audit:
         raise ValueError("Catalogo Offiho invalido: indice unico esperado de 1206")
     if len(items) != EXPECTED_UNIQUE_ITEM_COUNT or len(set(keys)) != EXPECTED_UNIQUE_ITEM_COUNT or not all(keys):
         raise ValueError("Catalogo Offiho invalido: claves de inventario no unicas")
     return {
         "source_hash": str(raw.get("source_hash", "")),
         "generated_at": str(raw.get("generated_at", "")),
+        **audit,
         "items": items,
         "by_inventory_key": {item.inventory_key: item for item in items},
     }
@@ -143,14 +156,20 @@ def build_offiho_cart_payload(
     by_inventory_key: dict[str, OffihoCatalogItem] = loaded_catalog["by_inventory_key"]
     if not raw_items:
         raise ValueError("El carrito Offiho esta vacio")
+    if len(raw_items) > MAX_CART_LINES:
+        raise ValueError(f"El carrito Offiho excede el limite de {MAX_CART_LINES} productos")
 
     lines: list[dict[str, Any]] = []
+    seen_inventory_keys: set[str] = set()
     for raw in raw_items:
         if not isinstance(raw, dict):
             raise ValueError("Cada producto Offiho debe ser un objeto")
         inventory_key = str(raw.get("inventory_key", "")).strip()
         if not inventory_key:
             raise ValueError("Cada producto Offiho requiere inventory_key")
+        if inventory_key in seen_inventory_keys:
+            raise ValueError(f"Clave de inventario Offiho duplicada: {inventory_key}")
+        seen_inventory_keys.add(inventory_key)
         item = by_inventory_key.get(inventory_key)
         if item is None:
             raise ValueError(f"Producto Offiho no encontrado: {inventory_key}")

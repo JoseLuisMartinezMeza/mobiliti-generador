@@ -13,6 +13,7 @@ import json
 import time
 import uuid
 import sys
+import hashlib
 import urllib.request
 import urllib.error
 from urllib.parse import quote, unquote
@@ -1029,23 +1030,53 @@ def db_release_offiho_reservations(quote_job_id: str):
     )
 
 
-_TARKETT_CATALOG_CACHE = {"path": None, "mtime": None, "catalog": None}
+_TARKETT_CATALOG_CACHE = {"path": None, "fingerprint": None, "source_hash": None, "catalog": None}
+
+
+def _catalog_file_fingerprint(catalog_path: Path) -> dict:
+    content = catalog_path.read_bytes()
+    stat = catalog_path.stat()
+    return {
+        "path": str(catalog_path),
+        "mtime_ns": stat.st_mtime_ns,
+        "size": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _load_catalog_cached(cache: dict, catalog_path: Path, loader, label: str) -> dict:
+    try:
+        fingerprint = _catalog_file_fingerprint(catalog_path)
+    except OSError as exc:
+        if cache.get("catalog") is not None:
+            return cache["catalog"]
+        raise RuntimeError(f"Catalogo {label} no disponible") from exc
+
+    if cache.get("catalog") is not None and cache.get("fingerprint") == fingerprint:
+        return cache["catalog"]
+
+    try:
+        catalog = loader(catalog_path)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        if cache.get("catalog") is not None:
+            return cache["catalog"]
+        raise RuntimeError(f"Catalogo {label} invalido") from exc
+
+    cache.clear()
+    cache.update(
+        {
+            "path": str(catalog_path),
+            "fingerprint": fingerprint,
+            "source_hash": catalog.get("source_hash"),
+            "catalog": catalog,
+        }
+    )
+    return catalog
 
 
 def _load_tarkett_catalog_cached() -> dict:
-    catalog_path = Path(TARKETT_CATALOG_PATH) if TARKETT_CATALOG_PATH else CATALOG_PATH
-    if not catalog_path.exists():
-        raise RuntimeError(f"Catalogo Tarkett no encontrado: {catalog_path}")
-    mtime = catalog_path.stat().st_mtime
-    if (
-        _TARKETT_CATALOG_CACHE["catalog"] is None
-        or _TARKETT_CATALOG_CACHE["path"] != str(catalog_path)
-        or _TARKETT_CATALOG_CACHE["mtime"] != mtime
-    ):
-        _TARKETT_CATALOG_CACHE["catalog"] = load_tarkett_catalog(catalog_path)
-        _TARKETT_CATALOG_CACHE["path"] = str(catalog_path)
-        _TARKETT_CATALOG_CACHE["mtime"] = mtime
-    return _TARKETT_CATALOG_CACHE["catalog"]
+    catalog_path = (Path(TARKETT_CATALOG_PATH) if TARKETT_CATALOG_PATH else CATALOG_PATH).resolve()
+    return _load_catalog_cached(_TARKETT_CATALOG_CACHE, catalog_path, load_tarkett_catalog, "Tarkett")
 
 
 def _tarkett_catalog_response(usuario_id: int) -> dict:
@@ -1076,25 +1107,12 @@ def _tarkett_catalog_response(usuario_id: int) -> dict:
     }
 
 
-_OFFIHO_CATALOG_CACHE = {"path": None, "mtime": None, "source_hash": None, "catalog": None}
+_OFFIHO_CATALOG_CACHE = {"path": None, "fingerprint": None, "source_hash": None, "catalog": None}
 
 
 def _load_offiho_catalog_cached() -> dict:
     catalog_path = Path(OFFIHO_CATALOG_PATH).resolve() if OFFIHO_CATALOG_PATH else OFFIHO_DEFAULT_CATALOG_PATH.resolve()
-    if not catalog_path.exists():
-        raise RuntimeError("Catalogo Offiho no encontrado")
-    mtime = catalog_path.stat().st_mtime
-    if (
-        _OFFIHO_CATALOG_CACHE["catalog"] is None
-        or _OFFIHO_CATALOG_CACHE["path"] != str(catalog_path)
-        or _OFFIHO_CATALOG_CACHE["mtime"] != mtime
-    ):
-        catalog = load_offiho_catalog(catalog_path)
-        _OFFIHO_CATALOG_CACHE["catalog"] = catalog
-        _OFFIHO_CATALOG_CACHE["path"] = str(catalog_path)
-        _OFFIHO_CATALOG_CACHE["mtime"] = mtime
-        _OFFIHO_CATALOG_CACHE["source_hash"] = catalog["source_hash"]
-    return _OFFIHO_CATALOG_CACHE["catalog"]
+    return _load_catalog_cached(_OFFIHO_CATALOG_CACHE, catalog_path, load_offiho_catalog, "Offiho")
 
 
 def _offiho_catalog_response(usuario_id: int) -> dict:
@@ -1124,9 +1142,31 @@ def _offiho_catalog_response(usuario_id: int) -> dict:
     return {
         "source_hash": catalog["source_hash"],
         "generated_at": catalog["generated_at"],
+        "source_row_count": catalog["source_row_count"],
+        "duplicate_row_count": catalog["duplicate_row_count"],
+        "unique_item_count": catalog["unique_item_count"],
         "total": len(items),
         "items": items,
     }
+
+
+def _require_queued_quote_job(updated: dict) -> dict:
+    if not isinstance(updated, dict) or updated.get("status") != "queued":
+        raise RuntimeError("Quote job update did not confirm queued status")
+    return updated
+
+
+def _cleanup_failed_catalog_quote(job_id: str, input_path: str, release_reservations) -> None:
+    operations = (
+        lambda: release_reservations(job_id),
+        lambda: db_delete_quote_job(job_id),
+        lambda: _delete_storage_paths([input_path]),
+    )
+    for operation in operations:
+        try:
+            operation()
+        except Exception:
+            pass
 
 
 def _require_active_subscription(usuario_id: int):
@@ -2047,8 +2087,8 @@ def tarkett_catalog(current_user: dict = Depends(get_current_user)):
     try:
         _require_active_subscription(current_user["id"])
         return _tarkett_catalog_response(current_user["id"])
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=f"Error leyendo catalogo Tarkett: {e}")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Error leyendo catalogo Tarkett") from exc
 
 
 @app.post("/tarkett/quote")
@@ -2056,8 +2096,8 @@ def tarkett_quote(body: dict, current_user: dict = Depends(get_current_user)):
     try:
         _require_active_subscription(current_user["id"])
         catalog = _load_tarkett_catalog_cached()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=f"Error preparando catalogo Tarkett: {e}")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Error preparando catalogo Tarkett") from exc
 
     raw_items = body.get("items") or []
     if not isinstance(raw_items, list):
@@ -2099,27 +2139,26 @@ def tarkett_quote(body: dict, current_user: dict = Depends(get_current_user)):
         _storage_upload_bytes(input_path, content, "application/json")
         job = db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
         db_create_tarkett_reservations(current_user["id"], job_id, cart_payload["items"])
-        updated = db_update_quote_job(
-            job_id,
-            {
-                "status": "queued",
-                "metadata": metadata,
-                "error_message": None,
-            },
+        updated = _require_queued_quote_job(
+            db_update_quote_job(
+                job_id,
+                {
+                    "status": "queued",
+                    "metadata": metadata,
+                    "error_message": None,
+                },
+            )
         )
-    except RuntimeError as e:
-        try:
-            db_release_tarkett_reservations(job_id)
-        except RuntimeError:
-            pass
-        raise HTTPException(status_code=503, detail=f"Error creando cotizacion Tarkett: {e}")
+    except Exception as exc:
+        _cleanup_failed_catalog_quote(job_id, input_path, db_release_tarkett_reservations)
+        raise HTTPException(status_code=503, detail="No fue posible crear cotizacion Tarkett") from exc
 
     _wake_worker()
     try:
         _enforce_quote_history_limit(current_user["id"])
     except RuntimeError:
         pass
-    return {"mensaje": "Cotizacion Tarkett en cola", "job": updated or job}
+    return {"mensaje": "Cotizacion Tarkett en cola", "job": updated}
 
 
 @app.get("/offiho/catalog")
@@ -2175,37 +2214,22 @@ def offiho_quote(body: dict, current_user: dict = Depends(get_current_user)):
     job_id = str(uuid.uuid4())
     input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
     content = json.dumps(cart_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    input_uploaded = False
-    job_created = False
     try:
         _storage_upload_bytes(input_path, content, "application/json")
-        input_uploaded = True
         job = db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
-        job_created = True
         db_create_offiho_reservations(current_user["id"], job_id, cart_payload["items"])
-        updated = db_update_quote_job(
-            job_id,
-            {
-                "status": "queued",
-                "metadata": metadata,
-                "error_message": None,
-            },
+        updated = _require_queued_quote_job(
+            db_update_quote_job(
+                job_id,
+                {
+                    "status": "queued",
+                    "metadata": metadata,
+                    "error_message": None,
+                },
+            )
         )
-    except RuntimeError as exc:
-        try:
-            db_release_offiho_reservations(job_id)
-        except RuntimeError:
-            pass
-        if job_created:
-            try:
-                db_delete_quote_job(job_id)
-            except RuntimeError:
-                pass
-        if input_uploaded:
-            try:
-                _delete_storage_paths([input_path])
-            except RuntimeError:
-                pass
+    except Exception as exc:
+        _cleanup_failed_catalog_quote(job_id, input_path, db_release_offiho_reservations)
         raise HTTPException(status_code=503, detail="No fue posible crear cotizacion Offiho") from exc
 
     _wake_worker()
@@ -2213,7 +2237,7 @@ def offiho_quote(body: dict, current_user: dict = Depends(get_current_user)):
         _enforce_quote_history_limit(current_user["id"])
     except RuntimeError:
         pass
-    return {"mensaje": "Cotizacion Offiho en cola", "job": updated or job}
+    return {"mensaje": "Cotizacion Offiho en cola", "job": updated}
 
 
 @app.post("/cotizaciones/init-upload")

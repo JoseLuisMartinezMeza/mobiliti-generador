@@ -1,0 +1,167 @@
+{
+  "generated_at": "2026-07-02",
+  "source": "https://www.sunonglobal.com/",
+  "notes": "Catalogo experimental. Usa coincidencia exacta y, solo si existe una fila oficial en el catalogo, codigo base Sunon para variantes extendidas.",
+  "entries": [
+    {
+      "code": "CHJ80SW",
+      "normalized_code": "CHJ80SW",
+      "product_title": "H7 Task Office Chair",
+      "product_url": "https://www.sunonglobal.com/product/h7-task-office-chair/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/04/143100011_%E5%8D%95%E4%BD%93%E5%9B%BE_CHJ80SW_%E4%BE%A7%E9%9D%A245%C2%B0-e1756288793763.jpg",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "CHJ81SW",
+      "normalized_code": "CHJ81SW",
+      "product_title": "H7 Task Office Chair",
+      "product_url": "https://www.sunonglobal.com/product/h7-task-office-chair/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/04/143100012_%E5%8D%95%E4%BD%93%E5%9B%BE_CHJ81SW_%E4%BE%A7%E9%9D%A245%C2%B0-e1756288809805.jpg",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "CHJ82SW",
+      "normalized_code": "CHJ82SW",
+      "product_title": "H7 Task Office Chair",
+      "product_url": "https://www.sunonglobal.com/product/h7-task-office-chair/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/04/143100013_%E5%8D%95%E4%BD%93%E5%9B%BE_CHJ82SW_%E4%BE%A7%E9%9D%A245%C2%B0-e1756288823810.jpg",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "CHJ83SW",
+      "normalized_code": "CHJ83SW",
+      "product_title": "H7 Task Office Chair",
+      "product_url": "https://www.sunonglobal.com/product/h7-task-office-chair/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/04/143100014_%E5%8D%95%E4%BD%93%E5%9B%BE_CHJ83SW_%E4%BE%A7%E9%9D%A245%C2%B0-e1756288838557.jpg",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "DMC27.058040",
+      "normalized_code": "DMC27058040",
+      "product_title": "MixCube DMC27.058040",
+      "product_url": "https://www.sunonglobal.com/product/dmc27-058040/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/07/116800022_%E5%8D%95%E4%BD%93%E5%9B%BE_DMC27.058040_01.jpg-scaled.jpg",
+      "source_type": "rest_exact_code",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "CLG65SW",
+      "normalized_code": "CLG65SW",
+      "product_title": "Locke Ergonomic Task Chair",
+      "product_url": "https://www.sunonglobal.com/product/locke-ergonomic-task-chair/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2026/05/%E5%88%97%E8%A1%A8%E9%A1%B501locke.png",
+      "source_type": "rest_exact_code",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "DV78",
+      "normalized_code": "DV78",
+      "product_title": "I-Varna Conference Table",
+      "product_url": "https://www.sunonglobal.com/product/i-varna-office-conference-tables/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/05/16486435481119meaf8-e1755839383632.png",
+      "source_type": "product_no_table",
+      "confidence": "exact_base_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "DV79",
+      "normalized_code": "DV79",
+      "product_title": "I-Varna Conference Table",
+      "product_url": "https://www.sunonglobal.com/product/i-varna-office-conference-tables/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/05/16486435773487jyx82-e1755839544778.png",
+      "source_type": "product_no_table",
+      "confidence": "exact_base_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "DV74",
+      "normalized_code": "DV74",
+      "product_title": "I-Varna Conference Table",
+      "product_url": "https://www.sunonglobal.com/product/i-varna-office-conference-tables/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/05/16486435879421r67sa-e1755839425842.png",
+      "source_type": "product_no_table",
+      "confidence": "exact_base_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "DV73",
+      "normalized_code": "DV73",
+      "product_title": "I-Varna Conference Table",
+      "product_url": "https://www.sunonglobal.com/product/i-varna-office-conference-tables/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/05/1648643627091999vv5-e1755839443717.png",
+      "source_type": "product_no_table",
+      "confidence": "exact_base_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "DV71",
+      "normalized_code": "DV71",
+      "product_title": "I-Varna Conference Table",
+      "product_url": "https://www.sunonglobal.com/product/i-varna-office-conference-tables/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/05/1648643668268eokom-e1755839597376.png",
+      "source_type": "product_no_table",
+      "confidence": "exact_base_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "DV72",
+      "normalized_code": "DV72",
+      "product_title": "I-Varna Conference Table",
+      "product_url": "https://www.sunonglobal.com/product/i-varna-office-conference-tables/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/05/16486437048837x05em-e1755839511804.png",
+      "source_type": "product_no_table",
+      "confidence": "exact_base_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "EN79-2.600180",
+      "normalized_code": "EN792600180",
+      "product_title": "Varna II",
+      "product_url": "https://www.sunonglobal.com/product/varna-ii-stylish-conference-table/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/05/16633150729147gdimv-e1755840421288.jpg",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "EN70-2.150150",
+      "normalized_code": "EN702150150",
+      "product_title": "Varna II",
+      "product_url": "https://www.sunonglobal.com/product/varna-ii-stylish-conference-table/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/03/102300077_%E5%8D%95%E4%BD%93%E5%9B%BE_EN70-2.150150-W-24B_%E4%BE%A7%E9%9D%A245%C2%B0-scaled-e1755840602406.jpg",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "CHT64SW",
+      "normalized_code": "CHT64SW",
+      "product_title": "H2 Ergonomic Office Chair",
+      "product_url": "https://www.sunonglobal.com/product/h2-ergonomic-office-chair/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/04/161666814021222o9ce-e1755758018961.jpg",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    },
+    {
+      "code": "SD32.1.MR",
+      "normalized_code": "SD321MR",
+      "product_title": "Ducky Training Chair",
+      "product_url": "https://www.sunonglobal.com/product/ducky-training-chair/",
+      "image_url": "https://file.sunonglobal.com/wp-content/uploads/2025/05/154100009_Product-OnlyImage_SD32.1.MR_.G_45%C2%B0SideView-1-e1751348289800.jpg",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-02"
+    }
+  ]
+}

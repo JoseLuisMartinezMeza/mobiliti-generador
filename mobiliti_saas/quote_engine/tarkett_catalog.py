@@ -26,11 +26,13 @@ class TarkettCatalogItem:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "TarkettCatalogItem":
+        if not isinstance(raw, dict):
+            raise ValueError("Item Tarkett invalido: se esperaba un objeto")
         return cls(
-            code=str(raw.get("code", "")).strip(),
-            name=str(raw.get("name", "")).strip(),
-            unit=str(raw.get("unit", "")).strip(),
-            available_quantity=_decimal(raw.get("available_quantity", 0)),
+            code=_required_text(raw, "code"),
+            name=_required_text(raw, "name"),
+            unit=_required_text(raw, "unit"),
+            available_quantity=_strict_stock(raw),
             product_url=str(raw.get("product_url", "") or "").strip(),
             image_url=str(raw.get("image_url", "") or "").strip(),
             match_status=str(raw.get("match_status", "unmatched") or "unmatched").strip(),
@@ -53,7 +55,25 @@ class TarkettCatalogItem:
 def load_tarkett_catalog(path: str | Path | None = None) -> dict[str, Any]:
     catalog_path = Path(path or CATALOG_PATH)
     raw = json.loads(catalog_path.read_text(encoding="utf-8"))
-    items = [TarkettCatalogItem.from_dict(item) for item in raw.get("items", [])]
+    if not isinstance(raw, dict):
+        raise ValueError("Catalogo Tarkett invalido: raiz no es un objeto")
+    for field in ("source_hash", "generated_at"):
+        _required_text(raw, field)
+    raw_items = raw.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise ValueError("Catalogo Tarkett invalido: catalogo vacio")
+    items: list[TarkettCatalogItem] = []
+    for index, item in enumerate(raw_items):
+        try:
+            items.append(TarkettCatalogItem.from_dict(item))
+        except ValueError as exc:
+            raise ValueError(f"Catalogo Tarkett invalido en item {index}: {exc}") from exc
+    codes = [item.code for item in items]
+    if len(set(codes)) != len(codes):
+        raise ValueError("Catalogo Tarkett invalido: claves duplicadas")
+    declared_total = raw.get("total")
+    if declared_total is not None and (isinstance(declared_total, bool) or not isinstance(declared_total, int) or declared_total != len(items)):
+        raise ValueError("Catalogo Tarkett invalido: total no coincide con items")
     return {
         "source_hash": str(raw.get("source_hash", "")),
         "generated_at": str(raw.get("generated_at", "")),
@@ -136,13 +156,34 @@ def create_tarkett_quotation_workbook(
 def _decimal(value: Any) -> Decimal:
     try:
         return Decimal(str(value).replace(",", "").strip())
-    except (InvalidOperation, AttributeError):
-        return Decimal("0")
+    except (InvalidOperation, AttributeError, ValueError):
+        raise ValueError("Numero Tarkett invalido") from None
+
+
+def _required_text(raw: dict[str, Any], field: str) -> str:
+    value = str(raw.get(field, "") or "").strip()
+    if not value:
+        raise ValueError(f"Campo obligatorio Tarkett invalido: {field}")
+    return value
+
+
+def _strict_stock(raw: dict[str, Any]) -> Decimal:
+    if "available_quantity" not in raw:
+        raise ValueError("Campo obligatorio Tarkett invalido: available_quantity")
+    try:
+        value = Decimal(str(raw["available_quantity"]).replace(",", "").strip())
+    except (InvalidOperation, AttributeError, ValueError):
+        raise ValueError("Campo numerico Tarkett invalido: available_quantity") from None
+    if not value.is_finite() or value < 0:
+        raise ValueError("Campo numerico Tarkett invalido: available_quantity")
+    return value
 
 
 def _json_number(value: Any) -> int | float:
     if not isinstance(value, Decimal):
         value = _decimal(value)
+    if not value.is_finite():
+        raise ValueError("Numero Tarkett invalido")
     if value == value.to_integral():
         return int(value)
     return float(value)

@@ -4,6 +4,7 @@ import hashlib
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "vercel_deploy", "api"))
@@ -191,6 +192,48 @@ def _mock_tarkett_catalog():
     }
 
 
+def _valid_tarkett_body(quantity=1):
+    return {
+        "proyecto": "Proyecto Tarkett",
+        "cliente": "Cliente",
+        "correo": "cliente@example.com",
+        "telefono": "5551234567",
+        "direccion": "Guadalajara",
+        "razon_social": "Cliente SA de CV",
+        "descuento": 40,
+        "items": [{"code": "25731726", "quantity": quantity}],
+    }
+
+
+@pytest.mark.parametrize("path", ["/tarkett/catalog", "/offiho/catalog"])
+def test_catalog_routes_require_token(path):
+    resp = _client().get(path)
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Token no proporcionado"
+
+
+@pytest.mark.parametrize("path", ["/tarkett/catalog", "/offiho/catalog"])
+def test_catalog_routes_reject_expired_subscription(monkeypatch, path):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(
+        index,
+        "db_get_suscripcion_by_usuario",
+        lambda usuario_id: {
+            "id": 1,
+            "usuario_id": usuario_id,
+            "estado": "activa",
+            "plan": "mensual",
+            "fecha_fin": "2020-01-01T00:00:00+00:00",
+        },
+    )
+
+    resp = _client().get(path, headers=_auth_headers())
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Suscripcion no activa"
+
+
 def test_tarkett_catalog_returns_base_stock_and_other_user_reservations(monkeypatch):
     _mock_user(monkeypatch)
     monkeypatch.setattr(index, "_load_tarkett_catalog_cached", _mock_tarkett_catalog)
@@ -345,6 +388,9 @@ def _mock_offiho_catalog(available_quantity=0, unit_price=7999):
     return {
         "source_hash": "offiho-catalog-hash",
         "generated_at": "2026-07-09T18:00:00+00:00",
+        "source_row_count": 1286,
+        "duplicate_row_count": 80,
+        "unique_item_count": 1206,
         "items": [item],
         "by_inventory_key": {item.inventory_key: item},
     }
@@ -373,6 +419,9 @@ def test_offiho_catalog_returns_1206_items_with_catalog_prices_and_reservations(
     payload = resp.json()
     assert payload["total"] == 1206
     assert len(payload["items"]) == 1206
+    assert payload["source_row_count"] == 1286
+    assert payload["duplicate_row_count"] == 80
+    assert payload["unique_item_count"] == 1206
     item = payload["items"][0]
     assert {"unit_price", "available_quantity", "product_url", "image_url", "is_out_of_stock", "reserved_quantity", "reserved_by_others"} <= set(item)
 
@@ -400,27 +449,94 @@ def test_offiho_catalog_returns_exhausted_item_and_other_user_reservation(monkey
     assert item["reserved_by_others"] is True
 
 
-def test_offiho_catalog_cache_reloads_when_mtime_changes(monkeypatch, tmp_path):
-    catalog_path = tmp_path / "offiho_catalog.json"
-    catalog_path.write_text("{}", encoding="utf-8")
+@pytest.mark.parametrize(
+    ("supplier", "path_attr", "cache_attr", "loader_attr"),
+    [
+        ("offiho", "OFFIHO_CATALOG_PATH", "_OFFIHO_CATALOG_CACHE", "load_offiho_catalog"),
+        ("tarkett", "TARKETT_CATALOG_PATH", "_TARKETT_CATALOG_CACHE", "load_tarkett_catalog"),
+    ],
+)
+def test_catalog_cache_reloads_when_content_hash_changes_with_same_mtime(
+    monkeypatch, tmp_path, supplier, path_attr, cache_attr, loader_attr
+):
+    catalog_path = tmp_path / f"{supplier}_catalog.json"
+    catalog_path.write_text("first", encoding="utf-8")
     loaded = []
 
     def fake_load(path):
-        loaded.append(Path(path).stat().st_mtime)
-        return {"source_hash": f"hash-{len(loaded)}", "items": [], "by_inventory_key": {}}
+        content = Path(path).read_text(encoding="utf-8")
+        loaded.append(content)
+        if supplier == "offiho":
+            catalog = _mock_offiho_catalog()
+        else:
+            catalog = _mock_tarkett_catalog()
+        return {**catalog, "source_hash": f"hash-{content}"}
 
-    monkeypatch.setattr(index, "OFFIHO_CATALOG_PATH", str(catalog_path), raising=False)
-    monkeypatch.setattr(index, "load_offiho_catalog", fake_load)
-    monkeypatch.setattr(index, "_OFFIHO_CATALOG_CACHE", {"path": None, "mtime": None, "source_hash": None, "catalog": None})
-    os.utime(catalog_path, (1_800_000_001, 1_800_000_001))
-    first = index._load_offiho_catalog_cached()
-    os.utime(catalog_path, (1_800_000_002, 1_800_000_002))
-    second = index._load_offiho_catalog_cached()
+    monkeypatch.setattr(index, path_attr, str(catalog_path), raising=False)
+    monkeypatch.setattr(index, loader_attr, fake_load)
+    monkeypatch.setattr(index, cache_attr, {"path": None, "fingerprint": None, "catalog": None})
+    fixed_mtime = 1_800_000_001
+    os.utime(catalog_path, (fixed_mtime, fixed_mtime))
+    load_cached = getattr(index, f"_load_{supplier}_catalog_cached")
+    first = load_cached()
+    catalog_path.write_text("second", encoding="utf-8")
+    os.utime(catalog_path, (fixed_mtime, fixed_mtime))
+    second = load_cached()
 
-    assert first["source_hash"] == "hash-1"
-    assert second["source_hash"] == "hash-2"
-    assert len(loaded) == 2
-    assert index._OFFIHO_CATALOG_CACHE["source_hash"] == "hash-2"
+    assert first["source_hash"] == "hash-first"
+    assert second["source_hash"] == "hash-second"
+    assert loaded == ["first", "second"]
+    assert getattr(index, cache_attr)["fingerprint"]["sha256"] == hashlib.sha256(b"second").hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("supplier", "path_attr", "cache_attr", "loader_attr"),
+    [
+        ("offiho", "OFFIHO_CATALOG_PATH", "_OFFIHO_CATALOG_CACHE", "load_offiho_catalog"),
+        ("tarkett", "TARKETT_CATALOG_PATH", "_TARKETT_CATALOG_CACHE", "load_tarkett_catalog"),
+    ],
+)
+def test_catalog_cache_keeps_last_valid_catalog_after_corrupt_reload(
+    monkeypatch, tmp_path, supplier, path_attr, cache_attr, loader_attr
+):
+    catalog_path = tmp_path / f"{supplier}_catalog.json"
+    catalog_path.write_text("valid", encoding="utf-8")
+
+    def fake_load(path):
+        if Path(path).read_text(encoding="utf-8") == "corrupt":
+            raise ValueError("corrupt catalog payload")
+        return _mock_offiho_catalog() if supplier == "offiho" else _mock_tarkett_catalog()
+
+    monkeypatch.setattr(index, path_attr, str(catalog_path), raising=False)
+    monkeypatch.setattr(index, loader_attr, fake_load)
+    monkeypatch.setattr(index, cache_attr, {"path": None, "fingerprint": None, "catalog": None})
+    load_cached = getattr(index, f"_load_{supplier}_catalog_cached")
+
+    valid = load_cached()
+    catalog_path.write_text("corrupt", encoding="utf-8")
+    retained = load_cached()
+
+    assert retained is valid
+
+
+@pytest.mark.parametrize(
+    ("supplier", "path_attr", "cache_attr", "loader_attr"),
+    [
+        ("offiho", "OFFIHO_CATALOG_PATH", "_OFFIHO_CATALOG_CACHE", "load_offiho_catalog"),
+        ("tarkett", "TARKETT_CATALOG_PATH", "_TARKETT_CATALOG_CACHE", "load_tarkett_catalog"),
+    ],
+)
+def test_catalog_cache_without_valid_catalog_rejects_corrupt_file(
+    monkeypatch, tmp_path, supplier, path_attr, cache_attr, loader_attr
+):
+    catalog_path = tmp_path / f"{supplier}_catalog.json"
+    catalog_path.write_text("corrupt", encoding="utf-8")
+    monkeypatch.setattr(index, path_attr, str(catalog_path), raising=False)
+    monkeypatch.setattr(index, loader_attr, lambda path: (_ for _ in ()).throw(ValueError("corrupt")))
+    monkeypatch.setattr(index, cache_attr, {"path": None, "fingerprint": None, "catalog": None})
+
+    with pytest.raises(RuntimeError, match="Catalogo"):
+        getattr(index, f"_load_{supplier}_catalog_cached")()
 
 
 def test_offiho_quote_creates_json_job_with_catalog_owned_values_and_reservations(monkeypatch):
@@ -499,6 +615,23 @@ def test_offiho_quote_rejects_empty_unknown_or_invalid_items(monkeypatch):
         assert resp.status_code == 400
 
 
+def test_offiho_quote_rejects_duplicate_inventory_key_before_upload(monkeypatch):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(index, "_load_offiho_catalog_cached", _mock_offiho_catalog)
+    monkeypatch.setattr(
+        index,
+        "_storage_upload_bytes",
+        lambda *args: (_ for _ in ()).throw(AssertionError("duplicate cart must not upload")),
+    )
+    body = _valid_offiho_body()
+    body["items"] = body["items"] * 2
+
+    resp = _client().post("/offiho/quote", headers=_auth_headers(), json=body)
+
+    assert resp.status_code == 400
+    assert "duplicada" in resp.json()["detail"].lower()
+
+
 def test_offiho_quote_rejects_inactive_user(monkeypatch):
     _mock_user(monkeypatch, active=False)
 
@@ -524,6 +657,84 @@ def test_offiho_quote_releases_reservations_and_partial_job_after_failure(monkey
 
     assert resp.status_code == 503
     assert calls == ["upload", "job", "reserve", "release", "delete", "storage-delete"]
+
+
+def _install_catalog_quote_failure_mocks(monkeypatch, supplier, calls, failure_stage):
+    _mock_user(monkeypatch)
+    body = _valid_offiho_body() if supplier == "offiho" else _valid_tarkett_body()
+    monkeypatch.setattr(
+        index,
+        f"_load_{supplier}_catalog_cached",
+        _mock_offiho_catalog if supplier == "offiho" else _mock_tarkett_catalog,
+    )
+    monkeypatch.setattr(index, "_next_quote_number_for_user", lambda user: None)
+    monkeypatch.setattr(index, "_wake_worker", lambda: None)
+    monkeypatch.setattr(index, "_enforce_quote_history_limit", lambda usuario_id: [])
+
+    def fake_upload(*args):
+        calls.append("upload")
+        if failure_stage == "upload_timeout":
+            raise TimeoutError("upload timed out after remote commit")
+
+    def fake_create(usuario_id, template, metadata, input_path, job_id=None):
+        calls.append("job")
+        if failure_stage == "job_timeout":
+            raise TimeoutError("job insert timed out after remote commit")
+        return {"id": job_id, "usuario_id": usuario_id, "status": "draft"}
+
+    def fake_reserve(usuario_id, job_id, lines):
+        calls.append("reserve")
+        return []
+
+    def fake_update(job_id, updates):
+        calls.append("update")
+        return {} if failure_stage == "empty_update" else {"id": job_id, **updates}
+
+    monkeypatch.setattr(index, "_storage_upload_bytes", fake_upload)
+    monkeypatch.setattr(index, "db_create_quote_job", fake_create)
+    monkeypatch.setattr(index, f"db_create_{supplier}_reservations", fake_reserve)
+    monkeypatch.setattr(index, "db_update_quote_job", fake_update)
+    monkeypatch.setattr(index, f"db_release_{supplier}_reservations", lambda job_id: calls.append("release"))
+    monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: calls.append("delete"))
+    monkeypatch.setattr(index, "_delete_storage_paths", lambda paths: calls.append("storage-delete"))
+    return body
+
+
+@pytest.mark.parametrize("supplier", ["tarkett", "offiho"])
+@pytest.mark.parametrize("failure_stage", ["empty_update", "upload_timeout", "job_timeout"])
+def test_catalog_quote_requires_queued_update_and_always_cleans_known_job_and_input(
+    monkeypatch, supplier, failure_stage
+):
+    calls = []
+    body = _install_catalog_quote_failure_mocks(monkeypatch, supplier, calls, failure_stage)
+
+    resp = _client().post(f"/{supplier}/quote", headers=_auth_headers(), json=body)
+
+    assert resp.status_code == 503
+    prefix = {
+        "empty_update": ["upload", "job", "reserve", "update"],
+        "upload_timeout": ["upload"],
+        "job_timeout": ["upload", "job"],
+    }[failure_stage]
+    assert calls == prefix + ["release", "delete", "storage-delete"]
+
+
+@pytest.mark.parametrize("supplier", ["tarkett", "offiho"])
+def test_catalog_quote_cleanup_continues_when_release_fails(monkeypatch, supplier):
+    calls = []
+    body = _install_catalog_quote_failure_mocks(monkeypatch, supplier, calls, "empty_update")
+
+    def fail_release(job_id):
+        calls.append("release")
+        raise RuntimeError("cleanup release failed")
+
+    monkeypatch.setattr(index, f"db_release_{supplier}_reservations", fail_release)
+
+    resp = _client().post(f"/{supplier}/quote", headers=_auth_headers(), json=body)
+
+    assert resp.status_code == 503
+    assert calls == ["upload", "job", "reserve", "update", "release", "delete", "storage-delete"]
+    assert "cleanup release failed" not in resp.json()["detail"]
 
 
 def test_offiho_reservations_work_in_dev_mode_without_existing_data(monkeypatch):
@@ -570,6 +781,25 @@ def test_deployable_api_copies_have_identical_sha256():
     hashes = {hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
     assert len(hashes) == 1
+
+
+def test_reservation_sql_enforces_server_only_rls_and_offiho_job_product_uniqueness():
+    root = Path(__file__).resolve().parents[1]
+    migration_paths = {
+        "saas_tarkett_reservations": root / "mobiliti_saas" / "supabase_setup" / "2026_07_tarkett_reservations.sql",
+        "saas_offiho_reservations": root / "mobiliti_saas" / "supabase_setup" / "2026_07_offiho_reservations.sql",
+    }
+    create_tables = (root / "mobiliti_saas" / "supabase_setup" / "create_tables.sql").read_text(encoding="utf-8").lower()
+
+    for table, path in migration_paths.items():
+        migration = path.read_text(encoding="utf-8").lower()
+        for sql in (migration, create_tables):
+            assert f"alter table {table} enable row level security" in sql
+            assert f"revoke all on table {table} from anon, authenticated" in sql
+            assert f"grant all on table {table} to service_role" in sql
+    for sql in (migration_paths["saas_offiho_reservations"].read_text(encoding="utf-8").lower(), create_tables):
+        assert "unique" in sql
+        assert "(quote_job_id, product_code)" in sql
 
 
 def test_init_upload_rejects_unsupported_file(monkeypatch):

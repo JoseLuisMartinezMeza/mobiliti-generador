@@ -109,9 +109,55 @@ def test_offiho_cart_accepts_commercial_quantity_limit_and_three_decimals():
     assert payload["items"][0]["quantity"] == 1000000
 
 
+def test_offiho_cart_accepts_200_unique_lines_and_rejects_201():
+    from mobiliti_saas.quote_engine.offiho_catalog import MAX_CART_LINES, OffihoCatalogItem, build_offiho_cart_payload
+
+    items = [
+        OffihoCatalogItem(
+            inventory_key=f"OHE-{index:03d} NEGRO MODELO {index}",
+            code=f"OHE-{index:03d}",
+            name=f"MODELO {index}",
+            variant="NEGRO",
+            unit="PZA",
+            pieces_per_box=Decimal("1"),
+            available_quantity=Decimal("0"),
+            unit_price=Decimal("1"),
+        )
+        for index in range(MAX_CART_LINES + 1)
+    ]
+    catalog = {
+        "source_hash": "hash",
+        "items": items,
+        "by_inventory_key": {item.inventory_key: item for item in items},
+    }
+    raw_items = [{"inventory_key": item.inventory_key, "quantity": 1} for item in items]
+
+    assert len(build_offiho_cart_payload(raw_items[:MAX_CART_LINES], catalog=catalog)["items"]) == 200
+    with pytest.raises(ValueError, match="200"):
+        build_offiho_cart_payload(raw_items, catalog=catalog)
+
+
+def test_offiho_cart_rejects_duplicate_inventory_key():
+    from mobiliti_saas.quote_engine.offiho_catalog import build_offiho_cart_payload
+
+    line = {"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 1}
+    with pytest.raises(ValueError, match="duplicada"):
+        build_offiho_cart_payload([line, dict(line)], catalog=fake_runtime_catalog(available_quantity=1, unit_price=7999))
+
+
 def _runtime_catalog_raw():
     path = Path(__file__).resolve().parents[1] / "mobiliti_saas" / "quote_engine" / "data" / "offiho_catalog.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_load_offiho_catalog_propagates_inventory_audit():
+    from mobiliti_saas.quote_engine.offiho_catalog import load_offiho_catalog
+
+    catalog = load_offiho_catalog()
+
+    assert catalog["source_row_count"] == 1286
+    assert catalog["duplicate_row_count"] == 80
+    assert catalog["unique_item_count"] == 1206
 
 
 @pytest.mark.parametrize(

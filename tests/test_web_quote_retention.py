@@ -101,16 +101,20 @@ def test_delete_quote_removes_only_owned_job_and_storage(monkeypatch):
     _mock_user(monkeypatch)
     deleted_jobs = []
     deleted_storage = []
+    released = []
 
     monkeypatch.setattr(index, "db_get_quote_job", lambda job_id: _job(job_id))
     monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: deleted_jobs.append(job_id) or _job(job_id), raising=False)
     monkeypatch.setattr(index, "_delete_quote_storage", lambda job: deleted_storage.extend([job["input_path"], job["output_path"]]), raising=False)
+    monkeypatch.setattr(index, "db_release_tarkett_reservations", lambda job_id: released.append(("tarkett", job_id)), raising=False)
+    monkeypatch.setattr(index, "db_release_offiho_reservations", lambda job_id: released.append(("offiho", job_id)), raising=False)
 
     resp = _client().delete("/cotizaciones/job-1", headers=_auth_headers())
 
     assert resp.status_code == 200
     assert resp.json()["deleted_id"] == "job-1"
     assert deleted_jobs == ["job-1"]
+    assert released == [("tarkett", "job-1"), ("offiho", "job-1")]
     assert deleted_storage == ["users/7/jobs/job-1/input.xlsx", "users/7/jobs/job-1/output.xlsx"]
 
 
@@ -130,6 +134,7 @@ def test_list_enforces_3_completed_quote_limit_and_purges_oldest_storage(monkeyp
     deleted_jobs = []
     deleted_storage = []
     deleted_input_paths = []
+    released = []
 
     def fake_list(usuario_id):
         return [job for job in jobs if job["id"] not in deleted_jobs]
@@ -139,6 +144,8 @@ def test_list_enforces_3_completed_quote_limit_and_purges_oldest_storage(monkeyp
     monkeypatch.setattr(index, "_delete_quote_storage", lambda job: deleted_storage.extend([job["input_path"], job["output_path"]]), raising=False)
     monkeypatch.setattr(index, "_delete_storage_paths", lambda paths: deleted_input_paths.extend(paths), raising=False)
     monkeypatch.setattr(index, "db_update_quote_job", lambda job_id, updates: {"id": job_id, **updates}, raising=False)
+    monkeypatch.setattr(index, "db_release_tarkett_reservations", lambda job_id: released.append(("tarkett", job_id)), raising=False)
+    monkeypatch.setattr(index, "db_release_offiho_reservations", lambda job_id: released.append(("offiho", job_id)), raising=False)
 
     resp = _client().get("/cotizaciones", headers=_auth_headers())
 
@@ -146,6 +153,7 @@ def test_list_enforces_3_completed_quote_limit_and_purges_oldest_storage(monkeyp
     body = resp.json()
     assert len(body["cotizaciones"]) == 3
     assert deleted_jobs == ["job-1"]
+    assert released == [("tarkett", "job-1"), ("offiho", "job-1")]
     assert "users/7/jobs/job-1/input.xlsx" in deleted_storage
     assert "users/7/jobs/job-1/output.xlsx" in deleted_storage
     assert "users/7/jobs/job-4/input.xlsx" in deleted_input_paths

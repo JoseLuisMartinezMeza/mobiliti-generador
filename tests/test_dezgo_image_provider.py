@@ -42,6 +42,8 @@ def test_normalize_image_provider_defaults_to_pillow():
     assert normalize_image_provider("") == "pillow"
     assert normalize_image_provider("local") == "pillow"
     assert normalize_image_provider("DEZGO") == "dezgo"
+    assert normalize_image_provider("sunon-web") == "sunon_web"
+    assert normalize_image_provider("catalogo_sunon") == "sunon_catalog"
 
 
 def test_default_dezgo_prompt_targets_realistic_ambient_catalog():

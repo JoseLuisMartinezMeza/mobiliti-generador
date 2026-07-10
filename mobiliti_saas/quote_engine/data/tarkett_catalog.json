@@ -1,0 +1,1133 @@
+{
+  "source_file": "Inventario Tarkett- 6 Julio .xls",
+  "source_hash": "05971b64c74224dbcd62100f4bb91f690f8bc4de47e234150a7a6c9002d6fdbd",
+  "generated_at": "2026-07-09T02:11:42.543173+00:00",
+  "total": 125,
+  "items": [
+    {
+      "code": "25731726",
+      "name": "Aurea Tech Cadiz 6.0mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 970.2,
+      "product_url": "https://tarkett.com.mx/producto/cadiz/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2026/05/Aurea-Tech-Cadiz-scaled.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "25731351",
+      "name": "Aurea Tech Ibiza 6.0mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 970.2,
+      "product_url": "https://tarkett.com.mx/producto/ibiza/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2024/03/Still-Aurea-Pro-Ibiza.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "25731101",
+      "name": "Aurea Tech Maiorca 6.0mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 480.65,
+      "product_url": "https://tarkett.com.mx/linea-2/linea-aurea-tech/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/Mallorca-600x600.jpg",
+      "match_status": "tarkett_mx_line_name_match"
+    },
+    {
+      "code": "25731513",
+      "name": "Aurea Tech Roble Natural Claro 6.0mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 2.325,
+      "product_url": "https://tarkett.com.mx/producto/roble-natural-claro-3/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/Roble-Natural-Claro-scaled.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "25731104",
+      "name": "Aurea Tech Valencia 6.0mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 467.3,
+      "product_url": "https://tarkett.com.mx/producto/valencia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/Valencia.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "9399350122",
+      "name": "BOX INSPIRATION LVT",
+      "unit": "H87 - pieza",
+      "available_quantity": 10,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C000115-id-inspiration-loose-lay",
+      "image_url": "https://media.tarkett-image.com/large/IN_HP_iD_Inspiration_Loose-Lay_24640024_24644037.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "9399350121",
+      "name": "BOX INSPIRATION MANTAS HO E HE",
+      "unit": "H87 - pieza",
+      "available_quantity": 10,
+      "product_url": "https://profesional.tarkett.es/es_ES/categor%C3%ADa-es_C02-suelos-vinilicos",
+      "image_url": "https://media.tarkett-image.com/medium/IN_HP_LVT_Floors_iD_Inspiration30_24532079_24526069_001.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "9309450085",
+      "name": "CATALOGO AMBIENTA_2023",
+      "unit": "H87 - pieza",
+      "available_quantity": 30,
+      "product_url": "https://tarkett.com.mx/linea-2/linea-ambienta/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/Carambola.jpg",
+      "match_status": "tarkett_mx_collection"
+    },
+    {
+      "code": "7100910014",
+      "name": "CATALOGO DESSO 2024",
+      "unit": "H87 - pieza",
+      "available_quantity": 5,
+      "product_url": "https://profesional.tarkett.es/es_ES/categor%C3%ADa-es_C01018-moqueta-en-losetas",
+      "image_url": "https://media.tarkett-image.com/medium/IN_HP_AirMaster_9107_9517_Sphere_2084_2092_001.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "2102002000",
+      "name": "CATALOGO ECLIPSE PREMIUM",
+      "unit": "H87 - pieza",
+      "available_quantity": 10,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C000043-eclipse-premium",
+      "image_url": "https://media.tarkett-image.com/large/IN_HP_HO-Floors-Premium-Eclipse-Spirit-Light-Red-21020683-Light-Orange-21020728_001.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "9494020006",
+      "name": "CATÁLOGO LINHA iQ 2024",
+      "unit": "H87 - pieza",
+      "available_quantity": 5,
+      "product_url": "https://profesional.tarkett.es/es_ES/node/iq-range-commercial-homogeneous-vinyl-flooring-22275",
+      "image_url": "https://media.tarkett-image.com/large/IN_HO-Floors-iQ-Motion-Brick-21182419-Soft-Brick-21182420-Carpet-Tiles-Linon-2114-712336008_002.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "440020085",
+      "name": "CB 20 4 X 120 .080 TOE",
+      "unit": "FOT - pie",
+      "available_quantity": 480,
+      "product_url": "https://tarkett.com.mx/producto/walnut/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2024/08/8582002.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "9440010002",
+      "name": "CHAVEIRO ECLIPSE PREMIUM",
+      "unit": "H87 - pieza",
+      "available_quantity": 5,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C000043-eclipse-premium",
+      "image_url": "https://media.tarkett-image.com/large/IN_HP_HO-Floors-Premium-Eclipse-Spirit-Light-Red-21020683-Light-Orange-21020728_001.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "9494020007",
+      "name": "CHAVEIRO iQ EMINENT",
+      "unit": "H87 - pieza",
+      "available_quantity": 5,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C000119-iq-eminent",
+      "image_url": "https://media.tarkett-image.com/large/IN_HP_Homogeneous-Floors-Walls-iQGranit-iQEminent-21030906-21030888-21142528_001.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "9399350218",
+      "name": "CHAVEIRO RODAPE POLIESTIRENO_2024",
+      "unit": "H87 - pieza",
+      "available_quantity": 2,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C000210-rodapie-rigido-decorativo",
+      "image_url": "https://media.tarkett-image.com/large/IN_HP_INT_Rigit_Set-ON_Decorative_Skirtings_001.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "2100303000",
+      "name": "CHAVEIRO STANDARD PLUS 95X165MM",
+      "unit": "H87 - pieza",
+      "available_quantity": 10,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C000259-standard-plus-2-0-mm",
+      "image_url": "https://media.tarkett-image.com/large/IN_HP_Standard_Plus_21003479_001.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "712199002",
+      "name": "Desso Defend AD19 9022 B1 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 500,
+      "product_url": "https://tarkett.com.mx/producto/9022/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2024/03/9022.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "712199003",
+      "name": "Desso Defend AD19 9502 B1 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 960,
+      "product_url": "https://tarkett.com.mx/producto/quasar/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2026/05/206072100.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "711533007",
+      "name": "Desso Ess Strct AA92 9502 B1 100x25",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 150,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C001042-essence-structure/essence-structure-aa92-9502",
+      "image_url": "https://media.tarkett-image.com/large/TH_EssenceStructure_9502.jpg",
+      "match_status": "professional_es_sku_match"
+    },
+    {
+      "code": "711533008",
+      "name": "Desso Ess Strct AA92 9505 B1 100x25",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 100,
+      "product_url": "https://tarkett.com.mx/producto/valencia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/Valencia.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "711464008",
+      "name": "Desso Ess Strct AA92 9505 B1 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 110,
+      "product_url": "https://tarkett.com.mx/producto/valencia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/Valencia.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "711533010",
+      "name": "Desso Ess Strct AA92 9507 B1 100x25",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 60,
+      "product_url": "https://tarkett.com.mx/producto/dark-blue-3/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2026/05/21020734.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "711464010",
+      "name": "Desso Ess Strct AA92 9507 B1 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 55,
+      "product_url": "https://tarkett.com.mx/producto/dark-blue-3/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2026/05/21020734.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "710550011",
+      "name": "Desso Grain B867 9506 B1 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 355,
+      "product_url": "https://tarkett.com.mx/producto/nebula/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2026/05/206072270.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "711793003",
+      "name": "Desso Grezzo AB64 7844-V B8 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 190,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C002029-grezzo/grezzo-ab64-7844",
+      "image_url": "https://media.tarkett-image.com/large/TH_Grezzo_7844.jpg",
+      "match_status": "professional_es_sku_match"
+    },
+    {
+      "code": "711793005",
+      "name": "Desso Grezzo AB64 8904-V B8 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 190,
+      "product_url": "https://tarkett.com.mx/producto/8904/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/07/8904.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "712113009",
+      "name": "Desso Grezzo Bloom AD04 9096-V B8 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 5,
+      "product_url": "https://tarkett.com.mx/producto/8904/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/07/8904.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "712117006",
+      "name": "Desso Grezzo Vivid AD05 9523 B8 50x50",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 135,
+      "product_url": "https://tarkett.com.mx/producto/nebula/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2026/05/206072270.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "132350",
+      "name": "Loseta 3.1mm Cholula",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 2478.74,
+      "product_url": "https://tarkett.com.mx/producto/cholula/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2024/05/Cholula-PM-323.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "155750",
+      "name": "Loseta 3.1mm Guadalajara",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 1835.02,
+      "product_url": "https://tarkett.com.mx/producto/guadalajara/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/04/557-Guadalajara-rotated.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "157350",
+      "name": "Loseta 3.1mm Guanajuato",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 33.44,
+      "product_url": "https://tarkett.com.mx/producto/guanajuato/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/04/573-Guanajuato-rotated.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "157250",
+      "name": "Loseta 3.1mm Mérida",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 3247.86,
+      "product_url": "https://tarkett.com.mx/572-merida-5/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/04/572-Merida-rotated.jpg",
+      "match_status": "media_name_match"
+    },
+    {
+      "code": "153350",
+      "name": "Loseta 3.1mm Palenque",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 2533.08,
+      "product_url": "https://tarkett.com.mx/producto/palenque/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2024/05/533-Palenque.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "148050",
+      "name": "Loseta 3.1mm Punta Mita",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 3043.041,
+      "product_url": "https://tarkett.com.mx/producto/punta-mita/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/04/480-Punta-Mita-rotated.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "106050",
+      "name": "Loseta 3.1mm Taxco",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 2528.9,
+      "product_url": "https://tarkett.com.mx/taxco-s60/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2024/05/Taxco-S60.jpg",
+      "match_status": "media_name_match"
+    },
+    {
+      "code": "132650",
+      "name": "Loseta 3.1mm Tepoztlán",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 1086.8,
+      "product_url": "https://tarkett.com.mx/tepoztlan-pm326/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2024/05/Tepoztlan-PM326.jpg",
+      "match_status": "media_name_match"
+    },
+    {
+      "code": "158050",
+      "name": "Loseta 3.1mm Tulum",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 1651.1,
+      "product_url": "https://tarkett.com.mx/producto/tulum-2/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/04/580-Tulum-1.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "150950",
+      "name": "Loseta TC509",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 41.8,
+      "product_url": "",
+      "image_url": "",
+      "match_status": "unmatched"
+    },
+    {
+      "code": "440280001",
+      "name": "MW 01 F",
+      "unit": "FOT - pie",
+      "available_quantity": 768,
+      "product_url": "https://tarkett.com.mx/producto/mw-01-f-snow-white-reveal/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2023/09/Millwork_0000_Millwork-Reveal.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "440298001",
+      "name": "MW 01 N",
+      "unit": "FOT - pie",
+      "available_quantity": 1512,
+      "product_url": "https://tarkett.com.mx/producto/mw-01-n-snow-white-oblique/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2023/09/Millwork_0001_Millwork-Oblique.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176621",
+      "name": "Piso Ambienta Series Açai 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/acai/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0023_Acai-24176621.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176625",
+      "name": "Piso Ambienta Series Algodao 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/algodao/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0022_Algodao-24176625-24181625.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181625",
+      "name": "Piso Ambienta Series Algodao 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/algodao/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0022_Algodao-24176625-24181625.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176655",
+      "name": "Piso Ambienta Series Aveia 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/aveia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0021_Aveia-24176655-24181655.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181655",
+      "name": "Piso Ambienta Series Aveia 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/aveia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0021_Aveia-24176655-24181655.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176606",
+      "name": "Piso Ambienta Series Betula 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 408.12,
+      "product_url": "https://tarkett.com.mx/producto/betula/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0020_Betula-24176606-24181606.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181606",
+      "name": "Piso Ambienta Series Betula 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/betula/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0020_Betula-24176606-24181606.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176605",
+      "name": "Piso Ambienta Series Cabreuva 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/cabreuva/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0019_Cabreuva-24176605.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176638",
+      "name": "Piso Ambienta Series Cambara 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/cambara/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0018_Cambara-24176638.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176604",
+      "name": "Piso Ambienta Series Canela 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/canela/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0017_Canela-24176604-24181604.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181604",
+      "name": "Piso Ambienta Series Canela 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/canela/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0017_Canela-24176604-24181604.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176653",
+      "name": "Piso Ambienta Series Carambola 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 3440.38,
+      "product_url": "https://tarkett.com.mx/producto/carambola/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0016_Carambola-24176653-24181653.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181653",
+      "name": "Piso Ambienta Series Carambola 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/carambola/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0016_Carambola-24176653-24181653.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176672",
+      "name": "Piso Ambienta Series Carvalho Cinza 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/carvalho-cinza/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0015_Carvalho-Cinza-24176672.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176643",
+      "name": "Piso Ambienta Series Castanha 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 21.48,
+      "product_url": "https://tarkett.com.mx/producto/castanha/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0014_Castanha-24176643.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176654",
+      "name": "Piso Ambienta Series Cedro 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 995.24,
+      "product_url": "https://tarkett.com.mx/producto/cedro/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0013_Cedro-24176654-24181654.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181654",
+      "name": "Piso Ambienta Series Cedro 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/cedro/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0013_Cedro-24176654-24181654.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176629",
+      "name": "Piso Ambienta Series Cinnamon 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 2799.56,
+      "product_url": "https://tarkett.com.mx/producto/cinnamon/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0012_Cinnamon-24176629-24181629.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181629",
+      "name": "Piso Ambienta Series Cinnamon 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/cinnamon/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0012_Cinnamon-24176629-24181629.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176676",
+      "name": "Piso Ambienta Series Faia 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/faia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0011_Faia-24176676.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176607",
+      "name": "Piso Ambienta Series Gergelim 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/gergelim/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0010_Gergelim-24176607-24181607.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181607",
+      "name": "Piso Ambienta Series Gergelim 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/gergelim/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0010_Gergelim-24176607-24181607.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176669",
+      "name": "Piso Ambienta Series Itauba 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 279.24,
+      "product_url": "https://tarkett.com.mx/producto/itauba/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0009_Itauba-24176669.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176633",
+      "name": "Piso Ambienta Series Jabuticaba 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/jabuticaba/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0008_Jabuticaba-24176633-24181633.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181633",
+      "name": "Piso Ambienta Series Jabuticaba 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/jabuticaba/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0008_Jabuticaba-24176633-24181633.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176639",
+      "name": "Piso Ambienta Series Jatai 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/jatai/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0007_Jatai-24176639-24181639.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181639",
+      "name": "Piso Ambienta Series Jatai 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/jatai/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0007_Jatai-24176639-24181639.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176661",
+      "name": "Piso Ambienta Series Jequitiba 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/jequitiba/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0006_Jequitiba-24176661-24181661.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24181661",
+      "name": "Piso Ambienta Series Jequitiba 3.2mm 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 17.9,
+      "product_url": "https://tarkett.com.mx/producto/jequitiba/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0006_Jequitiba-24176661-24181661.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176517",
+      "name": "Piso Ambienta Series Roble Natural Claro 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 3311.5,
+      "product_url": "https://tarkett.com.mx/producto/roble-natural-claro-3/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/Roble-Natural-Claro-scaled.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176658",
+      "name": "Piso Ambienta Series Sapucaia 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/sapucaia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0004_Sapucaia-24176658.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176632",
+      "name": "Piso Ambienta Series Sisal 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/sisal/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0003_Sisal-24176632.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176634",
+      "name": "Piso Ambienta Series Tabaco 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/tabaco/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0002_Tabaco-24176634.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176663",
+      "name": "Piso Ambienta Series Timborana 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.74,
+      "product_url": "https://tarkett.com.mx/producto/timborana/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0001_Timborana-24176663.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24176675",
+      "name": "Piso Ambienta Series Tuia 208x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 279.24,
+      "product_url": "https://tarkett.com.mx/producto/tuia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-series_0000_Tuia-24176675.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174115",
+      "name": "Piso Ambienta Stone Beige Porcelain 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 25.2,
+      "product_url": "https://tarkett.com.mx/producto/beige-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0013_Beige-Porcelain-24174115-24175115.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24175115",
+      "name": "Piso Ambienta Stone Beige Porcelain 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 16.9,
+      "product_url": "https://tarkett.com.mx/producto/beige-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0013_Beige-Porcelain-24174115-24175115.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174111",
+      "name": "Piso Ambienta Stone Dark Porcelain 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.8,
+      "product_url": "https://tarkett.com.mx/producto/dark-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0012_Dark-Porcelain-24174111-24175111.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24175111",
+      "name": "Piso Ambienta Stone Dark Porcelain 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 16.9,
+      "product_url": "https://tarkett.com.mx/producto/dark-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0012_Dark-Porcelain-24174111-24175111.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174683",
+      "name": "Piso Ambienta Stone Deep Metal 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.8,
+      "product_url": "https://tarkett.com.mx/producto/deep-metal/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0011_Deep-Metal-24174683-24175683.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24175683",
+      "name": "Piso Ambienta Stone Deep Metal 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 16.9,
+      "product_url": "https://tarkett.com.mx/producto/deep-metal/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0011_Deep-Metal-24174683-24175683.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24175517",
+      "name": "Piso Ambienta Stone Galena 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 16.9,
+      "product_url": "https://tarkett.com.mx/producto/galena/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0010_Galena-24175517.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174124",
+      "name": "Piso Ambienta Stone Grafitto Porcelain 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.8,
+      "product_url": "https://tarkett.com.mx/producto/grafito-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0009_Grafito-Porcelain-24174124-24175124.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "24175124",
+      "name": "Piso Ambienta Stone Grafitto Porcelain 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 16.9,
+      "product_url": "https://tarkett.com.mx/producto/grafito-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0009_Grafito-Porcelain-24174124-24175124.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "24175560",
+      "name": "Piso Ambienta Stone Iron Ore 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.14,
+      "product_url": "https://tarkett.com.mx/producto/iron-one/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0008_Iron-Ore-24175560.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "24175715",
+      "name": "Piso Ambienta Stone Lido 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 662.48,
+      "product_url": "https://tarkett.com.mx/producto/lido/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0007_Lido-24175715.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174113",
+      "name": "Piso Ambienta Stone Light Porcelain 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 3.6,
+      "product_url": "https://tarkett.com.mx/producto/light-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0006_Light-Porcelain-24174113-24175113.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24175113",
+      "name": "Piso Ambienta Stone Light Porcelain 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 16.9,
+      "product_url": "https://tarkett.com.mx/producto/light-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0006_Light-Porcelain-24174113-24175113.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24175773",
+      "name": "Piso Ambienta Stone Murano 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 425.88,
+      "product_url": "https://tarkett.com.mx/producto/murano/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0005_Murano-24175773.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174679",
+      "name": "Piso Ambienta Stone Rock 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.8,
+      "product_url": "https://tarkett.com.mx/producto/rock/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0004_Rock-24174679.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174616",
+      "name": "Piso Ambienta Stone Sandstone 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.8,
+      "product_url": "https://tarkett.com.mx/producto/sandstone/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0003_Sandstone-24174616.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24182680",
+      "name": "Piso Ambienta Stone Steel 3.2mm 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 18,
+      "product_url": "https://tarkett.com.mx/producto/steel/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0002_Steel-24174680-24182680.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174680",
+      "name": "Piso Ambienta Stone Steel 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.8,
+      "product_url": "https://tarkett.com.mx/producto/steel/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0002_Steel-24174680-24182680.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24182681",
+      "name": "Piso Ambienta Stone Titanium 3.2mm 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 18,
+      "product_url": "https://tarkett.com.mx/producto/titanium/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0001_Titanium-24174681-24175681-24182681.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24174681",
+      "name": "Piso Ambienta Stone Titanium 600x600mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.8,
+      "product_url": "https://tarkett.com.mx/producto/titanium/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0001_Titanium-24174681-24175681-24182681.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24175681",
+      "name": "Piso Ambienta Stone Titanium 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 16.9,
+      "product_url": "https://tarkett.com.mx/producto/titanium/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0001_Titanium-24174681-24175681-24182681.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24175564",
+      "name": "Piso Ambienta Stone Veneza 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.14,
+      "product_url": "https://tarkett.com.mx/producto/veneza/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0000_Veneza-24175564.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "37005132",
+      "name": "Piso Aurea Click Roble Claro",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 0.004,
+      "product_url": "https://tarkett.com.mx/producto/roble-claro/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/Still-Aurea-Pro-Roble-Claro.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "37005539",
+      "name": "Piso Aurea Click Roble Oscuro",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 531.432,
+      "product_url": "https://tarkett.com.mx/producto/roble-oscuro/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/lvt_Aurea_click_roble-oscuro.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24170111",
+      "name": "Piso Aurea Pro Dark Porcelain",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 10.8,
+      "product_url": "https://tarkett.com.mx/producto/dark-porcelain/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0012_Dark-Porcelain-24174111-24175111.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "48000132",
+      "name": "Piso Aurea Pro Roble Claro",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 25.47,
+      "product_url": "https://tarkett.com.mx/producto/roble-claro/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/Still-Aurea-Pro-Roble-Claro.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "48000530",
+      "name": "Piso Aurea Pro Roble Platino",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 186.78,
+      "product_url": "https://tarkett.com.mx/producto/roble-platino/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/lvt_Aurea_pro_Roble-Platino_regua.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "48000840",
+      "name": "Piso Aurea Pro Sereno",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 5.66,
+      "product_url": "https://tarkett.com.mx/linea-2/linea-aurea-pro/ambiente-aurea-pro-sereno/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/Ambiente-Aurea-Pro-Sereno.jpg",
+      "match_status": "media_sku_match"
+    },
+    {
+      "code": "24173722",
+      "name": "Piso Aurea Tech Alicante",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 1298.26,
+      "product_url": "https://tarkett.com.mx/linea-2/linea-aurea-tech/24173722-alicante/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/24173722-Alicante-scaled.jpg",
+      "match_status": "media_sku_match"
+    },
+    {
+      "code": "24173701",
+      "name": "Piso Aurea Tech Mallorca",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 1423.36,
+      "product_url": "https://tarkett.com.mx/producto/mallorca/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/Mallorca.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895381",
+      "name": "Piso Injoy Calendula 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 400.14,
+      "product_url": "https://tarkett.com.mx/producto/calendula/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0015_Calendula-24124381.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895011",
+      "name": "Piso Injoy Camelia 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 943.92,
+      "product_url": "https://tarkett.com.mx/producto/camelia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0014_Camelia-24124011.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895330",
+      "name": "Piso Injoy Centeio 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 15.39,
+      "product_url": "https://tarkett.com.mx/producto/centeio/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0013_Centeio-24124330.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895812",
+      "name": "Piso Injoy Gérbera 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 15.39,
+      "product_url": "https://tarkett.com.mx/producto/gerbera/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0012_Gerbera-24124812.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24272102",
+      "name": "Piso Injoy Gnaisse 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 274.95,
+      "product_url": "https://tarkett.com.mx/producto/gnaisse/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0011_Gnaisse-24272102.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895344",
+      "name": "Piso Injoy Lichia 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 769.5,
+      "product_url": "https://tarkett.com.mx/producto/lichia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0009_Lichia-24124344.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24272556",
+      "name": "Piso Injoy Lucerna 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 241.11,
+      "product_url": "https://tarkett.com.mx/producto/lucerna/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0008_Lucerna-24272556.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895301",
+      "name": "Piso Injoy Mate 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 15.39,
+      "product_url": "https://tarkett.com.mx/producto/mate/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0007_Mate-24124301.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895345",
+      "name": "Piso Injoy Menta 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 15.39,
+      "product_url": "https://tarkett.com.mx/producto/menta/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0006_Menta-24124345.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895384",
+      "name": "Piso Injoy Papoula 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 1108.08,
+      "product_url": "https://tarkett.com.mx/producto/papoula/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0005_Papoula-24124384.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895613",
+      "name": "Piso Injoy Peonia 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 15.39,
+      "product_url": "https://tarkett.com.mx/producto/peonia/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0004_Peonia-24124613.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895319",
+      "name": "Piso Injoy Primula 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 15.39,
+      "product_url": "https://tarkett.com.mx/producto/primula/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0003_Primula-24124319.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895517",
+      "name": "Piso Injoy Roble Natural Claro 208,5X1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 784.89,
+      "product_url": "https://tarkett.com.mx/producto/roble-natural-claro-3/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/Roble-Natural-Claro-scaled.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24272112",
+      "name": "Piso Injoy Roseo 920x920mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 321.48,
+      "product_url": "https://tarkett.com.mx/producto/roseo/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0001_Roseo-24272112.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24895911",
+      "name": "Piso Injoy Tulipa 208,5x1230mm",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 15.39,
+      "product_url": "https://tarkett.com.mx/producto/tulipa/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/injoy_0000_Tulipa-24124911.jpg",
+      "match_status": "name_match"
+    },
+    {
+      "code": "24064200",
+      "name": "Piso Square Set Acoustic (Cemento)",
+      "unit": "MTK - metro cuadrado",
+      "available_quantity": 0.001,
+      "product_url": "https://profesional.tarkett.es/es_ES/colecci%C3%B3n-C000117-id-square-loose-lay/cement-dark-grey",
+      "image_url": "https://media.tarkett-image.com/large/TH_LVT_iD_SQUARE_Cement_Dark_Grey.jpg",
+      "match_status": "professional_es_collection_match"
+    },
+    {
+      "code": "440556092",
+      "name": "TDC 50 3 1/4 X 75",
+      "unit": "FOT - pie",
+      "available_quantity": 1425,
+      "product_url": "https://tarkett.com.mx/producto/marble-carrare-2/",
+      "image_url": "https://tarkett.com.mx/wp-content/uploads/2025/07/3942079.jpg",
+      "match_status": "sku_match"
+    },
+    {
+      "code": "666214",
+      "name": "Ultrabond Eco 4 LVT bucket 14 kg",
+      "unit": "KGM - kilogramo",
+      "available_quantity": 197,
+      "product_url": "https://tarkett.com.ar/productos/accesorios/",
+      "image_url": "https://tarkett.com.ar/prod/acc/ultrabond-4-lvt-14kg.jpg",
+      "match_status": "tarkett_ar_accessory_sku_match"
+    },
+    {
+      "code": "666204",
+      "name": "Ultrabond Eco 4 LVT buckets 4 kg",
+      "unit": "H87 - pieza",
+      "available_quantity": 120,
+      "product_url": "",
+      "image_url": "",
+      "match_status": "unmatched"
+    },
+    {
+      "code": "1948815",
+      "name": "Ultrabond Eco 711 4gal",
+      "unit": "H87 - pieza",
+      "available_quantity": 62,
+      "product_url": "",
+      "image_url": "",
+      "match_status": "unmatched"
+    }
+  ]
+}

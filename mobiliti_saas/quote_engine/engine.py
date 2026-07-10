@@ -40,6 +40,14 @@ from .ai_image_provider import dezgo_config_from_env, generate_with_dezgo, norma
 from .image_processing import improve_image_map
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .parser import QuoteItem, col_index, read_items
+from .sunon_image_provider import (
+    extract_product_code,
+    fetch_sunon_catalog_product_image,
+    fetch_sunon_product_image,
+    find_sunon_catalog_match,
+    normalize_sunon_code,
+    sunon_lookup_enabled,
+)
 
 
 MONEY_FORMAT = '$#,##0.00;[Red]-$#,##0.00;"-"'
@@ -2152,6 +2160,106 @@ def _generate_missing_dezgo_images(
     return result
 
 
+def _resolve_sunon_web_images(
+    image_map: dict[int, str],
+    items: list[QuoteItem],
+    temp_dir: str | Path,
+    metadata: dict[str, Any],
+    stats: dict[str, Any] | None = None,
+) -> dict[int, str]:
+    requested_provider = metadata.get("image_provider", metadata.get("proveedor_imagen"))
+    provider = normalize_image_provider(requested_provider or os.environ.get("IMAGE_PROVIDER"))
+    if provider != "sunon_web" or not sunon_lookup_enabled():
+        return image_map
+
+    result = dict(image_map)
+    sunon_dir = Path(temp_dir) / "sunon"
+    for item in items:
+        if item.tipo != "producto":
+            continue
+        code = extract_product_code(str(item.nombre or ""))
+        if not code:
+            continue
+        _bump_image_stat(stats, "image_sunon_attempted_count")
+        try:
+            image_path = fetch_sunon_product_image(str(item.nombre or ""), sunon_dir)
+        except Exception:
+            _bump_image_stat(stats, "image_sunon_failed_count")
+            continue
+        if not image_path:
+            _bump_image_stat(stats, "image_sunon_not_found_count")
+            continue
+        _bump_image_stat(stats, "image_sunon_found_count")
+        result[item.row] = str(image_path)
+    return result
+
+
+def _resolve_sunon_catalog_images(
+    image_map: dict[int, str],
+    items: list[QuoteItem],
+    temp_dir: str | Path,
+    metadata: dict[str, Any],
+    stats: dict[str, Any] | None = None,
+) -> dict[int, str]:
+    requested_provider = metadata.get("image_provider", metadata.get("proveedor_imagen"))
+    provider = normalize_image_provider(requested_provider or os.environ.get("IMAGE_PROVIDER"))
+    if provider != "sunon_catalog" or not sunon_lookup_enabled():
+        return image_map
+
+    result = dict(image_map)
+    sunon_dir = Path(temp_dir) / "sunon_catalog"
+    timeout_seconds = max(
+        2,
+        min(
+            18,
+            int(
+                _num(
+                    metadata.get("sunon_timeout_seconds", os.environ.get("SUNON_CATALOG_TIMEOUT_SECONDS")),
+                    8,
+                )
+            ),
+        ),
+    )
+    live_lookup_value = str(metadata.get("sunon_live_lookup", os.environ.get("SUNON_CATALOG_LIVE_LOOKUP_ENABLED", "")))
+    live_lookup = live_lookup_value.strip().lower() in {"1", "true", "yes", "on"}
+    lookup_cache: dict[str, Path | None] = {}
+    for item in items:
+        if item.tipo != "producto":
+            continue
+        code = extract_product_code(str(item.nombre or ""))
+        if not code:
+            _bump_image_stat(stats, "image_sunon_catalog_not_found_count")
+            continue
+        _entry, matched_candidate, match_type = find_sunon_catalog_match(code)
+        cache_key = normalize_sunon_code(matched_candidate or code)
+        _bump_image_stat(stats, "image_sunon_catalog_attempted_count")
+        if cache_key in lookup_cache:
+            image_path = lookup_cache[cache_key]
+        else:
+            try:
+                image_path = fetch_sunon_catalog_product_image(
+                    str(item.nombre or ""),
+                    sunon_dir,
+                    live_lookup=live_lookup,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception:
+                _bump_image_stat(stats, "image_sunon_catalog_failed_count")
+                lookup_cache[cache_key] = None
+                continue
+            lookup_cache[cache_key] = image_path
+        if not image_path:
+            _bump_image_stat(stats, "image_sunon_catalog_not_found_count")
+            _bump_image_stat(stats, "image_sunon_catalog_fallback_local_count")
+            continue
+        if match_type == "base_code":
+            _bump_image_stat(stats, "image_sunon_catalog_base_code_count")
+        else:
+            _bump_image_stat(stats, "image_sunon_catalog_exact_code_count")
+        result[item.row] = str(image_path)
+    return result
+
+
 def _bump_image_stat(stats: dict[str, Any] | None, key: str, amount: int = 1) -> None:
     if stats is not None:
         stats[key] = int(stats.get(key, 0) or 0) + amount
@@ -2164,6 +2272,12 @@ def _estimate_generation_seconds(metadata: dict[str, Any], image_stats: dict[str
         source_images = int(image_stats.get("image_source_count", 0) or 0)
         missing_attempts = int(image_stats.get("image_ai_missing_attempted_count", 0) or 0)
         return min(1800, max(240, 90 + products * 4 + source_images * 22 + missing_attempts * 35))
+    if provider == "sunon_web":
+        lookup_attempts = int(image_stats.get("image_sunon_attempted_count", 0) or 0)
+        return min(900, max(120, 60 + products * 2 + lookup_attempts * 4))
+    if provider == "sunon_catalog":
+        lookup_attempts = int(image_stats.get("image_sunon_catalog_attempted_count", 0) or 0)
+        return min(900, max(120, 60 + products * 2 + lookup_attempts * 4))
     return min(420, max(75, 45 + products * 2))
 
 
@@ -2226,6 +2340,8 @@ def generate_quote(
     image_map, temp_dir = extract_images(source_path)
     image_stats: dict[str, Any] = {}
     try:
+        image_map = _resolve_sunon_catalog_images(image_map, items, temp_dir, metadata, stats=image_stats)
+        image_map = _resolve_sunon_web_images(image_map, items, temp_dir, metadata, stats=image_stats)
         image_map = improve_image_map(
             image_map,
             temp_dir,

@@ -55,6 +55,10 @@ def normalize_image_provider(value: str | None) -> str:
         return "pillow"
     if text in {"dezgo", "flux", "flux2", "flux_2", "ia", "ai"}:
         return "dezgo"
+    if text in {"sunon_catalog", "sunon-catalog", "catalogo_sunon", "sunon_precise", "sunon-precise"}:
+        return "sunon_catalog"
+    if text in {"sunon", "sunon_web", "sunon-web", "web_sunon"}:
+        return "sunon_web"
     return "pillow"
 
 

@@ -18,3 +18,9 @@ CREATE INDEX IF NOT EXISTS idx_offiho_reservations_usuario
     ON saas_offiho_reservations(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_offiho_reservations_quote_job
     ON saas_offiho_reservations(quote_job_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_offiho_reservations_quote_job_product
+    ON saas_offiho_reservations(quote_job_id, product_code);
+
+ALTER TABLE saas_offiho_reservations ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE saas_offiho_reservations FROM anon, authenticated;
+GRANT ALL ON TABLE saas_offiho_reservations TO service_role;

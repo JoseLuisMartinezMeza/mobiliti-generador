@@ -20,6 +20,8 @@ from mobiliti_saas.quote_engine.images import (  # noqa: E402
 )
 from mobiliti_saas.quote_engine.engine import _align_image_map_to_product_rows  # noqa: E402
 from mobiliti_saas.quote_engine.engine import _generate_missing_dezgo_images  # noqa: E402
+from mobiliti_saas.quote_engine.engine import _resolve_sunon_catalog_images  # noqa: E402
+from mobiliti_saas.quote_engine.engine import _resolve_sunon_web_images  # noqa: E402
 from mobiliti_saas.quote_engine.parser import QuoteItem  # noqa: E402
 
 
@@ -133,6 +135,62 @@ def test_generate_missing_dezgo_images_only_fills_missing_rows(monkeypatch, tmp_
     assert "Mejora la calidad de imagen y que este en fondo blanco" in generated[0][0]
     assert "Double Seat Workstation" in generated[0][0]
     assert Path(image_map[9]).exists()
+
+
+def test_sunon_web_provider_replaces_local_image_by_product_code(monkeypatch, tmp_path):
+    local = tmp_path / "local.png"
+    sunon = tmp_path / "sunon.png"
+    _image(local, (20, 20))
+    _image(sunon, (40, 40))
+    items = [QuoteItem(tipo="producto", row=9, nombre="CHJ80SW H7 Task Chair")]
+
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.fetch_sunon_product_image",
+        lambda _name, _output_dir: sunon,
+    )
+
+    stats = {}
+    result = _resolve_sunon_web_images(
+        {9: str(local)},
+        items,
+        tmp_path,
+        {"image_provider": "sunon_web"},
+        stats=stats,
+    )
+
+    assert result[9] == str(sunon)
+    assert stats["image_sunon_attempted_count"] == 1
+    assert stats["image_sunon_found_count"] == 1
+
+
+def test_sunon_catalog_provider_replaces_only_exact_catalog_matches(monkeypatch, tmp_path):
+    local = tmp_path / "local.png"
+    sunon = tmp_path / "sunon.png"
+    _image(local, (20, 20))
+    _image(sunon, (40, 40))
+    items = [
+        QuoteItem(tipo="producto", row=9, nombre="CHJ80SW H7 Task Chair"),
+        QuoteItem(tipo="producto", row=13, nombre="SIN CODIGO"),
+    ]
+
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.fetch_sunon_catalog_product_image",
+        lambda name, _output_dir, **_kwargs: sunon if "CHJ80SW" in name else None,
+    )
+
+    stats = {}
+    result = _resolve_sunon_catalog_images(
+        {9: str(local), 13: str(local)},
+        items,
+        tmp_path,
+        {"image_provider": "sunon_catalog"},
+        stats=stats,
+    )
+
+    assert result[9] == str(sunon)
+    assert result[13] == str(local)
+    assert stats["image_sunon_catalog_attempted_count"] == 1
+    assert stats["image_sunon_catalog_exact_code_count"] == 1
 
 
 def test_generate_missing_dezgo_images_raises_when_explicit_provider_fails(monkeypatch, tmp_path):
