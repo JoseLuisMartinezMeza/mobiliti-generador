@@ -34,6 +34,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.formula import ArrayFormula
 from PIL import Image as PILImage
 
+from .catalog_cart import WARNING_FILL
 from .classification import classify_product_name, load_category_dictionary
 from .descriptions import build_product_description, normalize_description_language
 from .ai_image_provider import dezgo_config_from_env, generate_with_dezgo, normalize_image_provider
@@ -1832,6 +1833,11 @@ def _align_description_top_for_category(ws, row: int, category: str) -> None:
     )
 
 
+def _apply_warning_description_fill(cell) -> None:
+    if "ADVERTENCIA:" in str(cell.value or "").upper():
+        cell.fill = PatternFill(fill_type="solid", fgColor=WARNING_FILL)
+
+
 def _anchor_position(img: XlsxImage) -> tuple[int, int]:
     anchor = getattr(img, "anchor", None)
     marker = getattr(anchor, "_from", None)
@@ -1951,6 +1957,7 @@ def _write_cotizacion(
     totals_snapshot = _snapshot_rows(ws, totals_start, totals_start + 4)
     terms_end = min(ws.max_row, max(terms_start, terms_start + 136))
     terms_snapshot = _snapshot_rows(ws, terms_start, terms_end)
+    base_description_fill = copy(ws.cell(17, 3).fill)
 
     for row in range(16, terms_end + 1):
         _clear_row(ws, row)
@@ -1993,12 +2000,15 @@ def _write_cotizacion(
             shrink_to_fit=code_alignment.shrink_to_fit,
             indent=code_alignment.indent,
         )
-        ws.cell(current_row, 3).value = build_product_description(
+        description_cell = ws.cell(current_row, 3)
+        description_cell.fill = copy(base_description_fill)
+        description_cell.value = build_product_description(
             item.nombre,
             item.descripcion,
             category,
             description_language,
         )
+        _apply_warning_description_fill(description_cell)
         ws.cell(current_row, 4).value = _formula("Quotation", f"E{item.row}")
         if mob_row:
             ws.cell(current_row, 5).value = f"=Mobiliti!H{mob_row}"

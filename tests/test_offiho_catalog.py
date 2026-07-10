@@ -538,6 +538,73 @@ def test_offiho_insufficient_warning_preserves_available_quantity_in_final_quote
     wb.close()
 
 
+def test_final_cotizacion_fills_only_warning_descriptions_yellow(tmp_path):
+    from mobiliti_saas.quote_engine.offiho_catalog import (
+        OffihoCatalogItem,
+        build_offiho_cart_payload,
+        create_offiho_quotation_workbook,
+    )
+    from mobiliti_saas.worker.online_quote_generator import generate_online_quote
+
+    definitions = [
+        ("OHE-501", "AGOTADO", 0, 7999, "inventory"),
+        ("OHE-502", "PRECIO PENDIENTE", 2, 0, "missing"),
+        ("OHE-503", "AGOTADO SIN PRECIO", 0, 0, "missing"),
+        ("OHE-504", "NORMAL", 2, 7999, "inventory"),
+    ]
+    items = [
+        OffihoCatalogItem(
+            inventory_key=f"{code} NEGRO {name}",
+            code=code,
+            name=name,
+            variant="NEGRO",
+            unit="PZA",
+            pieces_per_box=Decimal("1"),
+            available_quantity=Decimal(str(stock)),
+            unit_price=Decimal(str(price)),
+            price_source=price_source,
+        )
+        for code, name, stock, price, price_source in definitions
+    ]
+    catalog = {
+        "source_hash": "hash",
+        "items": items,
+        "by_inventory_key": {item.inventory_key: item for item in items},
+    }
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": item.inventory_key, "quantity": 1} for item in items],
+        catalog=catalog,
+    )
+    source = create_offiho_quotation_workbook(payload, tmp_path / "offiho-all-warnings.xlsx")
+    output = tmp_path / "cotizacion-all-warnings.xlsx"
+
+    generate_online_quote(source, output, {"tipo_cambio": "20"})
+
+    workbook = load_workbook(output, data_only=False)
+    sheet = workbook["Cotizacion"]
+    warning_cells = [cell for cell in sheet["C"] if "ADVERTENCIA:" in str(cell.value or "").upper()]
+    assert len(warning_cells) == 3
+    for code in ("OHE-501", "OHE-502", "OHE-503"):
+        cell = next(cell for cell in warning_cells if code in str(cell.value or ""))
+        assert cell.fill.fill_type == "solid"
+        assert cell.fill.fgColor.rgb.endswith("FFF2CC")
+    both = next(cell for cell in warning_cells if "OHE-503" in str(cell.value or ""))
+    assert "ADVERTENCIA: PRODUCTO AGOTADO" in both.value
+    assert "ADVERTENCIA: PRECIO POR CONFIRMAR" in both.value
+
+    normal = next(cell for cell in sheet["C"] if "OHE-504" in str(cell.value or ""))
+    assert not (
+        normal.fill.fill_type == "solid"
+        and str(normal.fill.fgColor.rgb or "").endswith("FFF2CC")
+    )
+    category = next(cell for cell in sheet["A"] if cell.value == "=Quotation!A8")
+    assert not (
+        category.fill.fill_type == "solid"
+        and str(category.fill.fgColor.rgb or "").endswith("FFF2CC")
+    )
+    workbook.close()
+
+
 def test_catalog_workbook_closes_when_save_fails(monkeypatch, tmp_path):
     import mobiliti_saas.quote_engine.catalog_cart as catalog_cart
     from mobiliti_saas.quote_engine.offiho_catalog import build_offiho_cart_payload
