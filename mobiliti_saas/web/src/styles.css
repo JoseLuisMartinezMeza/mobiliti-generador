@@ -1175,6 +1175,23 @@ textarea:focus {
   grid-template-columns: minmax(240px, 1fr) minmax(150px, 190px) minmax(180px, 220px) auto;
 }
 
+.offiho-product {
+  grid-template-columns: 124px minmax(0, 1fr);
+}
+
+.offiho-product .product-media {
+  width: 124px;
+  height: 148px;
+  background: #fff;
+}
+
+.offiho-product .product-media img {
+  box-sizing: border-box;
+  padding: 4px;
+  object-fit: contain;
+  object-position: center;
+}
+
 .offiho-product .product-info strong {
   min-height: 0;
 }
@@ -1503,14 +1520,14 @@ textarea:focus {
   }
 
   .offiho-product {
-    grid-template-columns: 64px minmax(0, 1fr) 104px;
+    grid-template-columns: 80px minmax(0, 1fr) 104px;
     gap: 8px;
     padding: 8px;
   }
 
   .offiho-product .product-media {
-    width: 64px;
-    height: 64px;
+    width: 80px;
+    height: 96px;
   }
 
   .offiho-product .product-info {

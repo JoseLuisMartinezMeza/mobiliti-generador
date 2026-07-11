@@ -117,6 +117,10 @@ def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
     assert '"/offiho/:path*"' in vercel
     assert ".offiho-product" in styles
     assert ".offiho-warning" in styles
+    assert ".offiho-product .product-media" in styles
+    assert "width: 124px;" in styles
+    assert "height: 148px;" in styles
+    assert "object-fit: contain;" in styles
 
 
 def test_offiho_catalog_uses_factual_filters_cache_and_pagination_contracts():

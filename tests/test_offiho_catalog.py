@@ -128,6 +128,47 @@ def test_offiho_description_reaches_cart_and_quotation_workbook(tmp_path):
     final.close()
 
 
+def test_exact_offiho_finish_image_reaches_cart_and_quotation_workbook(monkeypatch, tmp_path):
+    from PIL import Image
+
+    from mobiliti_saas.quote_engine import catalog_cart
+    from mobiliti_saas.quote_engine.offiho_catalog import (
+        build_offiho_cart_payload,
+        create_offiho_quotation_workbook,
+        load_offiho_catalog,
+    )
+
+    payload = build_offiho_cart_payload(
+        [{"inventory_key": "OHS-86AL ROJA REVOLUTION", "quantity": 1}],
+        catalog=load_offiho_catalog(),
+    )
+    expected_url = (
+        "https://www.offiho.com/operativos/revolution/"
+        "OHS-86al/colores/OHS-86alRojo.jpg"
+    )
+    captured = {}
+
+    def fake_download(image_url, image_dir, code, source_type):
+        captured.update(url=image_url, code=code, source_type=source_type)
+        image_path = image_dir / "revolution-roja.png"
+        Image.new("RGB", (40, 60), "red").save(image_path)
+        return image_path
+
+    monkeypatch.setattr(catalog_cart, "_download_catalog_image", fake_download)
+
+    output = create_offiho_quotation_workbook(payload, tmp_path / "revolution-roja.xlsx")
+    workbook = load_workbook(output)
+
+    assert payload["items"][0]["image_url"] == expected_url
+    assert captured == {
+        "url": expected_url,
+        "code": "OHS-86AL",
+        "source_type": "offiho_cart",
+    }
+    assert len(workbook["Quotation"]._images) == 1
+    workbook.close()
+
+
 def test_offiho_cart_uses_inventory_key_when_variant_name_is_blank(tmp_path):
     from mobiliti_saas.quote_engine.offiho_catalog import (
         OffihoCatalogItem,
@@ -247,7 +288,8 @@ def test_load_offiho_catalog_propagates_inventory_audit():
 def test_checked_in_offiho_catalog_keeps_official_media_coverage():
     raw = _runtime_catalog_raw()
     items = raw["items"]
-    matched = [item for item in items if item.get("product_url") or item.get("image_url")]
+    linked = [item for item in items if item.get("product_url")]
+    imaged = [item for item in items if item.get("image_url")]
     official_hosts = {
         "offiho.com",
         "www.offiho.com",
@@ -257,16 +299,64 @@ def test_checked_in_offiho_catalog_keeps_official_media_coverage():
     }
 
     assert len(items) == 1207
-    assert len(matched) >= 700
-    assert all(item.get("product_url") and item.get("image_url") for item in matched)
-    for item in matched:
-        for field in ("product_url", "image_url"):
+    assert len(linked) >= 850
+    assert len(imaged) >= 750
+    assert all(item.get("product_url") for item in imaged)
+    for item in linked:
+        fields = ("product_url", "image_url") if item.get("image_url") else ("product_url",)
+        for field in fields:
             parsed = urlsplit(item[field])
             assert parsed.scheme == "https"
             assert parsed.hostname in official_hosts
             if parsed.hostname == "web-lemon-one-45.vercel.app":
                 assert parsed.path.startswith("/catalog-assets/offiho/")
-        assert item["product_url"] != item["image_url"]
+        if item.get("image_url"):
+            assert item["product_url"] != item["image_url"]
+
+
+def test_checked_in_revolution_variants_use_their_exact_official_color_image():
+    items = [
+        item
+        for item in _runtime_catalog_raw()["items"]
+        if item.get("code") == "OHS-86AL"
+    ]
+    expected_suffixes = {
+        "BLANCO": "OHS-86alBlanco.jpg",
+        "ARENA": "OHS-86alArena.jpg",
+        "GRIS": "OHS-86alGris.jpg",
+        "NEGRO": "OHS-86alNegro.jpg",
+        "VERDE": "OHS-86alVerde.jpg",
+        "AZUL MARINO": "OHS-86alMarino.jpg",
+        "ROJA": "OHS-86alRojo.jpg",
+        "NARANJA": "OHS-86alNaranja.jpg",
+    }
+
+    assert {item["variant"] for item in items} == set(expected_suffixes)
+    for item in items:
+        assert item["image_url"].endswith(expected_suffixes[item["variant"]])
+    assert len({item["image_url"] for item in items}) == len(expected_suffixes)
+
+
+def test_checked_in_official_images_never_belong_to_another_structured_code():
+    official_hosts = {
+        "offiho.com",
+        "www.offiho.com",
+        "offihoblack.com",
+        "www.offihoblack.com",
+    }
+    mismatches = []
+    for item in _runtime_catalog_raw()["items"]:
+        image_url = item.get("image_url", "")
+        if urlsplit(image_url).hostname not in official_hosts:
+            continue
+        if build.CODE_RE.fullmatch(item.get("code", "")) is None:
+            continue
+        if build._compact_variant_value(item["code"]) not in build._compact_variant_value(
+            urlsplit(image_url).path
+        ):
+            mismatches.append((item["inventory_key"], image_url))
+
+    assert mismatches == []
 
 
 @pytest.mark.parametrize(
@@ -1100,7 +1190,7 @@ def test_site_match_requires_expected_model_code():
     assert product["image_url"] == ""
 
 
-def test_site_match_falls_back_to_exact_normalized_product_name():
+def test_site_match_uses_exact_name_link_without_borrowing_an_unverified_model_image():
     product = match_official_product(
         extract_offiho_identity("OHE-405 NEGRO ALUFSEN"),
         [
@@ -1118,7 +1208,7 @@ def test_site_match_falls_back_to_exact_normalized_product_name():
     )
 
     assert product["url"] == "https://www.offiho.com/directivos/alufsen/"
-    assert product["image_url"] == "https://www.offiho.com/images/alufsen-frente.jpg"
+    assert product["image_url"] == ""
     assert product["match_status"] == "official_name_match"
     assert product["description"] == "Respaldo de malla y asiento tapizado."
 
@@ -1163,6 +1253,75 @@ def test_site_match_accepts_official_code_with_inventory_variant_suffix():
     assert product["url"].endswith("modelo-OHE-165negro")
     assert product["image_url"].endswith("OHE-165negroFrente.jpg")
     assert product["match_status"] == "official_code_match"
+
+
+def test_site_match_never_borrows_a_variant_image_from_another_model():
+    product = match_official_product(
+        extract_offiho_identity("OHS-85AL NEGRO REVOLUTION"),
+        [
+            {
+                "codes": ["OHS-85AL"],
+                "url": (
+                    "https://www.offiho.com/operativos/revolution/"
+                    "operativos-revolution-modelo-OHS-85al"
+                ),
+                "image_url": (
+                    "https://www.offiho.com/operativos/revolution/"
+                    "OHS-85al/OHS-85alFrente.jpg"
+                ),
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            },
+            {
+                "codes": ["OHS-85AL", "OHV-87CR"],
+                "url": (
+                    "https://www.offiho.com/visitantes-interior/revolution/"
+                    "visitantes-interior-revolution-modelo-OHV-87cr"
+                ),
+                "variant_images": {
+                    "NEGRO": {
+                        "image_url": (
+                            "https://www.offiho.com/visitantes-interior/revolution/"
+                            "OHV-87cr/colores/OHV-87crNegroTurquesa.jpg"
+                        ),
+                        "image_verified": True,
+                        "image_content_type": "image/jpeg",
+                        "image_content_length": 2048,
+                    }
+                },
+            },
+        ],
+    )
+
+    assert product["image_url"].endswith("OHS-85al/OHS-85alFrente.jpg")
+
+
+def test_site_match_does_not_use_a_different_finish_when_exact_color_is_missing():
+    product = match_official_product(
+        extract_offiho_identity("OHE-805 BLANCO QUO"),
+        [
+            {
+                "codes": ["OHE-805"],
+                "url": "https://www.offiho.com/ejecutivos/quo/modelo-OHE-805",
+                "image_url": "https://www.offiho.com/ejecutivos/quo/OHE-805negroFrente.jpg",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+                "variant_images": {
+                    "NEGRO": {
+                        "image_url": "https://www.offiho.com/ejecutivos/quo/OHE-805negro.jpg",
+                        "image_verified": True,
+                        "image_content_type": "image/jpeg",
+                        "image_content_length": 2048,
+                    }
+                },
+            }
+        ],
+    )
+
+    assert product["image_url"] == ""
+    assert product["has_variant_catalog"] is True
 
 
 @pytest.mark.parametrize("inventory_key", ["RIMINI NEGRO", "FESTINA PERLA"])
@@ -1331,6 +1490,39 @@ def test_fetch_page_normalizes_mixed_case_product_codes(monkeypatch):
     assert record["codes"] == ["OHP-325CR"]
 
 
+def test_fetch_product_page_ignores_related_model_codes_in_body(monkeypatch):
+    payload = (
+        b"<html><body><h1>OHS-86al</h1>"
+        b"<a href='/modelo-OHV-87cr'>Relacionado OHV-87cr</a></body></html>"
+    )
+
+    class _Response:
+        def __init__(self):
+            self.headers = Message()
+            self.headers["Content-Type"] = "text/html"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def geturl(self):
+            return (
+                "https://www.offiho.com/operativos/revolution/"
+                "operativos-revolution-modelo-OHS-86al"
+            )
+
+        def read(self, size):
+            return payload[:size]
+
+    monkeypatch.setattr(build, "_open_official", lambda request, timeout: _Response())
+
+    record = build._fetch_official_page("https://www.offiho.com/modelo-OHS-86al")
+
+    assert record["codes"] == ["OHS-86AL"]
+
+
 def test_page_names_do_not_treat_category_card_headings_as_page_name():
     parser = build._PageParser()
     parser.feed("<html><head><title>Visitantes Interior - Offiho</title></head><body><h3>KYOS</h3></body></html>")
@@ -1448,6 +1640,81 @@ def test_image_extraction_rejects_shopify_width_template_before_real_photo():
     image_url = build._extract_official_image_url(page_url, parser, codes=["OHM-41001"])
 
     assert image_url == "https://www.offihoblack.com/cdn/shop/files/Amelia-Frente41001_1800x1800.jpg"
+
+
+def test_collection_swatch_extraction_maps_large_images_by_exact_finish():
+    page_url = (
+        "https://www.offiho.com/operativos/revolution/"
+        "operativos-revolution-modelo-OHS-86al"
+    )
+    parser = build._PageParser()
+    parser.feed(
+        """
+        <img class="cloudzoom-gallery colecciones"
+             src="OHS-86al/colores/gris.jpg"
+             data-cloudzoom="useZoom: '.cloudzoom', image: 'OHS-86al/colores/OHS-86alGris.jpg', zoomImage: 'OHS-86al/zoom/OHS-86alGris.jpg'">
+        <img class="cloudzoom-gallery colecciones"
+             src="OHS-86al/colores/azul.jpg"
+             data-cloudzoom="useZoom: '.cloudzoom', image: 'OHS-86al/colores/OHS-86alMarino.jpg', zoomImage: 'OHS-86al/zoom/OHS-86alMarino.jpg'">
+        """
+    )
+
+    images = build._extract_variant_image_urls(page_url, parser, codes=["OHS-86AL"])
+
+    assert images == {
+        "AZUL": (
+            "https://www.offiho.com/operativos/revolution/"
+            "OHS-86al/colores/OHS-86alMarino.jpg"
+        ),
+        "GRIS": (
+            "https://www.offiho.com/operativos/revolution/"
+            "OHS-86al/colores/OHS-86alGris.jpg"
+        ),
+        "MARINO": (
+            "https://www.offiho.com/operativos/revolution/"
+            "OHS-86al/colores/OHS-86alMarino.jpg"
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    ("variant", "finish"),
+    [("GRIS", "Gris"), ("AZUL MARINO", "Marino"), ("ROJA", "Rojo")],
+)
+def test_site_match_prefers_exact_finish_image_over_generic_gallery(variant, finish):
+    image_url = (
+        "https://www.offiho.com/operativos/revolution/"
+        f"OHS-86al/colores/OHS-86al{finish}.jpg"
+    )
+    metadata = {
+        "image_url": image_url,
+        "image_verified": True,
+        "image_content_type": "image/jpeg",
+        "image_content_length": 2048,
+    }
+    product = match_official_product(
+        extract_offiho_identity(f"OHS-86AL {variant} REVOLUTION"),
+        [
+            {
+                "codes": ["OHS-86AL"],
+                "names": ["REVOLUTION"],
+                "url": (
+                    "https://www.offiho.com/operativos/revolution/"
+                    "operativos-revolution-modelo-OHS-86al"
+                ),
+                "image_url": (
+                    "https://www.offiho.com/operativos/revolution/"
+                    "galeria/OHV-85cr.jpg"
+                ),
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+                "variant_images": {finish.upper(): metadata},
+            }
+        ],
+    )
+
+    assert product["image_url"] == image_url
 
 
 def _mock_image_response(url, content_type, content_length):
@@ -1745,6 +2012,32 @@ def test_no_network_uses_compatible_cache_without_refresh(monkeypatch):
     index = build.build_site_product_index(cache, no_network=True)
 
     assert index["OHE-405"] == product
+
+
+def test_no_network_preserves_verified_description_and_finish_images():
+    variant_image = {
+        "image_url": "https://www.offiho.com/operativos/revolution/OHS-86alRojo.jpg",
+        "image_verified": True,
+        "image_content_type": "image/jpeg",
+        "image_content_length": 2048,
+    }
+    cache = {
+        "cache_version": build.CACHE_VERSION,
+        "site_index": {
+            "OHS-86AL": {
+                "url": "https://www.offiho.com/operativos/revolution/modelo-OHS-86al",
+                "description": "Asiento y respaldo de polipropileno de alta resistencia.",
+                "variant_images": {"ROJO": variant_image},
+                "source_updated_at": "",
+            }
+        },
+        "site_index_expires_at": "2000-01-01T00:00:00+00:00",
+    }
+
+    index = build.build_site_product_index(cache, no_network=True)
+
+    assert index["OHS-86AL"]["description"].startswith("Asiento y respaldo")
+    assert index["OHS-86AL"]["variant_images"]["ROJO"] == variant_image
 
 
 def test_no_network_discards_unverified_cache_image():

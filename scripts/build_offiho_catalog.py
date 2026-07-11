@@ -55,7 +55,7 @@ SITE_SEEDS = (
     "https://www.offihoblack.com/",
 )
 USER_AGENT = "Mobiliti Offiho Catalog Builder/1.0"
-CACHE_VERSION = 14
+CACHE_VERSION = 16
 CACHE_TTL_SECONDS = 24 * 60 * 60
 LEGACY_CACHE_TIMESTAMP = "1970-01-01T00:00:00+00:00"
 SOURCE_MANIFEST_VERSION = 3
@@ -149,6 +149,11 @@ VARIANT_WORDS = frozenset(
         "VINO",
     }
 )
+VARIANT_CANONICAL_WORDS = {
+    "BLANCA": "BLANCO",
+    "NEGRA": "NEGRO",
+    "ROJA": "ROJO",
+}
 
 
 @dataclass(frozen=True)
@@ -404,6 +409,17 @@ def normalize_variant(value: str) -> str:
     text = normalize_space(value).upper()
     text = re.sub(r"\s*/\s*", " ", text)
     return text
+
+
+def _variant_lookup_keys(value: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKD", normalize_variant(value))
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    words = [VARIANT_CANONICAL_WORDS.get(word, word) for word in re.findall(r"[A-Z0-9]+", ascii_text)]
+    canonical = normalize_space(" ".join(words))
+    keys = [canonical] if canonical else []
+    if canonical == "AZUL MARINO":
+        keys.extend(["MARINO", "AZUL"])
+    return list(dict.fromkeys(keys))
 
 
 def price_key(code: str, variant: str) -> str:
@@ -725,7 +741,7 @@ def _variant_from_pdf_text(value: str) -> str:
     return normalize_variant(" ".join(variants))
 
 
-def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[str, Any]]) -> dict[str, str]:
+def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if not identity.code and not identity.name:
         return {"url": "", "image_url": "", "description": "", "match_status": "unmatched", "source_updated_at": ""}
     code_matches = []
@@ -741,6 +757,7 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
             {
                 "url": url,
                 "image_url": image_url,
+                "variant_images": _trusted_cached_variant_images(candidate),
                 "description": str(candidate.get("description", "")),
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
             }
@@ -762,6 +779,7 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
             {
                 "url": url,
                 "image_url": _trusted_cached_image(candidate)["image_url"],
+                "variant_images": _trusted_cached_variant_images(candidate),
                 "description": str(candidate.get("description", "")),
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
                 "matched_name": matched_name,
@@ -791,10 +809,10 @@ def _official_code_matches(identity: OffihoIdentity, candidate_code: str) -> boo
 
 def _select_official_product(
     identity: OffihoIdentity,
-    matches: Sequence[dict[str, str]],
+    matches: Sequence[dict[str, Any]],
     match_status: str,
-) -> dict[str, str]:
-    def url_rank(product: dict[str, str]) -> tuple[int, int, int, str]:
+) -> dict[str, Any]:
+    def url_rank(product: dict[str, Any]) -> tuple[int, int, int, str]:
         url = product["url"]
         path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
         compact_path = re.sub(r"[^A-Z0-9]", "", path.upper())
@@ -812,8 +830,28 @@ def _select_official_product(
         return primary, secondary, depth, url
 
     url_product = max(matches, key=url_rank)
-    image_products = [product for product in matches if product.get("image_url")]
-    image_url = max(image_products, key=url_rank)["image_url"] if image_products else ""
+    variant_image_products = [
+        (product, _variant_image_for_identity(product, identity))
+        for product in matches
+    ]
+    variant_image_products = [pair for pair in variant_image_products if pair[1]]
+    has_variant_catalog = any(
+        _product_targets_identity(product, identity)
+        and bool(_trusted_cached_variant_images(product))
+        for product in matches
+    )
+    if variant_image_products:
+        image_url = max(variant_image_products, key=lambda pair: url_rank(pair[0]))[1]
+    elif has_variant_catalog and identity.variant:
+        image_url = ""
+    else:
+        image_products = [
+            product
+            for product in matches
+            if product.get("image_url")
+            and _image_targets_identity(str(product["image_url"]), identity)
+        ]
+        image_url = str(max(image_products, key=url_rank)["image_url"]) if image_products else ""
     description_products = [product for product in matches if product.get("description")]
     description = max(description_products, key=url_rank)["description"] if description_products else ""
     return {
@@ -821,8 +859,38 @@ def _select_official_product(
         "image_url": image_url,
         "description": description,
         "match_status": match_status,
-        "source_updated_at": url_product["source_updated_at"],
+        "source_updated_at": str(url_product["source_updated_at"]),
+        "has_variant_catalog": has_variant_catalog,
     }
+
+
+def _variant_image_for_identity(product: dict[str, Any], identity: OffihoIdentity) -> str:
+    if not _product_targets_identity(product, identity):
+        return ""
+    images = product.get("variant_images", {})
+    if not isinstance(images, dict):
+        return ""
+    for key in _variant_lookup_keys(identity.variant):
+        metadata = images.get(key)
+        if isinstance(metadata, dict):
+            image_url = _trusted_cached_image(metadata)["image_url"]
+            if image_url and _image_targets_identity(image_url, identity):
+                return image_url
+    return ""
+
+
+def _product_targets_identity(product: dict[str, Any], identity: OffihoIdentity) -> bool:
+    return _image_targets_identity(str(product.get("url", "")), identity)
+
+
+def _image_targets_identity(value: str, identity: OffihoIdentity) -> bool:
+    if CODE_RE.fullmatch(identity.code) is None:
+        return True
+    compact_code = _compact_variant_value(identity.code)
+    compact_path = _compact_variant_value(
+        urllib.parse.unquote(urllib.parse.urlsplit(value).path)
+    )
+    return bool(compact_code and compact_code in compact_path)
 
 
 def _identity_name_keys(identity: OffihoIdentity) -> list[str]:
@@ -899,6 +967,35 @@ def _trusted_cached_image(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _trusted_cached_variant_images(value: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_images = value.get("variant_images", {})
+    if not isinstance(raw_images, dict):
+        return {}
+    trusted: dict[str, dict[str, Any]] = {}
+    for raw_key, metadata in raw_images.items():
+        if not isinstance(metadata, dict):
+            continue
+        keys = _variant_lookup_keys(str(raw_key))
+        image_metadata = _trusted_cached_image(metadata)
+        if not keys or not image_metadata["image_url"]:
+            continue
+        trusted.setdefault(keys[0], image_metadata)
+    return dict(sorted(trusted.items()))
+
+
+def _verify_variant_images(images: dict[str, str]) -> dict[str, dict[str, Any]]:
+    verified_by_url: dict[str, dict[str, Any]] = {}
+    for image_url in sorted(set(images.values())):
+        metadata = _verify_official_image(image_url)
+        if metadata["image_url"]:
+            verified_by_url[image_url] = metadata
+    return {
+        key: verified_by_url[image_url]
+        for key, image_url in sorted(images.items())
+        if image_url in verified_by_url
+    }
+
+
 def _verify_official_image(image_url: str) -> dict[str, Any]:
     if not is_official_image_url(image_url):
         return _empty_image_metadata()
@@ -959,6 +1056,7 @@ class _PageParser(HTMLParser):
         self.meta: dict[str, str] = {}
         self.text: list[str] = []
         self.names: list[str] = []
+        self.collection_images: list[dict[str, str]] = []
         self._name_tag = ""
         self._name_parts: list[str] = []
 
@@ -972,6 +1070,21 @@ class _PageParser(HTMLParser):
                     self.images.append(values[name])
             if values.get("srcset"):
                 self.images.extend(_srcset_urls(values["srcset"]))
+            classes = {value.casefold() for value in values.get("class", "").split()}
+            cloudzoom = values.get("data-cloudzoom", "")
+            if "colecciones" in classes and cloudzoom:
+                match = re.search(
+                    r"(?:^|[,\s])image\s*:\s*(['\"])(?P<url>[^'\"]+)\1",
+                    cloudzoom,
+                    flags=re.IGNORECASE,
+                )
+                if match:
+                    self.collection_images.append(
+                        {
+                            "swatch": values.get("src", values.get("data-src", "")),
+                            "image": match.group("url"),
+                        }
+                    )
         elif tag == "meta":
             key = values.get("property", values.get("name", "")).lower()
             content = values.get("content", "")
@@ -997,6 +1110,60 @@ class _PageParser(HTMLParser):
 
 def _srcset_urls(value: str) -> list[str]:
     return [candidate.strip().split(" ", 1)[0] for candidate in value.split(",") if candidate.strip()]
+
+
+def _compact_variant_value(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "").upper())
+    return re.sub(
+        r"[^A-Z0-9]",
+        "",
+        "".join(char for char in normalized if not unicodedata.combining(char)),
+    )
+
+
+def _variant_keys_from_image_reference(value: str, codes: Sequence[str]) -> list[str]:
+    stem = Path(urllib.parse.unquote(urllib.parse.urlsplit(value).path)).stem
+    compact = _compact_variant_value(stem)
+    for code in sorted(codes, key=lambda item: len(_compact_variant_value(item)), reverse=True):
+        compact_code = _compact_variant_value(code)
+        if compact_code and compact.startswith(compact_code):
+            compact = compact[len(compact_code) :]
+            break
+
+    words_by_compact = sorted(
+        {(_compact_variant_value(word), word) for word in VARIANT_WORDS if _compact_variant_value(word)},
+        key=lambda item: (-len(item[0]), item[0]),
+    )
+    words: list[str] = []
+    remaining = compact
+    while remaining:
+        matched = next((pair for pair in words_by_compact if remaining.startswith(pair[0])), None)
+        if matched is None:
+            break
+        words.append(matched[1])
+        remaining = remaining[len(matched[0]) :]
+    return _variant_lookup_keys(" ".join(words))
+
+
+def _extract_variant_image_urls(
+    page_url: str,
+    parser: _PageParser,
+    *,
+    codes: Sequence[str],
+) -> dict[str, str]:
+    images: dict[str, str] = {}
+    for collection_image in parser.collection_images:
+        raw_image = normalize_space(collection_image.get("image", ""))
+        resolved = urllib.parse.urljoin(page_url, raw_image)
+        if not is_official_image_url(resolved) or _product_image_score(page_url, resolved, codes) is None:
+            continue
+        keys = [
+            *_variant_keys_from_image_reference(raw_image, codes),
+            *_variant_keys_from_image_reference(collection_image.get("swatch", ""), codes),
+        ]
+        for key in keys:
+            images.setdefault(key, resolved)
+    return dict(sorted(images.items()))
 
 
 def _extract_official_image_url(
@@ -1127,6 +1294,7 @@ def build_site_product_index(
             "names": names,
             "source_updated_at": str(record.get("source_updated_at", "")),
             "description": str(record.get("description", "")),
+            "variant_images": _trusted_cached_variant_images(record),
             **_trusted_cached_image(record),
         }
         if candidate["image_url"] == candidate["url"]:
@@ -1223,11 +1391,18 @@ def _sanitize_site_index(index: dict[str, Any]) -> dict[str, dict[str, Any]]:
         image_metadata = _trusted_cached_image(value)
         if image_metadata["image_url"] == url:
             image_metadata = _empty_image_metadata()
-        sanitized[str(code)] = {
+        sanitized_value: dict[str, Any] = {
             "url": url,
             "source_updated_at": str(value.get("source_updated_at", "")),
             **image_metadata,
         }
+        variant_images = _trusted_cached_variant_images(value)
+        if variant_images:
+            sanitized_value["variant_images"] = variant_images
+        description = str(value.get("description", ""))
+        if description:
+            sanitized_value["description"] = description
+        sanitized[str(code)] = sanitized_value
         if isinstance(value.get("codes"), list):
             sanitized[str(code)]["codes"] = sorted(
                 {str(item).upper() for item in value["codes"] if str(item).strip()}
@@ -1285,20 +1460,33 @@ def _fetch_official_page(url: str) -> dict[str, Any]:
     page_text = " ".join(parser.text)
     metadata_text = " ".join(parser.meta.values())
     codes = sorted({code.upper() for code in CODE_RE.findall(unescape(f"{page_text} {metadata_text}"))})
-    names = _page_names(page_url, parser, codes)
+    page_codes = sorted(
+        {
+            code.upper()
+            for code in CODE_RE.findall(
+                urllib.parse.unquote(urllib.parse.urlsplit(page_url).path)
+            )
+        }
+    )
+    product_codes = page_codes or codes
+    names = _page_names(page_url, parser, product_codes)
     image_url = _extract_official_image_url(
         page_url,
         parser,
-        codes=codes,
+        codes=product_codes,
         extra_candidates=[link for link in links if is_official_image_url(link)],
     )
     image_metadata = _verify_official_image(image_url) if image_url else _empty_image_metadata()
+    variant_images = _verify_variant_images(
+        _extract_variant_image_urls(page_url, parser, codes=product_codes)
+    )
     return {
         "url": page_url,
         "links": links,
-        "codes": codes,
+        "codes": product_codes,
         "names": names,
         "description": _page_description(page_text),
+        "variant_images": variant_images,
         **image_metadata,
         "source_updated_at": source_updated_at,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -1457,7 +1645,11 @@ def build_catalog(
             item["unit_price"] = json_number(pdf_product["unit_price"])
             item["price_source"] = "pdf_catalog"
         item["product_url"] = product["url"] or str(pdf_product.get("product_url", ""))
-        item["image_url"] = product["image_url"] or str(pdf_product.get("image_url", ""))
+        item["image_url"] = (
+            product["image_url"]
+            if product.get("has_variant_catalog")
+            else product["image_url"] or str(pdf_product.get("image_url", ""))
+        )
         item["description"] = product["description"] or str(pdf_product.get("description", "")) or _inventory_description(item)
         item["description_source"] = (
             "official_site"
