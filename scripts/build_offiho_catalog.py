@@ -53,12 +53,13 @@ SITE_SEEDS = (
     *(f"https://www.offiho.com/{section}/" for section in OFFIHO_CATALOG_SECTIONS),
     "https://www.offiho.com/econosillas/",
     "https://www.offihoblack.com/",
+    "https://www.offiho.com/econosillas/penguin-modelo-OHV-7067F",
 )
 USER_AGENT = "Mobiliti Offiho Catalog Builder/1.0"
-CACHE_VERSION = 18
+CACHE_VERSION = 19
 CACHE_TTL_SECONDS = 24 * 60 * 60
 LEGACY_CACHE_TIMESTAMP = "1970-01-01T00:00:00+00:00"
-SOURCE_MANIFEST_VERSION = 3
+SOURCE_MANIFEST_VERSION = 4
 MAX_INVENTORY_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_VALIDATION_TIMEOUT = 10
@@ -68,7 +69,29 @@ CODE_RE = re.compile(r"\b[A-Z]{2,}(?:-\d+[A-Z0-9]*)+", re.ASCII | re.IGNORECASE)
 OFFICIAL_CODE_ALIASES = {
     # Offiho publica este modelo como OHT-337; el inventario vigente lo identifica como OHV-337.
     "OHV-337": "OHT-337",
+    "OHV-338": "OHT-338",
+    "OHV-339CR": "OHT-339CR",
+    "OHV-340CR": "OHT-340CR",
+    "OHR-2800-3P": "OHR-2800-3PCR",
+    "OHR-2800-4P": "OHR-2800-4PCR",
 }
+OFFICIAL_NAME_ALIASES = {
+    # Nombres publicados que no conservan literalmente la clave del inventario.
+    "GAMER-002": ("ESCRITORIO DRAGON GAMER002",),
+    "OHV-90": ("VIOLET 90",),
+    "SILLA": ("SILLA ELEFANTE",),
+}
+OFFICIAL_BROCHURE_URL = "https://www.offiho.com/folletoeconosillas.pdf"
+OFFICIAL_BROCHURE_PRODUCTS = (
+    ("NOVAISO SIN BRAZOS", "econosillas-novaiso-sin-brazos.jpg", 19),
+    ("NOVAISO CON BRAZOS", "econosillas-novaiso-con-brazos.jpg", 20),
+    ("ISO SIN BRAZOS", "econosillas-iso-sin-brazos.jpg", 17),
+    ("ISO CON BRAZOS", "econosillas-iso-con-brazos.jpg", 18),
+    ("ECOGERENCIAL", "econosillas-ecogerencial.jpg", 6),
+    ("ECONOMALLA", "econosillas-economalla.jpg", 11),
+    ("ECOVISITA", "econosillas-ecovisita.jpg", 16),
+    ("OHV 64", "econosillas-sand.jpg", 26),
+)
 PRICE_RE = re.compile(r"\$\s*([\d][\d,]*)")
 IMAGE_EXTENSIONS = frozenset({".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
 NON_PRODUCT_IMAGE_TOKENS = frozenset(
@@ -694,11 +717,52 @@ def _pdf_code_matches(item: dict[str, Any], candidate_code: str) -> bool:
 
 
 def _title_record_for_inventory(key: str, records: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
-    candidates = [
-        record for record in records
-        if _pdf_match_key(record.get("title", "")) == key
-    ]
-    return candidates[0] if candidates else None
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for record in records:
+        title_key = _pdf_match_key(record.get("title", ""))
+        if not title_key or not (key == title_key or key.startswith(f"{title_key} ")):
+            continue
+        candidates.append((len(title_key), record))
+    return max(candidates, key=lambda pair: pair[0])[1] if candidates else None
+
+
+def match_official_brochure_product(
+    item: dict[str, Any],
+    assets_dir: Path,
+    asset_base_url: str,
+) -> dict[str, Any]:
+    inventory_key = _pdf_match_key(item.get("inventory_key", ""))
+    for prefix, asset_name, page_number in OFFICIAL_BROCHURE_PRODUCTS:
+        if not (inventory_key == prefix or inventory_key.startswith(f"{prefix} ")):
+            continue
+        asset_path = Path(assets_dir) / "images" / asset_name
+        if not asset_path.is_file() or asset_path.stat().st_size <= 0:
+            return {}
+        return {
+            "product_url": f"{OFFICIAL_BROCHURE_URL}#page={page_number}",
+            "image_url": f"{asset_base_url.rstrip('/')}/images/{asset_name}",
+            "description": "",
+            "match_status": "official_brochure_match",
+            "source_updated_at": "",
+        }
+    return {}
+
+
+def _official_brochure_manifest(assets_dir: Path) -> list[dict[str, Any]]:
+    manifest: list[dict[str, Any]] = []
+    for prefix, asset_name, page_number in OFFICIAL_BROCHURE_PRODUCTS:
+        asset_path = Path(assets_dir) / "images" / asset_name
+        if not asset_path.is_file():
+            continue
+        manifest.append(
+            {
+                "prefix": prefix,
+                "asset_name": asset_name,
+                "page_number": page_number,
+                "sha256": _sha256_bytes(asset_path.read_bytes()),
+            }
+        )
+    return manifest
 
 
 def _pdf_asset_stem(source_path: Path) -> str:
@@ -768,10 +832,19 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
             }
         )
-    if code_matches:
-        return _select_official_product(identity, code_matches, "official_code_match")
+    code_product = (
+        _select_official_product(identity, code_matches, "official_code_match")
+        if code_matches
+        else None
+    )
+    if code_product and code_product["image_url"]:
+        return code_product
 
     name_keys = _identity_name_keys(identity)
+    curated_name_keys = {
+        _product_name_key(alias)
+        for alias in OFFICIAL_NAME_ALIASES.get(str(identity.code or "").upper(), ())
+    }
     if not name_keys:
         return {"url": "", "image_url": "", "description": "", "match_status": "unmatched", "source_updated_at": ""}
     name_matches = []
@@ -789,10 +862,15 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
                 "description": str(candidate.get("description", "")),
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
                 "matched_name": matched_name,
+                "curated_name_match": matched_name in curated_name_keys,
             }
         )
     if name_matches:
-        return _select_official_product(identity, name_matches, "official_name_match")
+        name_product = _select_official_product(identity, name_matches, "official_name_match")
+        if name_product["image_url"] or not code_product:
+            return name_product
+    if code_product:
+        return code_product
     return {"url": "", "image_url": "", "description": "", "match_status": "unmatched", "source_updated_at": ""}
 
 
@@ -823,7 +901,7 @@ def _select_official_product(
     matches: Sequence[dict[str, Any]],
     match_status: str,
 ) -> dict[str, Any]:
-    def url_rank(product: dict[str, Any]) -> tuple[int, int, int, str]:
+    def url_rank(product: dict[str, Any]) -> tuple[int, int, int, int, str]:
         url = product["url"]
         path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
         compact_path = re.sub(r"[^A-Z0-9]", "", path.upper())
@@ -831,14 +909,22 @@ def _select_official_product(
         leaf_name = _product_name_key(path.rstrip("/").rsplit("/", 1)[-1], codes=[identity.code])
         name_key = product.get("matched_name") or _product_name_key(identity.name)
         if match_status == "official_code_match":
+            variant_specific = int(
+                bool(identity.variant)
+                and any(
+                    key and compact_code + key in compact_path
+                    for key in map(_compact_variant_value, _variant_lookup_keys(identity.variant))
+                )
+            )
             primary = int(bool(compact_code and compact_code in compact_path))
             secondary = int("/products/" in path.casefold() or "modelo-" in path.casefold())
             depth = path.count("/")
         else:
+            variant_specific = 0
             primary = int(bool(name_key and leaf_name == name_key))
             secondary = -path.count("/")
             depth = int(bool(product.get("image_url")))
-        return primary, secondary, depth, url
+        return variant_specific, primary, secondary, depth, url
 
     url_product = max(matches, key=url_rank)
     variant_image_products = [
@@ -853,14 +939,17 @@ def _select_official_product(
     )
     if variant_image_products:
         image_url = max(variant_image_products, key=lambda pair: url_rank(pair[0]))[1]
-    elif has_variant_catalog and identity.variant:
-        image_url = ""
     else:
         image_products = [
             product
             for product in matches
             if product.get("image_url")
-            and _image_targets_identity(str(product["image_url"]), identity)
+            and not _image_conflicts_with_identity_variant(str(product["image_url"]), identity)
+            and (
+                product.get("curated_name_match") is True
+                or _product_targets_identity(product, identity)
+                or _image_targets_identity(str(product["image_url"]), identity)
+            )
         ]
         image_url = str(max(image_products, key=url_rank)["image_url"]) if image_products else ""
     description_products = [product for product in matches if product.get("description")]
@@ -906,6 +995,14 @@ def _image_targets_identity(value: str, identity: OffihoIdentity) -> bool:
     )
 
 
+def _image_conflicts_with_identity_variant(value: str, identity: OffihoIdentity) -> bool:
+    requested = set(_variant_lookup_keys(identity.variant))
+    if not requested:
+        return False
+    labeled = set(_variant_keys_from_image_reference(value, _identity_code_targets(identity)))
+    return bool(labeled and requested.isdisjoint(labeled))
+
+
 def _identity_code_targets(identity: OffihoIdentity) -> tuple[str, ...]:
     code = str(identity.code or "").upper()
     alias = OFFICIAL_CODE_ALIASES.get(code, "")
@@ -921,6 +1018,8 @@ def _identity_name_keys(identity: OffihoIdentity) -> list[str]:
             keys.append(key)
 
     add(identity.name)
+    for alias in OFFICIAL_NAME_ALIASES.get(str(identity.code or "").upper(), ()):
+        add(alias)
     if identity.code and CODE_RE.fullmatch(identity.code) is None:
         add(identity.code)
     return keys
@@ -1694,6 +1793,8 @@ def build_catalog(
             for key, product in sorted(pdf_products.items())
         }
     )
+    brochure_manifest = _official_brochure_manifest(assets_dir)
+    brochure_index_sha256 = _canonical_hash(brochure_manifest)
     site_index = build_site_product_index(cache, no_network=no_network)
     site_index_sha256 = _canonical_hash(site_index)
     generated_at, generated_at_source = _deterministic_generated_at(ordered_pdf_paths)
@@ -1703,6 +1804,7 @@ def build_catalog(
         "pdf_sha256": sorted(source["sha256"] for source in pdf_sources),
         "site_index_sha256": site_index_sha256,
         "pdf_index_sha256": pdf_index_sha256,
+        "brochure_index_sha256": brochure_index_sha256,
         "site_cache_version": CACHE_VERSION,
         "generated_at": generated_at,
         "generated_at_source": generated_at_source,
@@ -1731,14 +1833,20 @@ def build_catalog(
                 item["price_source"] = "pdf_exact"
         product = match_official_product(identity, site_candidates)
         pdf_product = pdf_products.get(item["inventory_key"], {})
+        brochure_product = match_official_brochure_product(item, assets_dir, asset_base_url)
+        support_product = pdf_product if pdf_product.get("image_url") else brochure_product
         if item["price_source"] == "missing" and pdf_product.get("unit_price") is not None:
             item["unit_price"] = json_number(pdf_product["unit_price"])
             item["price_source"] = "pdf_catalog"
-        item["product_url"] = product["url"] or str(pdf_product.get("product_url", ""))
+        item["product_url"] = (
+            product["url"]
+            or str(pdf_product.get("product_url", ""))
+            or str(brochure_product.get("product_url", ""))
+        )
         item["image_url"] = (
             product["image_url"]
             if product.get("has_variant_catalog")
-            else product["image_url"] or str(pdf_product.get("image_url", ""))
+            else product["image_url"] or str(support_product.get("image_url", ""))
         )
         item["description"] = product["description"] or str(pdf_product.get("description", "")) or _inventory_description(item)
         item["description_source"] = (
@@ -1748,8 +1856,15 @@ def build_catalog(
             if pdf_product.get("description")
             else "inventory_label"
         )
-        item["match_status"] = product["match_status"] if product["url"] or product["image_url"] else str(pdf_product.get("match_status", "unmatched"))
-        item["source_updated_at"] = product["source_updated_at"] or str(pdf_product.get("source_updated_at", ""))
+        item["match_status"] = (
+            product["match_status"]
+            if product["url"] or product["image_url"]
+            else str(support_product.get("match_status", "unmatched"))
+        )
+        item["source_updated_at"] = (
+            product["source_updated_at"]
+            or str(support_product.get("source_updated_at", ""))
+        )
 
     result = {
         "source_hash": _canonical_hash(source_manifest),
@@ -1782,6 +1897,11 @@ def build_catalog(
                 "sha256": pdf_index_sha256,
                 "record_count": len(pdf_products),
                 "asset_base_url": asset_base_url,
+            },
+            "official_brochure": {
+                "url": OFFICIAL_BROCHURE_URL,
+                "sha256": brochure_index_sha256,
+                "record_count": len(brochure_manifest),
             },
         },
         "total": len(items),

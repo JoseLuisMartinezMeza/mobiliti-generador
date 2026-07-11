@@ -377,7 +377,16 @@ def test_checked_in_official_images_never_belong_to_another_structured_code():
         if build.CODE_RE.fullmatch(item.get("code", "")) is None:
             continue
         identity = extract_offiho_identity(item["inventory_key"])
-        if not build._image_targets_identity(image_url, identity):
+        product_url = item.get("product_url", "")
+        curated_name_match = (
+            item.get("match_status") == "official_name_match"
+            and identity.code in build.OFFICIAL_NAME_ALIASES
+        )
+        if not (
+            build._image_targets_identity(image_url, identity)
+            or build._image_targets_identity(product_url, identity)
+            or curated_name_match
+        ):
             mismatches.append((item["inventory_key"], image_url))
 
     assert mismatches == []
@@ -1198,6 +1207,65 @@ def test_real_black_pdf_index_maps_vesper_family_to_pdf_asset(tmp_path):
     assert list((tmp_path / "assets" / "images").glob("vesper-1*"))
 
 
+def test_pdf_title_match_uses_longest_family_prefix_for_color_variants():
+    records = [
+        {"title": "PIAZZA 1", "image_name": "piazza-1"},
+        {"title": "PIAZZA 3A", "image_name": "piazza-3a"},
+        {"title": "VILLA 3", "image_name": "villa-3"},
+    ]
+
+    product = build._title_record_for_inventory("PIAZZA 3A N NEGRO", records)
+
+    assert product is not None
+    assert product["image_name"] == "piazza-3a"
+
+
+def test_pdf_title_match_does_not_cross_product_families():
+    records = [{"title": "PIAZZA 1", "image_name": "piazza-1"}]
+
+    assert build._title_record_for_inventory("VILLA 1 N NEGRO", records) is None
+
+
+@pytest.mark.parametrize(
+    ("inventory_key", "asset_name", "page"),
+    [
+        ("ECOGERENCIAL NEGRO", "econosillas-ecogerencial.jpg", 6),
+        ("ECONOMALLA BLANCO", "econosillas-economalla.jpg", 11),
+        ("ECOVISITA VISITA", "econosillas-ecovisita.jpg", 16),
+        ("ISO SIN BRAZOS BRAZOS", "econosillas-iso-sin-brazos.jpg", 17),
+        ("ISO CON BRAZOS BRAZOS", "econosillas-iso-con-brazos.jpg", 18),
+        ("NOVAISO SIN BRAZOS NEGRO", "econosillas-novaiso-sin-brazos.jpg", 19),
+        ("NOVAISO CON BRAZOS AZUL", "econosillas-novaiso-con-brazos.jpg", 20),
+        ("OHV-64 BLANCO SAND", "econosillas-sand.jpg", 26),
+    ],
+)
+def test_official_brochure_fallback_maps_verified_product_family(
+    tmp_path, inventory_key, asset_name, page
+):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    (image_dir / asset_name).write_bytes(b"verified brochure image")
+
+    product = build.match_official_brochure_product(
+        {"inventory_key": inventory_key},
+        tmp_path,
+        "https://web-lemon-one-45.vercel.app/catalog-assets/offiho",
+    )
+
+    assert product["match_status"] == "official_brochure_match"
+    assert product["image_url"].endswith(f"/images/{asset_name}")
+    assert product["product_url"] == f"https://www.offiho.com/folletoeconosillas.pdf#page={page}"
+
+
+def test_official_brochure_fallback_rejects_unmapped_or_missing_asset(tmp_path):
+    assert build.match_official_brochure_product(
+        {"inventory_key": "PRODUCTO SIN MAPA"}, tmp_path, "https://example.test/assets"
+    ) == {}
+    assert build.match_official_brochure_product(
+        {"inventory_key": "OHV-64 BLANCO SAND"}, tmp_path, "https://example.test/assets"
+    ) == {}
+
+
 def test_site_match_requires_expected_model_code():
     product = match_official_product(
         extract_offiho_identity("OHE-405 NEGRO ALUFSEN"),
@@ -1339,6 +1407,95 @@ def test_site_match_uses_documented_official_alias_for_inventory_code():
     assert product["image_url"] == image_url
 
 
+@pytest.mark.parametrize(
+    ("inventory_key", "official_code"),
+    [
+        ("OHV-338 NEGRO KYOS", "OHT-338"),
+        ("OHV-339CR GRIS KYOS", "OHT-339CR"),
+        ("OHV-340CR BLANCO KYOS", "OHT-340CR"),
+        ("OHR-2800-3P CR CROMADA IVY", "OHR-2800-3PCR"),
+        ("OHR-2800-4P CR CROMADA IVY", "OHR-2800-4PCR"),
+    ],
+)
+def test_site_match_uses_documented_inventory_code_aliases(inventory_key, official_code):
+    image_url = f"https://www.offiho.com/galeria/{official_code}.jpg"
+    product = match_official_product(
+        extract_offiho_identity(inventory_key),
+        [
+            {
+                "url": f"https://www.offiho.com/modelo-{official_code}",
+                "codes": [official_code],
+                "names": ["KYOS", "IVY"],
+                "image_url": image_url,
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            }
+        ],
+    )
+
+    assert product["match_status"] == "official_code_match"
+    assert product["image_url"] == image_url
+
+
+@pytest.mark.parametrize(
+    ("inventory_key", "official_name", "image_name"),
+    [
+        ("OHV-90 GRIS VIOLET", "VIOLET 90", "VioletGris.jpg"),
+        ("GAMER-002 MESA DRAGON", "ESCRITORIO DRAGON GAMER002", "Gamer002.jpg"),
+        ("SILLA ELEFANTE CAFÉ", "SILLA ELEFANTE", "Elefante.jpg"),
+    ],
+)
+def test_site_match_uses_curated_official_name_aliases(inventory_key, official_name, image_name):
+    image_url = f"https://www.offiho.com/galeria/{image_name}"
+    product = match_official_product(
+        extract_offiho_identity(inventory_key),
+        [
+            {
+                "url": f"https://www.offiho.com/productos/{image_name.lower()}",
+                "codes": [],
+                "names": [official_name],
+                "image_url": image_url,
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            }
+        ],
+    )
+
+    assert product["match_status"] == "official_name_match"
+    assert product["image_url"] == image_url
+
+
+def test_site_match_falls_back_to_exact_name_when_false_code_match_has_no_image():
+    product = match_official_product(
+        extract_offiho_identity("OHV-90 GRIS VIOLET"),
+        [
+            {
+                "url": "https://www.offihoblack.com/collections/sillas-interior",
+                "codes": ["OHV-90"],
+                "names": ["SILLAS"],
+                "image_url": "https://www.offihoblack.com/images/OHV-127.jpg",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            },
+            {
+                "url": "https://www.offihoblack.com/products/violet-90",
+                "codes": ["OHV-128"],
+                "names": ["VIOLET 90"],
+                "image_url": "https://www.offihoblack.com/images/VioletGris.jpg",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            },
+        ],
+    )
+
+    assert product["match_status"] == "official_name_match"
+    assert product["image_url"].endswith("VioletGris.jpg")
+
+
 def test_site_match_never_borrows_a_variant_image_from_another_model():
     product = match_official_product(
         extract_offiho_identity("OHS-85AL NEGRO REVOLUTION"),
@@ -1381,14 +1538,14 @@ def test_site_match_never_borrows_a_variant_image_from_another_model():
     assert product["image_url"].endswith("OHS-85al/OHS-85alFrente.jpg")
 
 
-def test_site_match_does_not_use_a_different_finish_when_exact_color_is_missing():
+def test_site_match_uses_same_model_generic_image_when_exact_color_is_missing():
     product = match_official_product(
         extract_offiho_identity("OHE-805 BLANCO QUO"),
         [
             {
                 "codes": ["OHE-805"],
                 "url": "https://www.offiho.com/ejecutivos/quo/modelo-OHE-805",
-                "image_url": "https://www.offiho.com/ejecutivos/quo/OHE-805negroFrente.jpg",
+                "image_url": "https://www.offiho.com/ejecutivos/quo/OHE-805Frente.jpg",
                 "image_verified": True,
                 "image_content_type": "image/jpeg",
                 "image_content_length": 2048,
@@ -1404,8 +1561,84 @@ def test_site_match_does_not_use_a_different_finish_when_exact_color_is_missing(
         ],
     )
 
-    assert product["image_url"] == ""
+    assert product["image_url"].endswith("OHE-805Frente.jpg")
     assert product["has_variant_catalog"] is True
+
+
+def test_site_match_rejects_generic_image_labeled_as_another_color():
+    product = match_official_product(
+        extract_offiho_identity("OHE-805 BLANCO QUO"),
+        [
+            {
+                "codes": ["OHE-805"],
+                "url": "https://www.offiho.com/ejecutivos/quo/modelo-OHE-805",
+                "image_url": "https://www.offiho.com/ejecutivos/quo/OHE-805negroFrente.jpg",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            }
+        ],
+    )
+
+    assert product["match_status"] == "official_code_match"
+    assert product["image_url"] == ""
+
+
+def test_site_match_accepts_verified_shopify_image_from_exact_code_product_page():
+    product = match_official_product(
+        extract_offiho_identity("OHE-75 NEGRO VANTO"),
+        [
+            {
+                "codes": ["OHE-75"],
+                "names": ["VANTO"],
+                "url": "https://www.offihoblack.com/products/vanto-ohe-75",
+                "image_url": "https://www.offihoblack.com/cdn/shop/products/VantoE_1400x.jpg?v=1",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            }
+        ],
+    )
+
+    assert product["match_status"] == "official_code_match"
+    assert product["image_url"].endswith("VantoE_1400x.jpg?v=1")
+
+
+def test_site_match_prefers_variant_specific_page_generic_image():
+    gray_image = "https://www.offiho.com/ejecutivos/aiko/OHE-705gris/OHE-705grisFrente.jpg"
+    product = match_official_product(
+        extract_offiho_identity("OHE-705 GRIS AIKO"),
+        [
+            {
+                "codes": ["OHE-705"],
+                "names": ["AIKO"],
+                "url": "https://www.offiho.com/ejecutivos/aiko/modelo-OHE-705",
+                "image_url": "https://www.offiho.com/ejecutivos/aiko/OHE-705/OHE-705negroFrente.jpg",
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+                "variant_images": {
+                    "NEGRO": {
+                        "image_url": "https://www.offiho.com/ejecutivos/aiko/OHE-705/colores/OHE-705.jpg",
+                        "image_verified": True,
+                        "image_content_type": "image/jpeg",
+                        "image_content_length": 2048,
+                    }
+                },
+            },
+            {
+                "codes": ["OHE-705GRIS"],
+                "names": ["AIKO"],
+                "url": "https://www.offiho.com/ejecutivos/aiko/modelo-OHE-705gris",
+                "image_url": gray_image,
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            },
+        ],
+    )
+
+    assert product["image_url"] == gray_image
 
 
 @pytest.mark.parametrize("inventory_key", ["RIMINI NEGRO", "FESTINA PERLA"])
