@@ -337,6 +337,31 @@ def test_checked_in_revolution_variants_use_their_exact_official_color_image():
     assert len({item["image_url"] for item in items}) == len(expected_suffixes)
 
 
+def test_checked_in_kyos_and_sling_rows_keep_exact_official_model_images():
+    catalog = json.loads(build.DEFAULT_OUTPUT.read_text(encoding="utf-8"))
+    items = catalog["items"]
+
+    expected_model_paths = {
+        "OHV-331": "/galeria/OHV-331.jpg",
+        "OHV-335CR": "/galeria/OHV-335cr.jpg",
+        "OHV-337": "/galeria/OHT-337.jpg",
+    }
+    for code, expected_path in expected_model_paths.items():
+        rows = [item for item in items if item["code"] == code]
+        assert rows
+        assert all(item["image_url"].endswith(expected_path) for item in rows)
+
+    sling = {
+        (item["code"], item["variant"]): item
+        for item in items
+        if item["code"] in {"OHE-94", "OHV-94"}
+    }
+    assert sling[("OHE-94", "PLUS GRIS")]["image_url"].endswith("/OHE-94plusGris.jpg")
+    assert sling[("OHE-94", "PLUS NEGRO")]["image_url"].endswith("/OHE-94plusnegro.jpg")
+    assert sling[("OHV-94", "PLUS GRIS")]["image_url"].endswith("/OHV-94plusGris.jpg")
+    assert sling[("OHV-94", "PLUS NEGRO")]["image_url"].endswith("/OHV-94plus.jpg")
+
+
 def test_checked_in_official_images_never_belong_to_another_structured_code():
     official_hosts = {
         "offiho.com",
@@ -351,9 +376,8 @@ def test_checked_in_official_images_never_belong_to_another_structured_code():
             continue
         if build.CODE_RE.fullmatch(item.get("code", "")) is None:
             continue
-        if build._compact_variant_value(item["code"]) not in build._compact_variant_value(
-            urlsplit(image_url).path
-        ):
+        identity = extract_offiho_identity(item["inventory_key"])
+        if not build._image_targets_identity(image_url, identity):
             mismatches.append((item["inventory_key"], image_url))
 
     assert mismatches == []
@@ -1255,6 +1279,66 @@ def test_site_match_accepts_official_code_with_inventory_variant_suffix():
     assert product["match_status"] == "official_code_match"
 
 
+def test_site_match_accepts_compound_variant_suffix_from_official_code():
+    image_url = (
+        "https://www.offiho.com/operativos/slingplus/"
+        "OHE-94plusgris/colores/OHE-94plusGris.jpg"
+    )
+    metadata = {
+        "image_url": image_url,
+        "image_verified": True,
+        "image_content_type": "image/jpeg",
+        "image_content_length": 57907,
+    }
+
+    product = build.match_official_product(
+        extract_offiho_identity("OHE-94 PLUS GRIS SLING"),
+        [
+            {
+                "url": (
+                    "https://www.offiho.com/operativos/slingplus/"
+                    "operativos-sling-modelo-OHE-94plusgris"
+                ),
+                "codes": ["OHE-94PLUSGRIS"],
+                "names": ["SLING"],
+                "variant_images": {"GRIS": metadata},
+                **metadata,
+            }
+        ],
+    )
+
+    assert product["match_status"] == "official_code_match"
+    assert product["image_url"] == image_url
+
+
+def test_site_match_uses_documented_official_alias_for_inventory_code():
+    image_url = (
+        "https://www.offiho.com/visitantes-interior/kyos-collection/"
+        "kyos-tapizadas/galeria/OHT-337.jpg"
+    )
+
+    product = build.match_official_product(
+        extract_offiho_identity("OHV-337 BLANCO KYOS"),
+        [
+            {
+                "url": (
+                    "https://www.offiho.com/visitantes-interior/kyos-collection/"
+                    "kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-337"
+                ),
+                "codes": ["OHT-337"],
+                "names": ["KYOS"],
+                "image_url": image_url,
+                "image_verified": True,
+                "image_content_type": "image/jpeg",
+                "image_content_length": 2048,
+            }
+        ],
+    )
+
+    assert product["match_status"] == "official_code_match"
+    assert product["image_url"] == image_url
+
+
 def test_site_match_never_borrows_a_variant_image_from_another_model():
     product = match_official_product(
         extract_offiho_identity("OHS-85AL NEGRO REVOLUTION"),
@@ -1675,6 +1759,71 @@ def test_collection_swatch_extraction_maps_large_images_by_exact_finish():
             "OHS-86al/colores/OHS-86alMarino.jpg"
         ),
     }
+
+
+def test_collection_gallery_extraction_maps_each_image_to_its_exact_code():
+    page_url = (
+        "https://www.offiho.com/visitantes-interior/kyos-collection/"
+        "kyos-tapizadas/"
+    )
+    parser = build._PageParser()
+    parser.feed(
+        '<img src="galeria/OHV-331.jpg" alt="OHV-331">'
+        '<img src="galeria/OHV-335cr.jpg" alt="OHV-335cr">'
+        '<img src="galeria/OHT-337.jpg" alt="OHT-337">'
+    )
+
+    images = build._extract_code_image_urls(
+        page_url,
+        parser,
+        codes=["OHV-331", "OHV-335CR", "OHT-337"],
+    )
+
+    assert images == {
+        "OHT-337": f"{page_url}galeria/OHT-337.jpg",
+        "OHV-331": f"{page_url}galeria/OHV-331.jpg",
+        "OHV-335CR": f"{page_url}galeria/OHV-335cr.jpg",
+    }
+
+
+def test_site_index_uses_exact_collection_image_for_each_code(monkeypatch):
+    page_url = (
+        "https://www.offiho.com/visitantes-interior/kyos-collection/"
+        "kyos-tapizadas/"
+    )
+
+    def metadata(code):
+        return {
+            "image_url": f"{page_url}galeria/{code}.jpg",
+            "image_verified": True,
+            "image_content_type": "image/jpeg",
+            "image_content_length": 2048,
+        }
+
+    record = {
+        "url": page_url,
+        "links": [],
+        "codes": ["OHV-331", "OHV-335CR"],
+        "names": ["KYOS TAPIZADAS"],
+        "image_url": f"{page_url}galeria/OHV-331.jpg",
+        "image_verified": True,
+        "image_content_type": "image/jpeg",
+        "image_content_length": 2048,
+        "code_images": {
+            "OHV-331": metadata("OHV-331"),
+            "OHV-335CR": metadata("OHV-335cr"),
+        },
+        "source_updated_at": "",
+    }
+    monkeypatch.setattr(build, "SITE_SEEDS", (page_url,))
+    monkeypatch.setattr(build, "_cached_or_fetch_page", lambda url, pages: record)
+
+    index = build.build_site_product_index({}, now=datetime(2026, 7, 10, tzinfo=timezone.utc))
+
+    assert index["OHV-331"]["image_url"].endswith("/OHV-331.jpg")
+    assert index["OHV-335CR"]["image_url"].endswith("/OHV-335cr.jpg")
+    assert index["OHV-331"]["codes"] == ["OHV-331"]
+    assert index["OHV-335CR"]["codes"] == ["OHV-335CR"]
 
 
 @pytest.mark.parametrize(
