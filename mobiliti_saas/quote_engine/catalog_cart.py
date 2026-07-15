@@ -42,6 +42,8 @@ OFFICIAL_IMAGE_HOSTS = {
             "www.tarkett.com.ar",
             "profesional.tarkett.es",
             "media.tarkett-image.com",
+            "tarkettnet.com.mx",
+            "www.tarkettnet.com.mx",
         }
     ),
 }

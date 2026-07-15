@@ -1031,6 +1031,22 @@ textarea:focus {
   line-height: 1.25;
 }
 
+.tarkett-price-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tarkett-price-row strong {
+  min-height: 0;
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .stock-row {
   display: flex;
   align-items: center;
@@ -1100,6 +1116,20 @@ textarea:focus {
   color: var(--muted);
   font-size: 13px;
   font-weight: 800;
+}
+
+.cart-head .tarkett-cart-total {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.cart-head .tarkett-price-notice {
+  display: block;
+  margin-top: 2px;
+  color: #976d00;
+  font-size: 12px;
 }
 
 .cart-list {

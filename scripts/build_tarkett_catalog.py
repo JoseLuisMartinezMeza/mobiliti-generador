@@ -11,18 +11,32 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import os
 import re
+import sys
 import time
 import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 
+_IMPORT_ROOT = Path(__file__).resolve().parents[1]
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
+
+from mobiliti_saas.quote_engine.tarkettnet_catalog import (
+    PortalProduct,
+    TARKETTNET_HOME_URL,
+    TarkettnetClient,
+    merge_tarkettnet_catalog,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = PROJECT_ROOT / "Inventario Tarkett- 6 Julio .xls"
 DEFAULT_OUTPUT = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" / "data" / "tarkett_catalog.json"
 DEFAULT_CACHE = PROJECT_ROOT / ".cache" / "tarkett-products.json"
+DEFAULT_TARKETTNET_CACHE = PROJECT_ROOT / ".cache" / "tarkettnet-products.json"
 TARKETT_API = "https://tarkett.com.mx/wp-json/wp/v2/product"
 TARKETT_PROFESSIONAL_SITEMAP_INDEX = "https://profesional.tarkett.es/es_ES/sitemap_index.xml"
 TARKETT_PROFESSIONAL_EXTRA_URLS = [
@@ -128,6 +142,7 @@ def build_catalog(
     validate_sku: bool = True,
     delay_seconds: float = 0.12,
     limit: int | None = None,
+    tarkettnet_records: list[PortalProduct] | None = None,
 ) -> dict[str, Any]:
     source_bytes = source.read_bytes()
     source_hash = hashlib.sha256(source_bytes).hexdigest()
@@ -153,6 +168,9 @@ def build_catalog(
                 "name": row.name,
                 "unit": row.unit,
                 "available_quantity": _json_number(row.available_quantity),
+                "unit_price": 0,
+                "price_source": "missing",
+                "stock_source": "inventory_file",
                 "product_url": match.get("product_url", ""),
                 "image_url": match.get("image_url", ""),
                 "match_status": match.get("match_status", "unmatched"),
@@ -171,6 +189,8 @@ def build_catalog(
         "total": len(items),
         "items": items,
     }
+    if tarkettnet_records is not None:
+        result = merge_tarkettnet_catalog(result, tarkettnet_records)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1070,15 +1090,56 @@ def _load_cache(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _load_tarkettnet_cache(path: Path) -> list[PortalProduct]:
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        items = raw.get("items") if isinstance(raw, dict) else None
+        if not isinstance(items, list):
+            return []
+        return [PortalProduct.from_dict(item) for item in items]
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
+
+
+def _save_tarkettnet_cache(path: Path, items: list[PortalProduct]) -> None:
+    payload = {
+        "source": TARKETTNET_HOME_URL,
+        "items": [item.to_dict() for item in items],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Construye catalogo Tarkett para Mobiliti")
     parser.add_argument("--source", default=str(DEFAULT_SOURCE))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--cache", default=str(DEFAULT_CACHE))
+    parser.add_argument("--tarkettnet-cache", default=str(DEFAULT_TARKETTNET_CACHE))
+    parser.add_argument("--sync-tarkettnet", action="store_true")
+    parser.add_argument("--use-tarkettnet-cache", action="store_true")
     parser.add_argument("--no-network", action="store_true")
     parser.add_argument("--skip-sku-validation", action="store_true")
     parser.add_argument("--limit", type=int)
     args = parser.parse_args()
+    tarkettnet_records: list[PortalProduct] | None = None
+    tarkettnet_cache = Path(args.tarkettnet_cache)
+    if args.sync_tarkettnet:
+        email = os.environ.get("TARKETTNET_EMAIL", "").strip()
+        password = os.environ.get("TARKETTNET_PASSWORD", "")
+        if not email or not password:
+            parser.error("--sync-tarkettnet requiere TARKETTNET_EMAIL y TARKETTNET_PASSWORD")
+        portal = TarkettnetClient()
+        portal.login(email, password)
+        tarkettnet_records = portal.fetch_products()
+        _save_tarkettnet_cache(tarkettnet_cache, tarkettnet_records)
+    elif args.use_tarkettnet_cache:
+        tarkettnet_records = _load_tarkettnet_cache(tarkettnet_cache)
+        if not tarkettnet_records:
+            parser.error("Cache Tarkettnet vacio o invalido")
+
     result = build_catalog(
         Path(args.source),
         Path(args.output),
@@ -1086,9 +1147,22 @@ def main() -> int:
         no_network=args.no_network,
         validate_sku=not args.skip_sku_validation,
         limit=args.limit,
+        tarkettnet_records=tarkettnet_records,
     )
     matched = sum(1 for item in result["items"] if item["product_url"])
-    print(json.dumps({"total": result["total"], "matched": matched, "output": args.output}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "total": result["total"],
+                "matched": matched,
+                "tarkettnet_matches": result.get("tarkettnet_matches", 0),
+                "tarkettnet_prices": result.get("tarkettnet_price_matches", 0),
+                "tarkettnet_images": result.get("tarkettnet_image_matches", 0),
+                "output": args.output,
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

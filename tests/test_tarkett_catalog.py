@@ -30,6 +30,9 @@ def _sample_catalog():
         product_url="https://tarkett.com.mx/producto/cadiz/",
         image_url="",
         match_status="name_match",
+        unit_price=Decimal("472.63"),
+        price_source="tarkettnet_code_match",
+        stock_source="tarkettnet_code_match",
     )
     return {
         "source_hash": "hash-1",
@@ -102,20 +105,19 @@ def test_generated_catalog_contains_cadiz_url_and_image():
 
     assert len(catalog["items"]) == 125
     assert first.code == "25731726"
-    assert first.product_url == "https://tarkett.com.mx/producto/cadiz/"
-    assert "Aurea-Tech-Cadiz" in first.image_url
-    assert by_code["24174124"].product_url == "https://tarkett.com.mx/producto/grafito-porcelain/"
-    assert "Grafito-Porcelain-24174124-24175124" in by_code["24174124"].image_url
-    assert by_code["24173722"].match_status == "media_sku_match"
-    assert "24173722-Alicante" in by_code["24173722"].image_url
-    assert by_code["711533007"].match_status == "professional_es_sku_match"
-    assert by_code["711533007"].image_url == "https://media.tarkett-image.com/large/TH_EssenceStructure_9502.jpg"
-    assert by_code["711793003"].match_status == "professional_es_sku_match"
-    assert by_code["711793003"].image_url == "https://media.tarkett-image.com/large/TH_Grezzo_7844.jpg"
-    assert by_code["25731101"].match_status == "tarkett_mx_line_name_match"
-    assert "Mallorca" in by_code["25731101"].image_url
+    assert first.match_status == "tarkettnet_code_match"
+    assert first.unit_price > 0
+    assert "/25731726-" in first.product_url
+    assert "25731726" in first.image_url
+    for code in ("24173722", "711533007", "711793003", "25731101", "666214"):
+        item = by_code[code]
+        assert item.match_status == "tarkettnet_code_match"
+        assert item.unit_price > 0
+        assert f"/{code}-" in item.product_url
+    assert by_code["24174124"].match_status == "sku_match"
+    assert by_code["24174124"].unit_price == 0
+    assert "24174124" in by_code["24174124"].image_url
     assert by_code["7100910014"].match_status == "professional_es_collection_match"
-    assert by_code["666214"].match_status == "tarkett_ar_accessory_sku_match"
     assert sum(1 for item in catalog["items"] if item.image_url) >= 122
 
 
@@ -153,12 +155,13 @@ def test_tarkett_loader_rejects_empty_and_duplicate_catalogs(tmp_path):
         load_tarkett_catalog(duplicate_path)
 
 
-def test_tarkett_cart_payload_validates_stock_and_sets_zero_price():
+def test_tarkett_cart_payload_validates_stock_and_uses_catalog_price():
     payload = build_tarkett_cart_payload([{"code": "25731726", "quantity": "2.5"}], catalog=_sample_catalog())
 
     assert payload["source_type"] == "tarkett_cart"
     assert payload["catalog_source_hash"] == "hash-1"
-    assert payload["items"][0]["unit_price"] == 0
+    assert payload["items"][0]["unit_price"] == 472.63
+    assert payload["items"][0]["price_source"] == "tarkettnet_code_match"
     assert payload["items"][0]["quantity"] == 2.5
     assert payload["items"][0]["product_url"] == "https://tarkett.com.mx/producto/cadiz/"
 
@@ -249,7 +252,7 @@ def test_tarkett_cart_workbook_is_readable_by_quote_parser(tmp_path):
     assert "cantidad" in column_map
     assert products[0].nombre == "Aurea Tech Cadiz 6.0mm"
     assert products[0].cantidad == 3.5
-    assert products[0].precio == 0
+    assert products[0].precio == 472.63
     assert products[0].categoria == "Tarkett"
 
 
@@ -278,18 +281,15 @@ def test_tarkett_workbook_delegates_to_shared_catalog_adapter(monkeypatch, tmp_p
     assert output == tmp_path / "tarkett.xlsx"
     assert seen["source_type"] == "tarkett_cart"
     assert seen["category_label"] == "Tarkett"
-    assert seen["payload"]["items"][0]["unit_price"] == 0
+    assert seen["payload"]["items"][0]["unit_price"] == 472.63
 
 
-def test_tarkett_workbook_forces_zero_price_from_untrusted_payload(tmp_path):
+def test_tarkett_workbook_rejects_invalid_untrusted_price(tmp_path):
     payload = build_tarkett_cart_payload([{"code": "25731726", "quantity": "3.5"}], catalog=_sample_catalog())
-    payload["items"][0]["unit_price"] = 999
+    payload["items"][0]["unit_price"] = "NaN"
 
-    output = create_tarkett_quotation_workbook(payload, tmp_path / "tarkett-untrusted-price.xlsx")
-
-    wb = load_workbook(output)
-    assert wb["Quotation"]["J9"].value == 0
-    wb.close()
+    with pytest.raises(ValueError, match="precio"):
+        create_tarkett_quotation_workbook(payload, tmp_path / "tarkett-untrusted-price.xlsx")
 
 
 def test_tarkett_scraper_resolves_typo_name_by_sku_index():

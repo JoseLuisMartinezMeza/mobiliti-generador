@@ -84,6 +84,9 @@ def test_tarkett_tab_catalog_cache_and_cart_are_present():
     assert 'request("/tarkett/catalog")' in source
     assert 'request("/tarkett/quote"' in source
     assert 'const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";' in source
+    assert "Precio unitario" in source
+    assert "Total con precios disponibles" in source
+    assert "formatCatalogCurrency(item.unit_price)" in source
     assert "sessionStorage.setItem(TARKETT_CATALOG_CACHE_KEY" in source
     assert "Apartado {formatQuantity(reserved)}" in source
     assert ".tarkett-grid" in styles

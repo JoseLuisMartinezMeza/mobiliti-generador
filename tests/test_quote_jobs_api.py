@@ -184,6 +184,9 @@ def _mock_tarkett_catalog():
         product_url="https://tarkett.com.mx/producto/cadiz/",
         image_url="https://tarkett.com.mx/wp-content/uploads/2026/05/Aurea-Tech-Cadiz-scaled.jpg",
         match_status="name_match",
+        unit_price=Decimal("472.63"),
+        price_source="tarkettnet_code_match",
+        stock_source="tarkettnet_code_match",
     )
     return {
         "source_hash": "catalog-hash",
@@ -419,7 +422,8 @@ def test_tarkett_quote_creates_json_job_and_reservations(monkeypatch):
     assert uploaded["content_type"] == "application/json"
     payload = index.json.loads(uploaded["content"].decode("utf-8"))
     assert payload["source_type"] == "tarkett_cart"
-    assert payload["items"][0]["unit_price"] == 0
+    assert payload["items"][0]["unit_price"] == 472.63
+    assert payload["items"][0]["price_source"] == "tarkettnet_code_match"
     assert created["metadata"]["source_type"] == "tarkett_cart"
     assert created["metadata"]["input_extension"] == ".json"
     assert created["metadata"]["storage_provider"] in {"supabase", "r2"}
@@ -614,6 +618,47 @@ def test_catalog_cache_without_valid_catalog_rejects_corrupt_file(
 
     with pytest.raises(RuntimeError, match="Catalogo"):
         getattr(index, f"_load_{supplier}_catalog_cached")()
+
+
+def test_tarkett_catalog_prefers_valid_supabase_snapshot(monkeypatch):
+    snapshot_payload = {
+        "source_file": "Inventario Tarkett.xls",
+        "source_hash": "live-tarkettnet-hash",
+        "generated_at": "2026-07-14T12:00:00+00:00",
+        "total": 1,
+        "items": [
+            {
+                "code": "25731726",
+                "name": "Aurea Tech Cadiz 6.0mm",
+                "unit": "MTK - metro cuadrado",
+                "available_quantity": 12.5,
+                "unit_price": 472.63,
+                "price_source": "tarkettnet_code_match",
+                "stock_source": "tarkettnet_code_match",
+                "product_url": "https://www.tarkettnet.com.mx/vendas/25731726-aurea-tech-cadiz/0.htm",
+                "image_url": "https://www.tarkettnet.com.mx/imagens/produtos/productos_tarkettnet/25731726_normal.jpg",
+                "match_status": "tarkettnet_code_match",
+            }
+        ],
+    }
+    monkeypatch.setattr(index, "TARKETT_CATALOG_DB_ENABLED", True)
+    monkeypatch.setattr(index, "TARKETT_CATALOG_DB_TTL_SECONDS", 300)
+    monkeypatch.setattr(
+        index,
+        "_TARKETT_CATALOG_CACHE",
+        {"path": None, "fingerprint": None, "source_hash": None, "catalog": None, "db_checked_at": 0.0},
+    )
+    monkeypatch.setattr(
+        index,
+        "db_get_supplier_catalog_snapshot",
+        lambda supplier: {"supplier": supplier, "payload": snapshot_payload},
+    )
+
+    catalog = index._load_tarkett_catalog_cached()
+
+    assert catalog["source_hash"] == "live-tarkettnet-hash"
+    assert catalog["by_code"]["25731726"].unit_price == Decimal("472.63")
+    assert index._TARKETT_CATALOG_CACHE["path"].startswith("supabase:")
 
 
 def test_offiho_quote_creates_json_job_with_catalog_owned_values_and_reservations(monkeypatch):

@@ -35,6 +35,7 @@ from mobiliti_saas.quote_engine.tarkett_catalog import (  # noqa: E402
     CATALOG_PATH,
     build_tarkett_cart_payload,
     load_tarkett_catalog,
+    load_tarkett_catalog_data,
 )
 from mobiliti_saas.quote_engine.offiho_catalog import (  # noqa: E402
     CATALOG_PATH as OFFIHO_DEFAULT_CATALOG_PATH,
@@ -89,6 +90,8 @@ DEV_PUBLIC_BASE_URL = os.environ.get("MOBILITI_DEV_PUBLIC_BASE_URL", "http://127
 DEV_USER_EMAIL = os.environ.get("MOBILITI_DEV_USER_EMAIL", "dev@mobiliti.local")
 DEV_USER_PASSWORD = os.environ.get("MOBILITI_DEV_USER_PASSWORD", "dev12345")
 TARKETT_CATALOG_PATH = os.environ.get("TARKETT_CATALOG_PATH")
+TARKETT_CATALOG_DB_ENABLED = _env_bool("TARKETT_CATALOG_DB_ENABLED", bool(os.environ.get("VERCEL")))
+TARKETT_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("TARKETT_CATALOG_DB_TTL_SECONDS", "300")))
 OFFIHO_CATALOG_PATH = os.environ.get("OFFIHO_CATALOG_PATH")
 DEFAULT_CORS_ORIGINS = (
     "https://web-lemon-one-45.vercel.app",
@@ -193,6 +196,7 @@ def _dev_load() -> dict:
         "quote_jobs": [],
         "tarkett_reservations": [],
         "offiho_reservations": [],
+        "supplier_catalog_snapshots": {},
     }
     _dev_save(data)
     return data
@@ -1031,7 +1035,41 @@ def db_release_offiho_reservations(quote_job_id: str):
     )
 
 
-_TARKETT_CATALOG_CACHE = {"path": None, "fingerprint": None, "source_hash": None, "catalog": None}
+_TARKETT_CATALOG_CACHE = {
+    "path": None,
+    "fingerprint": None,
+    "source_hash": None,
+    "catalog": None,
+    "db_checked_at": 0.0,
+}
+
+
+def db_get_supplier_catalog_snapshot(supplier: str) -> dict | None:
+    clean_supplier = str(supplier or "").strip().lower()
+    if clean_supplier not in {"tarkett"}:
+        raise RuntimeError("Proveedor de catalogo no permitido")
+    if DEV_MODE:
+        return _dev_load().get("supplier_catalog_snapshots", {}).get(clean_supplier)
+    if DATABASE_URL:
+        return _pg_one(
+            """
+            SELECT supplier, source_hash, generated_at, payload, updated_at
+            FROM saas_supplier_catalog_snapshots
+            WHERE supplier = %s
+            LIMIT 1
+            """,
+            (clean_supplier,),
+        )
+    rows = _supabase_req(
+        "GET",
+        "/saas_supplier_catalog_snapshots",
+        params={
+            "supplier": f"eq.{clean_supplier}",
+            "select": "supplier,source_hash,generated_at,payload,updated_at",
+            "limit": "1",
+        },
+    )
+    return rows[0] if rows else None
 
 
 def _catalog_file_fingerprint(catalog_path: Path) -> dict:
@@ -1076,8 +1114,35 @@ def _load_catalog_cached(cache: dict, catalog_path: Path, loader, label: str) ->
 
 
 def _load_tarkett_catalog_cached() -> dict:
+    now = time.monotonic()
+    if TARKETT_CATALOG_DB_ENABLED:
+        checked_at = float(_TARKETT_CATALOG_CACHE.get("db_checked_at") or 0)
+        if _TARKETT_CATALOG_CACHE.get("catalog") is not None and now - checked_at < TARKETT_CATALOG_DB_TTL_SECONDS:
+            return _TARKETT_CATALOG_CACHE["catalog"]
+        try:
+            snapshot = db_get_supplier_catalog_snapshot("tarkett")
+            payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
+            if isinstance(payload, dict):
+                catalog = load_tarkett_catalog_data(payload)
+                _TARKETT_CATALOG_CACHE.clear()
+                _TARKETT_CATALOG_CACHE.update(
+                    {
+                        "path": "supabase:saas_supplier_catalog_snapshots/tarkett",
+                        "fingerprint": {"source_hash": catalog.get("source_hash")},
+                        "source_hash": catalog.get("source_hash"),
+                        "catalog": catalog,
+                        "db_checked_at": now,
+                    }
+                )
+                return catalog
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+            if _TARKETT_CATALOG_CACHE.get("catalog") is not None:
+                _TARKETT_CATALOG_CACHE["db_checked_at"] = now
+                return _TARKETT_CATALOG_CACHE["catalog"]
     catalog_path = (Path(TARKETT_CATALOG_PATH) if TARKETT_CATALOG_PATH else CATALOG_PATH).resolve()
-    return _load_catalog_cached(_TARKETT_CATALOG_CACHE, catalog_path, load_tarkett_catalog, "Tarkett")
+    catalog = _load_catalog_cached(_TARKETT_CATALOG_CACHE, catalog_path, load_tarkett_catalog, "Tarkett")
+    _TARKETT_CATALOG_CACHE["db_checked_at"] = now
+    return catalog
 
 
 def _tarkett_catalog_response(usuario_id: int) -> dict:

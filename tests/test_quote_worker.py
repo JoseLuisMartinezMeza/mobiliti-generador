@@ -10,6 +10,59 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mobiliti_saas"
 import quote_worker
 
 
+def test_tarkett_catalog_sync_publishes_changed_snapshot_and_respects_interval(monkeypatch):
+    base = {
+        "source_file": "Inventario Tarkett.xls",
+        "source_hash": "old-hash",
+        "generated_at": "2026-07-08T00:00:00+00:00",
+        "total": 1,
+        "items": [
+            {
+                "code": "25731726",
+                "name": "Cadiz",
+                "unit": "MTK - metro cuadrado",
+                "available_quantity": 10,
+                "unit_price": 0,
+                "price_source": "missing",
+                "stock_source": "inventory_file",
+                "product_url": "",
+                "image_url": "",
+                "match_status": "unmatched",
+            }
+        ],
+    }
+    enriched = {**base, "source_hash": "new-hash", "tarkettnet_matches": 1}
+
+    class CatalogClient:
+        def __init__(self):
+            self.upserts = []
+
+        def catalog_snapshot_get(self, supplier):
+            assert supplier == "tarkett"
+            return {"supplier": supplier, "source_hash": "old-hash", "payload": base}
+
+        def catalog_snapshot_upsert(self, supplier, payload):
+            self.upserts.append((supplier, payload))
+            return {"supplier": supplier, "source_hash": payload["source_hash"]}
+
+    client = CatalogClient()
+    monkeypatch.setattr(quote_worker, "TARKETT_SYNC_ENABLED", True)
+    monkeypatch.setattr(quote_worker, "TARKETTNET_EMAIL", "sync@example.com")
+    monkeypatch.setattr(quote_worker, "TARKETTNET_PASSWORD", "test-password")
+    monkeypatch.setattr(quote_worker, "TARKETT_SYNC_INTERVAL_SECONDS", 3600)
+    monkeypatch.setattr(quote_worker, "_TARKETT_LAST_SYNC_ATTEMPT", 0.0)
+    monkeypatch.setattr(
+        quote_worker,
+        "sync_catalog_from_tarkettnet",
+        lambda payload, **kwargs: enriched,
+    )
+
+    assert quote_worker.sync_tarkett_catalog_if_due(client, force=True) is True
+    assert client.upserts == [("tarkett", enriched)]
+    assert quote_worker.sync_tarkett_catalog_if_due(client) is False
+    assert client.upserts == [("tarkett", enriched)]
+
+
 def test_default_template_resolves_existing_template():
     template = quote_worker._default_template()
 

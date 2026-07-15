@@ -24,6 +24,9 @@ class TarkettCatalogItem:
     product_url: str = ""
     image_url: str = ""
     match_status: str = "unmatched"
+    unit_price: Decimal = Decimal("0")
+    price_source: str = "missing"
+    stock_source: str = "inventory_file"
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "TarkettCatalogItem":
@@ -37,6 +40,9 @@ class TarkettCatalogItem:
             product_url=str(raw.get("product_url", "") or "").strip(),
             image_url=str(raw.get("image_url", "") or "").strip(),
             match_status=str(raw.get("match_status", "unmatched") or "unmatched").strip(),
+            unit_price=_strict_price(raw),
+            price_source=str(raw.get("price_source", "missing") or "missing").strip(),
+            stock_source=str(raw.get("stock_source", "inventory_file") or "inventory_file").strip(),
         )
 
     def to_public_dict(self, reserved_quantity: Decimal = Decimal("0"), reserved_by_others: bool = False) -> dict[str, Any]:
@@ -50,12 +56,19 @@ class TarkettCatalogItem:
             "product_url": self.product_url,
             "image_url": self.image_url,
             "match_status": self.match_status,
+            "unit_price": _json_number(self.unit_price),
+            "price_source": self.price_source,
+            "stock_source": self.stock_source,
         }
 
 
 def load_tarkett_catalog(path: str | Path | None = None) -> dict[str, Any]:
     catalog_path = Path(path or CATALOG_PATH)
     raw = json.loads(catalog_path.read_text(encoding="utf-8"))
+    return load_tarkett_catalog_data(raw)
+
+
+def load_tarkett_catalog_data(raw: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("Catalogo Tarkett invalido: raiz no es un objeto")
     for field in ("source_hash", "generated_at"):
@@ -123,7 +136,8 @@ def build_tarkett_cart_payload(
                 "name": item.name,
                 "unit": item.unit,
                 "quantity": _json_number(quantity),
-                "unit_price": 0,
+                "unit_price": _json_number(item.unit_price),
+                "price_source": item.price_source,
                 "available_quantity": _json_number(item.available_quantity),
                 "product_url": item.product_url,
                 "image_url": item.image_url,
@@ -147,7 +161,7 @@ def create_tarkett_quotation_workbook(
     sanitized_payload = {
         **cart_payload,
         "items": [
-            {**item, "unit_price": 0}
+            {**item, "unit_price": _validated_cart_price(item)}
             for item in list(cart_payload.get("items") or [])
         ],
     }
@@ -184,6 +198,26 @@ def _strict_stock(raw: dict[str, Any]) -> Decimal:
     if not value.is_finite() or value < 0:
         raise ValueError("Campo numerico Tarkett invalido: available_quantity")
     return value
+
+
+def _strict_price(raw: dict[str, Any]) -> Decimal:
+    try:
+        value = Decimal(str(raw.get("unit_price", 0)).replace(",", "").strip())
+    except (InvalidOperation, AttributeError, ValueError):
+        raise ValueError("Campo numerico Tarkett invalido: unit_price") from None
+    if not value.is_finite() or value < 0 or value > Decimal("1000000000"):
+        raise ValueError("Campo numerico Tarkett invalido: unit_price")
+    return value
+
+
+def _validated_cart_price(item: dict[str, Any]) -> int | float:
+    try:
+        value = Decimal(str(item.get("unit_price", 0)).replace(",", "").strip())
+    except (InvalidOperation, AttributeError, ValueError):
+        raise ValueError("precio Tarkett invalido") from None
+    if not value.is_finite() or value < 0 or value > Decimal("1000000000"):
+        raise ValueError("precio Tarkett invalido")
+    return _json_number(value)
 
 
 def _json_number(value: Any) -> int | float:

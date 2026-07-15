@@ -43,6 +43,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 DEV_STORE_DIR = Path(os.environ.get("MOBILITI_DEV_STORE_DIR", PROJECT_ROOT / ".mobiliti_dev_store")).resolve()
+TARKETT_SYNC_ENABLED = os.environ.get("TARKETT_SYNC_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+TARKETT_SYNC_INTERVAL_SECONDS = max(900, int(os.environ.get("TARKETT_SYNC_INTERVAL_SECONDS", "21600")))
+TARKETTNET_EMAIL = os.environ.get("TARKETTNET_EMAIL", "").strip()
+TARKETTNET_PASSWORD = os.environ.get("TARKETTNET_PASSWORD", "")
+TARKETT_CATALOG_FALLBACK_PATH = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" / "data" / "tarkett_catalog.json"
+_TARKETT_LAST_SYNC_ATTEMPT = 0.0
+
+from mobiliti_saas.quote_engine.tarkettnet_catalog import sync_catalog_from_tarkettnet  # noqa: E402
 
 
 def _required_env(name: str) -> str:
@@ -154,6 +162,40 @@ class SupabaseClient:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8")
             raise RuntimeError(f"Supabase REST {exc.code}: {body}") from exc
+
+    def catalog_snapshot_get(self, supplier: str) -> dict | None:
+        rows = self.rest(
+            "GET",
+            "/saas_supplier_catalog_snapshots",
+            params={
+                "supplier": f"eq.{supplier}",
+                "select": "supplier,source_hash,generated_at,payload,updated_at",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
+        url = f"{self.base_url}/rest/v1/saas_supplier_catalog_snapshots?on_conflict=supplier"
+        row = {
+            "supplier": supplier,
+            "source_hash": payload["source_hash"],
+            "generated_at": payload["generated_at"],
+            "payload": payload,
+            "updated_at": _utc_now(),
+        }
+        req = urllib.request.Request(url, data=json.dumps(row).encode("utf-8"), method="POST")
+        for key, value in self._headers().items():
+            req.add_header(key, value)
+        req.add_header("Prefer", "resolution=merge-duplicates,return=representation")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                body = resp.read().decode("utf-8")
+                rows = json.loads(body) if body else []
+                return rows[0] if isinstance(rows, list) and rows else row
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            raise RuntimeError(f"Supabase catalog snapshot {exc.code}: {body}") from exc
 
     def storage_download(self, object_path: str, dest: Path) -> None:
         self.storage_download_from_provider(object_path, dest, STORAGE_PROVIDER)
@@ -297,6 +339,35 @@ class PostgresClient(SupabaseClient):
 
         raise RuntimeError(f"Operacion Postgres no soportada: {method} {path}")
 
+    def catalog_snapshot_get(self, supplier: str) -> dict | None:
+        rows = self._rows(
+            """
+            SELECT supplier, source_hash, generated_at, payload, updated_at
+            FROM saas_supplier_catalog_snapshots
+            WHERE supplier = %s
+            LIMIT 1
+            """,
+            (supplier,),
+        )
+        return rows[0] if rows else None
+
+    def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
+        rows = self._write(
+            """
+            INSERT INTO saas_supplier_catalog_snapshots
+                (supplier, source_hash, generated_at, payload, updated_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (supplier) DO UPDATE SET
+                source_hash = EXCLUDED.source_hash,
+                generated_at = EXCLUDED.generated_at,
+                payload = EXCLUDED.payload,
+                updated_at = NOW()
+            RETURNING supplier, source_hash, generated_at, payload, updated_at
+            """,
+            (supplier, payload["source_hash"], payload["generated_at"], payload),
+        )
+        return rows[0]
+
     def _update_jobs(self, data: dict, where_sql: str, where_params: tuple) -> list[dict]:
         payload = dict(data)
         if not payload:
@@ -395,6 +466,22 @@ class LocalDevClient:
             return []
 
         raise RuntimeError(f"Operacion dev no soportada: {method} {path}")
+
+    def catalog_snapshot_get(self, supplier: str) -> dict | None:
+        return self._load().get("supplier_catalog_snapshots", {}).get(supplier)
+
+    def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
+        store = self._load()
+        row = {
+            "supplier": supplier,
+            "source_hash": payload["source_hash"],
+            "generated_at": payload["generated_at"],
+            "payload": payload,
+            "updated_at": _utc_now(),
+        }
+        store.setdefault("supplier_catalog_snapshots", {})[supplier] = row
+        self._save(store)
+        return row
 
     def _storage_file(self, object_path: str) -> Path:
         safe_path = object_path.replace("\\", "/").lstrip("/")
@@ -765,11 +852,55 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
             raise
 
 
+def _fallback_tarkett_catalog_payload() -> dict:
+    try:
+        payload = json.loads(TARKETT_CATALOG_FALLBACK_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Catalogo Tarkett de respaldo no disponible") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list) or not payload["items"]:
+        raise RuntimeError("Catalogo Tarkett de respaldo invalido")
+    return payload
+
+
+def sync_tarkett_catalog_if_due(client, *, force: bool = False) -> bool:
+    global _TARKETT_LAST_SYNC_ATTEMPT
+    if not TARKETT_SYNC_ENABLED:
+        return False
+    now = time.monotonic()
+    if not force and now - _TARKETT_LAST_SYNC_ATTEMPT < TARKETT_SYNC_INTERVAL_SECONDS:
+        return False
+    _TARKETT_LAST_SYNC_ATTEMPT = now
+    if not TARKETTNET_EMAIL or not TARKETTNET_PASSWORD:
+        print("WARN: sincronizacion Tarkett habilitada sin credenciales Tarkettnet.")
+        return False
+
+    snapshot = client.catalog_snapshot_get("tarkett")
+    base_payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
+    if not isinstance(base_payload, dict):
+        base_payload = _fallback_tarkett_catalog_payload()
+    enriched = sync_catalog_from_tarkettnet(
+        base_payload,
+        email=TARKETTNET_EMAIL,
+        password=TARKETTNET_PASSWORD,
+    )
+    if str(enriched.get("source_hash")) == str((snapshot or {}).get("source_hash")):
+        print("Catalogo Tarkett sin cambios.")
+        return False
+    client.catalog_snapshot_upsert("tarkett", enriched)
+    print(
+        "Catalogo Tarkett actualizado: "
+        f"{enriched.get('tarkettnet_matches', 0)} coincidencias, "
+        f"{enriched.get('tarkettnet_price_matches', 0)} precios."
+    )
+    return True
+
+
 def run_once() -> bool:
     client = LocalDevClient() if DEV_MODE else (PostgresClient() if DATABASE_URL else SupabaseClient())
     recover_stale_jobs(client)
     job = fetch_next_job(client)
     if not job:
+        sync_tarkett_catalog_if_due(client)
         print("Sin jobs pendientes.")
         return False
     print(f"Procesando job {job['id']}...")

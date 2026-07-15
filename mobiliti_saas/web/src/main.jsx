@@ -159,6 +159,7 @@ const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";
 const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";
 const OFFIHO_PAGE_SIZE = 24;
 const quantityFormatter = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 3 });
+const catalogCurrencyFormatter = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
 
 function clearCatalogCaches() {
   try {
@@ -180,6 +181,15 @@ function formatQuantity(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "0";
   return quantityFormatter.format(numeric);
+}
+
+function formatCatalogCurrency(value) {
+  const numeric = Number(value);
+  return catalogCurrencyFormatter.format(Number.isFinite(numeric) ? numeric : 0);
+}
+
+function hasMissingCatalogPrice(item) {
+  return item?.price_source === "missing" || !(Number(item?.unit_price) > 0);
 }
 
 function stockLimit(item) {
@@ -824,6 +834,13 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
     .filter((line) => line.item), [cart, byCode]);
 
   const cartUnits = cartRows.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+  const missingPriceCount = cartRows.filter((line) => hasMissingCatalogPrice(line.item)).length;
+  const cartAmount = cartRows.reduce(
+    (sum, line) => hasMissingCatalogPrice(line.item)
+      ? sum
+      : sum + (Number(line.item.unit_price || 0) * Number(line.quantity || 0)),
+    0,
+  );
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -955,6 +972,10 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
                     </div>
                     <strong>{item.name}</strong>
                     <small>{item.unit}</small>
+                    <div className="tarkett-price-row">
+                      <span>Precio unitario</span>
+                      <strong>{hasMissingCatalogPrice(item) ? "Por confirmar" : formatCatalogCurrency(item.unit_price)}</strong>
+                    </div>
                     <div className="stock-row">
                       <span>Existencia {formatQuantity(item.available_quantity)}</span>
                       {item.reserved_by_others && reserved > 0 ? <em>Apartado {formatQuantity(reserved)}</em> : null}
@@ -994,6 +1015,8 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
             <div>
               <h3>Carrito</h3>
               <span>{cartRows.length} productos - {formatQuantity(cartUnits)} unidades</span>
+              <strong className="tarkett-cart-total">Total con precios disponibles: {formatCatalogCurrency(cartAmount)}</strong>
+              {missingPriceCount ? <span className="tarkett-price-notice">{missingPriceCount} precios por confirmar</span> : null}
             </div>
           </div>
 
@@ -1002,7 +1025,7 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
               <div className="cart-row" key={line.code}>
                 <div>
                   <strong>{line.item.name}</strong>
-                  <span>{line.code}</span>
+                  <span>{line.code} - {hasMissingCatalogPrice(line.item) ? "Precio por confirmar" : formatCatalogCurrency(line.item.unit_price)}</span>
                 </div>
                 <input
                   type="number"
