@@ -661,6 +661,53 @@ def test_tarkett_catalog_prefers_valid_supabase_snapshot(monkeypatch):
     assert index._TARKETT_CATALOG_CACHE["path"].startswith("supabase:")
 
 
+def test_internal_tarkett_catalog_requires_worker_secret(monkeypatch):
+    monkeypatch.setattr(index, "MOBILITI_REST_SECRET", "worker-secret")
+
+    response = _client().get("/internal/catalogs/tarkett")
+
+    assert response.status_code == 403
+
+
+def test_internal_tarkett_catalog_reads_and_updates_snapshot(monkeypatch):
+    payload = {
+        "source_hash": "snapshot-hash",
+        "generated_at": "2026-07-15T00:00:00+00:00",
+        "items": [
+            {
+                "code": "25731726",
+                "name": "Cadiz",
+                "unit": "MTK - metro cuadrado",
+                "available_quantity": 10,
+                "unit_price": 472.63,
+                "price_source": "tarkettnet_code_match",
+                "stock_source": "tarkettnet_code_match",
+            }
+        ],
+    }
+    saved = []
+    monkeypatch.setattr(index, "MOBILITI_REST_SECRET", "worker-secret")
+    monkeypatch.setattr(
+        index,
+        "db_get_supplier_catalog_snapshot",
+        lambda supplier: {"supplier": supplier, "source_hash": payload["source_hash"], "payload": payload},
+    )
+    monkeypatch.setattr(
+        index,
+        "db_upsert_supplier_catalog_snapshot",
+        lambda supplier, current: saved.append((supplier, current)) or {"supplier": supplier, "payload": current},
+    )
+    headers = {"x-mobiliti-rest-secret": "worker-secret"}
+
+    get_response = _client().get("/internal/catalogs/tarkett", headers=headers)
+    put_response = _client().put("/internal/catalogs/tarkett", headers=headers, json={"payload": payload})
+
+    assert get_response.status_code == 200
+    assert get_response.json()["source_hash"] == "snapshot-hash"
+    assert put_response.status_code == 200
+    assert saved == [("tarkett", payload)]
+
+
 def test_offiho_quote_creates_json_job_with_catalog_owned_values_and_reservations(monkeypatch):
     _mock_user(monkeypatch)
     uploaded = {}

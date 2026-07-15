@@ -14,6 +14,7 @@ import time
 import uuid
 import sys
 import hashlib
+import hmac
 import urllib.request
 import urllib.error
 from urllib.parse import quote, unquote
@@ -1072,6 +1073,51 @@ def db_get_supplier_catalog_snapshot(supplier: str) -> dict | None:
     return rows[0] if rows else None
 
 
+def db_upsert_supplier_catalog_snapshot(supplier: str, payload: dict) -> dict:
+    clean_supplier = str(supplier or "").strip().lower()
+    if clean_supplier not in {"tarkett"}:
+        raise RuntimeError("Proveedor de catalogo no permitido")
+    catalog = load_tarkett_catalog_data(payload)
+    row = {
+        "supplier": clean_supplier,
+        "source_hash": catalog["source_hash"],
+        "generated_at": catalog["generated_at"],
+        "payload": payload,
+        "updated_at": _iso(datetime.now(timezone.utc)),
+    }
+    if DEV_MODE:
+        data = _dev_load()
+        data.setdefault("supplier_catalog_snapshots", {})[clean_supplier] = row
+        _dev_save(data)
+        return row
+    if DATABASE_URL:
+        return _pg_write(
+            """
+            INSERT INTO saas_supplier_catalog_snapshots
+                (supplier, source_hash, generated_at, payload, updated_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (supplier) DO UPDATE SET
+                source_hash = EXCLUDED.source_hash,
+                generated_at = EXCLUDED.generated_at,
+                payload = EXCLUDED.payload,
+                updated_at = NOW()
+            RETURNING supplier, source_hash, generated_at, payload, updated_at
+            """,
+            (clean_supplier, catalog["source_hash"], catalog["generated_at"], payload),
+        ) or row
+    existing = db_get_supplier_catalog_snapshot(clean_supplier)
+    if existing:
+        rows = _supabase_req(
+            "PATCH",
+            "/saas_supplier_catalog_snapshots",
+            params={"supplier": f"eq.{clean_supplier}"},
+            json_data=row,
+        )
+    else:
+        rows = _supabase_req("POST", "/saas_supplier_catalog_snapshots", json_data=row)
+    return rows[0] if isinstance(rows, list) and rows else row
+
+
 def _catalog_file_fingerprint(catalog_path: Path) -> dict:
     content = catalog_path.read_bytes()
     stat = catalog_path.stat()
@@ -1866,6 +1912,16 @@ def require_retention_token(
     raise HTTPException(status_code=403, detail="Token de retencion requerido")
 
 
+def require_worker_secret(x_mobiliti_rest_secret: str = Header(None)):
+    if (
+        MOBILITI_REST_SECRET
+        and x_mobiliti_rest_secret
+        and hmac.compare_digest(x_mobiliti_rest_secret, MOBILITI_REST_SECRET)
+    ):
+        return True
+    raise HTTPException(status_code=403, detail="Credencial interna requerida")
+
+
 # ─── Health Check ─────────────────────────────────────────────
 
 @app.get("/")
@@ -2354,6 +2410,7 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
         "input_storage_provider": _storage_provider_name(),
     }
 
+
     try:
         upload = _create_signed_upload(input_path)
         job = db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
@@ -2382,6 +2439,27 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
         "max_size_mb": MAX_QUOTE_UPLOAD_MB,
         "allowed_extensions": list(ALLOWED_QUOTE_INPUT_EXTENSIONS),
     }
+
+
+@app.get("/internal/catalogs/tarkett")
+def internal_get_tarkett_catalog(_authorized: bool = Depends(require_worker_secret)):
+    snapshot = db_get_supplier_catalog_snapshot("tarkett")
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Catalogo Tarkett no disponible")
+    return snapshot
+
+
+@app.put("/internal/catalogs/tarkett")
+def internal_put_tarkett_catalog(body: dict, _authorized: bool = Depends(require_worker_secret)):
+    payload = body.get("payload") if isinstance(body, dict) else None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload de catalogo requerido")
+    try:
+        return db_upsert_supplier_catalog_snapshot("tarkett", payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/cotizaciones/{job_id}/dev-upload")

@@ -35,6 +35,7 @@ QUOTE_ENGINE = os.environ.get("QUOTE_ENGINE", "python").strip().lower()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY")
 MOBILITI_REST_SECRET = os.environ.get("MOBILITI_REST_SECRET")
+MOBILITI_API_URL = os.environ.get("MOBILITI_API_URL", "https://web-lemon-one-45.vercel.app").strip().rstrip("/")
 DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes"}
 TARKETT_CART_SOURCE_TYPE = "tarkett_cart"
 OFFIHO_CART_SOURCE_TYPE = "offiho_cart"
@@ -164,6 +165,8 @@ class SupabaseClient:
             raise RuntimeError(f"Supabase REST {exc.code}: {body}") from exc
 
     def catalog_snapshot_get(self, supplier: str) -> dict | None:
+        if not os.environ.get("SUPABASE_SERVICE_KEY") and MOBILITI_REST_SECRET:
+            return self._catalog_api_request("GET")
         rows = self.rest(
             "GET",
             "/saas_supplier_catalog_snapshots",
@@ -176,6 +179,8 @@ class SupabaseClient:
         return rows[0] if rows else None
 
     def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
+        if not os.environ.get("SUPABASE_SERVICE_KEY") and MOBILITI_REST_SECRET:
+            return self._catalog_api_request("PUT", {"payload": payload})
         url = f"{self.base_url}/rest/v1/saas_supplier_catalog_snapshots?on_conflict=supplier"
         row = {
             "supplier": supplier,
@@ -196,6 +201,25 @@ class SupabaseClient:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8")
             raise RuntimeError(f"Supabase catalog snapshot {exc.code}: {body}") from exc
+
+    def _catalog_api_request(self, method: str, payload: dict | None = None) -> dict | None:
+        parsed = urllib.parse.urlparse(MOBILITI_API_URL)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise RuntimeError("MOBILITI_API_URL invalida")
+        url = f"{MOBILITI_API_URL}/internal/catalogs/tarkett"
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(url, data=body, method=method)
+        req.add_header("Content-Type", "application/json")
+        req.add_header("x-mobiliti-rest-secret", MOBILITI_REST_SECRET or "")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                content = resp.read().decode("utf-8")
+                return json.loads(content) if content else None
+        except urllib.error.HTTPError as exc:
+            exc.read()
+            raise RuntimeError(f"Mobiliti catalog API {exc.code}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Mobiliti catalog API connection error: {exc.reason}") from exc
 
     def storage_download(self, object_path: str, dest: Path) -> None:
         self.storage_download_from_provider(object_path, dest, STORAGE_PROVIDER)

@@ -64,6 +64,54 @@ def test_tarkett_catalog_sync_publishes_changed_snapshot_and_respects_interval(m
     assert client.upserts == [("tarkett", enriched)]
 
 
+def test_tarkett_snapshot_uses_internal_api_without_service_key(monkeypatch):
+    response_payload = {
+        "supplier": "tarkett",
+        "source_hash": "hash-1",
+        "payload": {"source_hash": "hash-1", "generated_at": "2026-07-15T00:00:00+00:00", "items": []},
+    }
+    seen = {}
+
+    class FakeResponse:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(response_payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        seen.update(
+            {
+                "url": request.full_url,
+                "method": request.get_method(),
+                "secret": request.get_header("X-mobiliti-rest-secret"),
+                "timeout": timeout,
+            }
+        )
+        return FakeResponse()
+
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.setattr(quote_worker, "MOBILITI_REST_SECRET", "worker-secret")
+    monkeypatch.setattr(quote_worker, "MOBILITI_API_URL", "https://web-lemon-one-45.vercel.app")
+    monkeypatch.setattr(quote_worker.urllib.request, "urlopen", fake_urlopen)
+    client = quote_worker.SupabaseClient.__new__(quote_worker.SupabaseClient)
+
+    result = client.catalog_snapshot_get("tarkett")
+
+    assert result == response_payload
+    assert seen == {
+        "url": "https://web-lemon-one-45.vercel.app/internal/catalogs/tarkett",
+        "method": "GET",
+        "secret": "worker-secret",
+        "timeout": 60,
+    }
+
+
 def test_isolated_worker_runs_tarkett_sync_during_idle_poll(monkeypatch):
     client = object()
     synced = []
