@@ -57,6 +57,7 @@ def _has_pending_job() -> bool:
 
 def _run_once_isolated() -> bool:
     if not _has_pending_job():
+        quote_worker.sync_tarkett_catalog_if_due(_build_client())
         print("Sin jobs pendientes.")
         return False
 

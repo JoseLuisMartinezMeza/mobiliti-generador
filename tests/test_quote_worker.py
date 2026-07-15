@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mobiliti_saas", "worker"))
 
 import quote_worker
+import render_web_worker
 
 
 def test_tarkett_catalog_sync_publishes_changed_snapshot_and_respects_interval(monkeypatch):
@@ -61,6 +62,21 @@ def test_tarkett_catalog_sync_publishes_changed_snapshot_and_respects_interval(m
     assert client.upserts == [("tarkett", enriched)]
     assert quote_worker.sync_tarkett_catalog_if_due(client) is False
     assert client.upserts == [("tarkett", enriched)]
+
+
+def test_isolated_worker_runs_tarkett_sync_during_idle_poll(monkeypatch):
+    client = object()
+    synced = []
+    monkeypatch.setattr(render_web_worker, "_has_pending_job", lambda: False)
+    monkeypatch.setattr(render_web_worker, "_build_client", lambda: client)
+    monkeypatch.setattr(
+        render_web_worker.quote_worker,
+        "sync_tarkett_catalog_if_due",
+        lambda current: synced.append(current),
+    )
+
+    assert render_web_worker._run_once_isolated() is False
+    assert synced == [client]
 
 
 def test_default_template_resolves_existing_template():
