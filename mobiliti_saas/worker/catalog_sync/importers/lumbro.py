@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import re
 import unicodedata
+import zipfile
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal, Mapping
+from xml.etree import ElementTree
 
+from . import common as _common
 from .common import (
     CatalogAssetBinding,
     CellRef,
@@ -16,6 +20,8 @@ from .common import (
     iter_pdf_pages,
     neutralize_spreadsheet_text,
     open_xlsx_data_only,
+    open_xlsx_data_only_from_bytes,
+    read_validated_source,
     source_ref,
     validate_source_file,
 )
@@ -97,7 +103,7 @@ class LumbroSpecRecord:
     image_sha256: str | None = None
     image_warning: str | None = None
     net_price: Decimal | None = None
-    price_source: LumbroPriceSource | None = None
+    price_source: LumbroPriceSource | LumbroInterconnectionSource | None = None
     warnings: tuple[str, ...] = ()
 
 
@@ -442,26 +448,30 @@ def _plain(value: object) -> str:
 
 
 _INTERCONNECTION_CODES_BY_DESCRIPTION = {
-    _plain(description): (code, "LIDO", "")
-    for code, description in (
+    _plain(description): (code, model, _plain(description))
+    for code, model, description in (
         (
             "MULT-LIDO-INT",
+            "LIDO",
             "Multicontacto Especial LINEA LIDO PARA INTERCONECTAR 4 Puertos AC , "
             "1 Puerto USB DE CARGA DOBLE TIPO A, CON ENTRADAS PARA ARNES DE AMBOS "
             "LADOS, MEDIDAS DE 42 X 16 CM ",
         ),
         (
             "LIDO.OP-INT",
+            "LIDO",
             "Multicontacto LIDO para canaleta COLOR GRIS OXFORD con 3 puertos AC "
             "No Regulados y 1 PUERTO USB CARGA DOBLE, para INTERCONECTAR",
         ),
         (
             "JUMP-1.5M",
+            "JUMPER",
             "Cable de interconexión o JUMPER CON SALIDA PARA ARNES POR AMBOS LADOS "
             "de 1.5 metros para Carga No Regula ",
         ),
         (
             "CAJA-FUS",
+            "CAJA DE FUSIBLE",
             "Caja de Fusible, PARA CARGA NO REGULADA, con entrada para ARNES de un "
             "costado y del otro cable cal 14 con clavija de 2.5 m de longitud",
         ),
@@ -489,6 +499,98 @@ def _validated_interconnection_source(source):
     return source
 
 
+def _validated_interconnection_package(source):
+    source = _validated_interconnection_source(source)
+    validated, data = read_validated_source(source.local_path, ".xlsx")
+    if validated.sha256 != source.sha256:
+        raise ValueError("LUMBRO_INTERCONNECTION_HASH")
+    parts, sheets, _, content_types = _common._validate_xlsx(data)
+    return source, parts, sheets, content_types
+
+
+def _data_only_package_for_sheet(parts, sheets, selected_sheet: str) -> bytes:
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    cleaned = dict(parts)
+    for sheet_name, part_name in sheets.items():
+        if sheet_name == selected_sheet:
+            continue
+        try:
+            root = ElementTree.fromstring(cleaned[part_name])
+        except Exception:
+            raise ValueError("LUMBRO_INTERCONNECTION_SHEET_XML") from None
+        root[:] = [
+            child for child in root if child.tag != f"{{{namespace}}}drawing"
+        ]
+        cleaned[part_name] = ElementTree.tostring(
+            root, encoding="utf-8", xml_declaration=True
+        )
+        relationships_name = _common._sheet_relationship_name(part_name)
+        if relationships_name in cleaned:
+            try:
+                relationships = ElementTree.fromstring(cleaned[relationships_name])
+            except Exception:
+                raise ValueError("LUMBRO_INTERCONNECTION_SHEET_XML") from None
+            relationships[:] = [
+                relation
+                for relation in relationships
+                if not relation.get("Type", "").endswith("/drawing")
+            ]
+            cleaned[relationships_name] = ElementTree.tostring(
+                relationships, encoding="utf-8", xml_declaration=True
+            )
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in sorted(cleaned):
+            archive.writestr(name, cleaned[name])
+    return output.getvalue()
+
+
+def _cached_formula_prices(parts, sheets) -> dict[str, str]:
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    part_name = sheets.get(_INTERCONNECTION_SHEET)
+    if part_name is None:
+        return {}
+    try:
+        root = ElementTree.fromstring(parts[part_name])
+    except Exception:
+        raise ValueError("LUMBRO_INTERCONNECTION_SHEET_XML") from None
+
+    cached = {}
+    for cell in root.iter(f"{{{namespace}}}c"):
+        coordinate = cell.get("r", "").upper()
+        price_match = re.fullmatch(r"H([1-9][0-9]*)", coordinate)
+        if coordinate != "P4" and (
+            price_match is None or int(price_match.group(1)) < 4
+        ):
+            continue
+        formula = cell.find(f"{{{namespace}}}f")
+        value = cell.find(f"{{{namespace}}}v")
+        if formula is None or value is None or cell.get("t") not in {None, "n"}:
+            continue
+        raw = (value.text or "").strip()
+        try:
+            numeric = Decimal(raw)
+        except InvalidOperation:
+            continue
+        if numeric.is_finite() and numeric > 0:
+            cached[coordinate] = raw
+    return cached
+
+
+def _sheet_image_gallery(parts, sheets, content_types):
+    part_name = sheets.get(_INTERCONNECTION_SHEET)
+    if part_name is None:
+        return ()
+    found = _common._drawing_images(
+        parts,
+        {_INTERCONNECTION_SHEET: part_name},
+        content_types,
+        keep_ambiguous=True,
+    )
+    return tuple(_common._normalized_xlsx_images(parts, found))
+
+
 def _interconnection_price(value: object) -> tuple[Decimal | None, tuple[str, ...]]:
     if value is None:
         return None, ("missing_price",)
@@ -508,11 +610,18 @@ def _interconnection_internal_id(code: str, description: str, cell: str) -> str:
     return "lumbro:interconnection:" + hashlib.sha256(material.encode()).hexdigest()[:20]
 
 
-def _interconnection_record(source, sheet, row: int, description_column: str, price_column: str):
+def _interconnection_record(
+    source,
+    sheet,
+    row: int,
+    description_column: str,
+    price_column: str,
+    cached_formula_prices,
+):
     description_cell = f"{description_column}{row}"
     price_cell = f"{price_column}{row}"
     description = _plain(sheet[description_cell].value)
-    raw_price = sheet[price_cell].value
+    raw_price = cached_formula_prices.get(price_cell, sheet[price_cell].value)
     if not description and raw_price is None:
         return None
     if description.startswith("*"):
@@ -563,7 +672,7 @@ def _bind_interconnection_images(source, records, images):
     for record in records:
         records_by_row.setdefault(record.source.row, []).append(record)
     images_by_row: dict[int, list[tuple[CellRef, ImageAsset]]] = {}
-    for reference, asset in images.items():
+    for reference, asset in images:
         row = _image_anchor_row(reference)
         if reference.sheet == _INTERCONNECTION_SHEET and row is not None:
             images_by_row.setdefault(row, []).append((reference, asset))
@@ -632,30 +741,32 @@ def _bind_interconnection_images(source, records, images):
 def parse_lumbro_interconnection(source) -> LumbroInterconnectionBuild:
     """Lee solo la hoja activa 2026 y conserva precios netos/celdas exactas."""
 
-    source = _validated_interconnection_source(source)
-    workbook = open_xlsx_data_only(source.local_path)
+    source, parts, sheets, content_types = _validated_interconnection_package(source)
+    passive_data = _data_only_package_for_sheet(parts, sheets, _INTERCONNECTION_SHEET)
+    workbook = open_xlsx_data_only_from_bytes(passive_data)
     try:
         if workbook.active.title != _INTERCONNECTION_SHEET:
             raise ValueError("LUMBRO_INTERCONNECTION_ACTIVE_SHEET")
         sheet = workbook.active
         if sheet["H3"].value != _INTERCONNECTION_HEADER:
             raise ValueError("LUMBRO_INTERCONNECTION_HEADER")
+        cached_prices = _cached_formula_prices(parts, sheets)
         records = []
         for row in range(4, sheet.max_row + 1):
-            record = _interconnection_record(source, sheet, row, "G", "H")
+            record = _interconnection_record(
+                source, sheet, row, "G", "H", cached_prices
+            )
             if record is not None:
                 records.append(record)
-        alternate = _interconnection_record(source, sheet, 4, "O", "P")
+        alternate = _interconnection_record(
+            source, sheet, 4, "O", "P", cached_prices
+        )
         if alternate is not None:
             records.append(alternate)
     finally:
         workbook.close()
 
-    images = {
-        reference: asset
-        for reference, asset in extract_xlsx_images(source.local_path).items()
-        if reference.sheet == _INTERCONNECTION_SHEET
-    }
+    images = _sheet_image_gallery(parts, sheets, content_types)
     records, assets, bindings, evidence = _bind_interconnection_images(
         source, tuple(records), images
     )
@@ -967,16 +1078,24 @@ def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
 
 
 def reconcile_lumbro_spec_prices(spec_records, price_records) -> tuple[LumbroSpecRecord, ...]:
-    """Añade solo precios PDF inequívocos; la columna E permanece como diagnóstico."""
+    """Añade precios comerciales inequívocos; E permanece como diagnóstico."""
 
     prices_by_identity = {}
+    prices_by_code = {}
     for price in price_records:
         if price.net_price is not None and price.parse_status == "parsed":
-            prices_by_identity.setdefault(price.identity, []).append(price)
+            code = getattr(price, "code", "")
+            if code:
+                prices_by_code.setdefault(code, []).append(price)
+            else:
+                prices_by_identity.setdefault(price.identity, []).append(price)
 
     enriched = []
     for record in spec_records:
-        matches = prices_by_identity.get(record.price_identity, ())
+        matches = (
+            *prices_by_code.get(record.code, ()),
+            *prices_by_identity.get(record.price_identity, ()),
+        )
         if not matches:
             enriched.append(record)
             continue

@@ -1,9 +1,12 @@
 import hashlib
 import json
+import zipfile
+from collections import Counter
 from io import BytesIO
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
+from xml.etree import ElementTree
 
 import fitz
 import pytest
@@ -29,6 +32,10 @@ MULT_LIDO_DESCRIPTION = (
 LIDO_OP_DESCRIPTION = (
     "Multicontacto LIDO para canaleta COLOR GRIS OXFORD con 3 puertos AC No "
     "Regulados y 1 PUERTO USB CARGA DOBLE, para INTERCONECTAR"
+)
+LIDO_OP_A_C_DESCRIPTION = (
+    "MULTICONTACTO LIDO PARA CANALETA COLOR GRIS OXFORD, CON 3 PUERTOS TOMA "
+    "CORRIENTE NO REGULADOS Y 1 PUERTO USB DE CARGA A+C PARA INTERCONECTAR"
 )
 JUMPER_DESCRIPTION = (
     "Cable de interconexión o JUMPER CON SALIDA PARA ARNES POR AMBOS LADOS "
@@ -206,6 +213,8 @@ def _write_interconnection_workbook(
     *,
     active_sheet: str = "2026",
     header: str = INTERCONNECTION_HEADER,
+    duplicate_anchor: bool = False,
+    corrupt_2025_image: bool = False,
 ) -> None:
     workbook = Workbook()
     old = workbook.active
@@ -227,22 +236,74 @@ def _write_interconnection_workbook(
     current["G19"] = FUSE_BOX_DESCRIPTION
     current["H19"] = 772
     current["G26"] = "Multicontacto sin código oficial verificable"
-    current["H26"] = 999
+    current["H26"] = "=3536.6666666667*0.9"
+    current["G31"] = "Multicontacto con cable sin código verificable"
+    current["H31"] = "=3614.4444444444*0.9"
+    current["G36"] = "Amberes de carga sin código verificable"
+    current["H36"] = 3208
+    current["G51"] = LIDO_OP_A_C_DESCRIPTION
+    current["H51"] = 1394.07
+    current["G62"] = "Jumper de un metro sin código verificable"
+    current["H62"] = 270
+    current["G76"] = "UP1 para canaleta sin código verificable"
+    current["H76"] = "=1552.6*0.9"
     current["O4"] = "Configuración alterna sin código verificable"
     current["P4"] = 3277
     current["O5"] = "Esta pareja no está autorizada"
     current["P5"] = 1234
 
-    current.add_image(XlsxImage(BytesIO(_png_bytes("#303030"))), "C4")
-    current.add_image(XlsxImage(BytesIO(_png_bytes("#008888"))), "C7")
-    current.add_image(XlsxImage(BytesIO(_png_bytes("#0044AA"))), "C13")
-    current.add_image(XlsxImage(BytesIO(_png_bytes("#00AA00"))), "C19")
-    current.add_image(XlsxImage(BytesIO(_png_bytes("#AA00AA"))), "I19")
-    current.add_image(XlsxImage(BytesIO(_png_bytes("#AAAA00"))), "C30")
+    for index, anchor in enumerate(
+        (
+            "C4",
+            "J4",
+            "M4",
+            "J5",
+            "J7",
+            "C13",
+            "C19",
+            "C26",
+            "I26",
+            "B36",
+            "A51",
+            "D51",
+            "I51",
+            "C62",
+            "A76",
+            "D76",
+        )
+    ):
+        color = f"#{(index + 1) * 1000:06X}"
+        current.add_image(XlsxImage(BytesIO(_png_bytes(color))), anchor)
+    if duplicate_anchor:
+        current.add_image(XlsxImage(BytesIO(_png_bytes("#EFEFEF"))), "C13")
 
     workbook.active = workbook.sheetnames.index(active_sheet)
-    workbook.save(path)
+    raw_path = path.with_name(f"{path.stem}-openpyxl.xlsx")
+    workbook.save(raw_path)
     workbook.close()
+
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    formula_caches = {"H26": "3183", "H31": "3253", "H76": "1397.34"}
+    with zipfile.ZipFile(raw_path) as source_archive, zipfile.ZipFile(
+        path, "w", zipfile.ZIP_DEFLATED
+    ) as output_archive:
+        for info in source_archive.infolist():
+            data = source_archive.read(info)
+            if info.filename == "xl/worksheets/sheet2.xml":
+                root = ElementTree.fromstring(data)
+                for cell in root.iter(f"{{{namespace}}}c"):
+                    cached = formula_caches.get(cell.get("r"))
+                    if cached is None:
+                        continue
+                    value = cell.find(f"{{{namespace}}}v")
+                    assert value is not None
+                    value.text = cached
+                data = ElementTree.tostring(
+                    root, encoding="utf-8", xml_declaration=True
+                )
+            if corrupt_2025_image and info.filename == "xl/media/image1.png":
+                data = b"not-a-decodable-png"
+            output_archive.writestr(info, data)
 
 
 @pytest.fixture
@@ -518,6 +579,18 @@ def test_interconnection_uses_active_2026_cached_net_value(interconnection_sourc
     assert all(record.net_price != Decimal("2587.5") for record in build.records)
 
 
+def test_interconnection_preserves_validated_xml_formula_caches(interconnection_source):
+    build = lumbro_importer.parse_lumbro_interconnection(interconnection_source)
+    by_cell = {record.source.price_cell: record for record in build.records}
+
+    assert by_cell["H26"].net_price == Decimal("3183")
+    assert by_cell["H31"].net_price == Decimal("3253")
+    assert by_cell["H76"].net_price == Decimal("1397.34")
+    assert all(record.parse_status == "needs_review" for record in (
+        by_cell["H26"], by_cell["H31"], by_cell["H76"]
+    ))
+
+
 def test_interconnection_maps_only_exact_spec_descriptions(interconnection_source):
     build = lumbro_importer.parse_lumbro_interconnection(interconnection_source)
     by_description = {record.description: record for record in build.records}
@@ -532,6 +605,69 @@ def test_interconnection_maps_only_exact_spec_descriptions(interconnection_sourc
     assert unknown.parse_status == "needs_review"
     assert "missing_code" in unknown.warnings
     assert all(record.description != "Esta pareja no está autorizada" for record in build.records)
+
+
+def test_interconnection_real_a_c_near_match_never_receives_lido_op_code(
+    interconnection_source,
+):
+    build = lumbro_importer.parse_lumbro_interconnection(interconnection_source)
+    near_match = next(
+        record for record in build.records if record.description == LIDO_OP_A_C_DESCRIPTION
+    )
+
+    assert near_match.source.description_cell == "G51"
+    assert near_match.net_price == Decimal("1394.07")
+    assert near_match.code == ""
+    assert near_match.parse_status == "needs_review"
+    assert "missing_code" in near_match.warnings
+
+
+def test_interconnection_verified_codes_have_distinct_reconciliation_identities(
+    interconnection_source,
+):
+    build = lumbro_importer.parse_lumbro_interconnection(interconnection_source)
+    verified = {record.code: record for record in build.records if record.code}
+
+    assert set(verified) == {
+        "MULT-LIDO-INT",
+        "LIDO.OP-INT",
+        "JUMP-1.5M",
+        "CAJA-FUS",
+    }
+    assert len({record.identity for record in verified.values()}) == 4
+    assert all(record.model and record.configuration for record in verified.values())
+
+
+def test_interconnection_rank_four_wins_mixed_real_reconciliation(
+    interconnection_source, lumbro_spec, pdf_sources
+):
+    interconnection = lumbro_importer.parse_lumbro_interconnection(
+        interconnection_source
+    )
+    base_spec = next(record for record in lumbro_spec.records if record.code == "BARCELONA")
+    target = replace(
+        base_spec,
+        code="MULT-LIDO-INT",
+        model="LIDO",
+        configuration="Multicontacto especial para interconectar",
+        price_identity="lido",
+        net_price=None,
+        price_source=None,
+    )
+    pdf = next(
+        record for record in parse_lumbro_pdf_prices(pdf_sources) if record.net_price
+    )
+    rank_three = replace(pdf, identity="lido", net_price=Decimal("2824"), authority_rank=3)
+    rank_two = replace(pdf, identity="lido", net_price=Decimal("2587.5"), authority_rank=2)
+
+    reconciled = lumbro_importer.reconcile_lumbro_spec_prices(
+        (target,), (*interconnection.records, rank_three, rank_two)
+    )[0]
+
+    assert reconciled.net_price == Decimal("3003")
+    assert reconciled.price_source is not None
+    assert reconciled.price_source.sheet == "2026"
+    assert reconciled.price_source.price_cell == "H4"
 
 
 def test_interconnection_parses_only_the_o_p_pair_on_row_four(interconnection_source):
@@ -561,22 +697,44 @@ def test_interconnection_images_are_active_sheet_only_and_fail_closed(
     assert bindings[jumper.internal_id].source_references[0]["cell_or_bbox"] == "C13"
 
     fuse_box = records[FUSE_BOX_DESCRIPTION]
-    assert fuse_box.internal_id not in bindings
-    assert "ambiguous_image" in fuse_box.warnings
-    assert len(build.assets_by_sha256) == 2
-    assert len(build.image_evidence) == 6
+    assert bindings[fuse_box.internal_id].source_references[0]["cell_or_bbox"] == "C19"
+    assert len(build.assets_by_sha256) == 5
+    assert len(build.image_evidence) == 16
     assert {evidence.source.sheet for evidence in build.image_evidence} == {"2026"}
-    assert {
-        (evidence.source.cell, evidence.status, evidence.reason)
-        for evidence in build.image_evidence
-    } == {
-        ("C4", "excluded", "ambiguous_product_row"),
-        ("C7", "bound", None),
-        ("C13", "bound", None),
-        ("C19", "excluded", "ambiguous_images"),
-        ("I19", "excluded", "ambiguous_images"),
-        ("C30", "excluded", "no_product_row"),
+    assert Counter(
+        (evidence.status, evidence.reason) for evidence in build.image_evidence
+    ) == {
+        ("bound", None): 5,
+        ("excluded", "ambiguous_images"): 7,
+        ("excluded", "ambiguous_product_row"): 3,
+        ("excluded", "no_product_row"): 1,
     }
+
+
+@pytest.mark.filterwarnings("error")
+def test_interconnection_never_decodes_invalid_2025_image(tmp_path):
+    path = tmp_path / "Precios Interconexion Sunon act.xlsx"
+    _write_interconnection_workbook(path, corrupt_2025_image=True)
+
+    build = lumbro_importer.parse_lumbro_interconnection(_interconnection_file(path))
+
+    assert len(build.image_evidence) == 16
+    assert {evidence.source.sheet for evidence in build.image_evidence} == {"2026"}
+
+
+def test_interconnection_duplicate_same_anchor_is_counted_as_ambiguous(tmp_path):
+    path = tmp_path / "Precios Interconexion Sunon act.xlsx"
+    _write_interconnection_workbook(path, duplicate_anchor=True)
+
+    build = lumbro_importer.parse_lumbro_interconnection(_interconnection_file(path))
+    c13 = [evidence for evidence in build.image_evidence if evidence.source.cell == "C13"]
+    jumper = next(record for record in build.records if record.code == "JUMP-1.5M")
+
+    assert len(build.image_evidence) == 17
+    assert len(c13) == 2
+    assert all(evidence.status == "excluded" for evidence in c13)
+    assert all(evidence.reason == "ambiguous_images" for evidence in c13)
+    assert jumper.internal_id not in {binding.internal_id for binding in build.bindings}
 
 
 @pytest.mark.parametrize(
