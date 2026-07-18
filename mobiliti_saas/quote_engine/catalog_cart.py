@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import ipaddress
 import mimetypes
+import os
 import re
 import socket
 import tempfile
+import unicodedata
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -56,6 +58,7 @@ def create_catalog_quotation_workbook(
     source_type: str,
     category_label: str,
     image_dir: str | Path | None = None,
+    text_transform: Callable[[object], str] | None = None,
 ) -> Path:
     if payload.get("source_type") != source_type:
         raise ValueError(f"Payload {category_label} invalido")
@@ -82,25 +85,36 @@ def create_catalog_quotation_workbook(
         ws.cell(8, 1).value = f"- {category_label}"
         ws.cell(8, 1).font = Font(bold=True)
 
+        transform = text_transform or (lambda value: str(value or ""))
         for index, item in enumerate(items, start=1):
             row = index + 8
-            code = str(item.get("code", "")).strip()
+            code = str(item.get("code") or item.get("sku") or "").strip()
             name = str(item.get("name", "")).strip()
             unit = str(item.get("unit", "")).strip()
+            attributes = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+            dimensions = str(attributes.get("dimensions") or "").strip()
             url = str(item.get("product_url", "") or "").strip()
+            if source_type == "supplier_cart":
+                quantity_precision = 6 if _is_square_meter_unit(unit) else 0
+            elif source_type == "tarkett_cart":
+                quantity_precision = 6
+            else:
+                quantity_precision = 3
             quantity = parse_commercial_quantity(
                 item.get("quantity", 0),
                 item_label=code or name or str(index),
-                max_decimal_places=6 if source_type == "tarkett_cart" else 3,
+                max_decimal_places=quantity_precision,
             )
             description, warning = _description_for_item(item, code, url, quantity)
             ws.cell(row, 1).value = index
-            ws.cell(row, 2).value = name
-            ws.cell(row, 4).value = description
-            ws.cell(row, 5).value = unit
-            ws.cell(row, 7).value = float(quantity)
+            ws.cell(row, 2).value = transform(name)
+            ws.cell(row, 4).value = transform(description)
+            ws.cell(row, 5).value = transform(
+                dimensions if source_type == "supplier_cart" and dimensions else unit
+            )
+            ws.cell(row, 7).value = _excel_number(quantity)
             ws.cell(row, 10).value = _excel_number(_decimal(item.get("unit_price", 0)))
-            ws.cell(row, 11).value = url
+            ws.cell(row, 11).value = transform(url)
             if warning:
                 ws.cell(row, 4).fill = PatternFill("solid", fgColor=WARNING_FILL)
             ws.row_dimensions[row].height = 72
@@ -142,31 +156,101 @@ def _description_for_item(
     url: str,
     quantity: Decimal,
 ) -> tuple[str, str]:
-    parts = [str(item.get("description", "") or "").strip(), f"Clave: {code}" if code else ""]
-    variant = str(item.get("variant", "") or "").strip()
-    if variant:
+    code_label = "SKU" if "sku" in item else "Clave"
+    parts = [
+        str(item.get("description", "") or "").strip(),
+        f"{code_label}: {code}" if code else "",
+    ]
+    configuration = str(item.get("configuration") or "").strip()
+    variant = str(item.get("variant") or "").strip()
+    if configuration:
+        parts.append(configuration)
+    elif variant:
         parts.append(f"Variante: {variant}")
+    attributes = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    color = str(attributes.get("color") or "").strip()
+    if color:
+        parts.append(f"Color: {color}")
+    warranty = str(attributes.get("warranty") or "").strip()
+    if warranty:
+        parts.append(f"Garantia: {warranty}")
+    product_notes = attributes.get("product_notes")
+    if isinstance(product_notes, list):
+        notes = [str(value).strip() for value in product_notes if str(value).strip()]
+        if notes:
+            parts.append(f"Notas: {'; '.join(notes)}")
+    lead_time = str(item.get("lead_time", "") or "").strip()
+    availability_type = str(item.get("availability_type", "") or "").strip()
+    if lead_time:
+        parts.append(f"Entrega: {lead_time}")
+    elif availability_type == "made_to_order":
+        parts.append("Entrega: Sobre pedido")
+    if availability_type == "unknown":
+        parts.append("Disponibilidad: por confirmar")
+    availability = _availability_bucket_summary(item, attributes)
+    if availability:
+        parts.append(f"Disponibilidad: {availability}")
     if url:
         parts.append(f"URL: {url}")
     warnings = [
         warning
-        for warning in (_stock_warning(item, quantity), _price_warning(item))
+        for warning in (
+            "Codigo por verificar" if item.get("code_status") == "needs_review" else "",
+            "Imagen de referencia" if item.get("image_kind") == "generated_reference" else "",
+            _stock_warning(item, quantity),
+            _price_warning(item),
+        )
         if warning
     ]
+    raw_warnings = item.get("warnings") or []
+    if isinstance(raw_warnings, list):
+        warnings.extend(str(value).strip() for value in raw_warnings if str(value).strip())
     parts.extend(warnings)
     return " | ".join(part for part in parts if part), " | ".join(warnings)
 
 
+def _availability_bucket_summary(item: dict[str, Any], attributes: dict[str, Any]) -> str:
+    buckets = attributes.get("availability_buckets")
+    if not isinstance(buckets, list):
+        return ""
+    unit = str(item.get("unit") or "").strip()
+    grouped: dict[str, Decimal] = {}
+    for bucket in buckets:
+        if not isinstance(bucket, dict):
+            continue
+        quantity = str(bucket.get("quantity") or "").strip()
+        lead_time = str(bucket.get("lead_time") or "").strip()
+        if quantity and lead_time:
+            grouped[lead_time] = grouped.get(lead_time, Decimal(0)) + _decimal(quantity)
+    parts = [
+        f"{_excel_number(quantity)}{f' {unit}' if unit else ''} ({lead_time})"
+        for lead_time, quantity in grouped.items()
+    ]
+    return "; ".join(parts)
+
+
 def _stock_warning(item: dict[str, Any], quantity: Decimal) -> str:
     status = str(item.get("stock_status", "") or "").strip()
-    if status == "out_of_stock":
+    availability_type = str(item.get("availability_type", "") or "").strip()
+    if availability_type == "made_to_order":
+        return ""
+    available_value = item.get(
+        "available_after_reservations",
+        item.get("available_quantity", item.get("stock")),
+    )
+    available = _decimal(available_value) if available_value is not None else None
+    if status in {"out_of_stock", "out", "exhausted"} or (
+        availability_type == "stocked" and available is not None and available <= 0
+    ):
         return "ADVERTENCIA: PRODUCTO AGOTADO"
-    if status == "insufficient_stock":
+    if status in {"insufficient_stock", "insufficient"} or (
+        availability_type == "stocked" and available is not None and quantity > available
+    ):
         quantity_number = _excel_number(quantity)
-        available = _excel_number(_decimal(item.get("available_quantity", 0)))
+        available_number = _excel_number(available or Decimal(0))
         return (
             "ADVERTENCIA: EXISTENCIA INSUFICIENTE"
-            f" - SOLICITADO {quantity_number} - DISPONIBLE {available}"
+            f" - SOLICITADO {quantity_number} - DISPONIBLE {available_number}"
         )
     return ""
 
@@ -214,7 +298,7 @@ class _OfficialRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def _download_catalog_image(url: Any, image_dir: Path, code: str, source_type: str) -> Path | None:
     clean_url = str(url or "").strip()
-    allowed_hosts = OFFICIAL_IMAGE_HOSTS.get(source_type, frozenset())
+    allowed_hosts = _allowed_image_hosts(source_type)
     if not allowed_hosts:
         return None
     try:
@@ -242,6 +326,31 @@ def _download_catalog_image(url: Any, image_dir: Path, code: str, source_type: s
         return destination
     except Exception:
         return None
+
+
+def _allowed_image_hosts(source_type: str) -> frozenset[str]:
+    if source_type != "supplier_cart":
+        return OFFICIAL_IMAGE_HOSTS.get(source_type, frozenset())
+    hosts: set[str] = set()
+    for variable in ("CATALOG_ASSET_PUBLIC_BASE_URL", "SUPABASE_URL"):
+        value = os.environ.get(variable, "").strip()
+        parsed = urlsplit(value)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        try:
+            port = parsed.port
+        except ValueError:
+            continue
+        if (
+            parsed.scheme.lower() == "https"
+            and host
+            and host != "kundesign.com"
+            and not host.endswith(".kundesign.com")
+            and not parsed.username
+            and not parsed.password
+            and port in (None, 443)
+        ):
+            hosts.add(host)
+    return frozenset(hosts)
 
 
 def _validate_official_https_url(url: str, allowed_hosts: frozenset[str]) -> None:
@@ -326,6 +435,13 @@ def parse_commercial_quantity(
     ):
         raise ValueError(f"Cantidad invalida para {item_label}")
     return quantity
+
+
+def _is_square_meter_unit(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "".join(normalized.split()) in {"m2", "m^2"}
 
 
 def _decimal(value: Any) -> Decimal:

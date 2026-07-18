@@ -40,6 +40,14 @@
       "destination": "/api/index"
     },
     {
+      "source": "/catalogs",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/catalogs/:path*",
+      "destination": "/api/index"
+    },
+    {
       "source": "/generar-cotizacion",
       "destination": "/api/index"
     },

@@ -1,0 +1,11 @@
+{
+  "value": [
+    {
+      "id": "item-2",
+      "name": "removed.xlsx",
+      "parentReference": {"path": "/drives/drive-1/root:/Catalogs"},
+      "deleted": {"state": "deleted"}
+    }
+  ],
+  "@odata.deltaLink": "https://graph.microsoft.com/v1.0/drives/drive-1/items/folder-1/delta?$deltatoken=opaque-final"
+}

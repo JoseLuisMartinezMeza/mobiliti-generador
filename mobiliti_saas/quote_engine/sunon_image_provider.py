@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from html import unescape
 from io import BytesIO
+import ipaddress
 import json
 from pathlib import Path
 import hashlib
 import os
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,6 +21,7 @@ SUNON_REST_PRODUCT_URL = "https://www.sunonglobal.com/wp-json/wp/v2/product"
 SUNON_USER_AGENT = "MobilitiQuoteWorker/1.0 (+https://www.sunonglobal.com/)"
 MAX_SUNON_IMAGE_BYTES = 12 * 1024 * 1024
 SUNON_CATALOG_PATH = Path(__file__).resolve().parent / "data" / "sunon_catalog.json"
+SUNON_ALLOWED_HOSTS = frozenset({"sunonglobal.com", "www.sunonglobal.com", "file.sunonglobal.com"})
 PRODUCT_CODE_RE = re.compile(r"\b[A-Z]{1,8}[A-Z0-9]*(?:[-.][A-Z0-9]+)*\d[A-Z0-9]*(?:[-.][A-Z0-9]+)*\b", re.I)
 IMG_SRC_RE = re.compile(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"']", re.I)
 LI_RE = re.compile(r"<li\b[^>]*>.*?</li>", re.I | re.S)
@@ -125,11 +128,20 @@ def fetch_sunon_catalog_product_image(
 
 
 def find_sunon_catalog_image_url(code: str, *, catalog_path: str | Path | None = None) -> str | None:
-    entry = find_sunon_catalog_entry(code, catalog_path=catalog_path)
-    if not entry:
+    entry, _matched_code, match_type = find_sunon_catalog_match(code, catalog_path=catalog_path)
+    if (
+        not entry
+        or match_type != "exact_code"
+        or str(entry.get("confidence") or "").strip().lower() != "exact_code"
+    ):
         return None
     image_url = str(entry.get("image_url") or "").strip()
-    return image_url or None
+    if not image_url:
+        return None
+    try:
+        return _validate_sunon_url_structure(image_url)
+    except SunonImageLookupError:
+        return None
 
 
 def find_sunon_catalog_entry(code: str, *, catalog_path: str | Path | None = None) -> dict | None:
@@ -167,10 +179,13 @@ def load_sunon_catalog(catalog_path: str | Path | None = None) -> dict[str, dict
             continue
         normalized = normalize_sunon_code(entry.get("normalized_code") or entry.get("code"))
         image_url = str(entry.get("image_url") or "").strip()
-        if not normalized or not image_url:
+        product_url = str(entry.get("product_url") or "").strip()
+        if not normalized or not (image_url or product_url):
             continue
         clean = dict(entry)
         clean["normalized_code"] = normalized
+        clean["image_url"] = image_url
+        clean["product_url"] = product_url
         catalog[normalized] = clean
     return catalog
 
@@ -482,11 +497,15 @@ def _fetch_bytes(
     timeout_seconds: int,
     max_bytes: int = MAX_SUNON_IMAGE_BYTES,
 ) -> tuple[bytes, str]:
-    request = urllib.request.Request(_ascii_url(url), headers={"User-Agent": SUNON_USER_AGENT})
+    safe_url = _validate_sunon_https_url(url)
+    request = urllib.request.Request(safe_url, headers={"User-Agent": SUNON_USER_AGENT})
     last_error: BaseException | None = None
     for _attempt in range(2):
         try:
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            with _open_sunon_request(request, timeout=timeout_seconds) as response:
+                final_url = response.geturl()
+                _validate_sunon_https_url(final_url)
+                _validate_connected_peer(response)
                 data = response.read(max_bytes + 1)
                 if len(data) > max_bytes:
                     raise SunonImageLookupError(f"Respuesta Sunon supera {max_bytes} bytes")
@@ -494,6 +513,90 @@ def _fetch_bytes(
         except (urllib.error.URLError, TimeoutError) as exc:
             last_error = exc
     raise SunonImageLookupError(f"No se pudo consultar Sunon: {last_error}") from last_error
+
+
+class _SunonRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_connected_peer(fp)
+        safe_url = _validate_sunon_https_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, safe_url)
+
+
+def _open_sunon_request(request, timeout):
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _SunonRedirectHandler(),
+    )
+    return opener.open(request, timeout=timeout)
+
+
+def _validate_sunon_url_structure(url: str) -> str:
+    try:
+        parts = urllib.parse.urlsplit(str(url or "").strip())
+        port = parts.port
+    except ValueError as exc:
+        raise SunonImageLookupError("URL Sunon invalida") from exc
+    host = (parts.hostname or "").lower().rstrip(".")
+    if (
+        parts.scheme.lower() != "https"
+        or not host
+        or parts.username
+        or parts.password
+        or port not in (None, 443)
+        or host not in SUNON_ALLOWED_HOSTS
+    ):
+        raise SunonImageLookupError("URL Sunon no es HTTPS oficial")
+    return _ascii_url(urllib.parse.urlunsplit(parts))
+
+
+def _validate_sunon_https_url(url: str) -> str:
+    safe_url = _validate_sunon_url_structure(url)
+    host = (urllib.parse.urlsplit(safe_url).hostname or "").lower().rstrip(".")
+    _resolve_public_sunon_host(host)
+    return safe_url
+
+
+def _resolve_public_sunon_host(host: str) -> None:
+    try:
+        answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        addresses = {
+            ipaddress.ip_address(str(answer[4][0]).split("%", 1)[0])
+            for answer in answers
+        }
+    except (OSError, TypeError, ValueError) as exc:
+        raise SunonImageLookupError("Host Sunon no se pudo validar") from exc
+    if not addresses or any(not address.is_global for address in addresses):
+        raise SunonImageLookupError("Host Sunon no resuelve a una direccion publica")
+
+
+def _validate_connected_peer(response) -> None:
+    socket_paths = (
+        ("fp", "raw", "_sock"),
+        ("fp", "raw", "_socket"),
+        ("fp", "_sock"),
+        ("raw", "_sock"),
+        ("_sock",),
+    )
+    connected_socket = None
+    for path in socket_paths:
+        candidate = response
+        for attribute in path:
+            candidate = getattr(candidate, attribute, None)
+            if candidate is None:
+                break
+        if candidate is not None and callable(getattr(candidate, "getpeername", None)):
+            connected_socket = candidate
+            break
+    if connected_socket is None:
+        raise SunonImageLookupError("No se pudo inspeccionar la IP conectada a Sunon")
+    try:
+        peer = connected_socket.getpeername()
+        address = str(peer[0]).split("%", 1)[0]
+        peer_ip = ipaddress.ip_address(address)
+    except (IndexError, OSError, TypeError, ValueError) as exc:
+        raise SunonImageLookupError("No se pudo inspeccionar la IP conectada a Sunon") from exc
+    if not peer_ip.is_global:
+        raise SunonImageLookupError("La IP conectada a Sunon no es publica")
 
 
 def _ascii_url(url: str) -> str:
@@ -510,7 +613,10 @@ def _first_image_src(html: str, base_url: str) -> str | None:
     url = unescape(match.group(1).strip())
     if not url:
         return None
-    return urllib.parse.urljoin(base_url, url)
+    try:
+        return _validate_sunon_url_structure(urllib.parse.urljoin(base_url, url))
+    except SunonImageLookupError:
+        return None
 
 
 def _strip_tags(html: str) -> str:

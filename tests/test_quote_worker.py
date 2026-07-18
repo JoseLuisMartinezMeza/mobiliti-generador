@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import json
 from pathlib import Path
@@ -112,7 +113,10 @@ def test_tarkett_snapshot_uses_internal_api_without_service_key(monkeypatch):
     }
 
 
-def test_isolated_worker_runs_tarkett_sync_during_idle_poll(monkeypatch):
+@pytest.mark.parametrize("tarkett_did_work", [True, False])
+def test_isolated_worker_runs_at_most_one_catalog_sync_during_idle_poll(
+    monkeypatch, tarkett_did_work,
+):
     client = object()
     synced = []
     monkeypatch.setattr(render_web_worker, "_has_pending_job", lambda: False)
@@ -120,11 +124,228 @@ def test_isolated_worker_runs_tarkett_sync_during_idle_poll(monkeypatch):
     monkeypatch.setattr(
         render_web_worker.quote_worker,
         "sync_tarkett_catalog_if_due",
-        lambda current: synced.append(current),
+        lambda current: (synced.append("tarkett"), tarkett_did_work)[1],
+    )
+    monkeypatch.setattr(
+        render_web_worker,
+        "_run_rate_sync_isolated",
+        lambda: (synced.append("rates"), False)[1],
+    )
+    monkeypatch.setattr(
+        render_web_worker,
+        "_run_catalog_sync_isolated",
+        lambda: (synced.append("catalog"), False)[1],
     )
 
-    assert render_web_worker._run_once_isolated() is False
-    assert synced == [client]
+    assert render_web_worker._run_once_isolated() is tarkett_did_work
+    assert synced == (["tarkett"] if tarkett_did_work else ["tarkett", "rates", "catalog"])
+
+
+def test_isolated_worker_prioritizes_quote_and_skips_all_catalog_sync(monkeypatch):
+    calls = []
+    monkeypatch.setattr(render_web_worker, "_has_pending_job", lambda: True)
+    monkeypatch.setattr(
+        render_web_worker.subprocess,
+        "run",
+        lambda cmd, **kwargs: (calls.append((cmd, kwargs)), type("Result", (), {"returncode": 0})())[1],
+    )
+    monkeypatch.setattr(
+        render_web_worker,
+        "_run_rate_sync_isolated",
+        lambda: pytest.fail("rate sync must wait"),
+    )
+    monkeypatch.setattr(
+        render_web_worker,
+        "_run_catalog_sync_isolated",
+        lambda: pytest.fail("catalog sync must wait"),
+    )
+    monkeypatch.setattr(
+        render_web_worker.quote_worker,
+        "sync_tarkett_catalog_if_due",
+        lambda _client: pytest.fail("Tarkett sync must wait"),
+    )
+
+    assert render_web_worker._run_once_isolated() is True
+    assert calls[0][0] == [sys.executable, str(render_web_worker.WORKER_SCRIPT), "--once"]
+
+
+def test_rate_sync_is_isolated_throttled_and_visible_in_health(monkeypatch):
+    calls = []
+    clock = iter((100.0, 100.0, 101.0, 101.0))
+    monkeypatch.setattr(render_web_worker, "CATALOG_SYNC_ENABLED", True, raising=False)
+    monkeypatch.setattr(render_web_worker, "_RATE_LAST_SYNC_ATTEMPT", 0.0, raising=False)
+    monkeypatch.setattr(render_web_worker.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        render_web_worker.subprocess,
+        "run",
+        lambda cmd, **kwargs: (
+            calls.append((cmd, kwargs)), type("Result", (), {"returncode": 0})()
+        )[1],
+    )
+
+    assert render_web_worker._run_rate_sync_isolated() is True
+    assert render_web_worker._run_rate_sync_isolated() is False
+    assert calls == [(
+        [sys.executable, "-m", "mobiliti_saas.worker.catalog_sync.rate_service"],
+        {
+            "cwd": str(render_web_worker.PROJECT_ROOT),
+            "check": False,
+            "timeout": 30,
+            "stdout": render_web_worker.subprocess.DEVNULL,
+            "stderr": render_web_worker.subprocess.DEVNULL,
+        },
+    )]
+    payload = render_web_worker._health_payload()
+    assert payload["last_rate_sync_status"] == "succeeded"
+    assert payload["last_rate_sync_at"]
+
+
+@pytest.mark.parametrize(("failure", "expected"), [
+    (type("Result", (), {"returncode": 3})(), "misconfigured"),
+    (type("Result", (), {"returncode": 1})(), "failed"),
+    (subprocess.TimeoutExpired(["rates"], 30, output=b"secret"), "timeout"),
+])
+def test_rate_sync_failure_is_redacted_and_does_not_block_catalog(monkeypatch, failure, expected):
+    monkeypatch.setattr(render_web_worker, "CATALOG_SYNC_ENABLED", True, raising=False)
+    monkeypatch.setattr(render_web_worker, "_RATE_LAST_SYNC_ATTEMPT", 0.0, raising=False)
+
+    def fake_run(*_args, **_kwargs):
+        if isinstance(failure, BaseException):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(render_web_worker.subprocess, "run", fake_run)
+
+    assert render_web_worker._run_rate_sync_isolated() is False
+    payload = render_web_worker._health_payload()
+    assert payload["last_rate_sync_status"] == expected
+    assert "secret" not in json.dumps(payload)
+
+
+def test_catalog_sync_subprocess_uses_exact_command_timeout_and_safe_health(monkeypatch):
+    calls = []
+    monkeypatch.setattr(render_web_worker, "CATALOG_SYNC_ENABLED", True, raising=False)
+    monkeypatch.setattr(render_web_worker, "CATALOG_SYNC_TIMEOUT_SECONDS", 1800, raising=False)
+    monkeypatch.setattr(
+        render_web_worker.subprocess,
+        "run",
+        lambda cmd, **kwargs: (calls.append((cmd, kwargs)), type("Result", (), {"returncode": 0})())[1],
+    )
+
+    assert render_web_worker._run_catalog_sync_isolated() is True
+    assert calls == [(
+        [sys.executable, "-m", "mobiliti_saas.worker.catalog_sync.service", "--due"],
+        {
+            "cwd": str(render_web_worker.PROJECT_ROOT),
+            "check": False,
+            "timeout": 1800,
+            "stdout": render_web_worker.subprocess.DEVNULL,
+            "stderr": render_web_worker.subprocess.DEVNULL,
+        },
+    )]
+    payload = render_web_worker._health_payload()
+    assert payload["last_catalog_sync_status"] == "succeeded"
+    assert payload["last_catalog_sync_at"]
+    assert "stdout" not in payload and "stderr" not in payload
+
+
+@pytest.mark.parametrize(
+    ("returncode", "expected_status"),
+    [
+        (render_web_worker.CATALOG_EXIT_NO_WORK, "no_work"),
+        (render_web_worker.CATALOG_EXIT_DISABLED, "misconfigured"),
+    ],
+)
+def test_catalog_sync_non_work_exit_does_not_replace_previous_failure(
+    monkeypatch, returncode, expected_status,
+):
+    monkeypatch.setattr(render_web_worker, "CATALOG_SYNC_ENABLED", True, raising=False)
+    monkeypatch.setattr(
+        render_web_worker.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type("Result", (), {"returncode": returncode})(),
+    )
+    render_web_worker._set_state(
+        status="degraded",
+        last_error="catalog_sync_failed",
+        last_catalog_sync_at="2026-07-16T00:00:00+00:00",
+        last_catalog_sync_status="timeout",
+    )
+
+    assert render_web_worker._run_catalog_sync_isolated() is False
+    payload = render_web_worker._health_payload()
+    assert payload["last_catalog_sync_at"] == "2026-07-16T00:00:00+00:00"
+    assert payload["last_catalog_sync_status"] == "timeout"
+    assert payload["status"] == "degraded"
+    assert payload["last_error"] == "catalog_sync_failed"
+
+    render_web_worker._set_state(
+        status="running", last_error=None, last_catalog_sync_at=None,
+        last_catalog_sync_status="never",
+    )
+    assert render_web_worker._run_catalog_sync_isolated() is False
+    payload = render_web_worker._health_payload()
+    assert payload["last_catalog_sync_at"] is None
+    assert payload["last_catalog_sync_status"] == expected_status
+
+
+def test_catalog_sync_timeout_is_bounded_and_invalid_values_do_not_break_import():
+    assert 0 < render_web_worker.CATALOG_SYNC_TIMEOUT_SECONDS < render_web_worker.CATALOG_SYNC_LEASE_SECONDS
+    assert render_web_worker._catalog_sync_timeout("invalid") == 1800
+    assert render_web_worker._catalog_sync_timeout("0") == 1800
+    assert render_web_worker._catalog_sync_timeout("999999") < render_web_worker.CATALOG_SYNC_LEASE_SECONDS
+
+
+def test_worker_loop_does_not_clear_catalog_failure_after_no_work(monkeypatch):
+    class SingleCycleEvent:
+        stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, _seconds):
+            self.stopped = True
+
+    def failed_catalog_cycle():
+        render_web_worker._set_state(
+            status="degraded", last_error="catalog_sync_failed",
+            last_catalog_sync_status="timeout",
+        )
+        return False
+
+    monkeypatch.setattr(render_web_worker, "stop_event", SingleCycleEvent())
+    monkeypatch.setattr(render_web_worker, "_run_once_isolated", failed_catalog_cycle)
+    monkeypatch.setattr(render_web_worker, "ISOLATE_JOBS", True)
+
+    render_web_worker.worker_loop()
+
+    payload = render_web_worker._health_payload()
+    assert payload["last_error"] == "catalog_sync_failed"
+    assert payload["last_catalog_sync_status"] == "timeout"
+
+
+@pytest.mark.parametrize(("failure", "expected"), [
+    (type("Result", (), {"returncode": 9})(), "failed"),
+    (subprocess.TimeoutExpired(["catalog"], 1800, output=b"secret", stderr=b"private"), "timeout"),
+    (OSError("private executable path"), "failed"),
+])
+def test_catalog_sync_failure_is_degraded_but_does_not_raise_or_leak(monkeypatch, failure, expected):
+    monkeypatch.setattr(render_web_worker, "CATALOG_SYNC_ENABLED", True, raising=False)
+
+    def fake_run(*_args, **_kwargs):
+        if isinstance(failure, BaseException):
+            raise failure
+        return failure
+
+    monkeypatch.setattr(render_web_worker.subprocess, "run", fake_run)
+
+    assert render_web_worker._run_catalog_sync_isolated() is False
+    payload = render_web_worker._health_payload()
+    assert payload["ok"] is True
+    assert payload["status"] == "degraded"
+    assert payload["last_catalog_sync_status"] == expected
+    assert "secret" not in json.dumps(payload)
+    assert "private" not in json.dumps(payload)
 
 
 def test_default_template_resolves_existing_template():
@@ -327,6 +548,67 @@ def test_process_job_converts_offiho_json_before_generator(monkeypatch):
     assert seen["source_type"] == "offiho_cart"
     assert seen["generator_input"] == "quotation_from_offiho.xlsx"
     assert seen["metadata"]["offiho_converted"] is True
+
+
+def test_process_job_converts_supplier_cart_and_sets_frozen_catalog_metadata(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    payload = {
+        "source_type": "supplier_cart",
+        "supplier": "alma",
+        "catalog_source_hash": "a" * 64,
+        "base_currency": "USD",
+        "quote_currency": "MXN",
+        "exchange_rate": "18.500000",
+        "rate_source": "saas_exchange_rates",
+        "rate_effective_date": "2026-07-15",
+        "rate_retrieved_at": "2026-07-15T23:00:00Z",
+        "items": [],
+    }
+    client.input_content = json.dumps(payload).encode("utf-8")
+    seen = {}
+
+    def fake_convert(source_json, output_xlsx, cart_payload):
+        seen["converted_input"] = source_json.name
+        seen["payload"] = cart_payload
+        output_xlsx.write_bytes(b"converted")
+
+    def fake_generator(job, input_path, output_path):
+        seen["generator_input"] = input_path.name
+        seen["metadata"] = dict(job["metadata"])
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(quote_worker, "_convert_supplier_cart_to_quotation", fake_convert, raising=False)
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+
+    quote_worker.process_job(
+        client,
+        {
+            "id": "job-1",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-1/input.json",
+            "metadata": {"source_type": "supplier_cart", "input_extension": ".json"},
+        },
+    )
+
+    assert seen["converted_input"] == "input.json"
+    assert seen["payload"] == payload
+    assert seen["generator_input"] == "quotation_from_supplier.xlsx"
+    expected_metadata = {
+        "source_type": "supplier_cart",
+        "input_extension": ".json",
+        "supplier_converted": True,
+        "catalog_supplier": "alma",
+        "catalog_supplier_label": "ALMA",
+        "catalog_price_mode": "list_price_net",
+        "base_currency": "USD",
+        "quote_currency": "MXN",
+        "exchange_rate": "18.500000",
+        "rate_source": "saas_exchange_rates",
+        "rate_effective_date": "2026-07-15",
+        "rate_retrieved_at": "2026-07-15T23:00:00Z",
+    }
+    assert {key: seen["metadata"][key] for key in expected_metadata} == expected_metadata
 
 
 def test_process_job_uses_source_type_when_input_name_is_not_json(monkeypatch):

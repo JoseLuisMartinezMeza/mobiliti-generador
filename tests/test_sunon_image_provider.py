@@ -1,30 +1,62 @@
 from pathlib import Path
 from io import BytesIO
 import sys
+import urllib.request
 
 from PIL import Image
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine.sunon_image_provider import (  # noqa: E402
+    SUNON_CATALOG_PATH,
     extract_product_code,
     fetch_sunon_product_image,
     find_sunon_catalog_match,
     find_sunon_catalog_image_url,
     find_sunon_exact_image_url,
     find_sunon_image_url,
+    load_sunon_catalog,
     parse_sunon_product_no_catalog_entries,
     parse_sunon_image_url,
     sunon_code_candidates,
 )
+from mobiliti_saas.quote_engine import sunon_image_provider as sunon_provider  # noqa: E402
+
+
+class _FakeSocket:
+    def __init__(self, address: str = "8.8.8.8") -> None:
+        self._address = address
+
+    def getpeername(self):
+        return self._address, 443
+
+
+class _FakeRaw:
+    def __init__(self, address: str) -> None:
+        self._sock = _FakeSocket(address)
+
+
+class _FakeFP:
+    def __init__(self, address: str) -> None:
+        self.raw = _FakeRaw(address)
 
 
 class _FakeResponse:
-    def __init__(self, data: bytes, content_type: str) -> None:
+    def __init__(
+        self,
+        data: bytes,
+        content_type: str,
+        *,
+        url: str = "https://www.sunonglobal.com/",
+        peer_address: str = "8.8.8.8",
+    ) -> None:
         self._data = data
         self.headers = {"Content-Type": content_type}
+        self._url = url
+        self.fp = _FakeFP(peer_address)
 
     def __enter__(self):
         return self
@@ -34,6 +66,18 @@ class _FakeResponse:
 
     def read(self, _size=-1):
         return self._data
+
+    def geturl(self):
+        return self._url
+
+
+@pytest.fixture(autouse=True)
+def _resolve_sunon_hosts_to_public_test_address(monkeypatch):
+    monkeypatch.setattr(
+        sunon_provider.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("8.8.8.8", 443))],
+    )
 
 
 def test_extract_product_code_reads_first_sunon_style_token():
@@ -127,6 +171,7 @@ def test_find_sunon_catalog_image_url_uses_exact_normalized_code(tmp_path):
             {
               "code": "DMC27.058040",
               "normalized_code": "DMC27058040",
+              "confidence": "exact_code",
               "image_url": "https://file.sunonglobal.com/dmc27.jpg"
             }
           ]
@@ -139,7 +184,31 @@ def test_find_sunon_catalog_image_url_uses_exact_normalized_code(tmp_path):
     assert find_sunon_catalog_image_url("DMC27", catalog_path=catalog) is None
 
 
-def test_find_sunon_catalog_image_url_uses_official_base_code_for_extended_variant(tmp_path):
+def test_bundled_catalog_preserves_eight_exact_current_product_links_without_images():
+    expected = {
+        "CHO67SW": "https://www.sunonglobal.com/product/hup-comfortable-office-chair/",
+        "CAZ63SW": "https://www.sunonglobal.com/product/aveza-task-chair/",
+        "CAZ83SW": "https://www.sunonglobal.com/product/aveza-task-chair/",
+        "CLG63SW": "https://www.sunonglobal.com/product/locke-ergonomic-task-chair/",
+        "CMA10GM": "https://www.sunonglobal.com/product/mat-oversized-chair/",
+        "CMA11GM": "https://www.sunonglobal.com/product/mat-oversized-chair/",
+        "CMT10GS": "https://www.sunonglobal.com/product/motto-cafe-chairs/",
+        "CMT11GS": "https://www.sunonglobal.com/product/motto-cafe-chairs/",
+    }
+
+    assert SUNON_CATALOG_PATH.is_file()
+    catalog = load_sunon_catalog()
+    for code, product_url in expected.items():
+        entry, matched_code, match_type = find_sunon_catalog_match(code)
+        assert catalog[code]["product_url"] == product_url
+        assert catalog[code]["image_url"] == ""
+        assert entry == catalog[code]
+        assert matched_code == code
+        assert match_type == "exact_code"
+        assert entry["confidence"] == "exact_code"
+
+
+def test_find_sunon_catalog_image_url_rejects_base_code_image_for_extended_variant(tmp_path):
     catalog = tmp_path / "sunon_catalog.json"
     catalog.write_text(
         """
@@ -148,6 +217,7 @@ def test_find_sunon_catalog_image_url_uses_official_base_code_for_extended_varia
             {
               "code": "DV74",
               "normalized_code": "DV74",
+              "confidence": "exact_code",
               "image_url": "https://file.sunonglobal.com/dv74.png"
             }
           ]
@@ -159,7 +229,7 @@ def test_find_sunon_catalog_image_url_uses_official_base_code_for_extended_varia
     assert find_sunon_catalog_image_url(
         "DV74-2.380148 I-Varna II Conference Table",
         catalog_path=catalog,
-    ) == "https://file.sunonglobal.com/dv74.png"
+    ) is None
     entry, matched_code, match_type = find_sunon_catalog_match(
         "DV74-2.380148 I-Varna II Conference Table",
         catalog_path=catalog,
@@ -178,11 +248,13 @@ def test_find_sunon_catalog_image_url_prefers_full_code_over_base_code(tmp_path)
             {
               "code": "DMC27",
               "normalized_code": "DMC27",
+              "confidence": "exact_code",
               "image_url": "https://file.sunonglobal.com/base.jpg"
             },
             {
               "code": "DMC27.058040",
               "normalized_code": "DMC27058040",
+              "confidence": "exact_code",
               "image_url": "https://file.sunonglobal.com/full.jpg"
             }
           ]
@@ -194,6 +266,112 @@ def test_find_sunon_catalog_image_url_prefers_full_code_over_base_code(tmp_path)
     assert find_sunon_catalog_image_url("DMC27.058040 MixCube Stools", catalog_path=catalog) == (
         "https://file.sunonglobal.com/full.jpg"
     )
+
+
+def test_find_sunon_catalog_image_url_requires_exact_confidence(tmp_path):
+    catalog = tmp_path / "sunon_catalog.json"
+    catalog.write_text(
+        """
+        {
+          "entries": [
+            {
+              "code": "DV74-2.380148",
+              "normalized_code": "DV742380148",
+              "confidence": "exact_base_code",
+              "image_url": "https://file.sunonglobal.com/dv74.png"
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert find_sunon_catalog_image_url("DV74-2.380148", catalog_path=catalog) is None
+
+
+def test_parse_sunon_image_url_rejects_non_official_image_host():
+    html = """
+    <li>
+      <img src="https://attacker.example/internal.png">
+      <span>CHJ80SW</span>
+    </li>
+    """
+
+    assert parse_sunon_image_url(html, "CHJ80SW") is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://www.sunonglobal.com/private",
+        "https://127.0.0.1/private",
+        "https://attacker.example/private",
+        "https://user:pass@www.sunonglobal.com/private",
+        "https://www.sunonglobal.com:444/private",
+    ],
+)
+def test_fetch_bytes_rejects_non_official_url_before_transport(monkeypatch, url):
+    def fail_open(*_args, **_kwargs):
+        raise AssertionError("unsafe URL reached transport")
+
+    monkeypatch.setattr(sunon_provider, "_open_sunon_request", fail_open, raising=False)
+
+    with pytest.raises(sunon_provider.SunonImageLookupError):
+        sunon_provider._fetch_bytes(url, timeout_seconds=1)
+
+
+def test_fetch_bytes_rejects_private_dns_resolution_before_transport(monkeypatch):
+    monkeypatch.setattr(
+        sunon_provider.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))],
+        raising=False,
+    )
+
+    def fail_open(*_args, **_kwargs):
+        raise AssertionError("private DNS result reached transport")
+
+    monkeypatch.setattr(sunon_provider, "_open_sunon_request", fail_open, raising=False)
+
+    with pytest.raises(sunon_provider.SunonImageLookupError):
+        sunon_provider._fetch_bytes("https://www.sunonglobal.com/", timeout_seconds=1)
+
+
+def test_fetch_bytes_rejects_private_connected_peer(monkeypatch):
+    monkeypatch.setattr(
+        sunon_provider.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(2, 1, 6, "", ("8.8.8.8", 443))],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sunon_provider,
+        "_open_sunon_request",
+        lambda *_args, **_kwargs: _FakeResponse(
+            b"ok",
+            "text/plain",
+            peer_address="127.0.0.1",
+        ),
+        raising=False,
+    )
+
+    with pytest.raises(sunon_provider.SunonImageLookupError):
+        sunon_provider._fetch_bytes("https://www.sunonglobal.com/", timeout_seconds=1)
+
+
+def test_redirect_handler_rejects_non_official_destination():
+    request = urllib.request.Request("https://www.sunonglobal.com/")
+    response = _FakeResponse(b"", "text/plain")
+
+    with pytest.raises(sunon_provider.SunonImageLookupError):
+        sunon_provider._SunonRedirectHandler().redirect_request(
+            request,
+            response,
+            302,
+            "Found",
+            {},
+            "https://attacker.example/internal.png",
+        )
 
 
 def test_fetch_sunon_product_image_downloads_search_match(monkeypatch, tmp_path):
@@ -215,7 +393,7 @@ def test_fetch_sunon_product_image_downloads_search_match(monkeypatch, tmp_path)
             return _FakeResponse(image_bytes, "image/jpeg")
         raise AssertionError(url)
 
-    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider._open_sunon_request", fake_urlopen)
 
     output = fetch_sunon_product_image("CHJ80SW H7 Task Chair", tmp_path)
 
@@ -258,7 +436,7 @@ def test_find_sunon_image_url_uses_rest_product_fallback(monkeypatch):
             return _FakeResponse(rest_json, "application/json; charset=utf-8")
         raise AssertionError(url)
 
-    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider._open_sunon_request", fake_urlopen)
 
     assert find_sunon_image_url("CLG65SW", product_name="CLG65SW Locke Task Chair") == (
         "https://file.sunonglobal.com/wp-content/uploads/locke-large.png"
@@ -292,7 +470,7 @@ def test_find_sunon_image_url_uses_product_name_when_code_search_has_no_rest_mat
             return _FakeResponse(h2_json, "application/json; charset=utf-8")
         raise AssertionError(url)
 
-    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider._open_sunon_request", fake_urlopen)
 
     assert find_sunon_image_url("CHT85SW", product_name="CHT85SW H2 Task Chair") == (
         "https://file.sunonglobal.com/wp-content/uploads/h2.png"
@@ -327,7 +505,7 @@ def test_find_sunon_image_url_uses_product_family_terms(monkeypatch):
             return _FakeResponse(empty_json, "application/json; charset=utf-8")
         raise AssertionError(url)
 
-    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider._open_sunon_request", fake_urlopen)
 
     assert find_sunon_image_url(
         "DV74-2.380148",
@@ -360,7 +538,7 @@ def test_find_sunon_exact_image_url_rejects_family_only_rest_match(monkeypatch):
             return _FakeResponse(varna_json, "application/json; charset=utf-8")
         raise AssertionError(url)
 
-    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider._open_sunon_request", fake_urlopen)
 
     assert find_sunon_exact_image_url("DV74-2.380148") is None
 
@@ -392,7 +570,7 @@ def test_find_sunon_image_url_skips_document_like_products(monkeypatch):
             return _FakeResponse(b"[]", "application/json; charset=utf-8")
         raise AssertionError(url)
 
-    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("mobiliti_saas.quote_engine.sunon_image_provider._open_sunon_request", fake_urlopen)
 
     assert find_sunon_image_url(
         "ST90.NA.MR",

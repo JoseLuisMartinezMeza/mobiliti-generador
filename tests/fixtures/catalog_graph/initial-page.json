@@ -1,0 +1,14 @@
+{
+  "value": [
+    {
+      "id": "item-1",
+      "name": "catalog one.pdf",
+      "parentReference": {"path": "/drives/drive-1/root:/Catalogs"},
+      "size": 12,
+      "eTag": "etag-1",
+      "cTag": "ctag-1",
+      "file": {"mimeType": "application/pdf"}
+    }
+  ],
+  "@odata.nextLink": "https://graph.microsoft.com/v1.0/drives/drive-1/items/folder-1/delta?$skiptoken=opaque-first"
+}

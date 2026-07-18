@@ -1,0 +1,47 @@
+[
+  {
+    "supplier": "cr-global",
+    "label": "CR Global",
+    "adapter": "cr_global",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "CR GLOBAL/CRG_FT_General_Dist_2026-04.pdf", "kind": "catalog"},
+      {"path": "CR GLOBAL/CRG_LP_General_Dist_2026-04.pdf", "kind": "price_list"},
+      {"path": "SPEC GUIDES 2026/CR Global/Spec guide-CR Global-2026.xlsx", "kind": "spec_guide"}
+    ]
+  },
+  {
+    "supplier": "sonara",
+    "label": "Sonara",
+    "adapter": "sonara",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SONARA/Catalogo-Sonara.pdf", "kind": "catalog"},
+      {"path": "SONARA/Lista de precios Sonara 2026.pdf", "kind": "price_list"}
+    ]
+  },
+  {
+    "supplier": "sunon",
+    "label": "Sunon",
+    "adapter": "sunon",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC GUIDES 2026/SUNON MTY/Spec guide-Sunon MTY-2026.xlsx", "kind": "spec_guide"},
+      {"path": "SUNON MTY/2026 updated price-Chairs _ Mexico Stock Reserves （4-6 weeks).xlsx", "kind": "inventory"},
+      {"path": "SUNON MTY/2026 updated price-Fast inventory(1-2 Weeks) 02-09.xlsx", "kind": "inventory"},
+      {"path": "SUNON MTY/2026 updated price-Raw material preparation ★ Mexican inventory list （4-6 weeks).xlsx", "kind": "inventory"},
+      {"path": "SUNON MTY/INVENTORY MALL 1 （4-6weeks).xlsx", "kind": "inventory"}
+    ]
+  },
+  {
+    "supplier": "alma",
+    "label": "ALMA",
+    "adapter": "alma",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC Guide-Alma-KUN.xlsx", "kind": "spec_guide", "brand": "KUN"},
+      {"path": "SPEC GUIDES 2026/ALMA/Spec guide-Alma-KUN Design.xlsx", "kind": "spec_guide", "brand": "KUN"},
+      {"path": "SPEC Guide-Alma-Mondecasa.xlsx", "kind": "spec_guide", "brand": "Mondecasa"}
+    ]
+  }
+]

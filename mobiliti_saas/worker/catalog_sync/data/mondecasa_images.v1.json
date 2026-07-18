@@ -1,0 +1,1151 @@
+{
+  "schema_version": "1.0",
+  "artifact_kind": "official_product_image_archive",
+  "generated_on": "2026-07-18",
+  "official_sources": {
+    "product_page_origin": "https://www.mondecasa.com.sg",
+    "image_origin": "https://cdn.prod.website-files.com"
+  },
+  "provenance": {
+    "audit_manifest_sha256": "3447da369e0446c473f553a1674b7659149d113e695a1cd69bb574a6ea73a4c7",
+    "selection": "Converted deterministically from the closed Mondecasa web-image audit; only exact-index official product pages are included.",
+    "references": "Live official reference numbers were matched exactly with closed slash-suffix expansion; no fuzzy matching was used.",
+    "images": "Assets are offline JPEG bytes from the first official product gallery image, validated and SHA-256 content-addressed.",
+    "assignments": "Assignments are the deduplicated union of audited product_url_match.evidence.references for each page; every assignment belongs to that page's live reference_numbers.",
+    "classification": "exact_web is one-to-one; model_web is an official shared model image and must not be presented as variant-exact.",
+    "record_coverage": "The 55 exact-reference assignments cover 66 audited source records; repeated variants never create non-reference assignment keys."
+  },
+  "counts": {
+    "pages": 50,
+    "assignments": 55,
+    "unique_assets": 50,
+    "total_asset_bytes": 17707287
+  },
+  "pages": [
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/cayenne-dining-table",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67038bbe1a13aa2b111ee11e_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67038bbe1a13aa2b111ee11e_1.jpg",
+      "reference_numbers": [
+        "AL5540H37ALU",
+        "AM9030N47CE"
+      ],
+      "assignments": [
+        {
+          "source_code": "AL5540H37ALU",
+          "match_status": "model_web"
+        },
+        {
+          "source_code": "AM9030N47CE",
+          "match_status": "model_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/c4137eb86470dd1d24d73933cbbb893a360bb2a760caafa992c40e3c2e042be9.jpg",
+        "sha256": "c4137eb86470dd1d24d73933cbbb893a360bb2a760caafa992c40e3c2e042be9",
+        "size_bytes": 150776,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/chiengmai-2-seater-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f0e88a785c7d9ee1d9f1_chiengmai%202-seater%20sofa.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f0e88a785c7d9ee1d9f1_chiengmai%202-seater%20sofa.jpg",
+      "reference_numbers": [
+        "AC5321B11ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5321B11ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/1e37a18fb9d901a2d1a4811f987c8fe089fd0b097ce8ef439ba1d9e8f8668576.jpg",
+        "sha256": "1e37a18fb9d901a2d1a4811f987c8fe089fd0b097ce8ef439ba1d9e8f8668576",
+        "size_bytes": 358755,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/chiengmai-3-seater-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f16e387d90c56e87422e_chiengmai%203-seater%20sofa.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f16e387d90c56e87422e_chiengmai%203-seater%20sofa.jpg",
+      "reference_numbers": [
+        "AC5321B12ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5321B12ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/366d5c15864097a848562317dccedba7ed03b85918c1309da8e3f13c6b8e0f29.jpg",
+        "sha256": "366d5c15864097a848562317dccedba7ed03b85918c1309da8e3f13c6b8e0f29",
+        "size_bytes": 355486,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/chiengmai-coffee-table",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f36923c9e2a0024abd03_chiengmai%20coffee%20table.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f36923c9e2a0024abd03_chiengmai%20coffee%20table.jpg",
+      "reference_numbers": [
+        "AT5786N23TEK"
+      ],
+      "assignments": [
+        {
+          "source_code": "AT5786N23TEK",
+          "match_status": "model_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/82cd78081d03258763b9674103a614c7fb4ff677bd825ed7dd80baef83e2ca5e.jpg",
+        "sha256": "82cd78081d03258763b9674103a614c7fb4ff677bd825ed7dd80baef83e2ca5e",
+        "size_bytes": 135112,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/chiengmai-dining-armchair",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f063c2110c541ad1dd0c_chiengmai%20dining%20armchair.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f063c2110c541ad1dd0c_chiengmai%20dining%20armchair.jpg",
+      "reference_numbers": [
+        "AC5321B04ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5321B04ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/2abaa05dbed6924d6bcdad22e65c7bc41cf654756b91f9289073d83e8015f2f9.jpg",
+        "sha256": "2abaa05dbed6924d6bcdad22e65c7bc41cf654756b91f9289073d83e8015f2f9",
+        "size_bytes": 269310,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/chiengmai-long-coffee-table",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f41b6f99b1488053c253_chiengmai%20long%20coffee%20table.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f41b6f99b1488053c253_chiengmai%20long%20coffee%20table.jpg",
+      "reference_numbers": [
+        "AT5321B23TEK"
+      ],
+      "assignments": [
+        {
+          "source_code": "AT5321B23TEK",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/7f4ed922ecd707bf99f17939ceacbd309c388830b466078a6708d4c37073d1b1.jpg",
+        "sha256": "7f4ed922ecd707bf99f17939ceacbd309c388830b466078a6708d4c37073d1b1",
+        "size_bytes": 151696,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/chiengmai-lounge-armchair",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f092f419588374d6728a_chiengmai%20lounge%20armchair.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704f092f419588374d6728a_chiengmai%20lounge%20armchair.jpg",
+      "reference_numbers": [
+        "AC5321B10ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5321B10ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/dd235bc554c851f09899467315e1a6b9ec743fa794703444739f212973b4d672.jpg",
+        "sha256": "dd235bc554c851f09899467315e1a6b9ec743fa794703444739f212973b4d672",
+        "size_bytes": 345701,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/dinosaur-egg-dining-armchair",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67063c2c4011b737e754d052_dinosaur%20egg%20dining%20armchair.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67063c2c4011b737e754d052_dinosaur%20egg%20dining%20armchair.jpg",
+      "reference_numbers": [
+        "AC5317N04TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5317N04TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/17150048801563f644a95fdd1e7d1bf1bd02c815fb5b33248be78c8a989e7f2e.jpg",
+        "sha256": "17150048801563f644a95fdd1e7d1bf1bd02c815fb5b33248be78c8a989e7f2e",
+        "size_bytes": 308357,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/dinosaur-egg-sling-2-seater-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67063d2d80701b33e58733ef_dinosaur%20egg%20sling%202-seater%20sofa.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67063d2d80701b33e58733ef_dinosaur%20egg%20sling%202-seater%20sofa.jpg",
+      "reference_numbers": [
+        "AC5317N08TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5317N08TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/9b041e1432b6b0a5db89a2631878dada6d608acf9c8c7282ae91e211d42fd1e7.jpg",
+        "sha256": "9b041e1432b6b0a5db89a2631878dada6d608acf9c8c7282ae91e211d42fd1e7",
+        "size_bytes": 256482,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/dinosaur-egg-sling-dining-armchair",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67063c724c48131ee541716e_dinosaur%20egg%20sling%20dining%20armchair%20with%20full%20aluminium%20legs.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67063c724c48131ee541716e_dinosaur%20egg%20sling%20dining%20armchair%20with%20full%20aluminium%20legs.jpg",
+      "reference_numbers": [
+        "AC5317B04TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5317B04TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/5cc36f25d2e313d9c7d18a2704403b1d0414b16585c60c920769542f390e87dd.jpg",
+        "sha256": "5cc36f25d2e313d9c7d18a2704403b1d0414b16585c60c920769542f390e87dd",
+        "size_bytes": 329268,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/dinosaur-egg-sling-dining-side-chair-full-alumnium-legs",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67063b3f93041de7dcc422e4_dinosaur%20egg%20sling%20dining%20sidechair%20with%20full%20aluminium%20legs.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67063b3f93041de7dcc422e4_dinosaur%20egg%20sling%20dining%20sidechair%20with%20full%20aluminium%20legs.jpg",
+      "reference_numbers": [
+        "AC5317B01TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5317B01TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/3888ac505fe40308586af6d76b9a182c372e79927edfa17e3f9d3079ce71bd30.jpg",
+        "sha256": "3888ac505fe40308586af6d76b9a182c372e79927edfa17e3f9d3079ce71bd30",
+        "size_bytes": 186413,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/honolulu",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67050034d53cd866ff874068_honolulu%20day%20bed%203.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67050034d53cd866ff874068_honolulu%20day%20bed%203.jpg",
+      "reference_numbers": [
+        "AP6109N43ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AP6109N43ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/72e2fdc6ae5183fdfb21d9a03ee8b19604a2154878f3de5c9a564688f366af62.jpg",
+        "sha256": "72e2fdc6ae5183fdfb21d9a03ee8b19604a2154878f3de5c9a564688f366af62",
+        "size_bytes": 799602,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/manhattan-2-seat-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e6cc81be75fb67f86243_manhattan%202-seat%20sofa.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e6cc81be75fb67f86243_manhattan%202-seat%20sofa.jpg",
+      "reference_numbers": [
+        "AC5835G11ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5835G11ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/fce7da5e4e6ffd49d8c6aba85dfc7f3a66f98c957d86e6c4aaca2dec73942069.jpg",
+        "sha256": "fce7da5e4e6ffd49d8c6aba85dfc7f3a66f98c957d86e6c4aaca2dec73942069",
+        "size_bytes": 217389,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/manhattan-2-seat-sofa-left-arm",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e682f2ea78fcfbc08418_manhattan%202-seat%20sofa%20left%20arm.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e682f2ea78fcfbc08418_manhattan%202-seat%20sofa%20left%20arm.jpg",
+      "reference_numbers": [
+        "AC5835G106ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5835G106ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/59ff396dd17e89cff4a275369bbab8f83dfea34f236da8254a105f910a8df764.jpg",
+        "sha256": "59ff396dd17e89cff4a275369bbab8f83dfea34f236da8254a105f910a8df764",
+        "size_bytes": 206293,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/manhattan-2-seat-sofa-right-arm",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e65a8a785c7d9ed7c886_manhattan%202-seat%20sofa%20right%20arm.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e65a8a785c7d9ed7c886_manhattan%202-seat%20sofa%20right%20arm.jpg",
+      "reference_numbers": [
+        "AC5835G107ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5835G107ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/2da3206a7543f87b8e15ac3a9398e2888fb160787170af2f6cf725aa3cf8cc25.jpg",
+        "sha256": "2da3206a7543f87b8e15ac3a9398e2888fb160787170af2f6cf725aa3cf8cc25",
+        "size_bytes": 206576,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/manhattan-3-seat-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e6f24e4c7523ed338569_manhattan%203-seat%20sofa.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e6f24e4c7523ed338569_manhattan%203-seat%20sofa.jpg",
+      "reference_numbers": [
+        "AC5835G12ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5835G12ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/b865746105aa936cc1fae545fd3fce2d4e9fea4d2c5c81bc87cc9275f7b80b05.jpg",
+        "sha256": "b865746105aa936cc1fae545fd3fce2d4e9fea4d2c5c81bc87cc9275f7b80b05",
+        "size_bytes": 217145,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/manhattan-lounge-armchair",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e56a3a197dff1d4ddf86_manhattan%20lounge%20armchair.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e56a3a197dff1d4ddf86_manhattan%20lounge%20armchair.jpg",
+      "reference_numbers": [
+        "AC5835G10ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5835G10ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/1bf8540e1dcca72dabd22b988f81b3030467aa4bb0fb5a59cffb9b6d57bec59c.jpg",
+        "sha256": "1bf8540e1dcca72dabd22b988f81b3030467aa4bb0fb5a59cffb9b6d57bec59c",
+        "size_bytes": 194294,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-2-seater-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039b0887c0b3443c329d2f_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039b0887c0b3443c329d2f_1.jpg",
+      "reference_numbers": [
+        "AC5879N11ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5879N11ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/724209d48fcabf487d2a13e2dde1cf579f62deaebd00275b096aebba43ffdbda.jpg",
+        "sha256": "724209d48fcabf487d2a13e2dde1cf579f62deaebd00275b096aebba43ffdbda",
+        "size_bytes": 573758,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-2-seater-sofa-right-arm-module-thick-rope",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039fec78ae124707706193_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039fec78ae124707706193_1.jpg",
+      "reference_numbers": [
+        "AC5879A86ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5879A86ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/a72ce1e02ec8981f321652dbafd3c85f8426320bf619f4ad0184ded7277dbd38.jpg",
+        "sha256": "a72ce1e02ec8981f321652dbafd3c85f8426320bf619f4ad0184ded7277dbd38",
+        "size_bytes": 587210,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-3-seater-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039ba566c1c5b3274e7180_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039ba566c1c5b3274e7180_1.jpg",
+      "reference_numbers": [
+        "AC5879N12ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5879N12ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/5c4acae59c96e974b21b1737a68a98821d68f9c4de6e47f12236b2570bd3b824.jpg",
+        "sha256": "5c4acae59c96e974b21b1737a68a98821d68f9c4de6e47f12236b2570bd3b824",
+        "size_bytes": 571396,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-3-seater-sofa-thick-rope",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039f629edd187637ef38b1_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039f629edd187637ef38b1_1.jpg",
+      "reference_numbers": [
+        "AC5879A12ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5879A12ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/dcbf891b6bedd90e0b8719b0dcd27d4ebed4928099efca3016be849cc1f4e6a2.jpg",
+        "sha256": "dcbf891b6bedd90e0b8719b0dcd27d4ebed4928099efca3016be849cc1f4e6a2",
+        "size_bytes": 410343,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-center-module-thick-rope",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6703a043db848dd2b7930770_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6703a043db848dd2b7930770_1.jpg",
+      "reference_numbers": [
+        "AC5879A07ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5879A07ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/4981ae3fb377699d146505f4f45698c51157b5e49621d9c7c4dce87d885c0539.jpg",
+        "sha256": "4981ae3fb377699d146505f4f45698c51157b5e49621d9c7c4dce87d885c0539",
+        "size_bytes": 452018,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-chaise-lounge-left-arm-module-thick-rope",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6703a009fde176e4586c3cee_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6703a009fde176e4586c3cee_1.jpg",
+      "reference_numbers": [
+        "AS5879A88ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AS5879A88ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/433d3677f9b2684c29967c2bc60a225b7bfbd13dbf545831339cb70a44ca73b7.jpg",
+        "sha256": "433d3677f9b2684c29967c2bc60a225b7bfbd13dbf545831339cb70a44ca73b7",
+        "size_bytes": 558948,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-coffee-table",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6703a1a0373513db3eec74ef_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6703a1a0373513db3eec74ef_1.jpg",
+      "reference_numbers": [
+        "AT5540G63ALU",
+        "AT5540G63CER",
+        "AT5540G63HPL"
+      ],
+      "assignments": [
+        {
+          "source_code": "AT5540G63ALU",
+          "match_status": "model_web"
+        },
+        {
+          "source_code": "AT5540G63CER",
+          "match_status": "model_web"
+        },
+        {
+          "source_code": "AT5540G63HPL",
+          "match_status": "model_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/be33a58205f90f9998ff33ef74d317b407c9ce4a711c20365ab9a8d027b5f44d.jpg",
+        "sha256": "be33a58205f90f9998ff33ef74d317b407c9ce4a711c20365ab9a8d027b5f44d",
+        "size_bytes": 253939,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-corner-module-thick-rope",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039fb37fc09cdae87ec5fa_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039fb37fc09cdae87ec5fa_1.jpg",
+      "reference_numbers": [
+        "AC5879A13ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5879A13ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/63b190704611a0161ff881983795c6086534402163a21da25fa7dd25dbcd5d90.jpg",
+        "sha256": "63b190704611a0161ff881983795c6086534402163a21da25fa7dd25dbcd5d90",
+        "size_bytes": 487229,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-lounge-armchair",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039959b8bb5d8d50b953df_2.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039959b8bb5d8d50b953df_2.jpg",
+      "reference_numbers": [
+        "AC5879N10ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5879N10ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/80de4bdcff3fd2a9bd037b0376fc0d5575e429a3b77a33a34866772078a2e9e0.jpg",
+        "sha256": "80de4bdcff3fd2a9bd037b0376fc0d5575e429a3b77a33a34866772078a2e9e0",
+        "size_bytes": 553847,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/marrakech-lounge-armchair-thick-rope",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039e868e09ff25014591e8_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67039e868e09ff25014591e8_1.jpg",
+      "reference_numbers": [
+        "AC5879A10ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5879A10ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/e90c4fe09d25a0c8c4809864dc2b7aed5775f2bbfe957db5dabe6adf2ca12a18.jpg",
+        "sha256": "e90c4fe09d25a0c8c4809864dc2b7aed5775f2bbfe957db5dabe6adf2ca12a18",
+        "size_bytes": 408567,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/mediterranean-dining-armchair-with-flat-wicker",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/670653ccc31ce213c2ea1ea6_mediterranean%20dining%20armchair%20with%20flat%20wicker.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/670653ccc31ce213c2ea1ea6_mediterranean%20dining%20armchair%20with%20flat%20wicker.jpg",
+      "reference_numbers": [
+        "AC5602N04RAT"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5602N04RAT",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/8abd593f2e611c702173f4b1e9015f256b20c67991ace93799f1b03bd537ed2b.jpg",
+        "sha256": "8abd593f2e611c702173f4b1e9015f256b20c67991ace93799f1b03bd537ed2b",
+        "size_bytes": 402147,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/mediterranean-dining-armchair-with-sling",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67065334de16976fc4537b0d_mediterranean%20dining%20armchair%20with%20sling.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67065334de16976fc4537b0d_mediterranean%20dining%20armchair%20with%20sling.jpg",
+      "reference_numbers": [
+        "AC5602N04TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5602N04TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/5992847c369c7d6534255a7237fad3b2dba2b840a40d262ff80292cb32717043.jpg",
+        "sha256": "5992847c369c7d6534255a7237fad3b2dba2b840a40d262ff80292cb32717043",
+        "size_bytes": 243837,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/mediterranean-dining-armchair-with-teak-slats",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6706544a410298fbe42fd9f0_mediterranean%20dining%20armchair%20with%20teak%20slats.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6706544a410298fbe42fd9f0_mediterranean%20dining%20armchair%20with%20teak%20slats.jpg",
+      "reference_numbers": [
+        "AC5602N04TEK"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5602N04TEK",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/48571c38cf367a2595ca5f2f19668bc6ff723de227a2c89521e19542dc62d4ab.jpg",
+        "sha256": "48571c38cf367a2595ca5f2f19668bc6ff723de227a2c89521e19542dc62d4ab",
+        "size_bytes": 295590,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/mediterranean-dining-side-chair-with-flat-wicker",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67065360b6b6b24bac6c4502_mediterranean%20dining%20sidechair%20with%20flat%20wicker.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67065360b6b6b24bac6c4502_mediterranean%20dining%20sidechair%20with%20flat%20wicker.jpg",
+      "reference_numbers": [
+        "AC5602N01RAT"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5602N01RAT",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/65e6db20d0ffca8ac55e1d2760e7a089b7f52cd1d1d5ae688168ba9853084365.jpg",
+        "sha256": "65e6db20d0ffca8ac55e1d2760e7a089b7f52cd1d1d5ae688168ba9853084365",
+        "size_bytes": 549174,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/mediterranean-dining-side-chair-with-sling",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/670652bc6d2f038c8acd0351_mediterranean%20dining%20sidechair%20with%20sling.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/670652bc6d2f038c8acd0351_mediterranean%20dining%20sidechair%20with%20sling.jpg",
+      "reference_numbers": [
+        "AC5602N01TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5602N01TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/a5d08d56217cd0935128869ea4418054ab0d68abc02fb7511c7b747911359cec.jpg",
+        "sha256": "a5d08d56217cd0935128869ea4418054ab0d68abc02fb7511c7b747911359cec",
+        "size_bytes": 219316,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/mediterranean-dining-side-chair-with-teak-slats",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/670654160642fc1078474c16_mediterranean%20dining%20sidechair%20with%20teak%20slats.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/670654160642fc1078474c16_mediterranean%20dining%20sidechair%20with%20teak%20slats.jpg",
+      "reference_numbers": [
+        "AC5602N01TEK"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5602N01TEK",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/77d3e7edfec5c4e723f852d4ced456b99af474de4d15094e3f3a518ade5845d6.jpg",
+        "sha256": "77d3e7edfec5c4e723f852d4ced456b99af474de4d15094e3f3a518ade5845d6",
+        "size_bytes": 263966,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/montana-3-seater-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e1c9761d7a6b00d6d60c_montana%203-seater%20sofa%20with%20wooden%20top.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e1c9761d7a6b00d6d60c_montana%203-seater%20sofa%20with%20wooden%20top.jpg",
+      "reference_numbers": [
+        "AC5880N12ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5880N12ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/2ea9d40a8120dd30dd32b4d450a2ecfeeb90f19da3e26a269fefcbe5691a3c5c.jpg",
+        "sha256": "2ea9d40a8120dd30dd32b4d450a2ecfeeb90f19da3e26a269fefcbe5691a3c5c",
+        "size_bytes": 382209,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/montana-coffee-table",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e2414701592d03cec886_montana%20coffee%20table%202.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e2414701592d03cec886_montana%20coffee%20table%202.jpg",
+      "reference_numbers": [
+        "AT5880N23CER",
+        "AT5880N23HPL"
+      ],
+      "assignments": [
+        {
+          "source_code": "AT5880N23CER",
+          "match_status": "model_web"
+        },
+        {
+          "source_code": "AT5880N23HPL",
+          "match_status": "model_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/23e8322c8a75970ae6c5ea60a6b8063e9ee9e7da1272e2a2238235c45280e288.jpg",
+        "sha256": "23e8322c8a75970ae6c5ea60a6b8063e9ee9e7da1272e2a2238235c45280e288",
+        "size_bytes": 204208,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/montana-lounge-armchair",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e124e4f15f14a9932310_montana%20lounge%20armchair%20with%20wooden%20top.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6704e124e4f15f14a9932310_montana%20lounge%20armchair%20with%20wooden%20top.jpg",
+      "reference_numbers": [
+        "AC5880N10ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5880N10ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/24891eea0eec06666fed44c8d805c682361baf26b09896cffe5480ef50318a90.jpg",
+        "sha256": "24891eea0eec06666fed44c8d805c682361baf26b09896cffe5480ef50318a90",
+        "size_bytes": 313804,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/samui-aluminium-cabana-with-sling-roof",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/670650426f3052c5cdeb2024_samui%20aluminium%20cabana%20with%20sling%20roof.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/670650426f3052c5cdeb2024_samui%20aluminium%20cabana%20with%20sling%20roof.jpg",
+      "reference_numbers": [
+        "AP6113N43ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AP6113N43ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/481dc0a3b3d005bca5ac2af8390b252ed34a6150d58f17a32480f4a3e3bd04dd.jpg",
+        "sha256": "481dc0a3b3d005bca5ac2af8390b252ed34a6150d58f17a32480f4a3e3bd04dd",
+        "size_bytes": 280915,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/samui-large-pavilion",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67064e2b84c09343c48df2a1_samui%20pavilion%203.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67064e2b84c09343c48df2a1_samui%20pavilion%203.jpg",
+      "reference_numbers": [
+        "AP6101N43ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AP6101N43ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/68a12daaeb2c5db94e8acdbf724cc410bde28e246ef90c787c208e7c60e23f19.jpg",
+        "sha256": "68a12daaeb2c5db94e8acdbf724cc410bde28e246ef90c787c208e7c60e23f19",
+        "size_bytes": 581060,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/samui-pavilion",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67064e73499d35302385b402_samui%20pavilion%202.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67064e73499d35302385b402_samui%20pavilion%202.jpg",
+      "reference_numbers": [
+        "AP6101A43ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AP6101A43ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/e480f52d5cc61ea3686d670ed418d2002f5054626b9cceb445513eb451c3e465.jpg",
+        "sha256": "e480f52d5cc61ea3686d670ed418d2002f5054626b9cceb445513eb451c3e465",
+        "size_bytes": 479383,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/samui-pavilion-with-adjustable-shade",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67064f1d713bd954bd23e8e8_samui%20pavilion%20with%20adjustable%20shade.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67064f1d713bd954bd23e8e8_samui%20pavilion%20with%20adjustable%20shade.jpg",
+      "reference_numbers": [
+        "AP6101H43ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AP6101H43ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/bbae6425a7bb0f37bdd5de69a2135b28696493dca58c9bac998f05926abf8e27.jpg",
+        "sha256": "bbae6425a7bb0f37bdd5de69a2135b28696493dca58c9bac998f05926abf8e27",
+        "size_bytes": 374613,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/samui-pavilion-with-pc-sling-roof",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67064eef63875c275621cd10_samui%20pavilion%201.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67064eef63875c275621cd10_samui%20pavilion%201.jpg",
+      "reference_numbers": [
+        "AP6101B43ALU",
+        "AP6101F43ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AP6101B43ALU",
+          "match_status": "model_web"
+        },
+        {
+          "source_code": "AP6101F43ALU",
+          "match_status": "model_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/dd68188b8fe79b25fd84a7b3cb358105365f2dae36d92cfa638ebea98dca5c99.jpg",
+        "sha256": "dd68188b8fe79b25fd84a7b3cb358105365f2dae36d92cfa638ebea98dca5c99",
+        "size_bytes": 541531,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/spaghetti-2-seater-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67060d180575cd9ba8fcacb7_spaghetti%202-seater%20sofa.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67060d180575cd9ba8fcacb7_spaghetti%202-seater%20sofa.jpg",
+      "reference_numbers": [
+        "AC5795A11RAT"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5795A11RAT",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/e672ff7c22947f09a3ec9edabaf4339738396f2d91043508abfe156870fed88e.jpg",
+        "sha256": "e672ff7c22947f09a3ec9edabaf4339738396f2d91043508abfe156870fed88e",
+        "size_bytes": 322853,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/spaghetti-3-seater-sofa",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67060d3784d81a4c63e7a467_spaghetti%203-seater%20sofa.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67060d3784d81a4c63e7a467_spaghetti%203-seater%20sofa.jpg",
+      "reference_numbers": [
+        "AC5795A12RAT"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5795A12RAT",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/582c4d8d7eec80460afa56c98ce6cca5f4e3da1d33a9c748410585bc550edfd6.jpg",
+        "sha256": "582c4d8d7eec80460afa56c98ce6cca5f4e3da1d33a9c748410585bc550edfd6",
+        "size_bytes": 339557,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/spaghetti-lounge-armchair",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67060c137f0a09ac37fc3a70_spaghetti%20lounge%20armchair.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67060c137f0a09ac37fc3a70_spaghetti%20lounge%20armchair.jpg",
+      "reference_numbers": [
+        "AC5795A10RAT"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5795A10RAT",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/9a6c553c24b0f371043055bc87af853a3699529c2a59392993e582db35e87b58.jpg",
+        "sha256": "9a6c553c24b0f371043055bc87af853a3699529c2a59392993e582db35e87b58",
+        "size_bytes": 362575,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/sunlounger-end-table-with-alu-top-curved",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67074b81714d522db712662f_Sun%20lounger%20end%20table%20with%20alu%20top.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67074b81714d522db712662f_Sun%20lounger%20end%20table%20with%20alu%20top.jpg",
+      "reference_numbers": [
+        "AT5603N24ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AT5603N24ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/5677efb2597415312f0d4b42c7d2d27c9c6dd64dfc70b002deae3a6dbd91c645.jpg",
+        "sha256": "5677efb2597415312f0d4b42c7d2d27c9c6dd64dfc70b002deae3a6dbd91c645",
+        "size_bytes": 269599,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/sunlounger-end-table-with-alu-top-white",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67074cd542e1cff0f69fde92_Sunlounger%20end%20table%20with%20alu%20top%20white.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67074cd542e1cff0f69fde92_Sunlounger%20end%20table%20with%20alu%20top%20white.jpg",
+      "reference_numbers": [
+        "AT5344N24ALU"
+      ],
+      "assignments": [
+        {
+          "source_code": "AT5344N24ALU",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/c15b753fa9c45ab7456b5dd2e8b50d940b1904a957242bbf861ad4a4bc59b4e6.jpg",
+        "sha256": "c15b753fa9c45ab7456b5dd2e8b50d940b1904a957242bbf861ad4a4bc59b4e6",
+        "size_bytes": 182486,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/sunlounger-single-sling-with-shade-no-arms",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6707336fd04cfd38a1d2cc06_Sunlounger%20with%20shade%20without%20arms%20single%20sling.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6707336fd04cfd38a1d2cc06_Sunlounger%20with%20shade%20without%20arms%20single%20sling.jpg",
+      "reference_numbers": [
+        "AS5604E19TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AS5604E19TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/dc615c7187fd647a3496af24e1e6bcc6a129646ff6c6a134e4e1f2dd2f491349.jpg",
+        "sha256": "dc615c7187fd647a3496af24e1e6bcc6a129646ff6c6a134e4e1f2dd2f491349",
+        "size_bytes": 212429,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/sunlounger-with-sling",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6707438f3be520ad405e3f42_Sunlounger%20with%20sling%202.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6707438f3be520ad405e3f42_Sunlounger%20with%20sling%202.jpg",
+      "reference_numbers": [
+        "AS5605N21TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AS5605N21TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/38e14d20a8a94df5ba22aba19e78d18b6ee40dcc09b5283c1a21228a262e3a15.jpg",
+        "sha256": "38e14d20a8a94df5ba22aba19e78d18b6ee40dcc09b5283c1a21228a262e3a15",
+        "size_bytes": 595020,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/sunlounger-with-sling-curved-and-no-arms",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6707398cf8133590e52931f1_Sunlounger%20with%20sling%20without%20arms.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/6707398cf8133590e52931f1_Sunlounger%20with%20sling%20without%20arms.jpg",
+      "reference_numbers": [
+        "AS5604B19TEX"
+      ],
+      "assignments": [
+        {
+          "source_code": "AS5604B19TEX",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/3840164febdd6a2d3fb93644d6fd011ad977b0a08fe61607fe455b5f32a0ca46.jpg",
+        "sha256": "3840164febdd6a2d3fb93644d6fd011ad977b0a08fe61607fe455b5f32a0ca46",
+        "size_bytes": 500842,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    },
+    {
+      "page_url": "https://www.mondecasa.com.sg/all-products/vatican-dining-armchair-rope",
+      "gallery_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67038fe82d33780dceb5237c_1.jpg",
+      "chosen_image_url": "https://cdn.prod.website-files.com/66fcf3946613a3f9499ea3b8/67038fe82d33780dceb5237c_1.jpg",
+      "reference_numbers": [
+        "AC5881N04ROP"
+      ],
+      "assignments": [
+        {
+          "source_code": "AC5881N04ROP",
+          "match_status": "exact_web"
+        }
+      ],
+      "asset": {
+        "archive_name": "images/40e1ba9d5aa1233733ad633ad77876f887434835ff687607f13528ab580aa0b6.jpg",
+        "sha256": "40e1ba9d5aa1233733ad633ad77876f887434835ff687607f13528ab580aa0b6",
+        "size_bytes": 244263,
+        "media_type": "image/jpeg",
+        "width": 1800,
+        "height": 1864
+      }
+    }
+  ]
+}

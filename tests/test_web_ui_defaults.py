@@ -126,6 +126,26 @@ def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
     assert "object-fit: contain;" in styles
 
 
+def test_shared_supplier_tabs_are_visible_and_routed_to_the_common_view():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    vercel = Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+
+    expected_tabs = [
+        '["cr-global", "CR Global", PackageSearch]',
+        '["sonara", "Sonara", PackageSearch]',
+        '["sunon", "Sunon", PackageSearch]',
+        '["alma", "ALMA", PackageSearch]',
+    ]
+    positions = [source.index(tab) for tab in expected_tabs]
+    assert positions == sorted(positions)
+    assert 'import SupplierCatalogView from "./SupplierCatalogView";' in source
+    assert source.count("<SupplierCatalogView") == 1
+    assert "export default function SupplierCatalogView" in component
+    assert '"source": "/catalogs"' in vercel
+    assert '"source": "/catalogs/:path*"' in vercel
+
+
 def test_offiho_catalog_uses_factual_filters_cache_and_pagination_contracts():
     source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
     styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
@@ -192,3 +212,13 @@ def test_catalog_shell_is_unframed_and_intermediate_breakpoint_prevents_overlap(
     assert ".tarkett-grid" in intermediate
     assert "text-align: left;" in intermediate
     assert ".product-actions {\n  min-width: 0;" in styles
+
+
+def test_verify_saas_runs_the_supported_frontend_validation_command():
+    script = Path("scripts/verify-saas.ps1").read_text(encoding="utf-8")
+
+    assert 'Invoke-Step "Python tests"' in script
+    assert 'Invoke-Step "Node tests"' not in script
+    assert "npm.cmd test" not in script
+    assert 'Join-Path $root "mobiliti_saas\\web"' in script
+    assert "npm.cmd run build" in script

@@ -46,6 +46,7 @@ from .ai_image_provider import (
 from .image_processing import improve_image_map
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .parser import QuoteItem, col_index, read_items
+from .supplier_catalog import safe_excel_text
 from .sunon_image_provider import (
     extract_product_code,
     fetch_sunon_catalog_product_image,
@@ -1608,17 +1609,35 @@ def _first_product_row(items: list[QuoteItem]) -> int:
     return next((item.row for item in items if item.tipo == "producto"), 9)
 
 
+def _uses_catalog_list_prices(metadata: dict[str, Any] | None) -> bool:
+    return str((metadata or {}).get("catalog_price_mode") or "").strip() == "list_price_net"
+
+
 def _write_header(ws, metadata: dict[str, Any]) -> None:
     for row in range(3, 13):
         _unmerge_row(ws, row)
-    ws["B3"] = metadata.get("cotizacion", "")
-    ws["B4"] = None
-    ws["B7"] = metadata.get("proyecto", "")
-    ws["B8"] = metadata.get("cliente", "")
-    ws["B9"] = metadata.get("correo", "")
-    ws["B10"] = metadata.get("telefono", "")
-    ws["B11"] = metadata.get("direccion", "")
-    ws["B12"] = metadata.get("razon_social", "")
+    catalog_list_prices = _uses_catalog_list_prices(metadata)
+    text = safe_excel_text if catalog_list_prices else lambda value: value
+    ws["B3"] = text(metadata.get("cotizacion", ""))
+    if catalog_list_prices:
+        base_currency = str(metadata.get("base_currency") or "").strip().upper()
+        quote_currency = str(metadata.get("quote_currency") or "").strip().upper()
+        exchange_rate = str(metadata.get("exchange_rate") or "").strip()
+        effective_date = str(metadata.get("rate_effective_date") or "").strip()
+        rate_source = str(metadata.get("rate_source") or "").strip()
+        source_label = "Banco de Mexico / DOF" if rate_source == "saas_exchange_rates" else rate_source
+        ws["B4"] = (
+            f"{quote_currency} | precios netos mas IVA | Tipo de cambio "
+            f"{base_currency}/{quote_currency}: {exchange_rate} | {source_label} | Fecha {effective_date}"
+        )
+    else:
+        ws["B4"] = None
+    ws["B7"] = text(metadata.get("proyecto", ""))
+    ws["B8"] = text(metadata.get("cliente", ""))
+    ws["B9"] = text(metadata.get("correo", ""))
+    ws["B10"] = text(metadata.get("telefono", ""))
+    ws["B11"] = text(metadata.get("direccion", ""))
+    ws["B12"] = text(metadata.get("razon_social", ""))
 
 
 def _write_mobiliti(
@@ -1632,7 +1651,10 @@ def _write_mobiliti(
     row_map: dict[int, int] = {}
     lumbro_row_map: dict[int, list[int]] = {}
     lumbro_prices = lumbro_prices or {}
-    discount_rate = _discount_rate(metadata or {})
+    metadata = metadata or {}
+    discount_rate = _discount_rate(metadata)
+    catalog_list_prices = _uses_catalog_list_prices(metadata)
+    provider_label = str(metadata.get("catalog_supplier_label") or "Sunon Inc").strip() or "Sunon Inc"
     written_rows: set[int] = set()
     category_dictionary = load_category_dictionary(
         [str(item.nombre or "") for item in items if item.tipo == "producto"]
@@ -1678,6 +1700,9 @@ def _write_mobiliti(
         ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).value = f"=X{row_number}*AA{row_number}"
         ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).value = f'=IF(AA{row_number}>Z{row_number},"ERROR",(X{row_number}-AB{row_number}))'
         ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).value = f"=AC{row_number}*H{row_number}"
+        if catalog_list_prices:
+            ws.cell(row_number, MOBILITI_UNIT_PRICE_COL).value = f"=ROUND(J{row_number},2)"
+            ws.cell(row_number, MOBILITI_MIN_UNIT_PRICE_COL).value = f"=ROUND(J{row_number},2)"
         written_rows.add(row_number)
 
     def write_lumbro_row(row_number: int, code: str, quantity: int, region: str = DEFAULT_MOBILITI_REGION) -> None:
@@ -1713,7 +1738,7 @@ def _write_mobiliti(
         ws.cell(row, 4).value = _formula(q_sheet, f"B{item.row}")
         category = classify_product_name(str(item.nombre or ""), category_dictionary)
         ws.cell(row, 5).value = category
-        ws.cell(row, 6).value = "Sunon Inc"
+        ws.cell(row, 6).value = provider_label
         ws.cell(row, 8).value = _formula(q_sheet, f"{qty_col}{item.row}")
         ws.cell(row, 10).value = _formula(q_sheet, f"{price_col}{item.row}")
         ws.cell(row, 11).value = _formula(q_sheet, f"{m3_col}{item.row}")
@@ -1721,7 +1746,8 @@ def _write_mobiliti(
         row_map[item.row] = row
 
         lumbro_rows: list[int] = []
-        for code, quantity in _lumbro_accessories_for_item(item, category):
+        accessories = [] if catalog_list_prices else _lumbro_accessories_for_item(item, category)
+        for code, quantity in accessories:
             accessory_row = next_product_row()
             if accessory_row is None:
                 break
@@ -1794,13 +1820,24 @@ def _write_fletes(ws, mobiliti_total_row: int | None = None) -> None:
 
 
 def _write_mobiliti_settings(ws, metadata: dict[str, Any]) -> None:
-    exchange_rate = _exchange_rate(metadata)
+    if _uses_catalog_list_prices(metadata):
+        exchange_rate = _positive_num(metadata.get("exchange_rate"))
+        if exchange_rate is None:
+            raise ValueError("Tipo de cambio congelado invalido")
+        base_currency = str(metadata.get("base_currency") or "").strip().upper()
+        quote_currency = str(metadata.get("quote_currency") or "").strip().upper()
+        if not base_currency or not quote_currency:
+            raise ValueError("Moneda de catalogo incompleta")
+        exchange_pair = f"{base_currency}/{quote_currency}"
+    else:
+        exchange_rate = _exchange_rate(metadata)
+        exchange_pair = "USD/MXN"
     delivery_place = (
         metadata.get("lugar_entrega")
         or metadata.get("delivery_place")
         or DEFAULT_DELIVERY_PLACE
     )
-    ws["J6"] = "USD/MXN"
+    ws["J6"] = exchange_pair
     ws["K6"] = exchange_rate
     ws["K8"] = delivery_place
 
@@ -1974,6 +2011,7 @@ def _write_cotizacion(
     first_product = None
     last_product = None
     discount_rate = _discount_rate(metadata)
+    catalog_list_prices = _uses_catalog_list_prices(metadata)
     quote_to_cot: dict[int, int] = {}
     category_by_quote_row: dict[int, str] = {}
     user_count_by_quote_row: dict[int, int | None] = {}
@@ -2021,7 +2059,9 @@ def _write_cotizacion(
         if mob_row:
             ws.cell(current_row, 5).value = f"=Mobiliti!H{mob_row}"
             lumbro_rows = lumbro_row_map.get(item.row, [])
-            if lumbro_rows:
+            if catalog_list_prices:
+                ws.cell(current_row, 6).value = f"=ROUND(Mobiliti!X{mob_row},2)"
+            elif lumbro_rows:
                 price_terms = [
                     f"Mobiliti!X{mob_row}*Mobiliti!H{mob_row}",
                     *(f"Mobiliti!Y{row}" for row in lumbro_rows),
@@ -2032,11 +2072,18 @@ def _write_cotizacion(
                 ws.cell(current_row, 6).value = f"=Mobiliti!X{mob_row}"
         else:
             ws.cell(current_row, 5).value = item.cantidad
-            ws.cell(current_row, 6).value = item.precio
+            ws.cell(current_row, 6).value = (
+                f"=ROUND({_excel_decimal(item.precio)},2)" if catalog_list_prices else item.precio
+            )
         ws.cell(current_row, 7).value = discount_rate if current_row == first_product else f"=G${first_product}"
-        ws.cell(current_row, 8).value = f"=F{current_row}*G{current_row}"
-        ws.cell(current_row, 9).value = f"=F{current_row}-H{current_row}"
-        ws.cell(current_row, 10).value = f"=E{current_row}*I{current_row}"
+        if catalog_list_prices:
+            ws.cell(current_row, 8).value = f"=ROUND(F{current_row}*G{current_row},2)"
+            ws.cell(current_row, 9).value = f"=ROUND(F{current_row}-H{current_row},2)"
+            ws.cell(current_row, 10).value = f"=ROUND(E{current_row}*I{current_row},2)"
+        else:
+            ws.cell(current_row, 8).value = f"=F{current_row}*G{current_row}"
+            ws.cell(current_row, 9).value = f"=F{current_row}-H{current_row}"
+            ws.cell(current_row, 10).value = f"=E{current_row}*I{current_row}"
         ws.cell(current_row, 7).number_format = PERCENT_FORMAT
         for col in [6, 8, 9, 10]:
             ws.cell(current_row, col).number_format = MONEY_FORMAT
@@ -2048,13 +2095,22 @@ def _write_cotizacion(
         raise ValueError("No se encontraron productos en Quotation")
 
     total_labels = ["SUBTOTAL:", "COSTO DE FLETE:", "SUBTOTAL:", "IVA:", "TOTAL:"]
-    total_formulas = [
-        f"=SUM(J{first_product}:J{last_product})",
-        f"=H{current_row}*12%",
-        f"=H{current_row}+H{current_row + 1}",
-        f"=H{current_row + 2}*16%",
-        f"=H{current_row + 2}+H{current_row + 3}",
-    ]
+    if catalog_list_prices:
+        total_formulas = [
+            f"=ROUND(SUM(J{first_product}:J{last_product}),2)",
+            f"=ROUND(H{current_row}*12%,2)",
+            f"=ROUND(H{current_row}+H{current_row + 1},2)",
+            f"=ROUND(H{current_row + 2}*16%,2)",
+            f"=ROUND(H{current_row + 2}+H{current_row + 3},2)",
+        ]
+    else:
+        total_formulas = [
+            f"=SUM(J{first_product}:J{last_product})",
+            f"=H{current_row}*12%",
+            f"=H{current_row}+H{current_row + 1}",
+            f"=H{current_row + 2}*16%",
+            f"=H{current_row + 2}+H{current_row + 3}",
+        ]
     total_row = current_row + len(total_labels) - 1
     _restore_rows(ws, current_row, totals_snapshot)
     for offset, (label, formula) in enumerate(zip(total_labels, total_formulas)):

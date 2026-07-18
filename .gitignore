@@ -18,6 +18,7 @@ dist/
 # Archivos grandes / binarios
 *.exe
 *.zip
+!mobiliti_saas/worker/catalog_sync/data/mondecasa_images.v1.zip
 *.msi
 
 # Temporales

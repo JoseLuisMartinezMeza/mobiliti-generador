@@ -113,6 +113,7 @@ def test_offiho_description_reaches_cart_and_quotation_workbook(tmp_path):
     assert payload["items"][0]["description"] == description
     workbook = load_workbook(output, read_only=True)
     assert description in workbook["Quotation"]["D9"].value
+    assert "Variante: NEGRO" in workbook["Quotation"]["D9"].value
     workbook.close()
 
     from mobiliti_saas.worker.online_quote_generator import generate_online_quote

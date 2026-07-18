@@ -150,13 +150,26 @@ Cloud Run o cualquier host Docker con salida HTTPS.
 Build local:
 
 ```powershell
-docker build -f mobiliti_saas\worker\Dockerfile -t mobiliti-worker .
+docker build --pull -f mobiliti_saas\worker\Dockerfile -t mobiliti-worker .
 ```
+
+El contexto del build usa la allowlist del `.dockerignore` raiz; no cambies el
+contexto a un directorio mas amplio ni reincorpores `.git`, historiales,
+catalogos fuente o archivos de entorno. La imagen instala
+`mobiliti_saas/worker/requirements.lock`, usa una base Alpine fijada por digest
+y ejecuta el runtime como UID/GID `10001`, no como `root`.
 
 Run local contra Supabase:
 
 ```powershell
 docker run --rm `
+  --read-only `
+  --tmpfs /tmp:rw,noexec,nosuid,size=256m `
+  --memory 768m `
+  --cpus 1 `
+  --pids-limit 256 `
+  --cap-drop ALL `
+  --security-opt no-new-privileges:true `
   -e SUPABASE_URL="https://[PROJECT_REF].supabase.co" `
   -e SUPABASE_SERVICE_KEY="[SERVICE_ROLE_OR_SECRET_KEY]" `
   -e QUOTE_ENGINE="python" `
@@ -200,7 +213,72 @@ DEZGO_IMAGE_STRENGTH=0.58
 `image2image` por defecto para que la opcion Dezgo produzca imagenes retocadas
 y falle de forma visible si la clave o la API no funcionan.
 
-## 5. Smoke test produccion
+## 5. Sincronizacion de catalogos
+
+Antes del smoke productivo, el worker de catalogos requiere la migracion
+`2026_07_multi_supplier_catalogs.sql` y debe ejecutar
+`mobiliti_saas/worker/render_web_worker.py`. La sincronizacion se habilita de
+forma gradual mediante una lista explicita; vacia o desactivada no accede a
+SharePoint. La base de datos reclama primero solicitudes manuales, aplica el
+intervalo de seis horas y evita dos runs activos para una misma fuente.
+
+Variables adicionales del worker, documentadas solo por nombre:
+
+- `MS_GRAPH_TENANT_ID`
+- `MS_GRAPH_CLIENT_ID`
+- `MS_GRAPH_CERT_PATH`
+- `MS_GRAPH_CERT_THUMBPRINT`
+- `SHAREPOINT_HOSTNAME`
+- `SHAREPOINT_SITE_PATH`
+- `SHAREPOINT_DRIVE_NAME`
+- `SHAREPOINT_CATALOG_ROOT`
+- `BANXICO_SIE_TOKEN`
+- `CATALOG_SYNC_ENABLED`
+- `CATALOG_ENABLED_SUPPLIERS`
+- `CATALOG_SYNC_TIMEOUT_SECONDS`
+- `CATALOG_ASSET_PUBLIC_BASE_URL`
+
+Los proveedores habilitables son `cr-global`, `sonara`, `sunon` y `alma`.
+Vercel no descarga ni parsea archivos de SharePoint: esa responsabilidad queda
+en el worker. Verifica `/health` y sus campos `last_catalog_sync_at` y
+`last_catalog_sync_status` antes de ampliar la lista. El mismo health expone
+`last_rate_sync_at` y `last_rate_sync_status`; nunca expone el token.
+
+El refresco Banxico se ejecuta en un subproceso separado solo cuando la cola de
+cotizaciones esta libre. Consulta USD/MXN y EUR/MXN para los ultimos 14 dias,
+inserta observaciones append-only y se limita a una ejecucion cada seis horas.
+Un fallo usa reintento de 15 minutos y timeout de 30 segundos, sin impedir una
+cotizacion o el siguiente catalogo. Antes de habilitarlo, guarda
+`BANXICO_SIE_TOKEN` exclusivamente en el secret manager del host.
+
+El scheduler recupera en base de datos los runs `running` con lease vencido de
+45 minutos antes de reclamar trabajo. El timeout configurable del subprocess
+siempre se limita por debajo de ese lease. Un resultado `no_work` no cambia el
+timestamp ni borra un estado `failed/timeout`; solo una sincronizacion real
+exitosa limpia el degradado. El `HEALTHCHECK` usa el `PORT` efectivo del runtime.
+
+Gate local completado el 17 de julio de 2026: la imagen OCI se construyo con el
+contexto allowlist, paso `pip check`, importo todas las dependencias de runtime
+y Docker Scout reporto cero vulnerabilidades conocidas. Un smoke aislado
+API -> cola -> worker -> XLSX completo un job con filesystem raiz de solo
+lectura, capacidades eliminadas, `no-new-privileges`, 768 MiB de memoria y un
+CPU. El pico observado fue 360,812,544 bytes, sin OOM ni reinicios. Conserva
+como gates separados la concurrencia PostgreSQL, servicios externos y el
+canary en el host real; este resultado no autoriza un despliegue productivo.
+
+Gate PostgreSQL aislado completado el 17 de julio de 2026: el bootstrap real y
+las carreras de claim, staging, publicacion, reservas y tipos de cambio pasaron
+en PostgreSQL Supabase 17 sin puertos de host. La prueba corrigio el lock
+determinista de la primera insercion FX y la liberacion idempotente de reservas
+genericas. Este resultado tampoco aplica la migracion a Supabase productivo.
+
+La lectura delegada de SharePoint confirmo que los 12 archivos allowlisted
+existen y que sus encabezados/contenido representan CR Global, Sonara, Sunon y
+ALMA. Para el runtime sigue siendo obligatorio crear una aplicacion Entra con
+certificado y `Sites.Selected`, probar Graph delta y Storage en preproduccion y
+aprobar cada snapshot antes de ampliar el canary.
+
+## 6. Smoke test produccion
 
 1. Login en web.
 2. Subir `Quotation.xlsx`.

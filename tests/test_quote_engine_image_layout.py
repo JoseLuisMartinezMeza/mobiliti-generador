@@ -263,6 +263,7 @@ def test_sunon_catalog_provider_replaces_only_exact_catalog_matches(monkeypatch,
 def test_generate_missing_dezgo_images_raises_when_explicit_provider_fails(monkeypatch, tmp_path):
     items = [QuoteItem(tipo="producto", row=9, nombre="Double Seat Workstation", descripcion="office workstation")]
     monkeypatch.setenv("DEZGO_API_KEY", "fake-key")
+    monkeypatch.setenv("IMAGE_PROVIDER_STRICT", "true")
 
     def fake_generate(_prompt, _output_path, _config):
         raise RuntimeError("dezgo generation failed")

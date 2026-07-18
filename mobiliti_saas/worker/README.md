@@ -82,9 +82,60 @@ categoria, dimensiones y descripcion del producto usando `DEZGO_TEXT_ENDPOINT`.
 Ejecucion:
 
 ```powershell
-python mobiliti_saas\worker\quote_worker.py --once
-python mobiliti_saas\worker\quote_worker.py
+python mobiliti_saas\worker\render_web_worker.py
 ```
+
+El proceso HTTP atiende `/health`, da prioridad a las cotizaciones y solo
+intenta sincronizar un catalogo cuando la cola esta libre. La sincronizacion
+aislada procesa como maximo un proveedor por invocacion:
+
+```powershell
+python -m mobiliti_saas.worker.catalog_sync.service --due
+```
+
+Cuando la cola queda libre, el mismo worker intenta primero el refresco oficial
+USD/MXN y EUR/MXN de Banxico en un subproceso aislado. Consulta solo los ultimos
+14 dias, inserta observaciones de forma append-only y vuelve a intentarlo cada
+seis horas; un fallo usa reintento acotado a 15 minutos y no bloquea
+cotizaciones ni sincronizaciones de proveedores:
+
+```powershell
+python -m mobiliti_saas.worker.catalog_sync.rate_service
+```
+
+Sin `BANXICO_SIE_TOKEN` el refresco queda `misconfigured` en `/health`; el
+token solo se lee del entorno y nunca se imprime.
+
+La sincronizacion queda desactivada si `CATALOG_SYNC_ENABLED` no esta activo o
+si `CATALOG_ENABLED_SUPPLIERS` esta vacio/invalido. Los identificadores
+permitidos son `cr-global`, `sonara`, `sunon` y `alma`; la base de datos aplica
+el intervalo de seis horas y reclama primero los runs manuales. Antes de cada
+claim, un RPC atomico cierra como `failed` los runs `running` de proveedores
+habilitados cuyo lease fijo de 45 minutos vencio.
+
+Nombres de variables para el worker de catalogos, sin valores ni secretos:
+
+- `MS_GRAPH_TENANT_ID`
+- `MS_GRAPH_CLIENT_ID`
+- `MS_GRAPH_CERT_PATH`
+- `MS_GRAPH_CERT_THUMBPRINT`
+- `SHAREPOINT_HOSTNAME`
+- `SHAREPOINT_SITE_PATH`
+- `SHAREPOINT_DRIVE_NAME`
+- `SHAREPOINT_CATALOG_ROOT`
+- `BANXICO_SIE_TOKEN`
+- `CATALOG_SYNC_ENABLED`
+- `CATALOG_ENABLED_SUPPLIERS`
+- `CATALOG_SYNC_TIMEOUT_SECONDS`
+- `CATALOG_ASSET_PUBLIC_BASE_URL`
+
+El health solo publica estados acotados y timestamps. Un timeout o fallo de
+catalogo deja el worker en estado degradado, pero no detiene el procesamiento
+posterior de cotizaciones. `CATALOG_SYNC_TIMEOUT_SECONDS` usa 1800 segundos por
+defecto, acepta solo valores validos y siempre queda por debajo del lease. El
+hijo usa codigos de salida acotados: `0` trabajo exitoso, `1` fallo, `2` sin
+trabajo y `3` desactivado o mal configurado. Solo `0` limpia un fallo previo y
+actualiza `last_catalog_sync_at`.
 
 Prueba local del motor online sin Supabase:
 
@@ -102,3 +153,10 @@ Dependencias minimas del worker online:
 ```powershell
 pip install -r mobiliti_saas\worker\requirements.txt
 ```
+
+El contenedor productivo usa `requirements.lock`, no el archivo de rangos
+anterior. Para actualizarlo, resuelve y prueba las dependencias en una imagen
+aislada, fija el resultado completo y repite `pip check`, importaciones,
+Docker Scout y el smoke de generacion. La imagen corre como UID/GID `10001` y
+debe desplegarse con filesystem raiz de solo lectura, `cap-drop=ALL` y
+`no-new-privileges`; `/tmp` es el unico espacio temporal requerido.

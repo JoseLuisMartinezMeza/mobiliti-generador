@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-02",
+  "generated_at": "2026-07-18",
   "source": "https://www.sunonglobal.com/",
   "notes": "Catalogo experimental. Usa coincidencia exacta y, solo si existe una fila oficial en el catalogo, codigo base Sunon para variantes extendidas.",
   "entries": [
@@ -162,6 +162,86 @@
       "source_type": "product_no_table",
       "confidence": "exact_code",
       "last_seen": "2026-07-02"
+    },
+    {
+      "code": "CHO67SW",
+      "normalized_code": "CHO67SW",
+      "product_title": "HUP Comfortable Office Chair",
+      "product_url": "https://www.sunonglobal.com/product/hup-comfortable-office-chair/",
+      "image_url": "",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-18"
+    },
+    {
+      "code": "CAZ63SW",
+      "normalized_code": "CAZ63SW",
+      "product_title": "Aveza Task Chair",
+      "product_url": "https://www.sunonglobal.com/product/aveza-task-chair/",
+      "image_url": "",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-18"
+    },
+    {
+      "code": "CAZ83SW",
+      "normalized_code": "CAZ83SW",
+      "product_title": "Aveza Task Chair",
+      "product_url": "https://www.sunonglobal.com/product/aveza-task-chair/",
+      "image_url": "",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-18"
+    },
+    {
+      "code": "CLG63SW",
+      "normalized_code": "CLG63SW",
+      "product_title": "Locke Ergonomic Task Chair",
+      "product_url": "https://www.sunonglobal.com/product/locke-ergonomic-task-chair/",
+      "image_url": "",
+      "source_type": "rest_exact_code",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-18"
+    },
+    {
+      "code": "CMA10GM",
+      "normalized_code": "CMA10GM",
+      "product_title": "Mat Oversized Chair",
+      "product_url": "https://www.sunonglobal.com/product/mat-oversized-chair/",
+      "image_url": "",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-18"
+    },
+    {
+      "code": "CMA11GM",
+      "normalized_code": "CMA11GM",
+      "product_title": "Mat Oversized Chair",
+      "product_url": "https://www.sunonglobal.com/product/mat-oversized-chair/",
+      "image_url": "",
+      "source_type": "product_no_table",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-18"
+    },
+    {
+      "code": "CMT10GS",
+      "normalized_code": "CMT10GS",
+      "product_title": "Motto Cafe Chairs",
+      "product_url": "https://www.sunonglobal.com/product/motto-cafe-chairs/",
+      "image_url": "",
+      "source_type": "rest_exact_code",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-18"
+    },
+    {
+      "code": "CMT11GS",
+      "normalized_code": "CMT11GS",
+      "product_title": "Motto Cafe Chairs",
+      "product_url": "https://www.sunonglobal.com/product/motto-cafe-chairs/",
+      "image_url": "",
+      "source_type": "rest_exact_code",
+      "confidence": "exact_code",
+      "last_seen": "2026-07-18"
     }
   ]
 }

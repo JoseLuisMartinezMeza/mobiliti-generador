@@ -15,17 +15,24 @@ import uuid
 import sys
 import hashlib
 import hmac
+import io
+import re
+import threading
 import urllib.request
 import urllib.error
-from urllib.parse import quote, unquote
-from datetime import datetime, timedelta, timezone
+import warnings
+from copy import deepcopy
+from decimal import Decimal, InvalidOperation
+from urllib.parse import quote, unquote, urlparse
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from jose import JWTError, jwt
 import bcrypt
-from fastapi import FastAPI, HTTPException, Header, Depends, Request, File, UploadFile
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from mangum import Mangum
+from PIL import Image, UnidentifiedImageError
 
 
 for _root in (Path(__file__).resolve().parents[2], Path(__file__).resolve().parents[3] if len(Path(__file__).resolve().parents) > 3 else None):
@@ -42,6 +49,13 @@ from mobiliti_saas.quote_engine.offiho_catalog import (  # noqa: E402
     CATALOG_PATH as OFFIHO_DEFAULT_CATALOG_PATH,
     build_offiho_cart_payload,
     load_offiho_catalog,
+)
+from mobiliti_saas.quote_engine.supplier_catalog import (  # noqa: E402
+    ALLOWED_CURRENCIES,
+    ALLOWED_SUPPLIERS,
+    build_supplier_cart_payload,
+    load_supplier_catalog_data,
+    resolve_conversion_rate,
 )
 
 
@@ -90,10 +104,41 @@ DEV_STORE_DIR = Path(os.environ.get("MOBILITI_DEV_STORE_DIR", DEV_PROJECT_ROOT /
 DEV_PUBLIC_BASE_URL = os.environ.get("MOBILITI_DEV_PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 DEV_USER_EMAIL = os.environ.get("MOBILITI_DEV_USER_EMAIL", "dev@mobiliti.local")
 DEV_USER_PASSWORD = os.environ.get("MOBILITI_DEV_USER_PASSWORD", "dev12345")
+_DEV_CATALOG_RESERVATION_LOCK = threading.RLock()
 TARKETT_CATALOG_PATH = os.environ.get("TARKETT_CATALOG_PATH")
 TARKETT_CATALOG_DB_ENABLED = _env_bool("TARKETT_CATALOG_DB_ENABLED", bool(os.environ.get("VERCEL")))
 TARKETT_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("TARKETT_CATALOG_DB_TTL_SECONDS", "300")))
 OFFIHO_CATALOG_PATH = os.environ.get("OFFIHO_CATALOG_PATH")
+CATALOG_SUPPLIER_ORDER = ("cr-global", "sonara", "sunon", "alma")
+CATALOG_SUPPLIER_LABELS = {
+    "cr-global": "CR Global",
+    "sonara": "Sonara",
+    "sunon": "Sunon",
+    "alma": "ALMA",
+}
+CATALOG_ENABLED_SUPPLIERS = tuple(
+    supplier
+    for supplier in CATALOG_SUPPLIER_ORDER
+    if supplier in {
+        value.strip().lower()
+        for value in os.environ.get("CATALOG_ENABLED_SUPPLIERS", "").split(",")
+        if value.strip().lower() in ALLOWED_SUPPLIERS
+    }
+)
+CATALOG_ASSET_BUCKET = "catalog-assets"
+CATALOG_ASSET_MAX_BYTES = 8 * 1024 * 1024
+CATALOG_ASSET_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+CATALOG_ASSET_MAX_WIDTH = 8192
+CATALOG_ASSET_MAX_HEIGHT = 8192
+CATALOG_ASSET_MAX_PIXELS = 25_000_000
+CATALOG_ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:png|jpg|jpeg|webp)$")
+CATALOG_DIFF_LIMIT = 100
+CATALOG_DIFF_FIELDS = (
+    "sku", "code_status", "brand", "collection", "name", "description", "unit",
+    "availability_type", "stock", "lead_time", "base_price_options", "add_on_options",
+    "base_currency", "price_net", "tax_rate", "attributes", "image_url", "image_kind",
+    "product_url", "warnings",
+)
 DEFAULT_CORS_ORIGINS = (
     "https://web-lemon-one-45.vercel.app",
     "http://localhost:5173",
@@ -197,6 +242,10 @@ def _dev_load() -> dict:
         "quote_jobs": [],
         "tarkett_reservations": [],
         "offiho_reservations": [],
+        "catalog_reservations": [],
+        "catalog_published_snapshots": {},
+        "catalog_sync_runs": [],
+        "exchange_rates": [],
         "supplier_catalog_snapshots": {},
     }
     _dev_save(data)
@@ -359,7 +408,7 @@ def _jsonable_row(row: dict | None) -> dict | None:
         return None
     clean = {}
     for key, value in dict(row).items():
-        if isinstance(value, datetime):
+        if isinstance(value, (date, datetime)):
             clean[key] = value.isoformat()
         else:
             clean[key] = value
@@ -1036,6 +1085,1290 @@ def db_release_offiho_reservations(quote_job_id: str):
     )
 
 
+def _catalog_supplier(value: object) -> str:
+    supplier = str(value or "").strip().lower()
+    if supplier not in ALLOWED_SUPPLIERS:
+        raise RuntimeError("Proveedor de catalogo no permitido")
+    return supplier
+
+
+def _require_catalog_service_backend() -> None:
+    if not DEV_MODE and not DATABASE_URL and not SUPABASE_SERVICE_KEY:
+        raise RuntimeError("SUPABASE_SERVICE_KEY requerida para catalogos")
+
+
+def db_get_catalog_source(supplier: str) -> dict | None:
+    supplier = _catalog_supplier(supplier)
+    if DEV_MODE:
+        rows = _dev_load().setdefault("catalog_sources", [])
+        return next((row for row in rows if row.get("supplier") == supplier and row.get("enabled", True)), None)
+    _require_catalog_service_backend()
+    if _use_postgres():
+        return _pg_one(
+            """
+            SELECT id, supplier, label, adapter, enabled, published_version_id
+            FROM saas_catalog_sources
+            WHERE supplier = %s AND enabled IS TRUE
+            LIMIT 1
+            """,
+            (supplier,),
+        )
+    rows = _supabase_req(
+        "GET",
+        "/saas_catalog_sources",
+        params={
+            "supplier": f"eq.{supplier}",
+            "enabled": "eq.true",
+            "select": "id,supplier,label,adapter,enabled,published_version_id",
+            "limit": "1",
+        },
+    )
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def db_get_published_catalog_snapshot(supplier: str) -> dict | None:
+    supplier = _catalog_supplier(supplier)
+    if DEV_MODE:
+        return _dev_load().setdefault("catalog_published_snapshots", {}).get(supplier)
+    source = db_get_catalog_source(supplier)
+    version_id = source.get("published_version_id") if isinstance(source, dict) else None
+    if not version_id:
+        return None
+    if _use_postgres():
+        row = _pg_one(
+            """
+            SELECT id, supplier, source_hash, generated_at, status, payload, created_at
+            FROM saas_catalog_snapshot_versions
+            WHERE id = %s AND supplier = %s AND status = 'published'
+            LIMIT 1
+            """,
+            (version_id, supplier),
+        )
+    else:
+        rows = _supabase_req(
+            "GET",
+            "/saas_catalog_snapshot_versions",
+            params={
+                "id": f"eq.{version_id}",
+                "supplier": f"eq.{supplier}",
+                "status": "eq.published",
+                "select": "id,supplier,source_hash,generated_at,status,payload,created_at",
+                "limit": "1",
+            },
+        )
+        row = rows[0] if isinstance(rows, list) and rows else None
+    if row:
+        row = {**row, "source_id": source.get("id"), "label": source.get("label")}
+    return row
+
+
+def db_list_catalog_reservations(supplier: str, status: str = "active") -> list[dict]:
+    supplier = _catalog_supplier(supplier)
+    if status not in {"active", "released"}:
+        raise RuntimeError("Estado de reserva invalido")
+    if DEV_MODE:
+        rows = _dev_load().setdefault("catalog_reservations", [])
+        return [row for row in rows if row.get("supplier") == supplier and row.get("status") == status]
+    _require_catalog_service_backend()
+    if _use_postgres():
+        return _pg_rows(
+            """
+            SELECT id, supplier, internal_id, sku, quantity, usuario_id,
+                   quote_job_id, status, created_at, updated_at
+            FROM saas_catalog_reservations
+            WHERE supplier = %s AND status = %s
+            ORDER BY created_at DESC
+            """,
+            (supplier, status),
+        )
+    rows: list[dict] = []
+    page_size = 1000
+    while True:
+        page = _supabase_req(
+            "GET",
+            "/saas_catalog_reservations",
+            params={
+                "supplier": f"eq.{supplier}",
+                "status": f"eq.{status}",
+                "select": "id,supplier,internal_id,sku,quantity,usuario_id,quote_job_id,status,created_at,updated_at",
+                "order": "created_at.desc,id.desc",
+                "limit": str(page_size),
+                "offset": str(len(rows)),
+            },
+        )
+        if not isinstance(page, list):
+            raise RuntimeError("Respuesta de reservas de catalogo invalida")
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+
+
+def db_catalog_reservation_summary(supplier: str, usuario_id: int) -> list[dict]:
+    supplier = _catalog_supplier(supplier)
+    try:
+        clean_user_id = int(usuario_id)
+    except (TypeError, ValueError):
+        raise RuntimeError("Usuario de reservas invalido") from None
+    if clean_user_id <= 0:
+        raise RuntimeError("Usuario de reservas invalido")
+
+    if DEV_MODE:
+        totals: dict[str, Decimal] = {}
+        reserved_by_others: set[str] = set()
+        for row in _dev_load().setdefault("catalog_reservations", []):
+            if row.get("supplier") != supplier or row.get("status") != "active":
+                continue
+            internal_id = str(row.get("internal_id") or "").strip()
+            try:
+                quantity = Decimal(str(row.get("quantity") or 0))
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+            if not internal_id or not quantity.is_finite() or quantity <= 0:
+                continue
+            totals[internal_id] = totals.get(internal_id, Decimal(0)) + quantity
+            if int(row.get("usuario_id") or 0) != clean_user_id:
+                reserved_by_others.add(internal_id)
+        return [
+            {
+                "internal_id": internal_id,
+                "reserved_quantity": f"{quantity:.6f}",
+                "reserved_by_others": internal_id in reserved_by_others,
+            }
+            for internal_id, quantity in sorted(totals.items())
+        ]
+
+    _require_catalog_service_backend()
+    if _use_postgres():
+        return _pg_rows(
+            """
+            SELECT internal_id,
+                   SUM(quantity)::NUMERIC(18,6) AS reserved_quantity,
+                   BOOL_OR(usuario_id <> %s) AS reserved_by_others
+            FROM saas_catalog_reservations
+            WHERE supplier = %s AND status = 'active'
+            GROUP BY internal_id
+            ORDER BY internal_id
+            """,
+            (clean_user_id, supplier),
+        )
+    rows = _supabase_req(
+        "POST",
+        "/rpc/saas_catalog_reservation_summary",
+        json_data={"p_supplier": supplier, "p_usuario_id": clean_user_id},
+    )
+    if not isinstance(rows, list):
+        raise RuntimeError("Respuesta de resumen de reservas invalida")
+    return rows
+
+
+def db_reserve_catalog_items(
+    usuario_id: int,
+    quote_job_id: str,
+    supplier: str,
+    lines: list[dict],
+) -> list[dict]:
+    supplier = _catalog_supplier(supplier)
+    try:
+        clean_user_id = int(usuario_id)
+        clean_job_id = str(uuid.UUID(str(quote_job_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise RuntimeError("Reserva de catalogo invalida") from None
+    if clean_user_id <= 0 or not isinstance(lines, list) or not 1 <= len(lines) <= 500:
+        raise RuntimeError("Reserva de catalogo invalida")
+
+    normalized = []
+    internal_ids = set()
+    for line in lines:
+        if not isinstance(line, dict) or set(line) != {"internal_id", "sku", "quantity", "stock"}:
+            raise RuntimeError("Reserva de catalogo invalida")
+        internal_id = str(line.get("internal_id") or "").strip()
+        sku = str(line.get("sku") or "").strip()
+        try:
+            quantity = Decimal(str(line.get("quantity")))
+            stock = Decimal(str(line.get("stock")))
+        except (InvalidOperation, TypeError, ValueError):
+            raise RuntimeError("Reserva de catalogo invalida") from None
+        quantity_scale = max(-quantity.as_tuple().exponent, 0)
+        stock_scale = max(-stock.as_tuple().exponent, 0)
+        if (
+            not internal_id
+            or len(internal_id) > 300
+            or not sku
+            or len(sku) > 300
+            or internal_id in internal_ids
+            or not quantity.is_finite()
+            or quantity <= 0
+            or quantity_scale > 6
+            or not stock.is_finite()
+            or stock < 0
+            or stock_scale > 6
+        ):
+            raise RuntimeError("Reserva de catalogo invalida")
+        internal_ids.add(internal_id)
+        normalized.append(
+            {
+                "internal_id": internal_id,
+                "sku": sku,
+                "quantity": format(quantity, "f"),
+                "stock": format(stock, "f"),
+            }
+        )
+
+    if DEV_MODE:
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            data = _dev_load()
+            job = next(
+                (row for row in data.get("quote_jobs", []) if str(row.get("id")) == clean_job_id),
+                None,
+            )
+            if (
+                not job
+                or int(job.get("usuario_id") or 0) != clean_user_id
+                or job.get("status") != "draft"
+            ):
+                raise RuntimeError("Cotizacion de reserva invalida")
+            reservations = data.setdefault("catalog_reservations", [])
+            if any(
+                row.get("supplier") == supplier
+                and str(row.get("quote_job_id") or "") == clean_job_id
+                for row in reservations
+            ):
+                raise RuntimeError("La cotizacion ya tiene reservas")
+
+            now = _iso(datetime.now(timezone.utc))
+            snapshot = []
+            new_rows = []
+            for line in sorted(normalized, key=lambda row: row["internal_id"]):
+                reserved_before = Decimal(0)
+                reserved_by_others = False
+                for row in reservations:
+                    if (
+                        row.get("supplier") != supplier
+                        or row.get("internal_id") != line["internal_id"]
+                        or row.get("status") != "active"
+                    ):
+                        continue
+                    try:
+                        reserved_before += Decimal(str(row.get("quantity") or 0))
+                    except (InvalidOperation, TypeError, ValueError):
+                        raise RuntimeError("Reserva de catalogo almacenada invalida") from None
+                    if int(row.get("usuario_id") or 0) != clean_user_id:
+                        reserved_by_others = True
+                quantity = Decimal(line["quantity"])
+                stock = Decimal(line["stock"])
+                available_before = max(stock - reserved_before, Decimal(0))
+                snapshot.append(
+                    {
+                        "internal_id": line["internal_id"],
+                        "reserved_before": f"{reserved_before:.6f}",
+                        "available_before": f"{available_before:.6f}",
+                        "insufficient": quantity > available_before,
+                        "reserved_by_others": reserved_by_others,
+                    }
+                )
+                new_rows.append(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "supplier": supplier,
+                        "internal_id": line["internal_id"],
+                        "sku": line["sku"],
+                        "quantity": line["quantity"],
+                        "usuario_id": clean_user_id,
+                        "quote_job_id": clean_job_id,
+                        "status": "active",
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+            reservations.extend(new_rows)
+            _dev_save(data)
+            return snapshot
+
+    _require_catalog_service_backend()
+    if _use_postgres():
+        rows = _pg_rows(
+            "SELECT * FROM saas_reserve_catalog_items(%s, %s, %s, %s::jsonb)",
+            (clean_user_id, clean_job_id, supplier, json.dumps(normalized, separators=(",", ":"))),
+        )
+    else:
+        rows = _supabase_req(
+            "POST",
+            "/rpc/saas_reserve_catalog_items",
+            json_data={
+                "p_usuario_id": clean_user_id,
+                "p_quote_job_id": clean_job_id,
+                "p_supplier": supplier,
+                "p_lines": normalized,
+            },
+        )
+    if not isinstance(rows, list) or len(rows) != len(normalized):
+        raise RuntimeError("Respuesta de reserva de catalogo invalida")
+
+    expected_ids = {line["internal_id"] for line in normalized}
+    snapshot = []
+    seen_ids = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RuntimeError("Respuesta de reserva de catalogo invalida")
+        internal_id = str(row.get("internal_id") or "").strip()
+        try:
+            reserved_before = Decimal(str(row.get("reserved_before")))
+            available_before = Decimal(str(row.get("available_before")))
+        except (InvalidOperation, TypeError, ValueError):
+            raise RuntimeError("Respuesta de reserva de catalogo invalida") from None
+        if (
+            internal_id not in expected_ids
+            or internal_id in seen_ids
+            or not reserved_before.is_finite()
+            or reserved_before < 0
+            or not available_before.is_finite()
+            or available_before < 0
+            or not isinstance(row.get("insufficient"), bool)
+            or not isinstance(row.get("reserved_by_others"), bool)
+        ):
+            raise RuntimeError("Respuesta de reserva de catalogo invalida")
+        seen_ids.add(internal_id)
+        snapshot.append(
+            {
+                "internal_id": internal_id,
+                "reserved_before": f"{reserved_before:.6f}",
+                "available_before": f"{available_before:.6f}",
+                "insufficient": row["insufficient"],
+                "reserved_by_others": row["reserved_by_others"],
+            }
+        )
+    if seen_ids != expected_ids:
+        raise RuntimeError("Respuesta de reserva de catalogo invalida")
+    return snapshot
+
+
+def db_create_catalog_reservations(
+    usuario_id: int,
+    quote_job_id: str,
+    supplier: str,
+    lines: list[dict],
+) -> list[dict]:
+    supplier = _catalog_supplier(supplier)
+    now = _iso(datetime.now(timezone.utc))
+    aggregated: dict[str, dict] = {}
+    for line in lines:
+        internal_id = str(line.get("internal_id") or "").strip()
+        sku = str(line.get("sku") or "").strip()
+        if not internal_id or not sku:
+            raise RuntimeError("Reserva de catalogo invalida")
+        try:
+            quantity = Decimal(str(line.get("quantity")))
+        except (InvalidOperation, TypeError, ValueError):
+            raise RuntimeError("Cantidad de reserva invalida") from None
+        if not quantity.is_finite() or quantity <= 0:
+            raise RuntimeError("Cantidad de reserva invalida")
+        if internal_id in aggregated:
+            aggregated[internal_id]["quantity"] += quantity
+        else:
+            aggregated[internal_id] = {"internal_id": internal_id, "sku": sku, "quantity": quantity}
+    rows = [
+        {
+            "id": str(uuid.uuid4()),
+            "supplier": supplier,
+            "internal_id": line["internal_id"],
+            "sku": line["sku"],
+            "quantity": format(line["quantity"], "f"),
+            "usuario_id": int(usuario_id),
+            "quote_job_id": str(quote_job_id),
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        for line in aggregated.values()
+    ]
+    if not rows:
+        return []
+    if DEV_MODE:
+        data = _dev_load()
+        data.setdefault("catalog_reservations", []).extend(rows)
+        _dev_save(data)
+        return rows
+    _require_catalog_service_backend()
+    if _use_postgres():
+        created = []
+        for row in rows:
+            saved = _pg_write(
+                """
+                INSERT INTO saas_catalog_reservations
+                    (id, supplier, internal_id, sku, quantity, usuario_id,
+                     quote_job_id, status, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    row["id"], row["supplier"], row["internal_id"], row["sku"],
+                    row["quantity"], row["usuario_id"], row["quote_job_id"],
+                    row["status"], row["created_at"], row["updated_at"],
+                ),
+            )
+            if saved:
+                created.append(saved)
+        return created
+    created = _supabase_req("POST", "/saas_catalog_reservations", json_data=rows)
+    return created if isinstance(created, list) else rows
+
+
+def db_release_catalog_reservations(quote_job_id: str) -> list[dict]:
+    now = _iso(datetime.now(timezone.utc))
+    if DEV_MODE:
+        data = _dev_load()
+        released = []
+        for row in data.setdefault("catalog_reservations", []):
+            if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
+                row["status"] = "released"
+                row["updated_at"] = now
+                released.append(row)
+        _dev_save(data)
+        return released
+    _require_catalog_service_backend()
+    if _use_postgres():
+        return _pg_rows(
+            """
+            UPDATE saas_catalog_reservations
+            SET status = 'released', updated_at = %s
+            WHERE quote_job_id = %s AND status = 'active'
+            RETURNING *
+            """,
+            (now, quote_job_id),
+        )
+    rows = _supabase_req(
+        "PATCH",
+        "/saas_catalog_reservations",
+        params={"quote_job_id": f"eq.{quote_job_id}", "status": "eq.active"},
+        json_data={"status": "released", "updated_at": now},
+    )
+    return rows if isinstance(rows, list) else []
+
+
+def db_list_exchange_rates() -> list[dict]:
+    if DEV_MODE:
+        rows = _dev_load().setdefault("exchange_rates", [])
+    else:
+        _require_catalog_service_backend()
+        if _use_postgres():
+            rows = _pg_rows(
+                """
+                SELECT currency, effective_date, mxn_per_unit, retrieved_at
+                FROM saas_exchange_rates
+                ORDER BY effective_date DESC, currency ASC
+                LIMIT 30
+                """
+            )
+        else:
+            rows = _supabase_req(
+                "GET",
+                "/saas_exchange_rates",
+                params={
+                    "select": "currency,effective_date,mxn_per_unit,retrieved_at",
+                    "order": "effective_date.desc,currency.asc",
+                    "limit": "30",
+                },
+            )
+    return [
+        {
+            "currency": str(row.get("currency") or ""),
+            "effective_date": row.get("effective_date").isoformat()
+            if isinstance(row.get("effective_date"), date)
+            else str(row.get("effective_date") or ""),
+            "mxn_per_unit": str(row.get("mxn_per_unit") or ""),
+            "retrieved_at": row.get("retrieved_at").isoformat()
+            if isinstance(row.get("retrieved_at"), datetime)
+            else str(row.get("retrieved_at") or ""),
+        }
+        for row in (rows if isinstance(rows, (list, tuple)) else [])
+    ]
+
+
+def db_list_catalog_sync_runs(limit: int = 50) -> list[dict]:
+    limit = max(1, min(int(limit), 100))
+    if DEV_MODE:
+        rows = _dev_load().setdefault("catalog_sync_runs", [])
+        return sorted(rows, key=lambda row: row.get("requested_at", ""), reverse=True)[:limit]
+    _require_catalog_service_backend()
+    if _use_postgres():
+        return _pg_rows(
+            """
+            SELECT r.*, s.supplier, s.label
+            FROM saas_catalog_sync_runs r
+            JOIN saas_catalog_sources s ON s.id = r.source_id
+            ORDER BY r.requested_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+    rows = _supabase_req(
+        "GET",
+        "/saas_catalog_sync_runs",
+        params={"select": "*", "order": "requested_at.desc", "limit": str(limit)},
+    )
+    sources = _supabase_req(
+        "GET",
+        "/saas_catalog_sources",
+        params={"select": "id,supplier,label", "limit": "100"},
+    )
+    by_id = {str(row.get("id")): row for row in sources if isinstance(row, dict)} if isinstance(sources, list) else {}
+    return [
+        {**row, **{key: source.get(key) for key in ("supplier", "label")}}
+        for row in (rows if isinstance(rows, list) else [])
+        for source in [by_id.get(str(row.get("source_id")), {})]
+    ]
+
+
+def db_get_catalog_sync_run(run_id: str) -> dict | None:
+    if DEV_MODE:
+        return next((row for row in _dev_load().setdefault("catalog_sync_runs", []) if str(row.get("id")) == str(run_id)), None)
+    _require_catalog_service_backend()
+    if _use_postgres():
+        return _pg_one(
+            """
+            SELECT r.*, s.supplier, s.label
+            FROM saas_catalog_sync_runs r
+            JOIN saas_catalog_sources s ON s.id = r.source_id
+            WHERE r.id = %s
+            LIMIT 1
+            """,
+            (run_id,),
+        )
+    rows = _supabase_req(
+        "GET",
+        "/saas_catalog_sync_runs",
+        params={"id": f"eq.{run_id}", "select": "*", "limit": "1"},
+    )
+    if not isinstance(rows, list) or not rows:
+        return None
+    row = rows[0]
+    source_rows = _supabase_req(
+        "GET",
+        "/saas_catalog_sources",
+        params={"id": f"eq.{row.get('source_id')}", "select": "supplier,label", "limit": "1"},
+    )
+    return {**row, **(source_rows[0] if isinstance(source_rows, list) and source_rows else {})}
+
+
+def db_get_catalog_snapshot_version(version_id: str) -> dict | None:
+    if DEV_MODE:
+        rows = _dev_load().setdefault("catalog_snapshot_versions", [])
+        return next((row for row in rows if str(row.get("id")) == str(version_id)), None)
+    _require_catalog_service_backend()
+    fields = (
+        "id,supplier,status,payload,previous_snapshot_id,base_published_version_id,"
+        "sync_run_id,created_at"
+    )
+    if _use_postgres():
+        return _pg_one(
+            f"SELECT {fields} FROM saas_catalog_snapshot_versions WHERE id = %s LIMIT 1",
+            (version_id,),
+        )
+    rows = _supabase_req(
+        "GET",
+        "/saas_catalog_snapshot_versions",
+        params={"id": f"eq.{version_id}", "select": fields, "limit": "1"},
+    )
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def db_create_catalog_sync_run(supplier: str, requested_by: int, trigger_type: str = "manual") -> dict:
+    supplier = _catalog_supplier(supplier)
+    if trigger_type not in {"manual", "scheduled"}:
+        raise RuntimeError("Trigger de catalogo invalido")
+    source = db_get_catalog_source(supplier)
+    if not source:
+        raise RuntimeError("Fuente de catalogo no configurada")
+    now = _iso(datetime.now(timezone.utc))
+    row = {
+        "id": str(uuid.uuid4()),
+        "source_id": source["id"],
+        "supplier": supplier,
+        "label": source.get("label") or CATALOG_SUPPLIER_LABELS[supplier],
+        "trigger_type": trigger_type,
+        "status": "requested",
+        "requested_by": int(requested_by),
+        "metrics": {},
+        "requested_at": now,
+        "updated_at": now,
+    }
+    if DEV_MODE:
+        data = _dev_load()
+        data.setdefault("catalog_sync_runs", []).append(row)
+        _dev_save(data)
+        return row
+    _require_catalog_service_backend()
+    payload = {key: row[key] for key in ("source_id", "trigger_type", "requested_by", "metrics")}
+    if _use_postgres():
+        saved = _pg_write(
+            """
+            INSERT INTO saas_catalog_sync_runs
+                (source_id, trigger_type, requested_by, metrics)
+            VALUES (%s, %s, %s, %s)
+            RETURNING *
+            """,
+            tuple(payload.values()),
+        )
+    else:
+        rows = _supabase_req("POST", "/saas_catalog_sync_runs", json_data=payload)
+        saved = rows[0] if isinstance(rows, list) and rows else None
+    if not saved:
+        raise RuntimeError("No fue posible solicitar sincronizacion")
+    return {**saved, "supplier": supplier, "label": row["label"]}
+
+
+def _catalog_rpc(name: str, payload: dict, result_status: str) -> dict:
+    _require_catalog_service_backend()
+    if _use_postgres():
+        params = []
+        placeholders = []
+        for value in payload.values():
+            if isinstance(value, list):
+                if any(not isinstance(item, str) for item in value):
+                    raise RuntimeError("Argumento array de RPC invalido")
+                if not value:
+                    placeholders.append("ARRAY[]::TEXT[]")
+                    continue
+                placeholders.append(f"ARRAY[{', '.join(['%s'] * len(value))}]::TEXT[]")
+                params.extend(value)
+            else:
+                placeholders.append("%s")
+                params.append(value)
+        row = _pg_write(f"SELECT {name}({', '.join(placeholders)}) AS value", tuple(params))
+        value = row.get("value") if row else None
+    else:
+        value = _supabase_req("POST", f"/rpc/{name}", json_data=payload)
+    if isinstance(value, list) and len(value) == 1:
+        value = value[0]
+    if isinstance(value, dict):
+        value = value.get("value") or value.get(name)
+    if not value:
+        raise RuntimeError("RPC de catalogo no devolvio resultado")
+    return {"candidate_id": str(value), "status": result_status}
+
+
+def db_publish_catalog_snapshot(candidate_id: str, reviewed_by: int, review_note: str) -> dict:
+    return _catalog_rpc(
+        "saas_publish_catalog_snapshot",
+        {"p_candidate_id": candidate_id, "p_reviewed_by": int(reviewed_by), "p_review_note": review_note},
+        "published",
+    )
+
+
+def db_reject_catalog_snapshot(candidate_id: str, reviewed_by: int, review_note: str) -> dict:
+    return _catalog_rpc(
+        "saas_reject_catalog_snapshot",
+        {"p_candidate_id": candidate_id, "p_reviewed_by": int(reviewed_by), "p_review_note": review_note},
+        "rejected",
+    )
+
+
+def db_clone_catalog_candidate_with_asset(
+    candidate_id: str,
+    reviewed_by: int,
+    object_name: str,
+    json_path: list[str],
+) -> str:
+    result = _catalog_rpc(
+        "saas_clone_catalog_candidate_with_asset",
+        {
+            "p_candidate_id": candidate_id,
+            "p_reviewed_by": int(reviewed_by),
+            "p_asset_object_name": object_name,
+            "p_json_path": json_path,
+        },
+        "candidate",
+    )
+    return result["candidate_id"]
+
+
+def db_clone_catalog_candidate_with_image_metadata(
+    candidate_id: str,
+    reviewed_by: int,
+    object_name: str,
+    json_path: list[str],
+    image_kind: str,
+    image_label: str,
+    image_references: list[str],
+) -> str:
+    result = _catalog_rpc(
+        "saas_clone_catalog_candidate_with_image_metadata",
+        {
+            "p_candidate_id": candidate_id,
+            "p_reviewed_by": int(reviewed_by),
+            "p_asset_object_name": object_name,
+            "p_json_path": json_path,
+            "p_image_kind": image_kind,
+            "p_image_label": image_label,
+            "p_image_references": image_references,
+        },
+        "candidate",
+    )
+    return result["candidate_id"]
+
+
+_SUPPLIER_CATALOG_CACHE: dict[str, dict] = {}
+
+
+def _enabled_catalog_suppliers() -> tuple[str, ...]:
+    enabled = {str(value).strip().lower() for value in CATALOG_ENABLED_SUPPLIERS}
+    return tuple(supplier for supplier in CATALOG_SUPPLIER_ORDER if supplier in enabled)
+
+
+def _require_enabled_catalog_supplier(supplier: str) -> str:
+    clean = str(supplier or "").strip().lower()
+    if clean not in _enabled_catalog_suppliers():
+        raise HTTPException(status_code=404, detail="Catalogo no disponible")
+    return clean
+
+
+def _catalog_asset_public_url(object_name: str) -> str:
+    if not CATALOG_ASSET_NAME_RE.fullmatch(str(object_name or "")):
+        raise ValueError("Nombre de asset invalido")
+    base_url = str(SUPABASE_URL or "").strip().rstrip("/")
+    if not base_url.startswith(("http://", "https://")):
+        raise ValueError("SUPABASE_URL requerida para asset de catalogo")
+    return f"{base_url}/storage/v1/object/public/{CATALOG_ASSET_BUCKET}/{quote(object_name, safe='')}"
+
+
+def _hydrate_catalog_asset_urls(payload: dict) -> dict:
+    hydrated = deepcopy(payload)
+    for item in hydrated.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        attributes = item.get("attributes")
+        if not isinstance(attributes, dict):
+            continue
+        asset = attributes.get("approved_asset")
+        attributes.pop("image_match", None)
+        if not isinstance(asset, dict) or asset.get("approved") is not True:
+            continue
+        if asset.get("bucket") != CATALOG_ASSET_BUCKET:
+            continue
+        try:
+            item["image_url"] = _catalog_asset_public_url(str(asset.get("path") or ""))
+        except ValueError:
+            continue
+        image_kind = asset.get("image_kind")
+        if image_kind not in {"official", "generated_reference"}:
+            current_kind = item.get("image_kind")
+            image_kind = current_kind if current_kind in {"official", "generated_reference"} else "generated_reference"
+        item["image_kind"] = image_kind
+        attributes.pop("approved_asset", None)
+    return hydrated
+
+
+def _catalog_diff_value(value, depth: int = 0):
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:500]
+    if depth >= 3:
+        return "..."
+    if isinstance(value, list):
+        return [_catalog_diff_value(item, depth + 1) for item in value[:12]]
+    if isinstance(value, dict):
+        result = {}
+        for key in sorted(value, key=str):
+            clean_key = str(key)[:80]
+            folded = clean_key.lower()
+            if any(token in folded for token in ("path", "file_id", "sha", "hash", "secret", "token")):
+                continue
+            if folded in {"approved_asset", "source_images"}:
+                continue
+            result[clean_key] = _catalog_diff_value(value[key], depth + 1)
+            if len(result) >= 20:
+                break
+        return result
+    return str(value)[:500]
+
+
+def _catalog_source_coordinate(source_reference) -> str:
+    if not isinstance(source_reference, str) or len(source_reference) > 2048:
+        return ""
+    try:
+        parsed = json.loads(source_reference)
+    except (TypeError, ValueError):
+        return ""
+    pending = list(parsed) if isinstance(parsed, list) else [parsed]
+    coordinates = []
+    for reference in pending[:20]:
+        if not isinstance(reference, dict):
+            continue
+        sheet = reference.get("sheet_or_page")
+        position = reference.get("cell_or_bbox")
+        if isinstance(sheet, str):
+            sheet = sheet.strip()[:128]
+            if not sheet or any(character in sheet for character in ("/", "\\")):
+                continue
+        elif type(sheet) is int and 1 <= sheet <= 2000:
+            sheet = f"Pagina {sheet}"
+        else:
+            continue
+        if isinstance(position, str) and re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]{0,6}", position):
+            clean_position = position
+        elif (
+            isinstance(position, list) and len(position) == 4
+            and all(type(value) in {int, float} and abs(value) <= 1_000_000 for value in position)
+        ):
+            clean_position = "[" + ", ".join(str(value) for value in position) + "]"
+        else:
+            continue
+        coordinates.append(f"{sheet}!{clean_position}")
+        if len(coordinates) == 3:
+            break
+    return "; ".join(coordinates)[:500]
+
+
+def _catalog_diff_material_type(field: str, before: dict | None, after: dict | None) -> str:
+    if field == "base_price_options":
+        return "base_price"
+    if field == "add_on_options":
+        options = (after or before or {}).get("add_on_options") or []
+        families = sorted({
+            str(option.get("family"))[:60]
+            for option in options
+            if isinstance(option, dict) and option.get("family")
+        })
+        return "add_on:" + ",".join(families[:3]) if families else "add_on"
+    if field in {"base_currency", "price_net", "tax_rate"}:
+        return "commercial"
+    if field in {"stock", "lead_time", "availability_type"}:
+        return "operational"
+    if field in {"image_url", "image_kind", "product_url"}:
+        return "image"
+    if field == "attributes":
+        attributes = (after or before or {}).get("attributes") or {}
+        if isinstance(attributes, dict):
+            keys = [str(key)[:60] for key in attributes if "material" in str(key).lower() or "finish" in str(key).lower()]
+            if keys:
+                return "attributes:" + ",".join(sorted(keys)[:3])
+        return "attributes"
+    return "product"
+
+
+def _catalog_detailed_diff(candidate_payload: dict, base_payload: dict | None) -> dict:
+    candidate_items = candidate_payload.get("items") if isinstance(candidate_payload, dict) else None
+    base_items = base_payload.get("items") if isinstance(base_payload, dict) else []
+    if not isinstance(candidate_items, list) or not isinstance(base_items, list):
+        raise RuntimeError("Payload de catalogo invalido para diferencias")
+    before = {
+        str(item.get("internal_id")): item
+        for item in base_items
+        if isinstance(item, dict) and str(item.get("internal_id") or "").strip()
+    }
+    after = {
+        str(item.get("internal_id")): item
+        for item in candidate_items
+        if isinstance(item, dict) and str(item.get("internal_id") or "").strip()
+    }
+    items = []
+    total = 0
+    for item_id in sorted(set(before) | set(after)):
+        old_item, new_item = before.get(item_id), after.get(item_id)
+        if old_item is None or new_item is None:
+            total += 1
+            source_item = new_item or old_item or {}
+            if len(items) < CATALOG_DIFF_LIMIT:
+                items.append({
+                    "item_id": item_id[:256],
+                    "field": "item",
+                    "before": None if old_item is None else _catalog_diff_value(old_item.get("name") or item_id),
+                    "after": None if new_item is None else _catalog_diff_value(new_item.get("name") or item_id),
+                    "source_coordinate": _catalog_source_coordinate(source_item.get("source_reference")),
+                    "material_type": "product",
+                })
+            continue
+        for field in CATALOG_DIFF_FIELDS:
+            if old_item.get(field) == new_item.get(field):
+                continue
+            total += 1
+            if len(items) >= CATALOG_DIFF_LIMIT:
+                continue
+            items.append({
+                "item_id": item_id[:256],
+                "field": field,
+                "before": _catalog_diff_value(old_item.get(field)),
+                "after": _catalog_diff_value(new_item.get(field)),
+                "source_coordinate": _catalog_source_coordinate(
+                    new_item.get("source_reference") or old_item.get("source_reference")
+                ),
+                "material_type": _catalog_diff_material_type(field, old_item, new_item),
+            })
+    return {"items": items, "total": total, "truncated": total > len(items)}
+
+
+def _catalog_run_detailed_diff(run: dict) -> dict:
+    candidate_id = str(run.get("candidate_version_id") or "").strip()
+    candidate = db_get_catalog_snapshot_version(candidate_id)
+    if (
+        not isinstance(candidate, dict)
+        or candidate.get("status") != "candidate"
+        or candidate.get("supplier") != run.get("supplier")
+        or not isinstance(candidate.get("payload"), dict)
+    ):
+        raise RuntimeError("Candidato de catalogo invalido")
+    base_id = candidate.get("base_published_version_id")
+    current = candidate
+    seen = {candidate_id}
+    for _index in range(20):
+        if base_id:
+            break
+        previous_id = str(current.get("previous_snapshot_id") or "").strip()
+        if not previous_id or previous_id in seen:
+            break
+        seen.add(previous_id)
+        current = db_get_catalog_snapshot_version(previous_id)
+        if not isinstance(current, dict) or current.get("supplier") != run.get("supplier"):
+            raise RuntimeError("Cadena de candidato invalida")
+        base_id = current.get("base_published_version_id")
+    base = db_get_catalog_snapshot_version(str(base_id)) if base_id else None
+    if base is not None and (
+        not isinstance(base, dict)
+        or base.get("supplier") != run.get("supplier")
+        or not isinstance(base.get("payload"), dict)
+    ):
+        raise RuntimeError("Base de catalogo invalida")
+    return _catalog_detailed_diff(candidate["payload"], base.get("payload") if base else None)
+
+
+def _load_supplier_catalog_cached(supplier: str) -> dict:
+    supplier = _catalog_supplier(supplier)
+    snapshot = db_get_published_catalog_snapshot(supplier)
+    payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
+    if not isinstance(payload, dict):
+        raise RuntimeError("Catalogo publicado no disponible")
+    cache_key = str(snapshot.get("id") or snapshot.get("source_hash") or payload.get("source_hash") or "")
+    cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
+    if cached and cached.get("cache_key") == cache_key:
+        return cached["catalog"]
+    try:
+        catalog = load_supplier_catalog_data(_hydrate_catalog_asset_urls(payload), expected_supplier=supplier)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise RuntimeError("Catalogo publicado invalido") from exc
+    _SUPPLIER_CATALOG_CACHE[supplier] = {"cache_key": cache_key, "catalog": catalog}
+    return catalog
+
+
+def _display_number(value: Decimal) -> int | float:
+    return int(value) if value == value.to_integral() else float(value)
+
+
+def _catalog_reservation_totals(rows: list[dict]) -> tuple[dict[str, Decimal], set[str]]:
+    if not isinstance(rows, list):
+        raise RuntimeError("Resumen de reservas invalido")
+    totals: dict[str, Decimal] = {}
+    reserved_by_others: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RuntimeError("Resumen de reservas invalido")
+        internal_id = str(row.get("internal_id") or "").strip()
+        if not internal_id:
+            raise RuntimeError("Resumen de reservas invalido")
+        try:
+            quantity = Decimal(str(row.get("reserved_quantity") or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            raise RuntimeError("Resumen de reservas invalido") from None
+        if not quantity.is_finite() or quantity <= 0:
+            raise RuntimeError("Resumen de reservas invalido")
+        if not isinstance(row.get("reserved_by_others"), bool):
+            raise RuntimeError("Resumen de reservas invalido")
+        totals[internal_id] = quantity
+        if row.get("reserved_by_others") is True:
+            reserved_by_others.add(internal_id)
+    return totals, reserved_by_others
+
+
+def _supplier_catalog_response(supplier: str, usuario_id: int) -> dict:
+    catalog = load_supplier_catalog_data(_load_supplier_catalog_cached(supplier), expected_supplier=supplier)
+    totals, reserved_by_others = _catalog_reservation_totals(
+        db_catalog_reservation_summary(supplier, usuario_id)
+    )
+    items = []
+    for source_item in catalog["items"]:
+        item = deepcopy(source_item)
+        reserved = totals.get(item["internal_id"], Decimal(0)) if item["availability_type"] == "stocked" else Decimal(0)
+        try:
+            stock = Decimal(str(item["stock"])) if item["stock"] is not None else None
+        except (InvalidOperation, TypeError, ValueError):
+            stock = None
+        item.update(
+            {
+                "reserved_quantity": _display_number(reserved),
+                "reserved_by_others": item["internal_id"] in reserved_by_others,
+                "is_out_of_stock": item["availability_type"] == "stocked" and stock is not None and stock <= 0,
+            }
+        )
+        items.append(item)
+    return {
+        "supplier": supplier,
+        "source_hash": catalog["source_hash"],
+        "generated_at": catalog["generated_at"],
+        "total": len(items),
+        "items": items,
+    }
+
+
+def _catalog_reservation_request_lines(cart_payload: dict) -> list[dict]:
+    rows = []
+    for line in cart_payload.get("items", []):
+        if line.get("availability_type") != "stocked":
+            continue
+        try:
+            quantity = Decimal(str(line.get("quantity") or 0))
+            stock = Decimal(str(line.get("stock") or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            raise ValueError("Existencia de catalogo invalida") from None
+        if not quantity.is_finite() or quantity <= 0 or not stock.is_finite() or stock < 0:
+            raise ValueError("Existencia de catalogo invalida")
+        rows.append(
+            {
+                "internal_id": line["internal_id"],
+                "sku": line["sku"],
+                "quantity": line["quantity"],
+                "stock": line["stock"],
+            }
+        )
+    return rows
+
+
+def _apply_catalog_reservation_snapshot(cart_payload: dict, snapshot: list[dict]) -> None:
+    stocked = {
+        str(line.get("internal_id") or ""): line
+        for line in cart_payload.get("items", [])
+        if line.get("availability_type") == "stocked"
+    }
+    if not isinstance(snapshot, list) or len(snapshot) != len(stocked):
+        raise ValueError("Respuesta de reserva de catalogo invalida")
+    seen = set()
+    for row in snapshot:
+        if not isinstance(row, dict):
+            raise ValueError("Respuesta de reserva de catalogo invalida")
+        internal_id = str(row.get("internal_id") or "").strip()
+        line = stocked.get(internal_id)
+        try:
+            reserved = Decimal(str(row.get("reserved_before")))
+            available = Decimal(str(row.get("available_before")))
+            stock = Decimal(str(line.get("stock"))) if line else Decimal(-1)
+            quantity = Decimal(str(line.get("quantity"))) if line else Decimal(-1)
+        except (InvalidOperation, TypeError, ValueError):
+            raise ValueError("Respuesta de reserva de catalogo invalida") from None
+        expected_available = max(stock - reserved, Decimal(0))
+        insufficient = row.get("insufficient")
+        if (
+            line is None
+            or internal_id in seen
+            or not reserved.is_finite()
+            or reserved < 0
+            or not available.is_finite()
+            or available < 0
+            or available != expected_available
+            or not isinstance(insufficient, bool)
+            or insufficient != (quantity > available)
+            or not isinstance(row.get("reserved_by_others"), bool)
+        ):
+            raise ValueError("Respuesta de reserva de catalogo invalida")
+        seen.add(internal_id)
+        line["reserved_quantity"] = f"{reserved:.6f}"
+        line["available_after_reservations"] = f"{available:.6f}"
+        line["reserved_by_others"] = row["reserved_by_others"]
+        if insufficient:
+            warning = (
+                "Cantidad solicitada supera la existencia disponible; verificar disponibilidad."
+                if reserved > 0
+                else "Cantidad solicitada supera la existencia; verificar disponibilidad."
+            )
+            if warning not in line["warnings"]:
+                line["warnings"].append(warning)
+            line["stock_status"] = "insufficient"
+    if seen != set(stocked):
+        raise ValueError("Respuesta de reserva de catalogo invalida")
+
+
+def _catalog_exchange_rates_response(base_currency: str) -> dict:
+    clean_base = str(base_currency or "USD").strip().upper()
+    if clean_base not in ALLOWED_CURRENCIES:
+        raise HTTPException(status_code=400, detail="Moneda base invalida")
+    rows = db_list_exchange_rates()
+    rates = []
+    for quote_currency in ("USD", "MXN", "EUR"):
+        try:
+            rate = resolve_conversion_rate(clean_base, quote_currency, rows, date.today())
+            rates.append(
+                {
+                    "quote_currency": quote_currency,
+                    "available": True,
+                    "exchange_rate": f"{rate.exchange_rate:.6f}",
+                    "rate_source": rate.rate_source,
+                    "rate_effective_date": rate.rate_effective_date.isoformat(),
+                    "rate_retrieved_at": rate.rate_retrieved_at,
+                }
+            )
+        except ValueError:
+            rates.append({"quote_currency": quote_currency, "available": False, "reason": "rate_unavailable"})
+    return {"base_currency": clean_base, "rates": rates}
+
+
+def _catalog_image_type(content: bytes) -> tuple[str, str] | None:
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png", "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "jpg", "image/jpeg"
+    if len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    return None
+
+
+def _catalog_jpeg_has_exact_end(content: bytes) -> bool:
+    if not content.startswith(b"\xff\xd8"):
+        return False
+    offset = 2
+    in_scan = False
+    while offset < len(content):
+        if in_scan:
+            offset = content.find(b"\xff", offset)
+            if offset < 0:
+                return False
+        elif content[offset] != 0xFF:
+            return False
+        while offset < len(content) and content[offset] == 0xFF:
+            offset += 1
+        if offset >= len(content):
+            return False
+        marker = content[offset]
+        offset += 1
+        if in_scan and (marker == 0x00 or 0xD0 <= marker <= 0xD7):
+            continue
+        in_scan = False
+        if marker == 0xD9:
+            return offset == len(content)
+        if marker in {0x01, 0xD8} or 0xD0 <= marker <= 0xD7:
+            continue
+        if offset + 2 > len(content):
+            return False
+        segment_length = int.from_bytes(content[offset:offset + 2], "big")
+        if segment_length < 2 or offset + segment_length > len(content):
+            return False
+        offset += segment_length
+        in_scan = marker == 0xDA
+    return False
+
+
+def _catalog_image_has_exact_end(content: bytes, extension: str) -> bool:
+    if extension == "jpg":
+        return _catalog_jpeg_has_exact_end(content)
+    if extension == "webp":
+        return len(content) >= 12 and int.from_bytes(content[4:8], "little") + 8 == len(content)
+    if extension != "png" or not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    offset = 8
+    while offset + 12 <= len(content):
+        length = int.from_bytes(content[offset:offset + 4], "big")
+        chunk_type = content[offset + 4:offset + 8]
+        offset += length + 12
+        if offset > len(content):
+            return False
+        if chunk_type == b"IEND":
+            return length == 0 and offset == len(content)
+    return False
+
+
+def _normalize_catalog_image(content: bytes, filename: str, declared_mime: str) -> bytes:
+    detected = _catalog_image_type(content)
+    if not detected:
+        raise HTTPException(status_code=400, detail="Formato de imagen invalido")
+    extension, detected_mime = detected
+    filename_extension = Path(str(filename or "")).suffix.lower().lstrip(".")
+    if filename_extension == "jpeg":
+        filename_extension = "jpg"
+    if str(declared_mime or "").lower() != detected_mime or filename_extension != extension:
+        raise HTTPException(status_code=400, detail="Tipo de imagen no coincide con su contenido")
+    if not _catalog_image_has_exact_end(content, extension):
+        raise HTTPException(status_code=400, detail="Imagen truncada o con contenido adicional")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as probe:
+                if probe.format not in {"PNG", "JPEG", "WEBP"}:
+                    raise ValueError("unsupported format")
+                width, height = probe.size
+                if (
+                    width < 1 or height < 1
+                    or width > CATALOG_ASSET_MAX_WIDTH
+                    or height > CATALOG_ASSET_MAX_HEIGHT
+                    or width * height > CATALOG_ASSET_MAX_PIXELS
+                ):
+                    raise ValueError("unsafe dimensions")
+                if getattr(probe, "is_animated", False) or getattr(probe, "n_frames", 1) != 1:
+                    raise ValueError("animated image")
+                probe.verify()
+            with Image.open(io.BytesIO(content)) as decoded:
+                decoded.load()
+                if getattr(decoded, "is_animated", False) or getattr(decoded, "n_frames", 1) != 1:
+                    raise ValueError("animated image")
+                has_alpha = "A" in decoded.getbands() or "transparency" in decoded.info
+                normalized = decoded.convert("RGBA" if has_alpha else "RGB")
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning, UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Imagen corrupta o no segura") from exc
+    output = io.BytesIO()
+    normalized.save(output, format="PNG", optimize=False, compress_level=9)
+    canonical = output.getvalue()
+    if len(canonical) > CATALOG_ASSET_MAX_OUTPUT_BYTES:
+        raise HTTPException(status_code=413, detail="Imagen normalizada mayor a 8 MB")
+    return canonical
+
+
+def _catalog_image_metadata(image_kind: str, image_label: str, image_references: str) -> tuple[str, str, list[str]]:
+    kind = str(image_kind or "").strip()
+    label = str(image_label or "").strip()
+    try:
+        references = json.loads(image_references or "[]")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Referencias de imagen invalidas") from exc
+    if kind not in {"official", "generated_reference"} or not isinstance(references, list):
+        raise HTTPException(status_code=400, detail="Metadata de imagen invalida")
+    clean_references = [str(reference).strip() for reference in references]
+    if any(not reference or len(reference) > 2000 for reference in clean_references):
+        raise HTTPException(status_code=400, detail="Referencia de imagen invalida")
+    if kind == "generated_reference":
+        if not label or len(label) > 300 or not clean_references:
+            raise HTTPException(status_code=400, detail="La imagen de referencia requiere etiqueta y referencia HTTPS")
+        if any((parsed := urlparse(reference)).scheme != "https" or not parsed.netloc for reference in clean_references):
+            raise HTTPException(status_code=400, detail="La imagen de referencia requiere URLs HTTPS verificables")
+    return kind, label, clean_references
+
+
+def _upload_catalog_asset(object_name: str, content: bytes, content_type: str) -> None:
+    if not CATALOG_ASSET_NAME_RE.fullmatch(str(object_name or "")):
+        raise RuntimeError("Nombre de asset invalido")
+    if DEV_MODE:
+        destination = DEV_STORE_DIR / CATALOG_ASSET_BUCKET / object_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            if destination.read_bytes() != content:
+                raise RuntimeError("Colision de asset de catalogo")
+            return
+        destination.write_bytes(content)
+        return
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise RuntimeError("Storage de catalogos no configurado")
+    encoded_name = quote(object_name, safe="")
+    url = f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/{CATALOG_ASSET_BUCKET}/{encoded_name}"
+    headers = _get_supabase_headers()
+    headers.update({"Content-Type": content_type, "x-upsert": "false"})
+    request = urllib.request.Request(url, data=content, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=60):
+            return
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            return
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(_safe_http_error("Supabase Storage", exc.code, body)) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Supabase Storage connection error: {exc.reason}") from exc
+
+
 _TARKETT_CATALOG_CACHE = {
     "path": None,
     "fingerprint": None,
@@ -1269,16 +2602,38 @@ def _require_queued_quote_job(updated: dict) -> dict:
 
 
 def _cleanup_failed_catalog_quote(job_id: str, input_path: str, release_reservations) -> None:
-    operations = (
-        lambda: release_reservations(job_id),
-        lambda: db_delete_quote_job(job_id),
-        lambda: _delete_storage_paths([input_path]),
-    )
-    for operation in operations:
+    def mark_pending(stage: str) -> None:
         try:
-            operation()
+            db_update_quote_job(
+                job_id,
+                {
+                    "status": "failed",
+                    "error_message": f"cleanup_pending:{stage}",
+                },
+            )
         except Exception:
             pass
+        print(
+            json.dumps(
+                {"event": "catalog_quote_cleanup_pending", "job_id": job_id, "stage": stage},
+                separators=(",", ":"),
+            )
+        )
+
+    try:
+        release_reservations(job_id)
+    except Exception:
+        mark_pending("release_reservations")
+        return
+    try:
+        db_delete_quote_job(job_id)
+    except Exception:
+        mark_pending("delete_job")
+        return
+    try:
+        _delete_storage_paths([input_path])
+    except Exception:
+        pass
 
 
 def _require_active_subscription(usuario_id: int):
@@ -1311,6 +2666,15 @@ def _quote_storage_paths(job: dict) -> list[str]:
         if path:
             paths.append(path)
     return list(dict.fromkeys(paths))
+
+
+def _release_quote_reservations(job: dict) -> None:
+    job_id = str(job.get("id") or "").strip()
+    if not job_id:
+        raise RuntimeError("Cotizacion sin identificador")
+    db_release_tarkett_reservations(job_id)
+    db_release_offiho_reservations(job_id)
+    db_release_catalog_reservations(job_id)
 
 
 def _delete_storage_paths(paths: list[str]) -> None:
@@ -1591,10 +2955,9 @@ def _run_quote_retention(usuario_id: int, jobs: list[dict] | None = None, dry_ru
         summary["deleted_reasons"][reason] = summary["deleted_reasons"].get(reason, 0) + 1
         deleted_job_ids.add(str(job["id"]))
         if not dry_run:
-            _delete_quote_storage(job)
-            db_release_tarkett_reservations(job["id"])
-            db_release_offiho_reservations(job["id"])
+            _release_quote_reservations(job)
             db_delete_quote_job(job["id"])
+            _delete_quote_storage(job)
             summary["storage_objects_deleted"] += len(paths)
 
     if DELETE_COMPLETED_QUOTE_INPUTS:
@@ -1607,9 +2970,9 @@ def _run_quote_retention(usuario_id: int, jobs: list[dict] | None = None, dry_ru
             summary["storage_objects_planned"] += 1
             summary["completed_inputs_deleted"] += 1
             if not dry_run:
-                _delete_storage_paths([input_path])
                 db_update_quote_job(job["id"], {"input_path": None})
                 job["input_path"] = None
+                _delete_storage_paths([input_path])
                 summary["storage_objects_deleted"] += 1
 
     if not dry_run:
@@ -2222,6 +3585,255 @@ def admin_storage_retention_emergency(body: dict | None = None, _authorized: boo
 
 # COTIZACIONES WEB
 
+@app.get("/catalogs")
+def supplier_catalog_registry(current_user: dict = Depends(get_current_user)):
+    try:
+        _require_active_subscription(current_user["id"])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Error leyendo suscripcion") from exc
+    return {
+        "suppliers": [
+            {"supplier": supplier, "label": CATALOG_SUPPLIER_LABELS[supplier]}
+            for supplier in _enabled_catalog_suppliers()
+        ]
+    }
+
+
+@app.get("/catalogs/exchange-rates")
+def supplier_exchange_rates(base_currency: str = "USD", current_user: dict = Depends(get_current_user)):
+    try:
+        _require_active_subscription(current_user["id"])
+        return _catalog_exchange_rates_response(base_currency)
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Tipos de cambio no disponibles") from exc
+
+
+@app.get("/catalogs/{supplier}")
+def supplier_catalog(supplier: str, current_user: dict = Depends(get_current_user)):
+    supplier = _require_enabled_catalog_supplier(supplier)
+    try:
+        _require_active_subscription(current_user["id"])
+        return _supplier_catalog_response(supplier, current_user["id"])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Catalogo publicado no disponible") from exc
+
+
+@app.post("/catalogs/{supplier}/quote")
+def supplier_quote(supplier: str, body: dict, current_user: dict = Depends(get_current_user)):
+    supplier = _require_enabled_catalog_supplier(supplier)
+    try:
+        _require_active_subscription(current_user["id"])
+        catalog = load_supplier_catalog_data(
+            _load_supplier_catalog_cached(supplier),
+            expected_supplier=supplier,
+        )
+        rate_rows = db_list_exchange_rates()
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Error preparando catalogo de proveedor") from exc
+
+    raw_items = body.get("items") or []
+    if not isinstance(raw_items, list):
+        raise HTTPException(status_code=400, detail="Items de proveedor debe ser una lista")
+    try:
+        cart_payload = build_supplier_cart_payload(
+            raw_items,
+            catalog,
+            str(body.get("quote_currency") or "USD"),
+            rate_rows,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        reservation_lines = _catalog_reservation_request_lines(cart_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    metadata = _validate_metadata({**body, "image_provider": body.get("image_provider") or "pillow"})
+    frozen_rate = {
+        key: cart_payload[key]
+        for key in (
+            "base_currency",
+            "quote_currency",
+            "exchange_rate",
+            "rate_source",
+            "rate_effective_date",
+            "rate_retrieved_at",
+        )
+    }
+    metadata.update(
+        {
+            "source_type": "supplier_cart",
+            "supplier": supplier,
+            "original_filename": f"{supplier}-cart.json",
+            "input_extension": ".json",
+            "storage_provider": _storage_provider_name(),
+            "input_storage_provider": _storage_provider_name(),
+            "catalog_source_hash": cart_payload["catalog_source_hash"],
+            "supplier_item_count": len(cart_payload["items"]),
+            "estimated_duration_seconds": 120,
+            **frozen_rate,
+        }
+    )
+    assigned_quote_number = _next_quote_number_for_user(current_user)
+    if assigned_quote_number:
+        metadata["cotizacion"] = assigned_quote_number
+    elif not metadata.get("cotizacion"):
+        metadata["cotizacion"] = metadata["proyecto"]
+
+    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
+    if not template:
+        raise HTTPException(status_code=400, detail="Template requerido")
+    _enforce_active_quote_limit(current_user["id"])
+    job_id = str(uuid.uuid4())
+    input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
+    try:
+        db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
+        if reservation_lines:
+            reservation_snapshot = db_reserve_catalog_items(
+                current_user["id"],
+                job_id,
+                supplier,
+                reservation_lines,
+            )
+            _apply_catalog_reservation_snapshot(cart_payload, reservation_snapshot)
+        content = json.dumps(cart_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        _storage_upload_bytes(input_path, content, "application/json")
+        updated = _require_queued_quote_job(
+            db_update_quote_job(
+                job_id,
+                {"status": "queued", "metadata": metadata, "error_message": None},
+            )
+        )
+    except Exception as exc:
+        _cleanup_failed_catalog_quote(job_id, input_path, db_release_catalog_reservations)
+        raise HTTPException(status_code=503, detail="No fue posible crear cotizacion de proveedor") from exc
+
+    _wake_worker()
+    try:
+        _enforce_quote_history_limit(current_user["id"])
+    except RuntimeError:
+        pass
+    return {"mensaje": f"Cotizacion {CATALOG_SUPPLIER_LABELS[supplier]} en cola", "job": updated}
+
+
+@app.get("/admin/catalog-sync-runs")
+def admin_catalog_sync_runs(user: dict = Depends(require_admin)):
+    try:
+        return {"runs": db_list_catalog_sync_runs()}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Error leyendo sincronizaciones") from exc
+
+
+@app.post("/admin/catalog-sync/{supplier}")
+def admin_catalog_sync(supplier: str, user: dict = Depends(require_admin)):
+    supplier = _require_enabled_catalog_supplier(supplier)
+    try:
+        run = db_create_catalog_sync_run(supplier, int(user["id"]), "manual")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="No fue posible solicitar sincronizacion") from exc
+    _wake_worker()
+    return {"mensaje": "Sincronizacion solicitada", "run": run}
+
+
+@app.get("/admin/catalog-sync-runs/{run_id}")
+def admin_catalog_sync_run(run_id: str, user: dict = Depends(require_admin)):
+    try:
+        run = db_get_catalog_sync_run(run_id)
+        if run and run.get("status") == "awaiting_approval" and run.get("candidate_version_id"):
+            run = {**run, "diff": _catalog_run_detailed_diff(run)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Error leyendo sincronizacion") from exc
+    if not run:
+        raise HTTPException(status_code=404, detail="Sincronizacion no encontrada")
+    return {"run": run}
+
+
+def _catalog_review_target(run_id: str) -> tuple[dict, str]:
+    run = db_get_catalog_sync_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Sincronizacion no encontrada")
+    candidate_id = str(run.get("candidate_version_id") or "").strip()
+    if run.get("status") != "awaiting_approval" or not candidate_id:
+        raise HTTPException(status_code=409, detail="Sincronizacion no espera aprobacion")
+    return run, candidate_id
+
+
+def _catalog_review_note(body: dict, required: bool = True) -> str:
+    note = str((body or {}).get("review_note") or "").strip()
+    if required and not note:
+        raise HTTPException(status_code=400, detail="Nota de revision requerida")
+    return note[:2000]
+
+
+@app.post("/admin/catalog-sync-runs/{run_id}/approve")
+def admin_catalog_approve(run_id: str, body: dict, user: dict = Depends(require_admin)):
+    try:
+        _run, candidate_id = _catalog_review_target(run_id)
+        result = db_publish_catalog_snapshot(candidate_id, int(user["id"]), _catalog_review_note(body, required=False))
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail="No fue posible publicar candidato") from exc
+    _SUPPLIER_CATALOG_CACHE.clear()
+    return {"mensaje": "Catalogo publicado", "snapshot": result}
+
+
+@app.post("/admin/catalog-sync-runs/{run_id}/reject")
+def admin_catalog_reject(run_id: str, body: dict, user: dict = Depends(require_admin)):
+    try:
+        _run, candidate_id = _catalog_review_target(run_id)
+        result = db_reject_catalog_snapshot(candidate_id, int(user["id"]), _catalog_review_note(body))
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail="No fue posible rechazar candidato") from exc
+    return {"mensaje": "Catalogo rechazado", "snapshot": result}
+
+
+@app.post("/admin/catalog-sync-runs/{run_id}/images")
+async def admin_catalog_image(
+    run_id: str,
+    item_index: int = Form(...),
+    file: UploadFile = File(...),
+    image_kind: str = Form("official"),
+    image_label: str = Form(""),
+    image_references: str = Form("[]"),
+    user: dict = Depends(require_admin),
+):
+    if item_index < 0:
+        raise HTTPException(status_code=400, detail="Indice de item invalido")
+    kind, label, references = _catalog_image_metadata(image_kind, image_label, image_references)
+    content = await file.read(CATALOG_ASSET_MAX_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="Imagen vacia")
+    if len(content) > CATALOG_ASSET_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Imagen mayor a 8 MB")
+    content = _normalize_catalog_image(content, str(file.filename or ""), str(file.content_type or ""))
+    try:
+        _run, candidate_id = _catalog_review_target(run_id)
+        object_name = f"{hashlib.sha256(content).hexdigest()}.png"
+        _upload_catalog_asset(object_name, content, "image/png")
+        new_candidate_id = db_clone_catalog_candidate_with_image_metadata(
+            candidate_id,
+            int(user["id"]),
+            object_name,
+            ["items", str(item_index)],
+            kind,
+            label,
+            references,
+        )
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail="No fue posible asociar imagen") from exc
+    return {
+        "mensaje": "Imagen aprobada",
+        "object_name": object_name,
+        "candidate_id": new_candidate_id,
+    }
+
 @app.get("/tarkett/catalog")
 def tarkett_catalog(current_user: dict = Depends(get_current_user)):
     try:
@@ -2572,10 +4184,9 @@ def cotizaciones_get(job_id: str, current_user: dict = Depends(get_current_user)
 def cotizaciones_delete(job_id: str, current_user: dict = Depends(get_current_user)):
     job = _quote_job_for_user(job_id, current_user["id"])
     try:
-        _delete_quote_storage(job)
-        db_release_tarkett_reservations(job_id)
-        db_release_offiho_reservations(job_id)
+        _release_quote_reservations(job)
         db_delete_quote_job(job_id)
+        _delete_quote_storage(job)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error eliminando cotizacion: {e}")
     return {"deleted_id": job_id}

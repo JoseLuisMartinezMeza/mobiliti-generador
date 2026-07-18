@@ -39,7 +39,16 @@ MOBILITI_API_URL = os.environ.get("MOBILITI_API_URL", "https://web-lemon-one-45.
 DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes"}
 TARKETT_CART_SOURCE_TYPE = "tarkett_cart"
 OFFIHO_CART_SOURCE_TYPE = "offiho_cart"
-JSON_CART_SOURCE_TYPES = frozenset({TARKETT_CART_SOURCE_TYPE, OFFIHO_CART_SOURCE_TYPE})
+SUPPLIER_CART_SOURCE_TYPE = "supplier_cart"
+JSON_CART_SOURCE_TYPES = frozenset(
+    {TARKETT_CART_SOURCE_TYPE, OFFIHO_CART_SOURCE_TYPE, SUPPLIER_CART_SOURCE_TYPE}
+)
+SUPPLIER_LABELS = {
+    "cr-global": "CR Global",
+    "sonara": "Sonara",
+    "sunon": "Sunon",
+    "alma": "ALMA",
+}
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -606,6 +615,12 @@ def _convert_offiho_cart_to_quotation(source_json: Path, output_xlsx: Path, payl
     create_offiho_quotation_workbook(payload, output_xlsx)
 
 
+def _convert_supplier_cart_to_quotation(source_json: Path, output_xlsx: Path, payload: dict) -> None:
+    from mobiliti_saas.quote_engine.supplier_catalog import create_supplier_quotation_workbook
+
+    create_supplier_quotation_workbook(payload, output_xlsx)
+
+
 def _read_cart_payload(source_json: Path) -> dict:
     try:
         payload = json.loads(source_json.read_text(encoding="utf-8"))
@@ -648,6 +663,11 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
                 _convert_offiho_cart_to_quotation,
                 "offiho_converted",
             ),
+            SUPPLIER_CART_SOURCE_TYPE: (
+                "quotation_from_supplier.xlsx",
+                _convert_supplier_cart_to_quotation,
+                "supplier_converted",
+            ),
         }
         conversion = conversions.get(source_type)
         if conversion is None:
@@ -658,6 +678,24 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
         converter(local_input, converted_input, payload)
         metadata["input_extension"] = ".json"
         metadata[conversion_flag] = True
+        if source_type == SUPPLIER_CART_SOURCE_TYPE:
+            supplier = str(payload.get("supplier") or "").strip().lower()
+            supplier_label = SUPPLIER_LABELS.get(supplier)
+            if supplier_label is None:
+                raise RuntimeError("Proveedor de catalogo no soportado")
+            metadata.update(
+                {
+                    "catalog_supplier": supplier,
+                    "catalog_supplier_label": supplier_label,
+                    "catalog_price_mode": "list_price_net",
+                    "base_currency": payload.get("base_currency"),
+                    "quote_currency": payload.get("quote_currency"),
+                    "exchange_rate": payload.get("exchange_rate"),
+                    "rate_source": payload.get("rate_source"),
+                    "rate_effective_date": payload.get("rate_effective_date"),
+                    "rate_retrieved_at": payload.get("rate_retrieved_at"),
+                }
+            )
         job["metadata"] = metadata
         return converted_input
     if input_extension != ".pdf":

@@ -29,6 +29,8 @@ import {
   UsersRound,
   XCircle
 } from "lucide-react";
+import SupplierCatalogView from "./SupplierCatalogView";
+import CatalogAdminPanel from "./CatalogAdminPanel";
 import "./styles.css";
 
 const DEFAULT_API_BASE = ["127.0.0.1", "localhost"].includes(
@@ -165,6 +167,10 @@ function clearCatalogCaches() {
   try {
     sessionStorage.removeItem(TARKETT_CATALOG_CACHE_KEY);
     sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY);
+    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith("supplier-catalog:")) sessionStorage.removeItem(key);
+    }
   } catch {
     // Storage can be unavailable in privacy-restricted browser sessions.
   }
@@ -328,10 +334,10 @@ async function runDownload(job, token, setDownloadState) {
 function useApi(token) {
   return useMemo(() => {
     async function request(path, options = {}) {
-      const headers = {
-        "Content-Type": "application/json",
-        ...(options.headers || {})
-      };
+      const headers = { ...(options.headers || {}) };
+      if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+      }
       if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch(apiUrl(path), { ...options, headers });
       const data = await res.json().catch(() => ({}));
@@ -413,7 +419,12 @@ function Sidebar({ view, setView, isAdmin, onLogout }) {
     ["historial", "Historial", History],
     ["clientes", "Clientes", UsersRound],
     ["admin", "Admin", Settings],
-    ["tarkett", "Tarkett", PackageSearch], ["offiho", "Offiho", Armchair]
+    ["tarkett", "Tarkett", PackageSearch],
+    ["offiho", "Offiho", Armchair],
+    ["cr-global", "CR Global", PackageSearch],
+    ["sonara", "Sonara", PackageSearch],
+    ["sunon", "Sunon", PackageSearch],
+    ["alma", "ALMA", PackageSearch]
   ];
   return (
     <aside className="sidebar">
@@ -1763,7 +1774,8 @@ function AdminView({ token }) {
   }
 
   return (
-    <section className="main-card full">
+    <>
+      <section className="main-card full">
       <div className="card-head">
         <h2>Admin</h2>
         <p>Gestion basica de usuarios y suscripciones.</p>
@@ -1846,7 +1858,9 @@ function AdminView({ token }) {
           ))}
         </div>
       </div>
-    </section>
+      </section>
+      <CatalogAdminPanel request={request} />
+    </>
   );
 }
 
@@ -1912,6 +1926,12 @@ function App() {
   if (!session) return <Login onLogin={login} notice={sessionNotice} />;
 
   const isAdmin = Boolean(session.usuario?.es_admin);
+  const supplierLabels = {
+    "cr-global": "CR Global",
+    sonara: "Sonara",
+    sunon: "Sunon",
+    alma: "ALMA"
+  };
   async function downloadJob(job) {
     try {
       await runDownload(job, session.access_token, setDownloadState);
@@ -1961,7 +1981,9 @@ function App() {
           ? <TarkettView token={session.access_token} userId={session.usuario?.id} refreshJobs={refreshJobs} onJobQueued={(job) => setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])} />
           : view === "offiho"
             ? <OffihoView token={session.access_token} userId={session.usuario?.id} refreshJobs={refreshJobs} onJobQueued={(job) => setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])} />
-        : view === "admin" || view === "clientes"
+            : Object.hasOwn(supplierLabels, view)
+              ? <SupplierCatalogView key={view} supplier={view} label={supplierLabels[view]} request={request} userId={session.usuario?.id} refreshJobs={refreshJobs} onJobQueued={(job) => setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])} />
+        : (view === "admin" || view === "clientes") && isAdmin
           ? <AdminView token={session.access_token} />
           : quoteForm;
 
