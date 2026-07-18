@@ -43,5 +43,18 @@
       {"path": "SPEC GUIDES 2026/ALMA/Spec guide-Alma-KUN Design.xlsx", "kind": "spec_guide", "brand": "KUN"},
       {"path": "SPEC Guide-Alma-Mondecasa.xlsx", "kind": "spec_guide", "brand": "Mondecasa"}
     ]
+  },
+  {
+    "supplier": "lumbro",
+    "label": "Lumbro",
+    "adapter": "lumbro",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf", "kind": "price_list", "drive_item_id": "01DHXXN73PQIV3NEC74BFIAXGF7HN3S3NE"},
+      {"path": "LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf", "kind": "price_list", "drive_item_id": "01DHXXN72MMCJPX2ENKRCLIVOLPBNYLFX7"},
+      {"path": "LUMBRO/LP/Precios Interconexión Sunón act.xlsx", "kind": "price_list", "drive_item_id": "01DHXXN7Y4QLJBB6BVO5CLJR5WQHD6ETGY"},
+      {"path": "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx", "kind": "spec_guide", "drive_item_id": "01DHXXN726RRTWDBVGDZH3DHSR4XUGGYNG"},
+      {"path": "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf", "kind": "catalog", "drive_item_id": "01DHXXN7YFOCIP7S2WR5F3AFZF3Z5ITB3J"}
+    ]
   }
 ]

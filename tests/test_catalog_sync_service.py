@@ -458,6 +458,22 @@ def test_due_runner_claims_at_most_one_run_and_uses_explicit_registry(monkeypatc
     assert seen[2][4]["adapters"] is ADAPTERS
 
 
+def test_configured_path_rejects_same_name_lumbro_discovery_with_wrong_graph_id():
+    from mobiliti_saas.worker.catalog_sync import load_source_config
+
+    config = next(
+        row for row in load_source_config(Path("mobiliti_saas/worker/catalog_sync/sources.json"))
+        if row.supplier == "lumbro"
+    )
+    discovered = graph_item(
+        item_id="01DHXXN73PQIV3NEC74BFIAXGF7HN3S3NF",
+        name="LISTA DE PRECIOS MULTICONTACTOS 2026.pdf",
+        parent=f"/drives/drive-1/root:/{ROOT_PATH}/LUMBRO/LP",
+    )
+
+    assert catalog_service._configured_path(discovered, config, "drive-1") is None
+
+
 def test_due_runner_claims_before_graph_initialization(monkeypatch):
     calls = []
 

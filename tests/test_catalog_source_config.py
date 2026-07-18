@@ -12,16 +12,51 @@ ROOT_PATH = "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES"
 
 def test_first_wave_source_config_is_explicit_and_safe():
     rows = load_source_config(Path("mobiliti_saas/worker/catalog_sync/sources.json"))
-    assert [row.supplier for row in rows] == ["cr-global", "sonara", "sunon", "alma"]
+    assert [row.supplier for row in rows] == ["cr-global", "sonara", "sunon", "alma", "lumbro"]
     names = {file.name for row in rows for file in row.files}
     assert "FAST INVENTARIO SUNON 2026.cmdrw" not in names
     assert "NEW Order registration template-To Dealers (1).xlsx" not in names
     assert "CRG_LP_General_Dist_2026-04.pdf" in names
     assert "SPEC Guide-Alma-KUN.xlsx" in names
     assert "Spec guide-Alma-KUN Design.xlsx" in names
-    assert sum(len(row.files) for row in rows) == 13
+    assert sum(len(row.files) for row in rows) == 18
     assert all(file.extension in {".xlsx", ".pdf"} for row in rows for file in row.files)
     assert {row.root_path for row in rows} == {ROOT_PATH}
+
+
+def test_lumbro_sources_are_pinned_by_path_kind_and_graph_id():
+    lumbro = {row.supplier: row for row in load_source_config(SOURCES_PATH)}["lumbro"]
+    assert len(lumbro.files) == 5
+    assert {
+        (file.path, file.kind, file.drive_item_id)
+        for file in lumbro.files
+    } == {
+        (
+            "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf",
+            "price_list",
+            "01DHXXN73PQIV3NEC74BFIAXGF7HN3S3NE",
+        ),
+        (
+            "LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf",
+            "price_list",
+            "01DHXXN72MMCJPX2ENKRCLIVOLPBNYLFX7",
+        ),
+        (
+            "LUMBRO/LP/Precios Interconexión Sunón act.xlsx",
+            "price_list",
+            "01DHXXN7Y4QLJBB6BVO5CLJR5WQHD6ETGY",
+        ),
+        (
+            "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx",
+            "spec_guide",
+            "01DHXXN726RRTWDBVGDZH3DHSR4XUGGYNG",
+        ),
+        (
+            "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf",
+            "catalog",
+            "01DHXXN7YFOCIP7S2WR5F3AFZF3Z5ITB3J",
+        ),
+    }
 
 
 def _source(**changes):

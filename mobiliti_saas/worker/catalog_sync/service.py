@@ -550,7 +550,11 @@ def _configured_path(row, config, drive_id):
     for configured in config.files:
         configured_path = PurePosixPath(configured.path)
         expected_parent = str(PurePosixPath(config.root_path) / configured_path.parent)
-        if row.name == configured_path.name and parent == expected_parent:
+        if (
+            row.name == configured_path.name
+            and parent == expected_parent
+            and (configured.drive_item_id is None or configured.drive_item_id == row.id)
+        ):
             matches.append(configured.path)
     if len(matches) > 1:
         raise ValueError

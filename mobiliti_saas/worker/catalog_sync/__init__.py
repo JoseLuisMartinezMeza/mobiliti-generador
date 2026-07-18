@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -8,10 +9,12 @@ _ADAPTERS = {
     "sonara": "sonara",
     "sunon": "sunon",
     "alma": "alma",
+    "lumbro": "lumbro",
 }
 _EXTENSIONS = {".pdf", ".xlsx"}
 _KINDS = {"catalog", "inventory", "price_list", "spec_guide"}
 _ROOT_PATH = "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES"
+_GRAPH_ITEM_ID_RE = re.compile(r"^[A-Za-z0-9]{34}$")
 
 
 @dataclass(frozen=True)
@@ -19,6 +22,7 @@ class SupplierFileConfig:
     path: str
     kind: str
     brand: str | None = None
+    drive_item_id: str | None = None
 
     @property
     def name(self) -> str:
@@ -84,6 +88,39 @@ _FIRST_WAVE_ALLOWLIST = (
             SupplierFileConfig("SPEC Guide-Alma-Mondecasa.xlsx", "spec_guide", "Mondecasa"),
         ),
     ),
+    SupplierSourceConfig(
+        supplier="lumbro",
+        label="Lumbro",
+        adapter="lumbro",
+        root_path=_ROOT_PATH,
+        files=(
+            SupplierFileConfig(
+                "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf",
+                "price_list",
+                drive_item_id="01DHXXN73PQIV3NEC74BFIAXGF7HN3S3NE",
+            ),
+            SupplierFileConfig(
+                "LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf",
+                "price_list",
+                drive_item_id="01DHXXN72MMCJPX2ENKRCLIVOLPBNYLFX7",
+            ),
+            SupplierFileConfig(
+                "LUMBRO/LP/Precios Interconexión Sunón act.xlsx",
+                "price_list",
+                drive_item_id="01DHXXN7Y4QLJBB6BVO5CLJR5WQHD6ETGY",
+            ),
+            SupplierFileConfig(
+                "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx",
+                "spec_guide",
+                drive_item_id="01DHXXN726RRTWDBVGDZH3DHSR4XUGGYNG",
+            ),
+            SupplierFileConfig(
+                "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf",
+                "catalog",
+                drive_item_id="01DHXXN7YFOCIP7S2WR5F3AFZF3Z5ITB3J",
+            ),
+        ),
+    ),
 )
 
 
@@ -94,7 +131,11 @@ def _string(value: object, field: str) -> str:
 
 
 def _file_config(raw: object) -> SupplierFileConfig:
-    if not isinstance(raw, dict) or set(raw) - {"path", "kind", "brand"} or {"path", "kind"} - set(raw):
+    if (
+        not isinstance(raw, dict)
+        or set(raw) - {"path", "kind", "brand", "drive_item_id"}
+        or {"path", "kind"} - set(raw)
+    ):
         raise ValueError("Invalid source file")
     path = _string(raw["path"], "source path")
     windows_path = PureWindowsPath(path)
@@ -111,7 +152,17 @@ def _file_config(raw: object) -> SupplierFileConfig:
     brand = raw.get("brand")
     if brand is not None:
         brand = _string(brand, "source brand")
-    file = SupplierFileConfig(path=path, kind=kind, brand=brand)
+    drive_item_id = raw.get("drive_item_id")
+    if drive_item_id is not None and (
+        not isinstance(drive_item_id, str) or not _GRAPH_ITEM_ID_RE.fullmatch(drive_item_id)
+    ):
+        raise ValueError("Invalid Graph item ID")
+    file = SupplierFileConfig(
+        path=path,
+        kind=kind,
+        brand=brand,
+        drive_item_id=drive_item_id,
+    )
     if file.extension not in _EXTENSIONS:
         raise ValueError("Unsupported source extension")
     return file
