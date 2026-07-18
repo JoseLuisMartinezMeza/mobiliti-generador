@@ -440,19 +440,37 @@ def _heading_rows(sheet, coded_rows: tuple[int, ...]) -> dict[int, int | None]:
     return headings
 
 
-def _designation_from_spec(heading: str, code: str) -> tuple[str, str]:
+def _designation_from_spec(
+    heading: str, code: str
+) -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
     designations = tuple(
         _SPEC_DESIGNATION_ALIASES.get(_fold(value))
         or _PUBLISHED_DESIGNATIONS.get(_fold(value))
         for value in (heading, code)
     )
+    selected = None
     for designation in designations:
         if designation is not None and designation[1]:
-            return designation
-    for designation in designations:
-        if designation is not None:
-            return designation
-    return heading or code, ""
+            selected = designation
+            break
+    if selected is None:
+        selected = next((value for value in designations if value is not None), None)
+    if selected is None:
+        source = "heading" if heading else "code"
+        return heading or code, "", (source,), ()
+
+    model, configuration = selected
+    model_sources = tuple(
+        source
+        for source, designation in zip(("heading", "code"), designations)
+        if designation is not None and designation[0] == model
+    )
+    configuration_sources = tuple(
+        source
+        for source, designation in zip(("heading", "code"), designations)
+        if configuration and designation is not None and designation[1] == configuration
+    )
+    return model, configuration, model_sources, configuration_sources
 
 
 def _colors(value: str) -> tuple[str, ...]:
@@ -487,11 +505,7 @@ def _image_rows(images) -> dict[int, tuple[object, ImageAsset]]:
     return rows
 
 
-def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
-    """Extrae evidencia de identidad del spec guide sin otorgarle autoridad de precio."""
-
-    source = _validated_spec_source(source)
-    workbook = open_xlsx_data_only(source.local_path)
+def _parse_lumbro_spec_workbook(source, workbook) -> LumbroSpecBuild:
     if workbook.sheetnames.count(_SPEC_SHEET) != 1:
         raise ValueError("LUMBRO_SPEC_SHEET")
     sheet = workbook[_SPEC_SHEET]
@@ -504,21 +518,28 @@ def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
         for row in range(_SPEC_FIRST_ROW + 1, _SPEC_LAST_ROW + 1)
         if _plain(sheet.cell(row, 1).value)
     )
+    coded_row_set = set(coded_rows)
     heading_rows = _heading_rows(sheet, coded_rows)
     raw_images = {
         reference: asset
         for reference, asset in extract_xlsx_images(source.local_path).items()
         if reference.sheet == _SPEC_SHEET
     }
-    exact_images = _image_rows(raw_images)
-    assets_by_sha256 = {asset.sha256: asset for asset in raw_images.values()}
+    exact_images = {
+        row: candidate
+        for row, candidate in _image_rows(raw_images).items()
+        if row in coded_row_set
+    }
+    assets_by_sha256 = {asset.sha256: asset for _, asset in exact_images.values()}
 
     blocks = []
     for index, row in enumerate(coded_rows):
         heading_row = heading_rows[row]
         heading = _plain(sheet.cell(heading_row, 3).value) if heading_row else ""
         code = _plain(sheet.cell(row, 1).value)
-        model, configuration = _designation_from_spec(heading, code)
+        model, configuration, model_sources, configuration_sources = (
+            _designation_from_spec(heading, code)
+        )
         next_row = coded_rows[index + 1] if index + 1 < len(coded_rows) else _SPEC_LAST_ROW + 1
         next_heading = heading_rows.get(next_row)
         block_end = (next_heading - 1) if next_heading else next_row - 1
@@ -553,10 +574,19 @@ def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
         dimensions = _plain(sheet.cell(row, 4).value)
         currency = _plain(sheet.cell(row, 6).value)
         evidence = sheet.cell(row, 5).value
+        identity_coordinates = {
+            "heading": f"C{heading_row}" if heading_row else None,
+            "code": f"A{row}",
+        }
         provenance = {
             "code": _cell_references(source.sha256, (f"A{row}",)),
+            "model": _cell_references(
+                source.sha256,
+                tuple(identity_coordinates[value] for value in model_sources),
+            ),
             "configuration": _cell_references(
-                source.sha256, (f"C{heading_row}" if heading_row else f"A{row}",)
+                source.sha256,
+                tuple(identity_coordinates[value] for value in configuration_sources),
             ),
             "description": _cell_references(source.sha256, description_coordinates),
             "dimensions": _cell_references(source.sha256, (f"D{row}",)) if dimensions else (),
@@ -583,8 +613,6 @@ def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
                 "provenance": provenance,
             }
         )
-    workbook.close()
-
     family_images = {}
     for block in blocks:
         exact = exact_images.get(block["row"])
@@ -651,6 +679,17 @@ def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
                     )
                 )
     return LumbroSpecBuild(tuple(records), assets_by_sha256, tuple(bindings))
+
+
+def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
+    """Extrae evidencia de identidad del spec guide sin otorgarle autoridad de precio."""
+
+    source = _validated_spec_source(source)
+    workbook = open_xlsx_data_only(source.local_path)
+    try:
+        return _parse_lumbro_spec_workbook(source, workbook)
+    finally:
+        workbook.close()
 
 
 def reconcile_lumbro_spec_prices(spec_records, price_records) -> tuple[LumbroSpecRecord, ...]:

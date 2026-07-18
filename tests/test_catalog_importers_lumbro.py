@@ -67,9 +67,9 @@ def _spec_file(local_path: Path) -> AdapterFile:
     )
 
 
-def _png_bytes() -> bytes:
+def _png_bytes(color="#303030") -> bytes:
     output = BytesIO()
-    Image.new("RGB", (24, 16), "#303030").save(output, format="PNG")
+    Image.new("RGB", (24, 16), color).save(output, format="PNG")
     return output.getvalue()
 
 
@@ -156,7 +156,11 @@ def spec_source(tmp_path):
     sheet["F60"] = "MXN"
     sheet["C61"] = "Color: Negro"
 
-    sheet.add_image(XlsxImage(BytesIO(_png_bytes())), "B10")
+    sheet.add_image(XlsxImage(BytesIO(_png_bytes("#303030"))), "B10")
+    sheet.add_image(XlsxImage(BytesIO(_png_bytes("#0044AA"))), "B20")
+    sheet.add_image(XlsxImage(BytesIO(_png_bytes("#AA0000"))), "A1")
+    sheet.add_image(XlsxImage(BytesIO(_png_bytes("#00AA00"))), "B31")
+    sheet.add_image(XlsxImage(BytesIO(_png_bytes("#AA00AA"))), "C31")
     workbook.save(path)
     workbook.close()
     return _spec_file(path)
@@ -287,6 +291,8 @@ def test_spec_guide_extracts_identity_dimensions_colors_and_exact_provenance(lum
     )
     assert all(record.provenance["dimensions"][0]["cell_or_bbox"] == "D10" for record in variants)
     assert all(record.provenance["color"][0]["cell_or_bbox"] == "C12" for record in variants)
+    assert all(record.notes == ("NOTA: SE PUEDEN MODIFICAR LAS CONEXIONES",) for record in variants)
+    assert all(record.provenance["notes"][0]["cell_or_bbox"] == "C15" for record in variants)
     assert all(record.spec_price_evidence == 5648 for record in variants)
     assert all(record.net_price is None for record in variants)
 
@@ -307,21 +313,38 @@ def test_spec_guide_emits_only_explicit_variants_and_safe_family_image_reuse(lum
         ("Monaco", "G", "Negro"),
     }
     bindings = {binding.internal_id: binding for binding in lumbro_spec.bindings}
-    for identity in (
-        ("Barcelona", "", "Gris Aluminio"),
-        ("Barcelona", "", "Negro"),
-        ("Barcelona", "Carga", "Blanco"),
-        ("Barcelona", "Box/HDMI Inalámbrico", "Negro"),
+    for identity, image_cell in (
+        (("Barcelona", "", "Gris Aluminio"), "B10"),
+        (("Barcelona", "", "Negro"), "B10"),
+        (("Barcelona", "Carga", "Blanco"), "B20"),
     ):
         record = variants[identity]
         assert record.image_warning == "El color puede variar"
         assert bindings[record.internal_id].match_status == "family_xlsx"
-        assert bindings[record.internal_id].source_references[0]["cell_or_bbox"] == "B10"
+        assert bindings[record.internal_id].source_references[0]["cell_or_bbox"] == image_cell
 
     lisboa = variants[("Lisboa", "", "Negro")]
     assert lisboa.image_sha256 is None
     assert lisboa.internal_id not in bindings
-    assert len(lumbro_spec.assets_by_sha256) == 1
+    assert len(lumbro_spec.assets_by_sha256) == 2
+
+
+def test_spec_guide_excludes_non_candidate_anchors_and_ambiguous_family_reuse(lumbro_spec):
+    variants = {
+        (record.model, record.configuration, record.color): record
+        for record in lumbro_spec.records
+    }
+    bindings = {binding.internal_id: binding for binding in lumbro_spec.bindings}
+    box = variants[("Barcelona", "Box/HDMI Inalámbrico", "Negro")]
+
+    assert box.image_sha256 is None
+    assert box.internal_id not in bindings
+    assert {
+        reference["cell_or_bbox"]
+        for binding in bindings.values()
+        for reference in binding.source_references
+    } == {"B10", "B20"}
+    assert len(lumbro_spec.assets_by_sha256) == 2
 
 
 def test_spec_guide_prefers_explicit_configuration_in_heading_or_code(lumbro_spec):
@@ -333,6 +356,10 @@ def test_spec_guide_prefers_explicit_configuration_in_heading_or_code(lumbro_spe
     assert (40, "Ibiza", "Carga") in identities
     assert (50, "Monaco", "G") in identities
     assert (60, "Barcelona", "Box/HDMI Inalámbrico") in identities
+
+    monaco = next(record for record in lumbro_spec.records if record.source.row == 50)
+    assert [ref["cell_or_bbox"] for ref in monaco.provenance["model"]] == ["C49", "A50"]
+    assert [ref["cell_or_bbox"] for ref in monaco.provenance["configuration"]] == ["A50"]
 
 
 def test_spec_price_is_never_commercial_authority(lumbro_spec, pdf_sources):
@@ -349,3 +376,48 @@ def test_spec_price_is_never_commercial_authority(lumbro_spec, pdf_sources):
     assert barcelona.price_source is not None
     assert barcelona.price_source.path.endswith("LISTA DE PRECIOS MULTICONTACTOS 2026.pdf")
     assert barcelona.provenance["spec_price_evidence"][0]["cell_or_bbox"] == "E10"
+
+
+def test_spec_price_collision_for_same_identity_fails_closed(lumbro_spec, pdf_sources):
+    price = next(row for row in parse_lumbro_pdf_prices(pdf_sources) if row.identity == "barcelona")
+    collision = replace(price, net_price=Decimal("9999"))
+
+    enriched = lumbro_importer.reconcile_lumbro_spec_prices(
+        lumbro_spec.records, (price, collision)
+    )
+    barcelona = next(
+        record
+        for record in enriched
+        if record.model == "Barcelona" and record.configuration == ""
+    )
+
+    assert barcelona.net_price is None
+    assert barcelona.price_source is None
+    assert barcelona.spec_price_evidence == 5648
+
+
+def test_spec_workbook_is_closed_when_parsing_raises(spec_source, monkeypatch):
+    workbook = Workbook()
+    workbook.active.title = "SPEC-GUIDE-LUMBRO"
+
+    class TrackingWorkbook:
+        closed = False
+
+        @property
+        def sheetnames(self):
+            return workbook.sheetnames
+
+        def __getitem__(self, name):
+            return workbook[name]
+
+        def close(self):
+            self.closed = True
+            workbook.close()
+
+    tracking = TrackingWorkbook()
+    monkeypatch.setattr(lumbro_importer, "open_xlsx_data_only", lambda _path: tracking)
+
+    with pytest.raises(ValueError, match="LUMBRO_SPEC_HEADER"):
+        lumbro_importer.parse_lumbro_spec_guide(spec_source)
+
+    assert tracking.closed is True
