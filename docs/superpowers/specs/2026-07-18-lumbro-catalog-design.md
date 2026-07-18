@@ -21,11 +21,15 @@ Añadir Lumbro como proveedor independiente en el catálogo web con el mismo flu
 
 El adaptador trabaja únicamente con los archivos Lumbro comerciales descubiertos en SharePoint. Se excluyen órdenes de compra, cotizaciones de proyectos y documentos históricos ajenos a las listas de proveedor.
 
-Fuentes iniciales:
+Fuentes iniciales, todas dentro de `PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES`:
 
-1. Lista general de precios de multicontactos Lumbro disponible en `LISTAS DE PRECIOS PROVEEDORES/LUMBRO/LP`.
-2. Lista de precios de nuevos productos Lumbro disponible en el árbol 2026.
-3. `Precios Interconexión Sunón act.xlsx`, actualizado el 2026-07-09, para productos Lido, interconexión, jumpers, cajas de fusible y UP1.
+1. `LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf` (`01DHXXN73PQIV3NEC74BFIAXGF7HN3S3NE`), autoridad principal de precio neto y configuración comercial.
+2. `LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf` (`01DHXXN72MMCJPX2ENKRCLIVOLPBNYLFX7`), evidencia complementaria de los modelos nuevos incluida para reconciliación.
+3. `LUMBRO/LP/Precios Interconexión Sunón act.xlsx` (`01DHXXN7Y4QLJBB6BVO5CLJR5WQHD6ETGY`), actualizado el 2026-07-09, para productos Lido, interconexión, jumpers, cajas de fusible y UP1.
+4. `SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx` (`01DHXXN726RRTWDBVGDZH3DHSR4XUGGYNG`), autoridad de código, descripción, especificaciones, color, medidas e imagen cuando la fila sea inequívoca.
+5. `LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf` (`01DHXXN7YFOCIP7S2WR5F3AFZF3Z5ITB3J`), enriquecimiento técnico y visual para modelos con correspondencia exacta.
+
+La lista general 2026 sustituye a la copia 2025 descubierta inicialmente. Mantener todas las fuentes dentro de la raíz 2026 evita ampliar el delta de Microsoft Graph a otras ramas de OneDrive.
 
 Cada archivo se identifica mediante el objetivo exacto de Microsoft Graph y su SHA-256. Un archivo con el mismo nombre pero distinto identificador o hash no reemplaza silenciosamente una fuente aprobada.
 
@@ -66,8 +70,9 @@ Los productos Lido/interconexión con configuraciones distintas permanecen como 
 1. El Excel actualizado de interconexión prevalece para los productos que identifica inequívocamente.
 2. La lista de nuevos productos prevalece sobre la lista general para el mismo modelo y configuración.
 3. La lista general cubre el resto de los productos.
-4. Dos registros solo se fusionan si modelo, configuración técnica y color son compatibles.
-5. Un conflicto de precio, descripción o identidad queda marcado para revisión; no se elige por similitud difusa.
+4. El spec guide y el catálogo aportan identidad, descripción, medidas e imagen, pero sus columnas de costo, factor o precio unitario no sustituyen las tres fuentes comerciales anteriores.
+5. Dos registros solo se fusionan si modelo, configuración técnica y color son compatibles.
+6. Un conflicto de precio, descripción o identidad queda marcado para revisión; no se elige por similitud difusa.
 
 El valor de precio se conserva exactamente como neto. El importador no resta el 10 % mencionado en el encabezado del Excel y no incorpora IVA al precio unitario.
 
@@ -77,7 +82,7 @@ El dominio permitido es `https://www.lumbromx.com`.
 
 Resolución:
 
-1. Ficha individual exacta, por ejemplo `/product-page/<slug>`, validada contra nombre y, cuando exista, SKU.
+1. Ficha individual exacta, por ejemplo `/product-page/{slug}`, validada contra nombre y, cuando exista, SKU.
 2. Categoría oficial exacta —empotrable, sobreponer, pasacable, split u otra categoría publicada— cuando no exista ficha individual verificable.
 3. Catálogo general `https://www.lumbromx.com/category/all-products`.
 
@@ -116,7 +121,7 @@ La electrificación automática existente no consulta ni modifica el carrito Lum
 
 La implementación seguirá TDD y debe demostrar:
 
-1. Parseo determinista de las tres familias de fuentes y precedencia correcta.
+1. Parseo determinista de las cinco fuentes permitidas y precedencia correcta.
 2. Precio neto sin descuento duplicado y con IVA separado.
 3. Variantes y colores sin fusiones ambiguas.
 4. Coincidencias exactas de SKU/enlace e imagen; fallback oficial correctamente etiquetado.
