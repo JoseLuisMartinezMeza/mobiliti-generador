@@ -10,6 +10,7 @@ from typing import Literal, Mapping
 
 from .common import (
     CatalogAssetBinding,
+    CellRef,
     ImageAsset,
     extract_xlsx_images,
     iter_pdf_pages,
@@ -32,6 +33,10 @@ _SPEC_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _SPEC_SHEET = "SPEC-GUIDE-LUMBRO"
 _SPEC_FIRST_ROW = 8
 _SPEC_LAST_ROW = 520
+_INTERCONNECTION_PATH = "LUMBRO/LP/Precios Interconexión Sunón act.xlsx"
+_INTERCONNECTION_SHEET = "2026"
+_INTERCONNECTION_HEADER = "PRECIOS UNITARIOS MENOS EL 10% DESCUENTO MAS IVA"
+_INTERCONNECTION_AUTHORITY = 4
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _MONEY = re.compile(
     r"^\s*\$?\s*((?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]{2})?)\s*$"
@@ -101,6 +106,54 @@ class LumbroSpecBuild:
     records: tuple[LumbroSpecRecord, ...]
     assets_by_sha256: Mapping[str, ImageAsset]
     bindings: tuple[CatalogAssetBinding, ...]
+
+
+@dataclass(frozen=True)
+class LumbroInterconnectionSource:
+    path: str
+    file_id: str
+    sheet: str
+    row: int
+    description_cell: str
+    price_cell: str
+
+
+@dataclass(frozen=True)
+class LumbroInterconnectionRecord:
+    internal_id: str
+    identity: str
+    code: str
+    model: str
+    configuration: str
+    description: str
+    net_price: Decimal | None
+    currency: Literal["MXN"]
+    tax_rate: Decimal
+    source: LumbroInterconnectionSource
+    provenance: Mapping[str, tuple[dict, ...]]
+    authority_rank: int
+    parse_status: LumbroParseStatus
+    warnings: tuple[str, ...] = ()
+
+
+LumbroImageEvidenceStatus = Literal["bound", "excluded"]
+
+
+@dataclass(frozen=True)
+class LumbroInterconnectionImageEvidence:
+    source: CellRef
+    asset_sha256: str
+    status: LumbroImageEvidenceStatus
+    internal_id: str | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class LumbroInterconnectionBuild:
+    records: tuple[LumbroInterconnectionRecord, ...]
+    assets_by_sha256: Mapping[str, ImageAsset]
+    bindings: tuple[CatalogAssetBinding, ...]
+    image_evidence: tuple[LumbroInterconnectionImageEvidence, ...]
 
 
 def _fold(value: object) -> str:
@@ -386,6 +439,227 @@ def parse_lumbro_pdf_prices(files) -> tuple[LumbroPriceRecord, ...]:
 
 def _plain(value: object) -> str:
     return " ".join(neutralize_spreadsheet_text(value).split())
+
+
+_INTERCONNECTION_CODES_BY_DESCRIPTION = {
+    _plain(description): (code, "LIDO", "")
+    for code, description in (
+        (
+            "MULT-LIDO-INT",
+            "Multicontacto Especial LINEA LIDO PARA INTERCONECTAR 4 Puertos AC , "
+            "1 Puerto USB DE CARGA DOBLE TIPO A, CON ENTRADAS PARA ARNES DE AMBOS "
+            "LADOS, MEDIDAS DE 42 X 16 CM ",
+        ),
+        (
+            "LIDO.OP-INT",
+            "Multicontacto LIDO para canaleta COLOR GRIS OXFORD con 3 puertos AC "
+            "No Regulados y 1 PUERTO USB CARGA DOBLE, para INTERCONECTAR",
+        ),
+        (
+            "JUMP-1.5M",
+            "Cable de interconexión o JUMPER CON SALIDA PARA ARNES POR AMBOS LADOS "
+            "de 1.5 metros para Carga No Regula ",
+        ),
+        (
+            "CAJA-FUS",
+            "Caja de Fusible, PARA CARGA NO REGULADA, con entrada para ARNES de un "
+            "costado y del otro cable cal 14 con clavija de 2.5 m de longitud",
+        ),
+    )
+}
+
+
+def _validated_interconnection_source(source):
+    local_path = getattr(source, "local_path", None)
+    declared_hash = getattr(source, "sha256", None)
+    if (
+        getattr(source, "path", None) != _INTERCONNECTION_PATH
+        or getattr(source, "kind", None) != "price_list"
+        or getattr(source, "brand", None) is not None
+        or getattr(source, "mime_type", None) != _SPEC_MIME
+        or not isinstance(local_path, Path)
+        or local_path.suffix.casefold() != ".xlsx"
+        or not isinstance(declared_hash, str)
+        or _HASH.fullmatch(declared_hash) is None
+    ):
+        raise ValueError("LUMBRO_INTERCONNECTION_SOURCE")
+    validated = validate_source_file(local_path, ".xlsx")
+    if validated.sha256 != declared_hash:
+        raise ValueError("LUMBRO_INTERCONNECTION_HASH")
+    return source
+
+
+def _interconnection_price(value: object) -> tuple[Decimal | None, tuple[str, ...]]:
+    if value is None:
+        return None, ("missing_price",)
+    if isinstance(value, bool):
+        return None, ("malformed_price",)
+    try:
+        price = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None, ("malformed_price",)
+    if not price.is_finite() or price <= 0:
+        return None, ("malformed_price",)
+    return price, ()
+
+
+def _interconnection_internal_id(code: str, description: str, cell: str) -> str:
+    material = "\0".join((code, description, cell))
+    return "lumbro:interconnection:" + hashlib.sha256(material.encode()).hexdigest()[:20]
+
+
+def _interconnection_record(source, sheet, row: int, description_column: str, price_column: str):
+    description_cell = f"{description_column}{row}"
+    price_cell = f"{price_column}{row}"
+    description = _plain(sheet[description_cell].value)
+    raw_price = sheet[price_cell].value
+    if not description and raw_price is None:
+        return None
+    if description.startswith("*"):
+        return None
+
+    designation = _INTERCONNECTION_CODES_BY_DESCRIPTION.get(description)
+    code, model, configuration = designation or ("", "", "")
+    price, price_warnings = _interconnection_price(raw_price)
+    warnings = (() if code else ("missing_code",)) + price_warnings
+    status: LumbroParseStatus = "parsed" if not warnings else "needs_review"
+    source_evidence = LumbroInterconnectionSource(
+        source.path,
+        source.sha256,
+        _INTERCONNECTION_SHEET,
+        row,
+        description_cell,
+        price_cell,
+    )
+    internal_id = _interconnection_internal_id(code, description, description_cell)
+    return LumbroInterconnectionRecord(
+        internal_id=internal_id,
+        identity=_identity(model, configuration) if code else _fold(description),
+        code=code,
+        model=model,
+        configuration=configuration,
+        description=description,
+        net_price=price,
+        currency="MXN",
+        tax_rate=Decimal("0.16"),
+        source=source_evidence,
+        provenance={
+            "description": (source_ref(source.sha256, _INTERCONNECTION_SHEET, description_cell),),
+            "price": (source_ref(source.sha256, _INTERCONNECTION_SHEET, price_cell),),
+        },
+        authority_rank=_INTERCONNECTION_AUTHORITY,
+        parse_status=status,
+        warnings=warnings,
+    )
+
+
+def _image_anchor_row(reference: CellRef) -> int | None:
+    match = re.fullmatch(r"[A-Z]{1,3}([1-9][0-9]{0,6})", reference.cell, re.IGNORECASE)
+    return int(match.group(1)) if match is not None else None
+
+
+def _bind_interconnection_images(source, records, images):
+    records_by_row: dict[int, list[LumbroInterconnectionRecord]] = {}
+    for record in records:
+        records_by_row.setdefault(record.source.row, []).append(record)
+    images_by_row: dict[int, list[tuple[CellRef, ImageAsset]]] = {}
+    for reference, asset in images.items():
+        row = _image_anchor_row(reference)
+        if reference.sheet == _INTERCONNECTION_SHEET and row is not None:
+            images_by_row.setdefault(row, []).append((reference, asset))
+
+    assets = {}
+    bindings = []
+    evidence = []
+    image_warning_by_row = {}
+    bound_rows = set()
+    for row in sorted(images_by_row):
+        row_images = sorted(images_by_row[row], key=lambda candidate: candidate[0].cell)
+        row_records = records_by_row.get(row, ())
+        can_bind = len(row_records) == 1 and len(row_images) == 1
+        if not row_records:
+            reason = "no_product_row"
+        elif len(row_records) > 1:
+            reason = "ambiguous_product_row"
+        elif len(row_images) > 1:
+            reason = "ambiguous_images"
+        else:
+            reason = None
+
+        if can_bind:
+            record = row_records[0]
+            reference, asset = row_images[0]
+            bound_rows.add(row)
+            assets[asset.sha256] = asset
+            bindings.append(
+                CatalogAssetBinding(
+                    internal_id=record.internal_id,
+                    asset_sha256=asset.sha256,
+                    object_name=f"lumbro/{asset.sha256}.png",
+                    image_kind="official",
+                    match_status="exact_xlsx",
+                    source_references=(
+                        source_ref(source.sha256, _INTERCONNECTION_SHEET, reference.cell),
+                    ),
+                )
+            )
+            evidence.append(
+                LumbroInterconnectionImageEvidence(
+                    reference, asset.sha256, "bound", record.internal_id
+                )
+            )
+        else:
+            if row_records:
+                image_warning_by_row[row] = "ambiguous_image"
+            for reference, asset in row_images:
+                evidence.append(
+                    LumbroInterconnectionImageEvidence(
+                        reference, asset.sha256, "excluded", reason=reason
+                    )
+                )
+
+    enriched = []
+    for record in records:
+        warning = image_warning_by_row.get(record.source.row)
+        if warning is None and record.source.row not in bound_rows:
+            warning = "missing_image"
+        enriched.append(
+            replace(record, warnings=record.warnings + (warning,)) if warning else record
+        )
+    return tuple(enriched), assets, tuple(bindings), tuple(evidence)
+
+
+def parse_lumbro_interconnection(source) -> LumbroInterconnectionBuild:
+    """Lee solo la hoja activa 2026 y conserva precios netos/celdas exactas."""
+
+    source = _validated_interconnection_source(source)
+    workbook = open_xlsx_data_only(source.local_path)
+    try:
+        if workbook.active.title != _INTERCONNECTION_SHEET:
+            raise ValueError("LUMBRO_INTERCONNECTION_ACTIVE_SHEET")
+        sheet = workbook.active
+        if sheet["H3"].value != _INTERCONNECTION_HEADER:
+            raise ValueError("LUMBRO_INTERCONNECTION_HEADER")
+        records = []
+        for row in range(4, sheet.max_row + 1):
+            record = _interconnection_record(source, sheet, row, "G", "H")
+            if record is not None:
+                records.append(record)
+        alternate = _interconnection_record(source, sheet, 4, "O", "P")
+        if alternate is not None:
+            records.append(alternate)
+    finally:
+        workbook.close()
+
+    images = {
+        reference: asset
+        for reference, asset in extract_xlsx_images(source.local_path).items()
+        if reference.sheet == _INTERCONNECTION_SHEET
+    }
+    records, assets, bindings, evidence = _bind_interconnection_images(
+        source, tuple(records), images
+    )
+    return LumbroInterconnectionBuild(records, assets, bindings, evidence)
 
 
 def _validated_spec_source(source):

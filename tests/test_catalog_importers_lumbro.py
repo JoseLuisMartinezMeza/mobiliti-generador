@@ -19,6 +19,25 @@ FIXTURES = Path("tests/fixtures/catalog_graph/lumbro")
 GENERAL_PATH = "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf"
 NEW_PATH = "LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf"
 SPEC_PATH = "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx"
+INTERCONNECTION_PATH = "LUMBRO/LP/Precios Interconexión Sunón act.xlsx"
+INTERCONNECTION_HEADER = "PRECIOS UNITARIOS MENOS EL 10% DESCUENTO MAS IVA"
+MULT_LIDO_DESCRIPTION = (
+    "Multicontacto Especial LINEA LIDO PARA INTERCONECTAR 4 Puertos AC , "
+    "1 Puerto USB DE CARGA DOBLE TIPO A, CON ENTRADAS PARA ARNES DE AMBOS "
+    "LADOS, MEDIDAS DE 42 X 16 CM"
+)
+LIDO_OP_DESCRIPTION = (
+    "Multicontacto LIDO para canaleta COLOR GRIS OXFORD con 3 puertos AC No "
+    "Regulados y 1 PUERTO USB CARGA DOBLE, para INTERCONECTAR"
+)
+JUMPER_DESCRIPTION = (
+    "Cable de interconexión o JUMPER CON SALIDA PARA ARNES POR AMBOS LADOS "
+    "de 1.5 metros para Carga No Regula"
+)
+FUSE_BOX_DESCRIPTION = (
+    "Caja de Fusible, PARA CARGA NO REGULADA, con entrada para ARNES de un "
+    "costado y del otro cable cal 14 con clavija de 2.5 m de longitud"
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +79,17 @@ def _spec_file(local_path: Path) -> AdapterFile:
     return AdapterFile(
         path=SPEC_PATH,
         kind="spec_guide",
+        brand=None,
+        sha256=hashlib.sha256(local_path.read_bytes()).hexdigest(),
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        local_path=local_path,
+    )
+
+
+def _interconnection_file(local_path: Path) -> AdapterFile:
+    return AdapterFile(
+        path=INTERCONNECTION_PATH,
+        kind="price_list",
         brand=None,
         sha256=hashlib.sha256(local_path.read_bytes()).hexdigest(),
         mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -169,6 +199,57 @@ def spec_source(tmp_path):
 @pytest.fixture
 def lumbro_spec(spec_source):
     return lumbro_importer.parse_lumbro_spec_guide(spec_source)
+
+
+def _write_interconnection_workbook(
+    path: Path,
+    *,
+    active_sheet: str = "2026",
+    header: str = INTERCONNECTION_HEADER,
+) -> None:
+    workbook = Workbook()
+    old = workbook.active
+    old.title = "2025"
+    current = workbook.create_sheet("2026")
+
+    old["H3"] = INTERCONNECTION_HEADER
+    old["G4"] = MULT_LIDO_DESCRIPTION
+    old["H4"] = 2587.5
+    old.add_image(XlsxImage(BytesIO(_png_bytes("#AA0000"))), "C13")
+
+    current["H3"] = header
+    current["G4"] = MULT_LIDO_DESCRIPTION
+    current["H4"] = 3003
+    current["G7"] = LIDO_OP_DESCRIPTION
+    current["H7"] = 1394.07
+    current["G13"] = JUMPER_DESCRIPTION
+    current["H13"] = 350
+    current["G19"] = FUSE_BOX_DESCRIPTION
+    current["H19"] = 772
+    current["G26"] = "Multicontacto sin código oficial verificable"
+    current["H26"] = 999
+    current["O4"] = "Configuración alterna sin código verificable"
+    current["P4"] = 3277
+    current["O5"] = "Esta pareja no está autorizada"
+    current["P5"] = 1234
+
+    current.add_image(XlsxImage(BytesIO(_png_bytes("#303030"))), "C4")
+    current.add_image(XlsxImage(BytesIO(_png_bytes("#008888"))), "C7")
+    current.add_image(XlsxImage(BytesIO(_png_bytes("#0044AA"))), "C13")
+    current.add_image(XlsxImage(BytesIO(_png_bytes("#00AA00"))), "C19")
+    current.add_image(XlsxImage(BytesIO(_png_bytes("#AA00AA"))), "I19")
+    current.add_image(XlsxImage(BytesIO(_png_bytes("#AAAA00"))), "C30")
+
+    workbook.active = workbook.sheetnames.index(active_sheet)
+    workbook.save(path)
+    workbook.close()
+
+
+@pytest.fixture
+def interconnection_source(tmp_path):
+    path = tmp_path / "Precios Interconexion Sunon act.xlsx"
+    _write_interconnection_workbook(path)
+    return _interconnection_file(path)
 
 
 def test_general_pdf_keeps_published_net_price(pdf_sources):
@@ -421,3 +502,95 @@ def test_spec_workbook_is_closed_when_parsing_raises(spec_source, monkeypatch):
         lumbro_importer.parse_lumbro_spec_guide(spec_source)
 
     assert tracking.closed is True
+
+
+def test_interconnection_uses_active_2026_cached_net_value(interconnection_source):
+    build = lumbro_importer.parse_lumbro_interconnection(interconnection_source)
+    item = next(record for record in build.records if record.code == "MULT-LIDO-INT")
+
+    assert item.net_price == Decimal("3003")
+    assert item.net_price != Decimal("2702.7")
+    assert item.source.sheet == "2026"
+    assert item.source.row == 4
+    assert item.source.description_cell == "G4"
+    assert item.source.price_cell == "H4"
+    assert item.authority_rank == 4
+    assert all(record.net_price != Decimal("2587.5") for record in build.records)
+
+
+def test_interconnection_maps_only_exact_spec_descriptions(interconnection_source):
+    build = lumbro_importer.parse_lumbro_interconnection(interconnection_source)
+    by_description = {record.description: record for record in build.records}
+
+    assert by_description[MULT_LIDO_DESCRIPTION].code == "MULT-LIDO-INT"
+    assert by_description[LIDO_OP_DESCRIPTION].code == "LIDO.OP-INT"
+    assert by_description[JUMPER_DESCRIPTION].code == "JUMP-1.5M"
+    assert by_description[FUSE_BOX_DESCRIPTION].code == "CAJA-FUS"
+
+    unknown = by_description["Multicontacto sin código oficial verificable"]
+    assert unknown.code == ""
+    assert unknown.parse_status == "needs_review"
+    assert "missing_code" in unknown.warnings
+    assert all(record.description != "Esta pareja no está autorizada" for record in build.records)
+
+
+def test_interconnection_parses_only_the_o_p_pair_on_row_four(interconnection_source):
+    build = lumbro_importer.parse_lumbro_interconnection(interconnection_source)
+    alternate = next(
+        record
+        for record in build.records
+        if record.description == "Configuración alterna sin código verificable"
+    )
+
+    assert alternate.source.description_cell == "O4"
+    assert alternate.source.price_cell == "P4"
+    assert alternate.net_price == Decimal("3277")
+    assert alternate.code == ""
+    assert alternate.parse_status == "needs_review"
+
+
+def test_interconnection_images_are_active_sheet_only_and_fail_closed(
+    interconnection_source,
+):
+    build = lumbro_importer.parse_lumbro_interconnection(interconnection_source)
+    bindings = {binding.internal_id: binding for binding in build.bindings}
+    records = {record.description: record for record in build.records}
+
+    jumper = records[JUMPER_DESCRIPTION]
+    assert bindings[jumper.internal_id].source_references[0]["sheet_or_page"] == "2026"
+    assert bindings[jumper.internal_id].source_references[0]["cell_or_bbox"] == "C13"
+
+    fuse_box = records[FUSE_BOX_DESCRIPTION]
+    assert fuse_box.internal_id not in bindings
+    assert "ambiguous_image" in fuse_box.warnings
+    assert len(build.assets_by_sha256) == 2
+    assert len(build.image_evidence) == 6
+    assert {evidence.source.sheet for evidence in build.image_evidence} == {"2026"}
+    assert {
+        (evidence.source.cell, evidence.status, evidence.reason)
+        for evidence in build.image_evidence
+    } == {
+        ("C4", "excluded", "ambiguous_product_row"),
+        ("C7", "bound", None),
+        ("C13", "bound", None),
+        ("C19", "excluded", "ambiguous_images"),
+        ("I19", "excluded", "ambiguous_images"),
+        ("C30", "excluded", "no_product_row"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("active_sheet", "header", "error"),
+    [
+        ("2025", INTERCONNECTION_HEADER, "LUMBRO_INTERCONNECTION_ACTIVE_SHEET"),
+        ("2026", "Precio neto aproximado", "LUMBRO_INTERCONNECTION_HEADER"),
+    ],
+)
+def test_interconnection_rejects_wrong_active_sheet_or_header(
+    tmp_path, active_sheet, header, error
+):
+    path = tmp_path / "Precios Interconexion Sunon act.xlsx"
+    _write_interconnection_workbook(path, active_sheet=active_sheet, header=header)
+
+    with pytest.raises(ValueError, match=error):
+        lumbro_importer.parse_lumbro_interconnection(_interconnection_file(path))
