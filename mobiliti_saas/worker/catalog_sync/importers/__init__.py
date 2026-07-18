@@ -28,6 +28,7 @@ from .sunon import (
     build_sunon_snapshot,
     build_sunon_snapshot_with_assets,
 )
+from .lumbro import parse_lumbro_pdf_prices
 
 __all__ = (
     "CellRef",
@@ -56,4 +57,5 @@ __all__ = (
     "SunonSnapshotBuild",
     "build_sunon_snapshot",
     "build_sunon_snapshot_with_assets",
+    "parse_lumbro_pdf_prices",
 )
