@@ -674,6 +674,113 @@ def test_pdf_enforces_aggregate_expanded_stream_bound(tmp_path, monkeypatch):
     assert_code("PDF_LIMIT", lambda: list(iter_pdf_pages(source)))
 
 
+def test_pdf_per_call_profile_preserves_default_and_uses_isolated_extraction(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "profile.pdf"
+    pdf(source, pages=2)
+    monkeypatch.setattr(common_module, "MAX_PDF_STREAM_EXPANDED_BYTES", 1)
+
+    assert_code("PDF_LIMIT", lambda: list(iter_pdf_pages(source)))
+    monkeypatch.setattr(
+        fitz.Page,
+        "get_text",
+        lambda *_args, **_kwargs: pytest.fail("in-process extractor called"),
+    )
+
+    pages = list(
+        iter_pdf_pages(
+            source,
+            pdf_max_pages=80,
+            pdf_max_stream_expanded_bytes=384 * 1024 * 1024,
+        )
+    )
+
+    assert [page.text.strip() for page in pages] == ["Page 1", "Page 2"]
+
+
+@pytest.mark.parametrize(
+    ("pages", "expanded"),
+    [
+        (81, 384 * 1024 * 1024),
+        (80, 384 * 1024 * 1024 + 1),
+        (0, 384 * 1024 * 1024),
+        (80, 0),
+        (True, 384 * 1024 * 1024),
+        (80, True),
+        (80, None),
+        (None, 384 * 1024 * 1024),
+    ],
+)
+def test_pdf_per_call_profile_rejects_invalid_or_over_hard_cap(
+    tmp_path, pages, expanded
+):
+    source = tmp_path / "profile-invalid.pdf"
+    pdf(source)
+
+    assert_code(
+        "SOURCE_ARGUMENT",
+        lambda: list(
+            iter_pdf_pages(
+                source,
+                pdf_max_pages=pages,
+                pdf_max_stream_expanded_bytes=expanded,
+            )
+        ),
+    )
+
+
+def test_pdf_per_call_profile_keeps_page_stream_and_active_content_guards(
+    tmp_path,
+):
+    too_many_pages = tmp_path / "too-many-pages.pdf"
+    pdf(too_many_pages, pages=81)
+    assert_code(
+        "PDF_LIMIT",
+        lambda: list(
+            iter_pdf_pages(
+                too_many_pages,
+                pdf_max_pages=80,
+                pdf_max_stream_expanded_bytes=384 * 1024 * 1024,
+            )
+        ),
+    )
+
+    active = tmp_path / "active-profile.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.xref_set_key(
+        document.pdf_catalog(),
+        "OpenAction",
+        "<</S/Launch/F(https://secret.invalid)>>",
+    )
+    document.save(active)
+    document.close()
+    assert_code(
+        "PDF_UNSAFE",
+        lambda: list(
+            iter_pdf_pages(
+                active,
+                pdf_max_pages=80,
+                pdf_max_stream_expanded_bytes=384 * 1024 * 1024,
+            )
+        ),
+    )
+
+    tiny_stream_budget = tmp_path / "tiny-stream-budget.pdf"
+    pdf(tiny_stream_budget)
+    assert_code(
+        "PDF_LIMIT",
+        lambda: list(
+            iter_pdf_pages(
+                tiny_stream_budget,
+                pdf_max_pages=80,
+                pdf_max_stream_expanded_bytes=1,
+            )
+        ),
+    )
+
+
 def test_pdf_accepts_passive_web_links_and_bounds_highly_compressed_images(tmp_path, monkeypatch):
     picture = tmp_path / "flat.png"
     Image.new("RGB", (1200, 1200), "white").save(picture)

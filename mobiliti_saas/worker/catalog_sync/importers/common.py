@@ -48,6 +48,8 @@ MAX_PDF_STREAMS = 50_000
 MAX_PDF_STREAM_RAW_BYTES = 8 * 1024 * 1024
 MAX_PDF_STREAM_DECODED_BYTES = 64 * 1024 * 1024
 MAX_PDF_STREAM_EXPANDED_BYTES = 192 * 1024 * 1024
+MAX_PDF_PROFILE_PAGES = 80
+MAX_PDF_PROFILE_STREAM_EXPANDED_BYTES = 384 * 1024 * 1024
 MAX_PDF_STREAM_RATIO = 200
 MAX_PDF_TEXT_BYTES = 64 * 1024 * 1024
 MAX_PDF_TEXT_WORKER_BYTES = 1024 * 1024 * 1024
@@ -345,21 +347,66 @@ def _read_source(path: Path, expected_extension: str, max_bytes: int) -> tuple[V
     return ValidatedSource(extension, len(data), hashlib.sha256(data).hexdigest()), data
 
 
+def _pdf_profile_limits(
+    pdf_max_pages: int | None,
+    pdf_max_stream_expanded_bytes: int | None,
+) -> tuple[int, int]:
+    if pdf_max_pages is None and pdf_max_stream_expanded_bytes is None:
+        return MAX_PDF_PAGES, MAX_PDF_STREAM_EXPANDED_BYTES
+    if (
+        type(pdf_max_pages) is not int
+        or not 0 < pdf_max_pages <= MAX_PDF_PROFILE_PAGES
+        or type(pdf_max_stream_expanded_bytes) is not int
+        or not 0
+        < pdf_max_stream_expanded_bytes
+        <= MAX_PDF_PROFILE_STREAM_EXPANDED_BYTES
+    ):
+        _fail("SOURCE_ARGUMENT")
+    return pdf_max_pages, pdf_max_stream_expanded_bytes
+
+
 def validate_source_file(
-    path: Path, expected_extension: str, max_bytes: int = MAX_FILE_BYTES
+    path: Path,
+    expected_extension: str,
+    max_bytes: int = MAX_FILE_BYTES,
+    *,
+    pdf_max_pages: int | None = None,
+    pdf_max_stream_expanded_bytes: int | None = None,
 ) -> ValidatedSource:
-    source, _ = read_validated_source(path, expected_extension, max_bytes)
+    source, _ = read_validated_source(
+        path,
+        expected_extension,
+        max_bytes,
+        pdf_max_pages=pdf_max_pages,
+        pdf_max_stream_expanded_bytes=pdf_max_stream_expanded_bytes,
+    )
     return source
 
 
 def read_validated_source(
-    path: Path, expected_extension: str, max_bytes: int = MAX_FILE_BYTES
+    path: Path,
+    expected_extension: str,
+    max_bytes: int = MAX_FILE_BYTES,
+    *,
+    pdf_max_pages: int | None = None,
+    pdf_max_stream_expanded_bytes: int | None = None,
 ) -> tuple[ValidatedSource, bytes]:
     source, data = _read_source(path, expected_extension, max_bytes)
+    if source.extension != ".pdf" and (
+        pdf_max_pages is not None or pdf_max_stream_expanded_bytes is not None
+    ):
+        _fail("SOURCE_ARGUMENT")
     if source.extension == ".xlsx":
         _validate_xlsx(data)
     elif source.extension == ".pdf":
-        _pdf_pages(data)
+        page_limit, expanded_limit = _pdf_profile_limits(
+            pdf_max_pages, pdf_max_stream_expanded_bytes
+        )
+        _pdf_pages(
+            data,
+            max_pages=page_limit,
+            max_stream_expanded_bytes=expanded_limit,
+        )
     else:
         _normalize_image(data)
     return source, data
@@ -931,7 +978,12 @@ def _pdf_passive_internal_open_action(document, xref: int) -> bool:
     )
 
 
-def _pdf_preflight(document) -> dict[int, int]:
+def _pdf_preflight(
+    document,
+    max_stream_expanded_bytes: int | None = None,
+) -> dict[int, int]:
+    if max_stream_expanded_bytes is None:
+        max_stream_expanded_bytes = MAX_PDF_STREAM_EXPANDED_BYTES
     xref_count = document.xref_length()
     if not 1 < xref_count <= MAX_PDF_XREFS:
         _fail("PDF_LIMIT")
@@ -999,7 +1051,7 @@ def _pdf_preflight(document) -> dict[int, int]:
         else:
             _fail("PDF_UNSAFE")
         total_expanded += decoded
-        if total_expanded > MAX_PDF_STREAM_EXPANDED_BYTES:
+        if total_expanded > max_stream_expanded_bytes:
             _fail("PDF_LIMIT")
     return raw_sizes
 
@@ -1291,7 +1343,16 @@ def _pdf_text_isolated(data: bytes, page_count: int) -> tuple[str, ...]:
     return tuple(texts)
 
 
-def _pdf_pages(data: bytes) -> tuple[PdfPage, ...]:
+def _pdf_pages(
+    data: bytes,
+    *,
+    max_pages: int | None = None,
+    max_stream_expanded_bytes: int | None = None,
+) -> tuple[PdfPage, ...]:
+    if max_pages is None:
+        max_pages = MAX_PDF_PAGES
+    if max_stream_expanded_bytes is None:
+        max_stream_expanded_bytes = MAX_PDF_STREAM_EXPANDED_BYTES
     failed = None
     pages = []
     document = None
@@ -1299,12 +1360,12 @@ def _pdf_pages(data: bytes) -> tuple[PdfPage, ...]:
         document = fitz.open(stream=data, filetype="pdf")
         if not document.is_pdf or document.needs_pass or document.is_encrypted:
             failed = "PDF_UNSAFE"
-        elif not 0 < document.page_count <= MAX_PDF_PAGES:
+        elif not 0 < document.page_count <= max_pages:
             failed = "PDF_LIMIT"
         elif document.embfile_names():
             failed = "PDF_UNSAFE"
         else:
-            raw_sizes = _pdf_preflight(document)
+            raw_sizes = _pdf_preflight(document, max_stream_expanded_bytes)
         total_images = 0
         total_image_bytes = 0
         page_image_counts = []
@@ -1337,9 +1398,23 @@ def _pdf_pages(data: bytes) -> tuple[PdfPage, ...]:
     return tuple(pages)
 
 
-def iter_pdf_pages(path: Path) -> Iterator[PdfPage]:
+def iter_pdf_pages(
+    path: Path,
+    *,
+    pdf_max_pages: int | None = None,
+    pdf_max_stream_expanded_bytes: int | None = None,
+) -> Iterator[PdfPage]:
     _, data = _read_source(path, ".pdf", MAX_FILE_BYTES)
-    return iter(_pdf_pages(data))
+    page_limit, expanded_limit = _pdf_profile_limits(
+        pdf_max_pages, pdf_max_stream_expanded_bytes
+    )
+    return iter(
+        _pdf_pages(
+            data,
+            max_pages=page_limit,
+            max_stream_expanded_bytes=expanded_limit,
+        )
+    )
 
 
 def _probe_image_dimensions(data: bytes) -> tuple[int, int]:

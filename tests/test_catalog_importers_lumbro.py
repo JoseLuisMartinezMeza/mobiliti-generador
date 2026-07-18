@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import zipfile
 from collections import Counter
 from io import BytesIO
@@ -14,6 +15,7 @@ from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XlsxImage
 from PIL import Image
 
+from mobiliti_saas.quote_engine.supplier_catalog import PUBLIC_ITEM_FIELDS
 from mobiliti_saas.worker.catalog_sync.importers import parse_lumbro_pdf_prices
 from mobiliti_saas.worker.catalog_sync.importers import lumbro as lumbro_importer
 
@@ -23,6 +25,7 @@ GENERAL_PATH = "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf"
 NEW_PATH = "LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf"
 SPEC_PATH = "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx"
 INTERCONNECTION_PATH = "LUMBRO/LP/Precios Interconexión Sunón act.xlsx"
+CATALOG_PATH = "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf"
 INTERCONNECTION_HEADER = "PRECIOS UNITARIOS MENOS EL 10% DESCUENTO MAS IVA"
 MULT_LIDO_DESCRIPTION = (
     "Multicontacto Especial LINEA LIDO PARA INTERCONECTAR 4 Puertos AC , "
@@ -100,6 +103,17 @@ def _interconnection_file(local_path: Path) -> AdapterFile:
         brand=None,
         sha256=hashlib.sha256(local_path.read_bytes()).hexdigest(),
         mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        local_path=local_path,
+    )
+
+
+def _catalog_file(local_path: Path) -> AdapterFile:
+    return AdapterFile(
+        path=CATALOG_PATH,
+        kind="catalog",
+        brand=None,
+        sha256=hashlib.sha256(local_path.read_bytes()).hexdigest(),
+        mime_type="application/pdf",
         local_path=local_path,
     )
 
@@ -313,6 +327,31 @@ def interconnection_source(tmp_path):
     return _interconnection_file(path)
 
 
+@pytest.fixture
+def catalog_source(tmp_path):
+    path = tmp_path / "CATALOGO LUMBRO 2024 DIGITAL (1).pdf"
+    document = fitz.open()
+    page = document.new_page(width=612, height=792)
+    page.insert_textbox(
+        fitz.Rect(45, 45, 560, 740),
+        "Empotrables\nBarcelona\nMedidas\n245 mm\n102 mm\n60 mm\n",
+        fontsize=11,
+    )
+    document.save(path)
+    document.close()
+    return _catalog_file(path)
+
+
+@pytest.fixture
+def lumbro_sources(pdf_sources, spec_source, interconnection_source, catalog_source):
+    return (*pdf_sources, spec_source, interconnection_source, catalog_source)
+
+
+@pytest.fixture
+def lumbro_build(lumbro_sources):
+    return lumbro_importer.build_lumbro_snapshot_with_assets(lumbro_sources)
+
+
 def test_general_pdf_keeps_published_net_price(pdf_sources):
     rows = parse_lumbro_pdf_prices(pdf_sources)
     barcelona = next(row for row in rows if row.identity == "barcelona")
@@ -322,7 +361,7 @@ def test_general_pdf_keeps_published_net_price(pdf_sources):
     assert barcelona.net_price == Decimal("2824")
     assert barcelona.currency == "MXN"
     assert barcelona.tax_rate == Decimal("0.16")
-    assert barcelona.authority_rank == 3
+    assert barcelona.authority_rank == 2
     assert barcelona.parse_status == "parsed"
     assert barcelona.source.path == GENERAL_PATH
     assert barcelona.source.file_id == pdf_sources[0].sha256
@@ -361,7 +400,7 @@ def test_new_pdf_parses_venecia_inalambrico_with_higher_authority(pdf_sources):
     assert venecia[0].model == "Venecia"
     assert venecia[0].configuration == "Inalámbrico"
     assert venecia[0].net_price == Decimal("1490")
-    assert venecia[0].authority_rank == 2
+    assert venecia[0].authority_rank == 3
     assert venecia[0].parse_status == "parsed"
 
 
@@ -752,3 +791,268 @@ def test_interconnection_rejects_wrong_active_sheet_or_header(
 
     with pytest.raises(ValueError, match=error):
         lumbro_importer.parse_lumbro_interconnection(_interconnection_file(path))
+
+
+def _without_generated_at(snapshot):
+    return {key: value for key, value in snapshot.items() if key != "generated_at"}
+
+
+def test_snapshot_uses_approved_new_products_precedence(lumbro_sources, tmp_path):
+    replacement = tmp_path / "LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf"
+    pages = json.loads((FIXTURES / "price_new_pages.json").read_text(encoding="utf-8"))
+    pages[0]["text"] = pages[0]["text"].replace("1,490.00", "1,777.00")
+    document = fitz.open()
+    for fixture in pages:
+        page = document.new_page(width=612, height=792)
+        page.insert_textbox(
+            fitz.Rect(45, 45, 560, 740), fixture["text"], fontsize=9
+        )
+    document.save(replacement)
+    document.close()
+    changed = tuple(
+        _adapter_file(NEW_PATH, replacement) if row.path == NEW_PATH else row
+        for row in lumbro_sources
+    )
+
+    venecia = next(
+        item
+        for item in lumbro_importer.build_lumbro_snapshot(changed)["items"]
+        if item["attributes"]["model"] == "Venecia"
+    )
+
+    assert venecia["price_net"] == "1777.000000"
+    assert venecia["attributes"]["price_source"]["path"] == NEW_PATH
+    assert venecia["attributes"]["price_source"]["authority_rank"] == 3
+
+
+def test_snapshot_contract_hash_ids_and_source_json_are_deterministic(
+    lumbro_sources,
+):
+    first = lumbro_importer.build_lumbro_snapshot(lumbro_sources)
+    second = lumbro_importer.build_lumbro_snapshot(tuple(reversed(lumbro_sources)))
+
+    assert _without_generated_at(first) == _without_generated_at(second)
+    descriptors = sorted(
+        (
+            {
+                "path": row.path,
+                "kind": row.kind,
+                "brand": row.brand,
+                "sha256": row.sha256,
+                "mime_type": row.mime_type,
+            }
+            for row in lumbro_sources
+        ),
+        key=lambda row: row["path"],
+    )
+    expected_material = {
+        "link_manifest_fingerprint": lumbro_importer.load_lumbro_link_index().resource_fingerprint,
+        "sources": descriptors,
+    }
+    expected_hash = hashlib.sha256(
+        json.dumps(
+            expected_material,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert first["source_hash"] == expected_hash
+    assert len({item["internal_id"] for item in first["items"]}) == len(first["items"])
+    for item in first["items"]:
+        assert set(item) == set(PUBLIC_ITEM_FIELDS)
+        evidence = json.loads(item["source_reference"])
+        assert item["source_reference"] == json.dumps(
+            evidence, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+
+
+def test_snapshot_exact_contract_and_non_quoteable_review_variants(lumbro_build):
+    items = lumbro_build.snapshot["items"]
+
+    assert items
+    assert all(item["supplier"] == "lumbro" for item in items)
+    assert all(item["brand"] == "Lumbro" for item in items)
+    assert all(item["base_currency"] == "MXN" for item in items)
+    assert all(item["tax_rate"] == "0.160000" for item in items)
+    assert all(item["unit"] == "PZA" for item in items)
+    assert all(item["availability_type"] == "unknown" for item in items)
+    assert all(item["stock"] is None for item in items)
+    assert all(re.fullmatch(r"[0-9]+\.[0-9]{6}", item["price_net"]) for item in items)
+    assert all(
+        (item["code_status"] == "verified" and item["sku"])
+        or (item["code_status"] == "needs_review" and not item["sku"])
+        for item in items
+    )
+    assert any(
+        item["code_status"] == "needs_review"
+        and not item["sku"]
+        and Decimal(item["price_net"]) > 0
+        for item in items
+    )
+    assert any(
+        item["code_status"] == "needs_review"
+        and not item["sku"]
+        and item["attributes"]["source_code"]
+        and Decimal(item["price_net"]) == 0
+        for item in items
+    )
+
+
+def test_snapshot_reconciles_verified_source_code_and_never_uses_spec_price(
+    lumbro_build,
+):
+    items = lumbro_build.snapshot["items"]
+    mult_lido = next(
+        item
+        for item in items
+        if item["attributes"]["source_code"] == "MULT-LIDO-INT"
+    )
+
+    assert mult_lido["price_net"] == "3003.000000"
+    assert mult_lido["attributes"]["price_source"] == {
+        "authority_rank": 4,
+        "cell": "H4",
+        "path": INTERCONNECTION_PATH,
+        "sheet": "2026",
+    }
+    barcelona = next(
+        item
+        for item in items
+        if item["attributes"]["source_code"] == "BARCELONA"
+        and item["attributes"]["configuration"] == ""
+    )
+    assert barcelona["price_net"] == "2824.000000"
+    assert barcelona["attributes"]["spec_price_evidence"] == 5648
+    assert barcelona["attributes"]["price_source"]["path"] == GENERAL_PATH
+
+
+def test_catalog_pdf_only_enriches_exact_category_and_measurements(lumbro_build):
+    barcelona = next(
+        item
+        for item in lumbro_build.snapshot["items"]
+        if item["attributes"]["source_code"] == "BARCELONA"
+        and item["attributes"]["configuration"] == ""
+    )
+
+    assert barcelona["collection"] == "Empotrables"
+    assert barcelona["attributes"]["catalog_measurements"] == [
+        "245 mm",
+        "102 mm",
+        "60 mm",
+    ]
+    assert barcelona["price_net"] == "2824.000000"
+    catalog_references = [
+        reference
+        for reference in json.loads(barcelona["source_reference"])
+        if reference["file_id"] == next(
+            source["sha256"]
+            for source in lumbro_build.snapshot["metadata"]["sources"]
+            if source["path"] == CATALOG_PATH
+        )
+    ]
+    assert catalog_references[0]["sheet_or_page"] == 1
+
+
+def test_catalog_elevated_profile_requires_exact_pinned_sha(
+    catalog_source, monkeypatch
+):
+    pinned_hash = "bbd810ebab20336d2a6bdc61123955bd062c5a64d57d4359556fcf6aef57e053"
+    validations = []
+    iterations = []
+    current_hash = {"value": catalog_source.sha256}
+    actual_hash = {"value": catalog_source.sha256}
+
+    def validated(_path, _extension, **kwargs):
+        validations.append(kwargs)
+        return type("Validated", (), {"sha256": current_hash["value"]})()
+
+    def pages(_path, **kwargs):
+        iterations.append(kwargs)
+        return iter(())
+
+    monkeypatch.setattr(lumbro_importer, "validate_source_file", validated)
+    monkeypatch.setattr(lumbro_importer, "iter_pdf_pages", pages)
+    monkeypatch.setattr(
+        lumbro_importer._common,
+        "_read_source",
+        lambda *_args: (
+            type("RawValidated", (), {"sha256": actual_hash["value"]})(),
+            b"%PDF-fixture",
+        ),
+    )
+
+    assert lumbro_importer._parse_lumbro_catalog(catalog_source) == {}
+    assert validations == [{}]
+    assert iterations == [{}]
+
+    validations.clear()
+    iterations.clear()
+    current_hash["value"] = pinned_hash
+    pinned = replace(catalog_source, sha256=pinned_hash)
+    with pytest.raises(ValueError, match="LUMBRO_CATALOG_HASH"):
+        lumbro_importer._parse_lumbro_catalog(pinned)
+    assert validations == []
+    assert iterations == []
+
+    actual_hash["value"] = pinned_hash
+    assert lumbro_importer._parse_lumbro_catalog(pinned) == {}
+    expected_profile = {
+        "pdf_max_pages": 80,
+        "pdf_max_stream_expanded_bytes": 384 * 1024 * 1024,
+    }
+    assert validations == [expected_profile]
+    assert iterations == [expected_profile]
+
+
+def test_link_resolution_preserves_truthful_status_and_label(lumbro_build):
+    items = lumbro_build.snapshot["items"]
+    barcelona = next(
+        item
+        for item in items
+        if item["attributes"]["source_code"] == "BARCELONA"
+    )
+    venecia = next(
+        item for item in items if item["attributes"]["model"] == "Venecia"
+    )
+    octa = next(
+        item for item in items if item["attributes"]["model"] == "Torre Octa"
+    )
+
+    assert barcelona["attributes"]["product_url_match"]["status"] == "collection_index"
+    assert barcelona["attributes"]["product_url_match"]["label"] == "Ver catálogo Lumbro"
+    assert venecia["attributes"]["product_url_match"]["status"] == "exact_index"
+    assert venecia["attributes"]["product_url_match"]["label"] == "Ver producto"
+    assert octa["attributes"]["product_url_match"]["status"] == "catalog_fallback"
+    assert octa["attributes"]["product_url_match"]["label"] == "Ver catálogo Lumbro"
+
+
+def test_every_price_row_has_an_audit_disposition(lumbro_build):
+    coverage = lumbro_build.snapshot["metadata"]["coverage"]
+
+    assert coverage["parsed_price_rows"] == (
+        coverage["imported_rows"]
+        + coverage["reconciled_rows"]
+        + coverage["excluded_rows"]
+    )
+    assert len(coverage["exclusions"]) == coverage["excluded_rows"]
+    assert all(row["reason"] for row in coverage["exclusions"])
+
+
+def test_asset_merge_has_one_binding_per_item_and_no_orphans(lumbro_build):
+    bindings = lumbro_build.bindings
+    item_by_id = {
+        item["internal_id"]: item for item in lumbro_build.snapshot["items"]
+    }
+
+    assert len({binding.internal_id for binding in bindings}) == len(bindings)
+    assert set(lumbro_build.assets_by_sha256) == {
+        binding.asset_sha256 for binding in bindings
+    }
+    assert all(binding.internal_id in item_by_id for binding in bindings)
+    assert all(binding.object_name == f"{binding.asset_sha256}.png" for binding in bindings)
+    assert all(
+        item_by_id[binding.internal_id]["attributes"]["image_match"]["asset_sha256"]
+        == binding.asset_sha256
+        for binding in bindings
+    )

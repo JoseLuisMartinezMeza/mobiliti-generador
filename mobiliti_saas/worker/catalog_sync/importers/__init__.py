@@ -28,7 +28,11 @@ from .sunon import (
     build_sunon_snapshot,
     build_sunon_snapshot_with_assets,
 )
-from .lumbro import parse_lumbro_pdf_prices
+from .lumbro import (
+    build_lumbro_snapshot,
+    build_lumbro_snapshot_with_assets,
+    parse_lumbro_pdf_prices,
+)
 
 __all__ = (
     "CellRef",
@@ -53,6 +57,8 @@ __all__ = (
     "build_cr_global_snapshot_with_assets",
     "build_sonara_snapshot",
     "build_sonara_snapshot_with_assets",
+    "build_lumbro_snapshot",
+    "build_lumbro_snapshot_with_assets",
     "SunonAssetBinding",
     "SunonSnapshotBuild",
     "build_sunon_snapshot",

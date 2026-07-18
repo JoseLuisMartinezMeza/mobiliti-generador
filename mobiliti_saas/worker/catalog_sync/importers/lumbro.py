@@ -2,18 +2,27 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import re
 import unicodedata
 import zipfile
+from collections import defaultdict
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal, Mapping
 from xml.etree import ElementTree
 
+from mobiliti_saas.worker.catalog_sync.lumbro_links import (
+    load_lumbro_link_index,
+    resolve_lumbro_link,
+)
+
 from . import common as _common
 from .common import (
     CatalogAssetBinding,
+    CatalogSnapshotBuild,
     CellRef,
     ImageAsset,
     extract_xlsx_images,
@@ -30,8 +39,8 @@ from .common import (
 _GENERAL_PATH = "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf"
 _NEW_PATH = "LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf"
 _EXPECTED_PDFS = {
-    _GENERAL_PATH: 3,
-    _NEW_PATH: 2,
+    _GENERAL_PATH: 2,
+    _NEW_PATH: 3,
 }
 _PDF_MIME = "application/pdf"
 _SPEC_PATH = "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx"
@@ -43,6 +52,13 @@ _INTERCONNECTION_PATH = "LUMBRO/LP/Precios Interconexión Sunón act.xlsx"
 _INTERCONNECTION_SHEET = "2026"
 _INTERCONNECTION_HEADER = "PRECIOS UNITARIOS MENOS EL 10% DESCUENTO MAS IVA"
 _INTERCONNECTION_AUTHORITY = 4
+_CATALOG_PATH = "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf"
+_CATALOG_MIME = "application/pdf"
+_CATALOG_SHA256 = "bbd810ebab20336d2a6bdc61123955bd062c5a64d57d4359556fcf6aef57e053"
+_CATALOG_PDF_PROFILE = {
+    "pdf_max_pages": 80,
+    "pdf_max_stream_expanded_bytes": 384 * 1024 * 1024,
+}
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _MONEY = re.compile(
     r"^\s*\$?\s*((?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]{2})?)\s*$"
@@ -1110,3 +1126,725 @@ def reconcile_lumbro_spec_prices(spec_records, price_records) -> tuple[LumbroSpe
             replace(record, net_price=selected.net_price, price_source=selected.source)
         )
     return tuple(enriched)
+
+
+_SOURCE_CONTRACT = {
+    _GENERAL_PATH: ("price_list", _PDF_MIME, ".pdf"),
+    _NEW_PATH: ("price_list", _PDF_MIME, ".pdf"),
+    _INTERCONNECTION_PATH: ("price_list", _SPEC_MIME, ".xlsx"),
+    _SPEC_PATH: ("spec_guide", _SPEC_MIME, ".xlsx"),
+    _CATALOG_PATH: ("catalog", _CATALOG_MIME, ".pdf"),
+}
+_CATALOG_CATEGORIES = {
+    "empotrables": "Empotrables",
+    "splits": "Splits",
+    "sobreponer": "Sobreponer",
+    "pasacables": "Pasacables",
+}
+_CATALOG_MEASUREMENT = re.compile(r"(?i)\b[0-9]+(?:[.,][0-9]+)?\s*mm\b")
+
+
+def _catalog_pdf_profile(source) -> dict[str, int]:
+    local_path = getattr(source, "local_path", None)
+    if (
+        getattr(source, "path", None) == _CATALOG_PATH
+        and getattr(source, "kind", None) == "catalog"
+        and getattr(source, "brand", None) is None
+        and getattr(source, "mime_type", None) == _CATALOG_MIME
+        and getattr(source, "sha256", None) == _CATALOG_SHA256
+        and isinstance(local_path, Path)
+        and local_path.suffix.casefold() == ".pdf"
+    ):
+        return dict(_CATALOG_PDF_PROFILE)
+    return {}
+
+
+def _validated_lumbro_bundle(files) -> dict[str, object]:
+    try:
+        rows = tuple(files)
+    except TypeError:
+        raise ValueError("LUMBRO_BUNDLE") from None
+    if len(rows) != len(_SOURCE_CONTRACT):
+        raise ValueError("LUMBRO_BUNDLE")
+    by_path = {}
+    for row in rows:
+        logical_path = getattr(row, "path", None)
+        contract = _SOURCE_CONTRACT.get(logical_path)
+        local_path = getattr(row, "local_path", None)
+        declared_hash = getattr(row, "sha256", None)
+        if contract is None:
+            raise ValueError("LUMBRO_BUNDLE")
+        kind, mime_type, extension = contract
+        if (
+            logical_path in by_path
+            or getattr(row, "kind", None) != kind
+            or getattr(row, "brand", None) is not None
+            or getattr(row, "mime_type", None) != mime_type
+            or not isinstance(local_path, Path)
+            or local_path.suffix.casefold() != extension
+            or not isinstance(declared_hash, str)
+            or _HASH.fullmatch(declared_hash) is None
+        ):
+            raise ValueError("LUMBRO_BUNDLE")
+        profile = _catalog_pdf_profile(row)
+        if profile:
+            raw_validated, _ = _common._read_source(
+                local_path, extension, _common.MAX_FILE_BYTES
+            )
+            if raw_validated.sha256 != declared_hash:
+                raise ValueError("LUMBRO_HASH")
+        validated = validate_source_file(local_path, extension, **profile)
+        if validated.sha256 != declared_hash:
+            raise ValueError("LUMBRO_HASH")
+        by_path[logical_path] = row
+    if set(by_path) != set(_SOURCE_CONTRACT):
+        raise ValueError("LUMBRO_BUNDLE")
+    return by_path
+
+
+def _source_descriptors(files) -> list[dict]:
+    descriptors = [
+        {
+            "path": row.path,
+            "kind": row.kind,
+            "brand": row.brand,
+            "sha256": row.sha256,
+            "mime_type": row.mime_type,
+        }
+        for row in files
+    ]
+    return sorted(descriptors, key=lambda row: row["path"])
+
+
+def _source_hash(files) -> str:
+    index = load_lumbro_link_index()
+    material = {
+        "link_manifest_fingerprint": index.resource_fingerprint,
+        "sources": _source_descriptors(files),
+    }
+    encoded = json.dumps(
+        material, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validated_catalog_source(source):
+    if (
+        getattr(source, "path", None) != _CATALOG_PATH
+        or getattr(source, "kind", None) != "catalog"
+        or getattr(source, "brand", None) is not None
+        or getattr(source, "mime_type", None) != _CATALOG_MIME
+        or not isinstance(getattr(source, "local_path", None), Path)
+        or source.local_path.suffix.casefold() != ".pdf"
+        or not isinstance(getattr(source, "sha256", None), str)
+        or _HASH.fullmatch(source.sha256) is None
+    ):
+        raise ValueError("LUMBRO_CATALOG_SOURCE")
+    profile = _catalog_pdf_profile(source)
+    if profile:
+        raw_validated, _ = _common._read_source(
+            source.local_path, ".pdf", _common.MAX_FILE_BYTES
+        )
+        if raw_validated.sha256 != source.sha256:
+            raise ValueError("LUMBRO_CATALOG_HASH")
+    validated = validate_source_file(source.local_path, ".pdf", **profile)
+    if validated.sha256 != source.sha256:
+        raise ValueError("LUMBRO_CATALOG_HASH")
+    return source
+
+
+def _catalog_designation(lines: tuple[str, ...], index: int):
+    designation, width = _designation_at(lines, index)
+    if designation is not None:
+        return designation, width
+    aliases = {
+        "split mini a c": ("Split", "Mini A+C"),
+        "split mini puertos": ("Split", "Mini Puertos"),
+        "split g de carga": ("Split", "G Carga"),
+        "split g a c": ("Split", "G A+C"),
+        "nano 1": ("Split", "Nano 1"),
+        "nano 2": ("Split", "Nano 2"),
+        "bari pasacables": ("Bari", "Pasacable"),
+    }
+    for width in range(min(3, len(lines) - index), 0, -1):
+        designation = aliases.get(_fold(" ".join(lines[index : index + width])))
+        if designation is not None:
+            return designation, width
+    return None, 0
+
+
+def _parse_lumbro_catalog(source) -> dict[str, dict]:
+    """Indexa solo encabezados exactos y medidas publicadas del PDF técnico."""
+
+    source = _validated_catalog_source(source)
+    category = ""
+    current_identity = ""
+    current_model = ""
+    current_configuration = ""
+    records: dict[str, dict] = {}
+    for page in iter_pdf_pages(
+        source.local_path, **_catalog_pdf_profile(source)
+    ):
+        lines = tuple(
+            " ".join(line.split())
+            for line in page.text.splitlines()
+            if " ".join(line.split())
+        )
+        for line in lines:
+            found = _CATALOG_CATEGORIES.get(_fold(line))
+            if found is not None:
+                category = found
+                break
+        index = 0
+        page_designation = None
+        while index < len(lines):
+            designation, width = _catalog_designation(lines, index)
+            if designation is not None:
+                page_designation = designation
+                index += width
+            else:
+                index += 1
+        if page_designation is not None:
+            current_model, current_configuration = page_designation
+            current_identity = _identity(current_model, current_configuration)
+
+        measurements = []
+        for line in lines:
+            for match in _CATALOG_MEASUREMENT.findall(line):
+                clean = " ".join(match.replace(",", ".").split())
+                if clean not in measurements:
+                    measurements.append(clean)
+        if current_identity and (measurements or page_designation is not None):
+            record = records.setdefault(
+                current_identity,
+                {
+                    "model": current_model,
+                    "configuration": current_configuration,
+                    "category": category,
+                    "measurements": [],
+                    "references": [],
+                },
+            )
+            if category and not record["category"]:
+                record["category"] = category
+            for measurement in measurements:
+                if measurement not in record["measurements"]:
+                    record["measurements"].append(measurement)
+            reference = source_ref(source.sha256, page.number, (0, 0, 0, 0))
+            if reference not in record["references"]:
+                record["references"].append(reference)
+    return records
+
+
+def _canonical_references(*groups) -> list[dict]:
+    unique = {}
+    for group in groups:
+        for reference in group or ():
+            encoded = json.dumps(
+                reference, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            unique[encoded] = reference
+    return [unique[key] for key in sorted(unique)]
+
+
+def _price_reference(record) -> dict:
+    source = record.source
+    if isinstance(source, LumbroInterconnectionSource):
+        return source_ref(source.file_id, source.sheet, source.price_cell)
+    return source_ref(source.file_id, source.page, (0, 0, 0, 0))
+
+
+def _row_audit_reference(record) -> dict:
+    source = record.source
+    if isinstance(source, LumbroInterconnectionSource):
+        return {
+            "path": source.path,
+            "sheet_or_page": source.sheet,
+            "cell_or_bbox": source.price_cell,
+        }
+    return {
+        "path": source.path,
+        "sheet_or_page": source.page,
+        "cell_or_bbox": [0, 0, 0, 0],
+    }
+
+
+def _price_source_metadata(record) -> dict:
+    source = record.source
+    if isinstance(source, LumbroInterconnectionSource):
+        return {
+            "authority_rank": record.authority_rank,
+            "cell": source.price_cell,
+            "path": source.path,
+            "sheet": source.sheet,
+        }
+    return {
+        "authority_rank": record.authority_rank,
+        "page": source.page,
+        "path": source.path,
+    }
+
+
+def _slug(value: object) -> str:
+    return "-".join(re.findall(r"[a-z0-9]+", _fold(value)))
+
+
+def _json_value(value):
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _variant_sku(code: str, internal_id: str) -> str:
+    suffix = hashlib.sha256(internal_id.encode("utf-8")).hexdigest()[:16]
+    return f"lumbro:{_slug(code)}:{suffix}"
+
+
+def _direct_internal_id(record) -> str:
+    if isinstance(record, LumbroInterconnectionRecord):
+        return record.internal_id
+    material = "\0".join(
+        (
+            record.identity,
+            format(record.net_price, "f") if record.net_price is not None else "",
+            record.source.path,
+            str(record.source.page),
+        )
+    )
+    return "lumbro:price:" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
+
+
+def _item(
+    *,
+    internal_id: str,
+    source_code: str,
+    model: str,
+    configuration: str,
+    color: str,
+    description: str,
+    dimensions: str,
+    mounting: str,
+    notes,
+    spec_price_evidence,
+    price_record,
+    technical,
+    warnings,
+    references,
+) -> dict:
+    price = price_record.net_price if price_record is not None else None
+    quoteable = bool(source_code and price is not None and price > 0)
+    item_warnings = list(dict.fromkeys(warnings))
+    if not source_code:
+        item_warnings.append("Código oficial por verificar; variante no cotizable.")
+    if price is None:
+        item_warnings.append("Precio comercial por verificar; variante no cotizable.")
+    name = " ".join(value for value in (model, configuration, color) if value).strip()
+    if not name:
+        name = description or "Producto Lumbro por revisar"
+    collection = technical.get("category", "") if technical else ""
+    link = resolve_lumbro_link(model, collection)
+    link_metadata = dict(link.metadata)
+    link_metadata["label"] = (
+        "Ver producto" if link.status == "exact_index" else "Ver catálogo Lumbro"
+    )
+    attributes = {
+        "source_code": source_code,
+        "model": model,
+        "configuration": configuration,
+        "color": color,
+        "dimensions": dimensions,
+        "mounting": mounting,
+        "product_notes": list(notes),
+        "spec_price_evidence": _json_value(spec_price_evidence),
+        "catalog_measurements": list(technical.get("measurements", ())) if technical else [],
+        "price_source": _price_source_metadata(price_record) if price_record else {},
+        "product_url_match": link_metadata,
+    }
+    product_key_material = source_code or _identity(model, configuration) or internal_id
+    return {
+        "internal_id": internal_id,
+        "supplier": "lumbro",
+        "product_key": f"lumbro:{_slug(product_key_material) or internal_id[-20:]}",
+        "sku": _variant_sku(source_code, internal_id) if quoteable else "",
+        "code_status": "verified" if quoteable else "needs_review",
+        "brand": "Lumbro",
+        "collection": collection,
+        "name": name,
+        "description": description,
+        "unit": "PZA",
+        "availability_type": "unknown",
+        "stock": None,
+        "lead_time": "",
+        "base_price_options": [],
+        "add_on_options": [],
+        "base_currency": "MXN",
+        "price_net": f"{(price or Decimal(0)):.6f}",
+        "tax_rate": "0.160000",
+        "attributes": attributes,
+        "image_url": "",
+        "image_kind": "placeholder",
+        "product_url": link.url,
+        "warnings": item_warnings,
+        "source_reference": json.dumps(
+            _canonical_references(references, technical.get("references", ()) if technical else ()),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ),
+    }
+
+
+def _selection(entries):
+    valid = [
+        entry
+        for entry in entries
+        if entry["record"].parse_status == "parsed"
+        and entry["record"].net_price is not None
+    ]
+    if not valid:
+        return None, (), ()
+    authority = max(entry["record"].authority_rank for entry in valid)
+    authoritative = [
+        entry for entry in valid if entry["record"].authority_rank == authority
+    ]
+    values = {entry["record"].net_price for entry in authoritative}
+    if len(values) != 1:
+        return None, (), tuple(valid)
+    selected = sorted(
+        authoritative,
+        key=lambda entry: json.dumps(
+            _row_audit_reference(entry["record"]), sort_keys=True, separators=(",", ":")
+        ),
+    )[0]
+    rejected = tuple(entry for entry in valid if entry is not selected)
+    return selected, tuple(authoritative), rejected
+
+
+def _spec_references(record: LumbroSpecRecord) -> list[dict]:
+    return _canonical_references(
+        *(record.provenance[key] for key in sorted(record.provenance))
+    )
+
+
+def _build_lumbro(files, *, include_assets: bool):
+    bundle = _validated_lumbro_bundle(files)
+    ordered_files = tuple(bundle[path] for path in _SOURCE_CONTRACT)
+    pdf_records = parse_lumbro_pdf_prices(
+        (bundle[_GENERAL_PATH], bundle[_NEW_PATH])
+    )
+    spec_build = parse_lumbro_spec_guide(bundle[_SPEC_PATH])
+    interconnection_build = parse_lumbro_interconnection(
+        bundle[_INTERCONNECTION_PATH]
+    )
+    technical_by_identity = _parse_lumbro_catalog(bundle[_CATALOG_PATH])
+    commercial = [
+        {"record": record, "kind": "pdf", "disposition": None, "final_ids": []}
+        for record in pdf_records
+    ] + [
+        {
+            "record": record,
+            "kind": "interconnection",
+            "disposition": None,
+            "final_ids": [],
+        }
+        for record in interconnection_build.records
+    ]
+
+    pdf_entries_by_identity = defaultdict(list)
+    inter_entries_by_code = defaultdict(list)
+    for entry in commercial:
+        record = entry["record"]
+        if entry["kind"] == "pdf" and record.identity:
+            pdf_entries_by_identity[record.identity].append(entry)
+        if entry["kind"] == "interconnection" and record.code:
+            inter_entries_by_code[record.code].append(entry)
+
+    resolution_cache = {}
+    items = []
+    item_by_id = {}
+    for record in spec_build.records:
+        resolution_key = (record.code, record.price_identity)
+        if resolution_key not in resolution_cache:
+            candidates = [
+                *inter_entries_by_code.get(record.code, ()),
+                *pdf_entries_by_identity.get(record.price_identity, ()),
+            ]
+            selected, _, rejected = _selection(candidates)
+            resolution_cache[resolution_key] = selected
+            if selected is not None and selected["disposition"] is None:
+                selected["disposition"] = ("reconciled", "exact_compatible_identity")
+            for rejected_entry in rejected:
+                if rejected_entry["disposition"] is None:
+                    reason = (
+                        "lower_authority"
+                        if selected is not None
+                        and rejected_entry["record"].authority_rank
+                        < selected["record"].authority_rank
+                        else "redundant_same_authority"
+                    )
+                    rejected_entry["disposition"] = ("excluded", reason)
+        selected = resolution_cache[resolution_key]
+        if selected is not None:
+            selected["final_ids"].append(record.internal_id)
+        technical = technical_by_identity.get(
+            _identity(record.model, record.configuration), {}
+        )
+        references = _spec_references(record)
+        if selected is not None:
+            references.append(_price_reference(selected["record"]))
+        item = _item(
+            internal_id=record.internal_id,
+            source_code=record.code,
+            model=record.model,
+            configuration=record.configuration,
+            color=record.color,
+            description=record.description,
+            dimensions=record.dimensions,
+            mounting=record.mounting,
+            notes=record.notes,
+            spec_price_evidence=record.spec_price_evidence,
+            price_record=selected["record"] if selected else None,
+            technical=technical,
+            warnings=record.warnings,
+            references=references,
+        )
+        items.append(item)
+        item_by_id[item["internal_id"]] = item
+
+    remaining_groups = defaultdict(list)
+    for entry in commercial:
+        if entry["disposition"] is not None:
+            continue
+        record = entry["record"]
+        if record.parse_status == "needs_review":
+            internal_id = _direct_internal_id(record)
+            technical = technical_by_identity.get(record.identity, {})
+            references = [
+                _price_reference(record),
+                *(
+                    reference
+                    for values in getattr(record, "provenance", {}).values()
+                    for reference in values
+                ),
+            ]
+            item = _item(
+                internal_id=internal_id,
+                source_code="",
+                model=record.model,
+                configuration=record.configuration,
+                color="",
+                description=getattr(record, "description", ""),
+                dimensions="",
+                mounting="",
+                notes=(),
+                spec_price_evidence=None,
+                price_record=record if record.net_price is not None else None,
+                technical=technical,
+                warnings=record.warnings,
+                references=references,
+            )
+            items.append(item)
+            item_by_id[internal_id] = item
+            entry["disposition"] = ("imported", "visible_needs_review")
+            entry["final_ids"].append(internal_id)
+            continue
+        key = (
+            f"code:{record.code}"
+            if getattr(record, "code", "")
+            else f"identity:{record.identity}"
+        )
+        remaining_groups[key].append(entry)
+
+    for entries in remaining_groups.values():
+        selected, _, rejected = _selection(entries)
+        if selected is None:
+            for entry in entries:
+                entry["disposition"] = ("excluded", "ambiguous_price")
+            continue
+        record = selected["record"]
+        internal_id = _direct_internal_id(record)
+        technical = technical_by_identity.get(record.identity, {})
+        references = [
+            _price_reference(record),
+            *(
+                reference
+                for values in getattr(record, "provenance", {}).values()
+                for reference in values
+            ),
+        ]
+        item = _item(
+            internal_id=internal_id,
+            source_code=getattr(record, "code", ""),
+            model=record.model,
+            configuration=record.configuration,
+            color="",
+            description=getattr(record, "description", ""),
+            dimensions="",
+            mounting="",
+            notes=(),
+            spec_price_evidence=None,
+            price_record=record,
+            technical=technical,
+            warnings=record.warnings,
+            references=references,
+        )
+        items.append(item)
+        item_by_id[internal_id] = item
+        selected["disposition"] = ("imported", "standalone_commercial_row")
+        selected["final_ids"].append(internal_id)
+        for entry in rejected:
+            if entry["disposition"] is None:
+                reason = (
+                    "lower_authority"
+                    if entry["record"].authority_rank < record.authority_rank
+                    else "redundant_same_authority"
+                )
+                entry["disposition"] = ("excluded", reason)
+
+    for entry in commercial:
+        if entry["disposition"] is None:
+            entry["disposition"] = ("excluded", "unresolved_commercial_row")
+
+    bindings_by_id = defaultdict(list)
+    for binding in spec_build.bindings:
+        if binding.internal_id in item_by_id:
+            bindings_by_id[binding.internal_id].append(
+                (binding, spec_build.assets_by_sha256.get(binding.asset_sha256))
+            )
+    inter_entry_by_id = {
+        entry["record"].internal_id: entry
+        for entry in commercial
+        if entry["kind"] == "interconnection"
+    }
+    for binding in interconnection_build.bindings:
+        entry = inter_entry_by_id.get(binding.internal_id)
+        if entry is None:
+            continue
+        targets = tuple(dict.fromkeys(entry["final_ids"]))
+        if len(targets) != 1:
+            continue
+        target = targets[0]
+        if target in item_by_id:
+            bindings_by_id[target].append(
+                (
+                    replace(binding, internal_id=target),
+                    interconnection_build.assets_by_sha256.get(binding.asset_sha256),
+                )
+            )
+
+    final_assets = {}
+    final_bindings = []
+    if include_assets:
+        for internal_id in sorted(bindings_by_id):
+            candidates = bindings_by_id[internal_id]
+            by_sha256 = defaultdict(list)
+            for binding, asset in candidates:
+                if asset is not None:
+                    by_sha256[binding.asset_sha256].append((binding, asset))
+            if len(by_sha256) != 1:
+                if len(by_sha256) > 1:
+                    item = item_by_id[internal_id]
+                    item["warnings"].append(
+                        "Conflicto de imágenes oficiales; se usa placeholder."
+                    )
+                    item["attributes"]["image_conflict"] = sorted(by_sha256)
+                continue
+            asset_sha256, same_asset = next(iter(by_sha256.items()))
+            binding, asset = sorted(
+                same_asset,
+                key=lambda pair: (pair[0].match_status == "family_xlsx", pair[0].match_status),
+            )[0]
+            references = _canonical_references(
+                *(candidate.source_references for candidate, _ in same_asset)
+            )
+            final_binding = CatalogAssetBinding(
+                internal_id=internal_id,
+                asset_sha256=asset_sha256,
+                object_name=f"{asset_sha256}.png",
+                image_kind="official",
+                match_status=binding.match_status,
+                source_references=tuple(references),
+            )
+            final_assets[asset_sha256] = asset
+            final_bindings.append(final_binding)
+            item = item_by_id[internal_id]
+            item["image_kind"] = "official"
+            item["attributes"]["image_match"] = {
+                "status": final_binding.match_status,
+                "asset_sha256": asset_sha256,
+                "source_references": references,
+            }
+            item["attributes"]["approved_asset"] = {
+                "bucket": "catalog-assets",
+                "path": final_binding.object_name,
+                "image_kind": "official",
+                "label": "Imagen oficial de fuente Lumbro verificada",
+                "approved": True,
+            }
+
+    exclusions = []
+    counts = {"imported": 0, "reconciled": 0, "excluded": 0}
+    for entry in commercial:
+        status, reason = entry["disposition"]
+        counts[status] += 1
+        if status == "excluded":
+            record = entry["record"]
+            exclusions.append(
+                {
+                    **_row_audit_reference(record),
+                    "identity": record.identity,
+                    "model": record.model,
+                    "configuration": record.configuration,
+                    "price_net": (
+                        f"{record.net_price:.6f}"
+                        if record.net_price is not None
+                        else ""
+                    ),
+                    "parse_status": record.parse_status,
+                    "reason": reason,
+                }
+            )
+    exclusions.sort(
+        key=lambda row: json.dumps(row, sort_keys=True, separators=(",", ":"))
+    )
+    items.sort(key=lambda item: item["internal_id"])
+    final_bindings.sort(key=lambda binding: binding.internal_id)
+    coverage = {
+        "parsed_price_rows": len(commercial),
+        "imported_rows": counts["imported"],
+        "reconciled_rows": counts["reconciled"],
+        "excluded_rows": counts["excluded"],
+        "exclusions": exclusions,
+        "items": len(items),
+        "verified_items": sum(item["code_status"] == "verified" for item in items),
+        "needs_review_items": sum(item["code_status"] == "needs_review" for item in items),
+        "priced_items": sum(Decimal(item["price_net"]) > 0 for item in items),
+        "assets": len(final_assets),
+        "bindings": len(final_bindings),
+        "catalog_enriched_items": sum(bool(item["collection"]) for item in items),
+    }
+    link_index = load_lumbro_link_index()
+    snapshot = {
+        "supplier": "lumbro",
+        "source_hash": _source_hash(ordered_files),
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "items": items,
+        "metadata": {
+            "sources": _source_descriptors(ordered_files),
+            "link_manifest_fingerprint": link_index.resource_fingerprint,
+            "coverage": coverage,
+        },
+    }
+    if include_assets:
+        return CatalogSnapshotBuild(snapshot, final_assets, tuple(final_bindings))
+    return snapshot
+
+
+def build_lumbro_snapshot(files) -> dict:
+    return _build_lumbro(files, include_assets=False)
+
+
+def build_lumbro_snapshot_with_assets(files) -> CatalogSnapshotBuild:
+    return _build_lumbro(files, include_assets=True)
