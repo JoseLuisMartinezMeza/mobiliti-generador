@@ -1,18 +1,24 @@
 import hashlib
 import json
+from io import BytesIO
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 
 import fitz
 import pytest
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XlsxImage
+from PIL import Image
 
 from mobiliti_saas.worker.catalog_sync.importers import parse_lumbro_pdf_prices
+from mobiliti_saas.worker.catalog_sync.importers import lumbro as lumbro_importer
 
 
 FIXTURES = Path("tests/fixtures/catalog_graph/lumbro")
 GENERAL_PATH = "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf"
 NEW_PATH = "LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf"
+SPEC_PATH = "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx"
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,23 @@ def _adapter_file(logical_path: str, local_path: Path) -> AdapterFile:
     )
 
 
+def _spec_file(local_path: Path) -> AdapterFile:
+    return AdapterFile(
+        path=SPEC_PATH,
+        kind="spec_guide",
+        brand=None,
+        sha256=hashlib.sha256(local_path.read_bytes()).hexdigest(),
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        local_path=local_path,
+    )
+
+
+def _png_bytes() -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (24, 16), "#303030").save(output, format="PNG")
+    return output.getvalue()
+
+
 @pytest.fixture
 def pdf_sources(tmp_path):
     general = tmp_path / "LISTA DE PRECIOS MULTICONTACTOS 2026.pdf"
@@ -60,6 +83,88 @@ def pdf_sources(tmp_path):
         _adapter_file(GENERAL_PATH, general),
         _adapter_file(NEW_PATH, new),
     )
+
+
+@pytest.fixture
+def spec_source(tmp_path):
+    path = tmp_path / "Spec guide-Lumbro-2026.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "SPEC-GUIDE-LUMBRO"
+    sheet.append([])
+    for column, value in enumerate(
+        ("Cod.", "Imagen.", "Descripcion.", "Medida/Unidad.", "P. Unitario.", "Moneda"),
+        1,
+    ):
+        sheet.cell(8, column, value)
+
+    sheet.merge_cells("C9:F9")
+    sheet["C9"] = "Barcelona"
+    sheet["A10"] = "BARCELONA"
+    sheet["C10"] = "Multicontacto, Modelo Barcelona. Incluye: 3 puertos de corriente"
+    sheet["D10"] = "245 x 102 x 60 mm"
+    sheet["E10"] = 5648
+    sheet["F10"] = "MXN"
+    sheet["C11"] = "  y 1 cable de metro con clavija  "
+    sheet["C12"] = "Color: Gris Aluminio, Negro"
+    sheet["C14"] = "Su montaje requiere orificio de 220 x 68 mm"
+    sheet["C15"] = "NOTA: SE PUEDEN MODIFICAR LAS CONEXIONES"
+
+    sheet.merge_cells("C19:F19")
+    sheet["C19"] = "Barcelona Carga"
+    sheet["A20"] = "BARCELONA"
+    sheet["C20"] = "Multicontacto, Modelo Barcelona. Incluye: USB de carga"
+    sheet["D20"] = "245 x 102 x 60 mm"
+    sheet["E20"] = 5648
+    sheet["F20"] = "MXN"
+    sheet["C21"] = "y 1 cable de metro con clavija"
+    sheet["C22"] = "Color: Blanco"
+    sheet["C24"] = "Su montaje requiere orificio de 220 x 68 mm"
+
+    sheet.merge_cells("C29:F29")
+    sheet["C29"] = "Lisboa"
+    sheet["A30"] = "LISBOA"
+    sheet["C30"] = "Multicontacto, Modelo Lisboa"
+    sheet["D30"] = "245 x 102 x 60 mm"
+    sheet["E30"] = 4000
+    sheet["F30"] = "MXN"
+    sheet["C31"] = "Color: Negro"
+
+    sheet.merge_cells("C39:F39")
+    sheet["C39"] = "Ibiza Carga"
+    sheet["A40"] = "IBIZA"
+    sheet["C40"] = "Multicontacto, Modelo Ibiza con USB de carga"
+    sheet["D40"] = "185 x 75 x 60 mm"
+    sheet["E40"] = 1648
+    sheet["F40"] = "MXN"
+    sheet["C41"] = "Color: Negro"
+
+    sheet.merge_cells("C49:F49")
+    sheet["C49"] = "Monaco"
+    sheet["A50"] = "MONACO-G"
+    sheet["C50"] = "Pasacables, Modelo Monaco G"
+    sheet["D50"] = "300 x 111 x 28 mm"
+    sheet["E50"] = 1000
+    sheet["F50"] = "MXN"
+    sheet["C51"] = "Color: Negro"
+
+    sheet.merge_cells("C59:F59")
+    sheet["C59"] = "Barcelona box HDMI"
+    sheet["A60"] = "BARCELONA BOX IN"
+    sheet["C60"] = "Multicontacto Barcelona con HDMI inalambrico"
+    sheet["E60"] = 5648
+    sheet["F60"] = "MXN"
+    sheet["C61"] = "Color: Negro"
+
+    sheet.add_image(XlsxImage(BytesIO(_png_bytes())), "B10")
+    workbook.save(path)
+    workbook.close()
+    return _spec_file(path)
+
+
+@pytest.fixture
+def lumbro_spec(spec_source):
+    return lumbro_importer.parse_lumbro_spec_guide(spec_source)
 
 
 def test_general_pdf_keeps_published_net_price(pdf_sources):
@@ -155,3 +260,92 @@ def test_new_pdf_conflicting_duplicate_prices_remain_as_review_evidence(pdf_sour
 def test_pdf_source_set_is_strictly_validated(pdf_sources, mutation):
     with pytest.raises(ValueError, match="LUMBRO_PDF_(?:BUNDLE|HASH)"):
         parse_lumbro_pdf_prices(mutation(pdf_sources))
+
+
+def test_spec_guide_extracts_identity_dimensions_colors_and_exact_provenance(lumbro_spec):
+    variants = [
+        record
+        for record in lumbro_spec.records
+        if record.model == "Barcelona" and record.configuration == ""
+    ]
+
+    assert {record.color for record in variants} == {"Gris Aluminio", "Negro"}
+    assert {record.code for record in variants} == {"BARCELONA"}
+    assert {record.dimensions for record in variants} == {"245 x 102 x 60 mm"}
+    assert all(
+        record.description
+        == "Multicontacto, Modelo Barcelona. Incluye: 3 puertos de corriente y 1 cable de metro con clavija"
+        for record in variants
+    )
+    assert all(record.mounting == "Su montaje requiere orificio de 220 x 68 mm" for record in variants)
+    assert all(record.source.row == 10 and record.source.heading_row == 9 for record in variants)
+    assert all(record.provenance["code"][0]["cell_or_bbox"] == "A10" for record in variants)
+    assert all(
+        [reference["cell_or_bbox"] for reference in record.provenance["description"]]
+        == ["C10", "C11"]
+        for record in variants
+    )
+    assert all(record.provenance["dimensions"][0]["cell_or_bbox"] == "D10" for record in variants)
+    assert all(record.provenance["color"][0]["cell_or_bbox"] == "C12" for record in variants)
+    assert all(record.spec_price_evidence == 5648 for record in variants)
+    assert all(record.net_price is None for record in variants)
+
+
+def test_spec_guide_emits_only_explicit_variants_and_safe_family_image_reuse(lumbro_spec):
+    variants = {
+        (record.model, record.configuration, record.color): record
+        for record in lumbro_spec.records
+    }
+
+    assert set(variants) == {
+        ("Barcelona", "", "Gris Aluminio"),
+        ("Barcelona", "", "Negro"),
+        ("Barcelona", "Carga", "Blanco"),
+        ("Barcelona", "Box/HDMI Inalámbrico", "Negro"),
+        ("Ibiza", "Carga", "Negro"),
+        ("Lisboa", "", "Negro"),
+        ("Monaco", "G", "Negro"),
+    }
+    bindings = {binding.internal_id: binding for binding in lumbro_spec.bindings}
+    for identity in (
+        ("Barcelona", "", "Gris Aluminio"),
+        ("Barcelona", "", "Negro"),
+        ("Barcelona", "Carga", "Blanco"),
+        ("Barcelona", "Box/HDMI Inalámbrico", "Negro"),
+    ):
+        record = variants[identity]
+        assert record.image_warning == "El color puede variar"
+        assert bindings[record.internal_id].match_status == "family_xlsx"
+        assert bindings[record.internal_id].source_references[0]["cell_or_bbox"] == "B10"
+
+    lisboa = variants[("Lisboa", "", "Negro")]
+    assert lisboa.image_sha256 is None
+    assert lisboa.internal_id not in bindings
+    assert len(lumbro_spec.assets_by_sha256) == 1
+
+
+def test_spec_guide_prefers_explicit_configuration_in_heading_or_code(lumbro_spec):
+    identities = {
+        (record.source.row, record.model, record.configuration)
+        for record in lumbro_spec.records
+    }
+
+    assert (40, "Ibiza", "Carga") in identities
+    assert (50, "Monaco", "G") in identities
+    assert (60, "Barcelona", "Box/HDMI Inalámbrico") in identities
+
+
+def test_spec_price_is_never_commercial_authority(lumbro_spec, pdf_sources):
+    prices = parse_lumbro_pdf_prices(pdf_sources)
+    enriched = lumbro_importer.reconcile_lumbro_spec_prices(lumbro_spec.records, prices)
+    barcelona = next(
+        record
+        for record in enriched
+        if record.model == "Barcelona" and record.configuration == "" and record.color == "Negro"
+    )
+
+    assert barcelona.net_price == Decimal("2824")
+    assert barcelona.spec_price_evidence == 5648
+    assert barcelona.price_source is not None
+    assert barcelona.price_source.path.endswith("LISTA DE PRECIOS MULTICONTACTOS 2026.pdf")
+    assert barcelona.provenance["spec_price_evidence"][0]["cell_or_bbox"] == "E10"

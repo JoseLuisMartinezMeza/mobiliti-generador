@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Mapping
 
-from .common import iter_pdf_pages, validate_source_file
+from .common import (
+    CatalogAssetBinding,
+    ImageAsset,
+    extract_xlsx_images,
+    iter_pdf_pages,
+    neutralize_spreadsheet_text,
+    open_xlsx_data_only,
+    source_ref,
+    validate_source_file,
+)
 
 
 _GENERAL_PATH = "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf"
@@ -17,6 +27,11 @@ _EXPECTED_PDFS = {
     _NEW_PATH: 2,
 }
 _PDF_MIME = "application/pdf"
+_SPEC_PATH = "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx"
+_SPEC_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_SPEC_SHEET = "SPEC-GUIDE-LUMBRO"
+_SPEC_FIRST_ROW = 8
+_SPEC_LAST_ROW = 520
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _MONEY = re.compile(
     r"^\s*\$?\s*((?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]{2})?)\s*$"
@@ -46,6 +61,46 @@ class LumbroPriceRecord:
     authority_rank: int
     parse_status: LumbroParseStatus
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LumbroSpecSource:
+    path: str
+    file_id: str
+    sheet: str
+    heading_row: int | None
+    row: int
+
+
+@dataclass(frozen=True)
+class LumbroSpecRecord:
+    internal_id: str
+    identity: str
+    price_identity: str
+    model: str
+    configuration: str
+    color: str
+    code: str
+    description: str
+    dimensions: str
+    mounting: str
+    notes: tuple[str, ...]
+    currency: str
+    spec_price_evidence: object | None
+    source: LumbroSpecSource
+    provenance: Mapping[str, tuple[dict, ...]]
+    image_sha256: str | None = None
+    image_warning: str | None = None
+    net_price: Decimal | None = None
+    price_source: LumbroPriceSource | None = None
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class LumbroSpecBuild:
+    records: tuple[LumbroSpecRecord, ...]
+    assets_by_sha256: Mapping[str, ImageAsset]
+    bindings: tuple[CatalogAssetBinding, ...]
 
 
 def _fold(value: object) -> str:
@@ -115,6 +170,18 @@ _PUBLISHED_DESIGNATIONS = {
             "Cable HDMI Lumbro 4K",
             "Fibra óptica 10 m",
         ),
+    )
+}
+
+_SPEC_DESIGNATION_ALIASES = {
+    _fold(label): _designation(model, configuration)
+    for label, model, configuration in (
+        ("AMBERES CARGA", "Amberes", "Carga"),
+        ("IBIZA CARGA", "Ibiza", "Carga"),
+        ("SPLIT G CARGA", "Split", "G Carga"),
+        ("MONACO-G", "Monaco", "G"),
+        ("BARCELONA BOX HDMI", "Barcelona", "Box/HDMI Inalámbrico"),
+        ("BARCELONA BOX IN", "Barcelona", "Box/HDMI Inalámbrico"),
     )
 }
 
@@ -315,3 +382,299 @@ def parse_lumbro_pdf_prices(files) -> tuple[LumbroPriceRecord, ...]:
         for page in iter_pdf_pages(row.local_path):
             records.extend(_parse_page(row, page))
     return _mark_conflicting_prices(records)
+
+
+def _plain(value: object) -> str:
+    return " ".join(neutralize_spreadsheet_text(value).split())
+
+
+def _validated_spec_source(source):
+    local_path = getattr(source, "local_path", None)
+    declared_hash = getattr(source, "sha256", None)
+    if (
+        getattr(source, "path", None) != _SPEC_PATH
+        or getattr(source, "kind", None) != "spec_guide"
+        or getattr(source, "brand", None) is not None
+        or getattr(source, "mime_type", None) != _SPEC_MIME
+        or not isinstance(local_path, Path)
+        or local_path.suffix.casefold() != ".xlsx"
+        or not isinstance(declared_hash, str)
+        or _HASH.fullmatch(declared_hash) is None
+    ):
+        raise ValueError("LUMBRO_SPEC_SOURCE")
+    validated = validate_source_file(local_path, ".xlsx")
+    if validated.sha256 != declared_hash:
+        raise ValueError("LUMBRO_SPEC_HASH")
+    return source
+
+
+def _detail_kind(value: str) -> str | None:
+    folded = _fold(value)
+    if folded.startswith("color "):
+        return "color"
+    if folded.startswith("su montaje"):
+        return "mounting"
+    if folded.startswith("nota"):
+        return "note"
+    return None
+
+
+def _heading_candidate(value: str) -> bool:
+    folded = _fold(value)
+    return bool(value) and _detail_kind(value) is None and not folded.startswith(
+        ("linea ", "famila ", "familia ", "sistema ")
+    )
+
+
+def _heading_rows(sheet, coded_rows: tuple[int, ...]) -> dict[int, int | None]:
+    headings = {}
+    previous = _SPEC_FIRST_ROW
+    for row in coded_rows:
+        candidates = [
+            current
+            for current in range(previous + 1, row)
+            if _heading_candidate(_plain(sheet.cell(current, 3).value))
+        ]
+        headings[row] = candidates[-1] if candidates else None
+        previous = row
+    return headings
+
+
+def _designation_from_spec(heading: str, code: str) -> tuple[str, str]:
+    designations = tuple(
+        _SPEC_DESIGNATION_ALIASES.get(_fold(value))
+        or _PUBLISHED_DESIGNATIONS.get(_fold(value))
+        for value in (heading, code)
+    )
+    for designation in designations:
+        if designation is not None and designation[1]:
+            return designation
+    for designation in designations:
+        if designation is not None:
+            return designation
+    return heading or code, ""
+
+
+def _colors(value: str) -> tuple[str, ...]:
+    text = value.split(":", 1)[1] if ":" in value else value
+    colors = []
+    for part in re.split(r"\s*(?:,|;|\by\b)\s*", text, flags=re.IGNORECASE):
+        clean = _plain(part)
+        if clean and clean not in colors:
+            colors.append(clean)
+    return tuple(colors)
+
+
+def _cell_references(file_id: str, coordinates) -> tuple[dict, ...]:
+    return tuple(source_ref(file_id, _SPEC_SHEET, coordinate) for coordinate in coordinates)
+
+
+def _internal_id(code: str, model: str, configuration: str, color: str) -> str:
+    material = "\0".join((_fold(code), _fold(model), _fold(configuration), _fold(color)))
+    return "lumbro:variant:" + hashlib.sha256(material.encode()).hexdigest()[:20]
+
+
+def _image_rows(images) -> dict[int, tuple[object, ImageAsset]]:
+    rows = {}
+    for reference, asset in images.items():
+        match = re.fullmatch(r"B([0-9]+)", reference.cell, re.IGNORECASE)
+        if (
+            reference.sheet == _SPEC_SHEET
+            and match is not None
+            and _SPEC_FIRST_ROW <= int(match.group(1)) <= _SPEC_LAST_ROW
+        ):
+            rows[int(match.group(1))] = (reference, asset)
+    return rows
+
+
+def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
+    """Extrae evidencia de identidad del spec guide sin otorgarle autoridad de precio."""
+
+    source = _validated_spec_source(source)
+    workbook = open_xlsx_data_only(source.local_path)
+    if workbook.sheetnames.count(_SPEC_SHEET) != 1:
+        raise ValueError("LUMBRO_SPEC_SHEET")
+    sheet = workbook[_SPEC_SHEET]
+    headings = tuple(_fold(sheet.cell(_SPEC_FIRST_ROW, column).value).strip(". ") for column in range(1, 7))
+    if headings != ("cod", "imagen", "descripcion", "medida unidad", "p unitario", "moneda"):
+        raise ValueError("LUMBRO_SPEC_HEADER")
+
+    coded_rows = tuple(
+        row
+        for row in range(_SPEC_FIRST_ROW + 1, _SPEC_LAST_ROW + 1)
+        if _plain(sheet.cell(row, 1).value)
+    )
+    heading_rows = _heading_rows(sheet, coded_rows)
+    raw_images = {
+        reference: asset
+        for reference, asset in extract_xlsx_images(source.local_path).items()
+        if reference.sheet == _SPEC_SHEET
+    }
+    exact_images = _image_rows(raw_images)
+    assets_by_sha256 = {asset.sha256: asset for asset in raw_images.values()}
+
+    blocks = []
+    for index, row in enumerate(coded_rows):
+        heading_row = heading_rows[row]
+        heading = _plain(sheet.cell(heading_row, 3).value) if heading_row else ""
+        code = _plain(sheet.cell(row, 1).value)
+        model, configuration = _designation_from_spec(heading, code)
+        next_row = coded_rows[index + 1] if index + 1 < len(coded_rows) else _SPEC_LAST_ROW + 1
+        next_heading = heading_rows.get(next_row)
+        block_end = (next_heading - 1) if next_heading else next_row - 1
+
+        description_parts = []
+        description_coordinates = []
+        color_values = []
+        color_coordinates = []
+        mounting_parts = []
+        mounting_coordinates = []
+        notes = []
+        note_coordinates = []
+        for current in range(row, block_end + 1):
+            text = _plain(sheet.cell(current, 3).value)
+            if not text:
+                continue
+            kind = _detail_kind(text)
+            coordinate = f"C{current}"
+            if kind == "color":
+                color_values.extend(value for value in _colors(text) if value not in color_values)
+                color_coordinates.append(coordinate)
+            elif kind == "mounting":
+                mounting_parts.append(text)
+                mounting_coordinates.append(coordinate)
+            elif kind == "note":
+                notes.append(text)
+                note_coordinates.append(coordinate)
+            else:
+                description_parts.append(text)
+                description_coordinates.append(coordinate)
+
+        dimensions = _plain(sheet.cell(row, 4).value)
+        currency = _plain(sheet.cell(row, 6).value)
+        evidence = sheet.cell(row, 5).value
+        provenance = {
+            "code": _cell_references(source.sha256, (f"A{row}",)),
+            "configuration": _cell_references(
+                source.sha256, (f"C{heading_row}" if heading_row else f"A{row}",)
+            ),
+            "description": _cell_references(source.sha256, description_coordinates),
+            "dimensions": _cell_references(source.sha256, (f"D{row}",)) if dimensions else (),
+            "color": _cell_references(source.sha256, color_coordinates),
+            "mounting": _cell_references(source.sha256, mounting_coordinates),
+            "notes": _cell_references(source.sha256, note_coordinates),
+            "spec_price_evidence": _cell_references(source.sha256, (f"E{row}",)) if evidence is not None else (),
+            "currency": _cell_references(source.sha256, (f"F{row}",)) if currency else (),
+        }
+        blocks.append(
+            {
+                "row": row,
+                "heading_row": heading_row,
+                "code": code,
+                "model": model,
+                "configuration": configuration,
+                "colors": tuple(color_values) or ("",),
+                "description": " ".join(description_parts),
+                "dimensions": dimensions,
+                "mounting": " ".join(mounting_parts),
+                "notes": tuple(notes),
+                "currency": currency,
+                "evidence": evidence,
+                "provenance": provenance,
+            }
+        )
+    workbook.close()
+
+    family_images = {}
+    for block in blocks:
+        exact = exact_images.get(block["row"])
+        if exact is not None:
+            family_images.setdefault(_fold(block["model"]), []).append(exact)
+
+    records = []
+    bindings = []
+    for block in blocks:
+        exact = exact_images.get(block["row"])
+        selected = exact
+        borrowed = False
+        if selected is None:
+            candidates = family_images.get(_fold(block["model"]), ())
+            unique = {asset.sha256: (reference, asset) for reference, asset in candidates}
+            if len(unique) == 1 and block["configuration"]:
+                selected = next(iter(unique.values()))
+                borrowed = True
+        for color in block["colors"]:
+            internal_id = _internal_id(
+                block["code"], block["model"], block["configuration"], color
+            )
+            family_binding = selected is not None and (bool(color) or borrowed)
+            warning = "El color puede variar" if family_binding else None
+            record = LumbroSpecRecord(
+                internal_id=internal_id,
+                identity=_identity(block["model"], " ".join(value for value in (block["configuration"], color) if value)),
+                price_identity=_identity(block["model"], block["configuration"]),
+                model=block["model"],
+                configuration=block["configuration"],
+                color=color,
+                code=block["code"],
+                description=block["description"],
+                dimensions=block["dimensions"],
+                mounting=block["mounting"],
+                notes=block["notes"],
+                currency=block["currency"],
+                spec_price_evidence=block["evidence"],
+                source=LumbroSpecSource(
+                    source.path,
+                    source.sha256,
+                    _SPEC_SHEET,
+                    block["heading_row"],
+                    block["row"],
+                ),
+                provenance=block["provenance"],
+                image_sha256=selected[1].sha256 if selected else None,
+                image_warning=warning,
+                warnings=(warning,) if warning else (),
+            )
+            records.append(record)
+            if selected is not None:
+                reference, asset = selected
+                bindings.append(
+                    CatalogAssetBinding(
+                        internal_id=internal_id,
+                        asset_sha256=asset.sha256,
+                        object_name=f"lumbro/{asset.sha256}.png",
+                        image_kind="official",
+                        match_status="family_xlsx" if family_binding else "exact_xlsx",
+                        source_references=(
+                            source_ref(source.sha256, _SPEC_SHEET, reference.cell),
+                        ),
+                    )
+                )
+    return LumbroSpecBuild(tuple(records), assets_by_sha256, tuple(bindings))
+
+
+def reconcile_lumbro_spec_prices(spec_records, price_records) -> tuple[LumbroSpecRecord, ...]:
+    """Añade solo precios PDF inequívocos; la columna E permanece como diagnóstico."""
+
+    prices_by_identity = {}
+    for price in price_records:
+        if price.net_price is not None and price.parse_status == "parsed":
+            prices_by_identity.setdefault(price.identity, []).append(price)
+
+    enriched = []
+    for record in spec_records:
+        matches = prices_by_identity.get(record.price_identity, ())
+        if not matches:
+            enriched.append(record)
+            continue
+        authority = max(match.authority_rank for match in matches)
+        authoritative = [match for match in matches if match.authority_rank == authority]
+        values = {match.net_price for match in authoritative}
+        if len(values) != 1:
+            enriched.append(record)
+            continue
+        selected = authoritative[0]
+        enriched.append(
+            replace(record, net_price=selected.net_price, price_source=selected.source)
+        )
+    return tuple(enriched)
