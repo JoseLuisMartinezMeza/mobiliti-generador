@@ -7,6 +7,7 @@ import pytest
 
 from mobiliti_saas.worker.catalog_sync.lumbro_links import (
     DEFAULT_LUMBRO_LINKS_PATH,
+    LumbroLinkIndex,
     LumbroLinkResourceError,
     build_lumbro_link_index,
     load_lumbro_link_index,
@@ -51,6 +52,10 @@ def test_resolver_uses_only_explicit_category_and_general_fallbacks():
         ("fallback_url", "http://www.lumbromx.com/category/all-products"),
         ("fallback_url", "https://lumbromx.com/category/all-products"),
         ("fallback_url", "https://attacker.invalid/category/all-products"),
+        ("fallback_url", "https://user:pass@www.lumbromx.com/category/all-products"),
+        ("fallback_url", "https://www.lumbromx.com:443/category/all-products"),
+        ("fallback_url", "https://www.lumbromx.com/category/all-products?source=test"),
+        ("fallback_url", "https://www.lumbromx.com/category/all-products#section"),
         ("products", "http://www.lumbromx.com/product-page/venecia"),
     ],
 )
@@ -63,6 +68,18 @@ def test_manifest_rejects_non_official_https_urls(field, url):
 
     with pytest.raises(LumbroLinkResourceError, match="LUMBRO_URL"):
         build_lumbro_link_index(resource)
+
+
+def test_resolver_rejects_an_externally_constructed_index_with_an_unsafe_url():
+    unsafe_index = LumbroLinkIndex(
+        resource_fingerprint="0" * 64,
+        product_urls_by_model={"venecia": "https://attacker.invalid/x"},
+        category_urls_by_category={},
+        fallback_url="https://www.lumbromx.com/category/all-products",
+    )
+
+    with pytest.raises(LumbroLinkResourceError, match="LUMBRO_URL"):
+        resolve_lumbro_link("VENECIA", "Empotrables", unsafe_index)
 
 
 def test_manifest_rejects_duplicate_normalized_model_keys():

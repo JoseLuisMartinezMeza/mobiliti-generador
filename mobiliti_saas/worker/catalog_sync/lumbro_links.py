@@ -16,6 +16,7 @@ _OFFICIAL_HOST = "www.lumbromx.com"
 _RESOURCE_FIELDS = {"schema_version", "official_host", "products", "categories", "fallback_url"}
 _PRODUCT_FIELDS = {"model_key", "url"}
 _CATEGORY_FIELDS = {"category_key", "url"}
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class LumbroLinkResourceError(ValueError):
@@ -143,6 +144,36 @@ def build_lumbro_link_index(resource: object) -> LumbroLinkIndex:
     )
 
 
+def _validated_mapping(value: object, code: str) -> Mapping[str, str]:
+    if not isinstance(value, Mapping):
+        _fail(code)
+    entries: dict[str, str] = {}
+    for raw_key, raw_url in value.items():
+        key = _require_text(raw_key, code)
+        if key != normalize_lumbro_key(key) or key in entries:
+            _fail(code)
+        entries[key] = _validate_url(raw_url)
+    return MappingProxyType(dict(sorted(entries.items())))
+
+
+def _validated_index(index: object) -> LumbroLinkIndex:
+    if not isinstance(index, LumbroLinkIndex):
+        _fail("LUMBRO_INDEX")
+    fingerprint = _require_text(index.resource_fingerprint, "LUMBRO_INDEX")
+    if _SHA256.fullmatch(fingerprint) is None:
+        _fail("LUMBRO_INDEX")
+    return LumbroLinkIndex(
+        resource_fingerprint=fingerprint,
+        product_urls_by_model=_validated_mapping(
+            index.product_urls_by_model, "LUMBRO_MODEL"
+        ),
+        category_urls_by_category=_validated_mapping(
+            index.category_urls_by_category, "LUMBRO_CATEGORY"
+        ),
+        fallback_url=_validate_url(index.fallback_url),
+    )
+
+
 def load_lumbro_link_index(path: Path = DEFAULT_LUMBRO_LINKS_PATH) -> LumbroLinkIndex:
     try:
         resource = json.loads(path.read_text(encoding="utf-8"))
@@ -164,7 +195,7 @@ def resolve_lumbro_link(
 ) -> LumbroLinkResolution:
     """Resuelve sólo modelos y categorías explícitamente indexados."""
 
-    index = index or load_lumbro_link_index()
+    index = _validated_index(index or load_lumbro_link_index())
     model_key = normalize_lumbro_key(model)
     category_key = normalize_lumbro_key(category)
     product_url = index.product_urls_by_model.get(model_key)
