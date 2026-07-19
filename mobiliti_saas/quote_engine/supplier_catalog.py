@@ -323,8 +323,24 @@ def create_supplier_quotation_workbook(payload: dict, output_path: Path) -> Path
     supplier = str(payload.get("supplier") or "").strip().lower()
     if supplier not in ALLOWED_SUPPLIERS:
         raise ValueError("Proveedor no soportado")
+    workbook_payload = deepcopy(payload)
+    for item in workbook_payload.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        description = str(item.get("description") or "").strip()
+        unit = str(item.get("unit") or "").strip()
+        source_reference = str(item.get("source_reference") or "").strip()
+        item["description"] = " | ".join(
+            part
+            for part in (
+                description,
+                f"Unidad: {unit}" if unit else "",
+                f"Fuente: {source_reference}" if source_reference else "",
+            )
+            if part
+        )
     return create_catalog_quotation_workbook(
-        payload,
+        workbook_payload,
         output_path,
         source_type="supplier_cart",
         category_label=SUPPLIER_LABELS[supplier],

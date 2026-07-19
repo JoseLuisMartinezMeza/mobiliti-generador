@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine.engine import (  # noqa: E402
+    LUMBRO_PRICE_ROWS,
     MAX_PROD_PER_SECTION,
     MOBILITI_DISCOUNT_AMOUNT_COL,
     MOBILITI_FINAL_PRICE_COL,
@@ -308,15 +309,25 @@ def test_lumbro_electrification_treats_px_as_pax_synonym():
         precio=1222,
     )
 
-    assert _lumbro_accessories_for_item(workstation, "Escritorios-WorkStation") == [
+    workstation_accessories = _lumbro_accessories_for_item(
+        workstation,
+        "Escritorios-WorkStation",
+    )
+    meeting_accessories = _lumbro_accessories_for_item(meeting_table, "Mesas de Juntas")
+
+    assert workstation_accessories == [
         ("LIDO.OP-INT", 8),
         ("JUMP-1.5M", 8),
         ("CAJA-FUS", 2),
     ]
-    assert _lumbro_accessories_for_item(meeting_table, "Mesas de Juntas") == [
+    assert meeting_accessories == [
         ("MULT-LIDO-INT", 2),
         ("JUMP-1.5M", 3),
     ]
+    assert {
+        code
+        for code, _quantity in [*workstation_accessories, *meeting_accessories]
+    } == set(LUMBRO_PRICE_ROWS)
 
 
 def test_mobiliti_writes_all_products_through_expanded_sections():

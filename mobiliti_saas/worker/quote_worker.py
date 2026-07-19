@@ -689,6 +689,7 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
                     "catalog_supplier": supplier,
                     "catalog_supplier_label": supplier_label,
                     "catalog_price_mode": "list_price_net",
+                    "descuento": 0,
                     "base_currency": payload.get("base_currency"),
                     "quote_currency": payload.get("quote_currency"),
                     "exchange_rate": payload.get("exchange_rate"),

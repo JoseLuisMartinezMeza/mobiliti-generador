@@ -30,6 +30,15 @@ def test_lumbro_accessories_for_workstation_pax_multiplies_quantity():
     ]
 
 
+def test_lumbro_price_rows_keep_exact_automatic_codes_and_source_rows():
+    assert engine.LUMBRO_PRICE_ROWS == {
+        "MULT-LIDO-INT": 348,
+        "LIDO.OP-INT": 380,
+        "JUMP-1.5M": 396,
+        "CAJA-FUS": 406,
+    }
+
+
 def test_lumbro_accessories_for_meeting_table_adds_jump_plus_one():
     item = QuoteItem(tipo="producto", row=14, nombre="Sala de juntas para 8 pax", cantidad=1)
 
