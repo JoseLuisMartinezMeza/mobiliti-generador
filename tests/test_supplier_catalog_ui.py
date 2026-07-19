@@ -369,6 +369,18 @@ def test_pza_quantities_are_validated_on_add_without_rewriting_input_state():
         component,
     )
     add_to_cart = _javascript_function(component, "addToCart")
+    quantity_expression = re.search(
+        r"const\s+quantity\s*=\s*(?P<expression>String\(quantityByItem\[item\.internal_id\].*?\.trim\(\))\s*;",
+        add_to_cart,
+    )
+    assert quantity_expression
+    resolved = _run_javascript(
+        f"const resolve = (quantityByItem, item) => {quantity_expression.group('expression')};"
+        "const item = {internal_id: 'product-1'};"
+        "console.log(JSON.stringify([resolve({}, item), resolve({'product-1': ''}, item)]));"
+    )
+    assert resolved == ["1", ""]
+    assert 'quantityByItem[item.internal_id] ?? "1"' in add_to_cart
     assert "if (!validQuantity(item, quantity))" in add_to_cart
     assert '"un número entero"' in add_to_cart
     assert "setSubmitError(`Captura ${requirement} para ${item.name}.`)" in add_to_cart

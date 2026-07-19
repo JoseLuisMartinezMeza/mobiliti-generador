@@ -496,7 +496,7 @@ export default function SupplierCatalogView({
       setSubmitError(`Selecciona una materialidad para ${item.name}.`);
       return;
     }
-    const quantity = String(quantityByItem[item.internal_id] || "1").trim();
+    const quantity = String(quantityByItem[item.internal_id] ?? "1").trim();
     if (!validQuantity(item, quantity)) {
       const requirement = quantityRules(item).integer ? "un número entero" : "una cantidad válida";
       setSubmitError(`Captura ${requirement} para ${item.name}.`);
