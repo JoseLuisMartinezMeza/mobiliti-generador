@@ -2,6 +2,7 @@ from copy import deepcopy
 from datetime import date
 from decimal import Decimal
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -117,10 +118,54 @@ def test_mixed_cart_normalizes_missing_supplier_configuration():
     assert normalized["add_on_option_ids"] == []
 
 
+@pytest.mark.parametrize("quantity", (1, 1.5))
+def test_mixed_cart_accepts_json_numeric_quantity_before_builder_rules(quantity):
+    normalized = preflight_mixed_catalog_items([{"catalog": "tarkett", "code": "25731726", "quantity": quantity}])
+    assert normalized[0]["quantity"] == quantity
+
+
+@pytest.mark.parametrize("quantity", (True, False, float("nan"), float("inf"), [], {}, None))
+def test_mixed_cart_rejects_non_finite_or_non_json_quantity_types(quantity):
+    with pytest.raises(ValueError, match="quantity invalida"):
+        preflight_mixed_catalog_items([{"catalog": "tarkett", "code": "25731726", "quantity": quantity}])
+
+
 def test_mixed_cart_uses_json_tuple_keys_to_avoid_delimiter_collisions():
     left = mixed_cart_key({"catalog": "alma", "internal_id": "a|b", "base_option_id": "c", "add_on_option_ids": []})
     right = mixed_cart_key({"catalog": "alma", "internal_id": "a", "base_option_id": "b|c", "add_on_option_ids": []})
     assert left != right
+
+
+@pytest.mark.parametrize("identity", ("x" * 1001, "bad\x00", "bad\x7f", "bad\u200b", "bad\ud800"))
+def test_mixed_cart_rejects_oversized_and_control_identities_before_builders(identity):
+    with pytest.raises(ValueError, match="code invalido"):
+        preflight_mixed_catalog_items([{"catalog": "tarkett", "code": identity, "quantity": "1"}])
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "x" * 65},
+        {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1", "add_on_option_ids": [f"a{i}" for i in range(201)]},
+        {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1", "add_on_option_ids": ["x" * 501]},
+        {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1", "add_on_option_ids": ["bad\ud800"]},
+        {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1", "add_on_option_ids": ["dup", "dup"]},
+    ],
+)
+def test_mixed_cart_rejects_bounded_configuration_before_builders(row):
+    with pytest.raises(ValueError):
+        preflight_mixed_catalog_items([row])
+
+
+def test_mixed_cart_rejects_duplicate_before_calling_supplier_builder(monkeypatch, mixed_catalogs, rate_rows):
+    import mobiliti_saas.quote_engine.mixed_catalog as mixed_module
+
+    called = []
+    monkeypatch.setattr(mixed_module, "build_supplier_cart_payload", lambda *args, **kwargs: called.append(args))
+    row = {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"}
+    with pytest.raises(ValueError, match="Clave mixta duplicada"):
+        build_mixed_catalog_cart_payload([row, dict(row)], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
+    assert called == []
 
 
 def test_mixed_reservations_aggregate_configurations(mixed_catalogs, rate_rows):
@@ -135,6 +180,57 @@ def test_mixed_reservations_aggregate_configurations(mixed_catalogs, rate_rows):
     ], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
     assert len(payload["groups"][0]["items"]) == 2
     assert build_mixed_reservation_groups(payload) == [{"catalog": "alma", "items": [{"identity": "alma:desk-1", "sku": "ALMA:DESK-1", "quantity": "3.000000", "stock": "5.000000"}]}]
+
+
+@pytest.mark.parametrize(
+    ("quote_currency", "alma_price", "sonara_price", "automatic_rate"),
+    (("MXN", "1850.00", "100.00", "1.000000"), ("USD", "100.00", "5.41", "0.054054"), ("EUR", "90.24", "4.88", "0.048780")),
+)
+def test_mixed_cart_freezes_conversion_without_double_conversion(mixed_catalogs, rate_rows, quote_currency, alma_price, sonara_price, automatic_rate):
+    payload = build_mixed_catalog_cart_payload(
+        [{"catalog": "tarkett", "code": "25731726", "quantity": "1"}, {"catalog": "sonara", "internal_id": "sonara:desk-1", "quantity": "1"}, {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"}],
+        catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency=quote_currency, commercial_discount_percent="40", today=date(2026, 7, 19),
+    )
+    lines = {group["catalog"]: group["items"][0] for group in payload["groups"]}
+    assert (lines["alma"]["unit_price"], lines["sonara"]["unit_price"]) == (alma_price, sonara_price)
+    assert lines["alma"]["original_currency"] == "USD"
+    assert lines["sonara"]["original_currency"] == "MXN"
+    assert payload["auto_electrification_rate"]["exchange_rate"] == automatic_rate
+
+
+def test_mixed_cart_applies_discount_only_to_legacy_catalogs(mixed_catalogs, rate_rows):
+    payload = build_mixed_catalog_cart_payload(browser_rows_for_all_catalogs(), catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
+    discounts = {group["catalog"]: group["items"][0]["discount_percent"] for group in payload["groups"]}
+    assert discounts["tarkett"] == discounts["offiho"] == "40.000000"
+    assert all(discounts[catalog] == "0.000000" for catalog in MIXED_CATALOG_ORDER[2:])
+
+
+def test_mixed_cart_rejects_non_sixteen_percent_tax(mixed_catalogs, rate_rows):
+    mixed_catalogs["alma"]["items"][0]["tax_rate"] = "0.080000"
+    with pytest.raises(ValueError, match="IVA 16"):
+        build_mixed_catalog_cart_payload([{"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
+
+
+@pytest.mark.parametrize("catalog", MIXED_CATALOG_ORDER)
+def test_mixed_payload_rejects_wrong_base_currency_for_every_catalog(frozen_mixed_payload, catalog):
+    payload = deepcopy(frozen_mixed_payload)
+    group = next(group for group in payload["groups"] if group["catalog"] == catalog)
+    group["base_currency"] = "USD" if group["base_currency"] == "MXN" else "MXN"
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+@pytest.mark.parametrize("catalog", MIXED_CATALOG_ORDER)
+def test_mixed_catalog_reservations_have_authoritative_identities(frozen_mixed_payload, catalog):
+    line = next(group for group in frozen_mixed_payload["groups"] if group["catalog"] == catalog)["items"][0]
+    reservation = line["reservation"]
+    assert set(reservation) == {"identity", "sku", "quantity", "stock"}
+    if catalog == "tarkett":
+        assert reservation["identity"] == line["code"]
+    elif catalog == "offiho":
+        assert reservation["identity"] == line["canonical_key"].split(":", 1)[1]
+    else:
+        assert reservation["identity"] == json.loads(line["canonical_key"].split(":", 1)[1])[0]
 
 
 def test_mixed_catalog_module_copies_are_byte_identical():
@@ -169,6 +265,69 @@ def test_mixed_payload_rejects_tampering(frozen_mixed_payload, mutate, message):
     mutate(payload)
     with pytest.raises(ValueError, match=message):
         validate_mixed_catalog_payload(payload)
+
+
+@pytest.mark.parametrize("field", ("reserved_quantity", "available_after_reservations", "reserved_by_others"))
+def test_mixed_payload_rejects_reservation_result_without_reservation(frozen_mixed_payload, field):
+    payload = deepcopy(frozen_mixed_payload)
+    line = payload["groups"][4]["items"][0]
+    line["availability_type"] = "made_to_order"
+    line["available_quantity"] = None
+    line["stock"] = None
+    line["stock_status"] = ""
+    line["reservation"] = None
+    line[field] = "0.000000" if field != "reserved_by_others" else False
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda line: line.update(code_status="needs_review", warnings=["Codigo por verificar"]), "Grupos mixtos invalidos"),
+        (lambda line: line.update(stock_status="insufficient_stock"), "Grupos mixtos invalidos"),
+    ],
+)
+def test_mixed_payload_preserves_tarkett_authoritative_semantics(frozen_mixed_payload, mutate, message):
+    payload = deepcopy(frozen_mixed_payload)
+    mutate(payload["groups"][0]["items"][0])
+    with pytest.raises(ValueError, match=message):
+        validate_mixed_catalog_payload(payload)
+
+
+@pytest.mark.parametrize("field", ("image_url", "product_url"))
+@pytest.mark.parametrize("url", ("http://sonara.mx/panel", "https://user:pass@sonara.mx/panel", "https://sonara.mx:444/panel"))
+def test_mixed_payload_rejects_noncommercial_url_shapes(frozen_mixed_payload, field, url):
+    payload = deepcopy(frozen_mixed_payload)
+    payload["groups"][2]["items"][0][field] = url
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_rejects_deep_attributes(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    attributes = {"leaf": "value"}
+    for _ in range(9):
+        attributes = {"nested": attributes}
+    payload["groups"][2]["items"][0]["attributes"] = attributes
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_cart_preserves_review_missing_price_and_generated_reference_warnings(mixed_catalogs, rate_rows):
+    sonara = mixed_catalogs["sonara"]["items"][0]
+    sonara.update(code_status="needs_review", sku="", warnings=["código por verificar"], image_kind="generated_reference", image_url="https://images.example.test/sonara.png")
+    offiho = mixed_catalogs["offiho"]["items"][0]
+    mixed_catalogs["offiho"]["items"] = [OffihoCatalogItem(offiho.inventory_key, offiho.code, offiho.name, offiho.variant, offiho.unit, offiho.pieces_per_box, offiho.available_quantity, offiho.unit_price, price_source="missing")]
+    mixed_catalogs["offiho"]["by_inventory_key"] = {offiho.inventory_key: mixed_catalogs["offiho"]["items"][0]}
+    payload = build_mixed_catalog_cart_payload(
+        [{"catalog": "sonara", "internal_id": "sonara:desk-1", "quantity": "1"}, {"catalog": "offiho", "inventory_key": "offiho:desk-1", "quantity": "1"}],
+        catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19),
+    )
+    lines = {group["catalog"]: group["items"][0] for group in payload["groups"]}
+    assert "Codigo por verificar" in lines["sonara"]["warnings"]
+    assert "Imagen de referencia" in lines["sonara"]["warnings"]
+    assert "Precio por confirmar" in lines["offiho"]["warnings"]
 
 
 def test_mixed_payload_keeps_commercial_product_url_inert(frozen_mixed_payload):

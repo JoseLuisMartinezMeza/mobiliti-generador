@@ -274,11 +274,11 @@ def resolve_conversion_rate(
             raise ValueError("Fila de tasa con estructura invalida")
         currency = _enum_text(raw, "currency", {"USD", "EUR"})
         effective_date = _iso_date(raw.get("effective_date"), "effective_date")
-        if effective_date > today:
-            raise ValueError("Fila de tasa con fecha futura")
         value = Decimal(_decimal_string(raw.get("mxn_per_unit"), "tasa", positive=True))
         retrieved_at = _required_text(raw, "retrieved_at")
         _iso_datetime(retrieved_at)
+        if effective_date > today:
+            continue
         key = (currency, effective_date)
         candidate = (value, retrieved_at)
         if key in rates and rates[key] != candidate:

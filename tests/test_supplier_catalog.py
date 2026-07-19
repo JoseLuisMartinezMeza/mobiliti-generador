@@ -1235,17 +1235,18 @@ def test_resolve_conversion_rate_uses_common_date_and_decimal_cross_rate():
 def test_supplier_cart_uses_explicit_effective_date_for_rate_selection():
     catalog = load_supplier_catalog_data(catalog_payload())
     rows = [
+        {"currency": "USD", "effective_date": "2026-07-17", "mxn_per_unit": "17.000000", "retrieved_at": "2026-07-17T12:00:00Z"},
         {"currency": "USD", "effective_date": "2026-07-18", "mxn_per_unit": "18.000000", "retrieved_at": "2026-07-18T12:00:00Z"},
         {"currency": "USD", "effective_date": "2026-07-19", "mxn_per_unit": "19.000000", "retrieved_at": "2026-07-19T12:00:00Z"},
     ]
 
     payload = build_supplier_cart_payload(
         [{"internal_id": "alma:kun:kc8611n01rop", "quantity": "1", "base_option_id": "powder-coated-aluminium", "add_on_option_ids": []}],
-        catalog, "MXN", rows, today=date(2026, 7, 19),
+        catalog, "MXN", rows, today=date(2026, 7, 18),
     )
 
-    assert payload["rate_effective_date"] == "2026-07-19"
-    assert payload["exchange_rate"] == "19.000000"
+    assert payload["rate_effective_date"] == "2026-07-18"
+    assert payload["exchange_rate"] == "18.000000"
 
 
 def test_resolve_conversion_rate_supports_mxn_and_rejects_stale_or_invalid_rows():
@@ -1278,8 +1279,7 @@ def test_identity_rate_validates_supplied_rows_without_requiring_any():
         resolve_conversion_rate("USD", "USD", duplicates, today)
 
     future = rate_rows(effective_date="2026-07-16")
-    with pytest.raises(ValueError, match="futura"):
-        resolve_conversion_rate("USD", "USD", future, today)
+    assert resolve_conversion_rate("USD", "USD", future, today).exchange_rate == Decimal("1.000000")
 
 
 def test_resolve_conversion_rate_rejects_datetime_for_today():

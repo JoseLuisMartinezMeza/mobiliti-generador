@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
+import math
 from typing import Any
 import unicodedata
 from urllib.parse import urlsplit
@@ -98,7 +99,13 @@ def _validate_browser_row(raw: object) -> dict[str, Any]:
     normalized = dict(raw)
     identity_field = {"tarkett": "code", "offiho": "inventory_key", "supplier": "internal_id"}[family]
     normalized[identity_field] = _identity_text(normalized[identity_field], identity_field)
-    if not isinstance(normalized.get("quantity"), str) or len(normalized["quantity"]) > 64 or any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in normalized["quantity"]):
+    quantity = normalized.get("quantity")
+    if type(quantity) not in {str, int, float}:
+        raise ValueError("quantity invalida")
+    if isinstance(quantity, float) and not math.isfinite(quantity):
+        raise ValueError("quantity invalida")
+    quantity_text = str(quantity)
+    if len(quantity_text) > 64 or any(unicodedata.category(char) in {"Cc", "Cf", "Cs"} for char in quantity_text):
         raise ValueError("quantity invalida")
     if family == "supplier":
         normalized.setdefault("base_option_id", "")
@@ -378,8 +385,9 @@ def _require_warning(warnings: list[str], expected: str, field: str) -> None:
 def _validate_reservation(line: dict[str, Any], catalog: str) -> None:
     reservation = line["reservation"]
     stocked = line["availability_type"] == "stocked"
+    optional = MIXED_RESERVATION_RESULT_FIELDS & set(line)
     if reservation is None:
-        if stocked:
+        if stocked or optional:
             raise ValueError("Reserva mixta invalida")
         return
     if not stocked or not isinstance(reservation, dict) or set(reservation) != {"identity", "sku", "quantity", "stock"}:
@@ -399,7 +407,6 @@ def _validate_reservation(line: dict[str, Any], catalog: str) -> None:
             raise ValueError("Reserva mixta invalida") from exc
         if not isinstance(identity_tuple, list) or not identity_tuple or identity != identity_tuple[0]:
             raise ValueError("Reserva mixta invalida")
-    optional = MIXED_RESERVATION_RESULT_FIELDS & set(line)
     if optional and optional != MIXED_RESERVATION_RESULT_FIELDS:
         raise ValueError("Reserva mixta invalida")
     if optional:
@@ -475,6 +482,8 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
                 _bounded(line[field], field, required=required)
             if line["code_status"] not in {"verified", "needs_review"} or (not line["code"] and line["code_status"] != "needs_review"):
                 raise ValueError("Grupos mixtos invalidos")
+            if catalog in {"tarkett", "offiho"} and line["code_status"] != "verified":
+                raise ValueError("Grupos mixtos invalidos")
             _bounded(line["code"], "code")
             if not isinstance(line["warnings"], list) or len(line["warnings"]) > MAX_MIXED_WARNINGS:
                 raise ValueError("Grupos mixtos invalidos")
@@ -499,6 +508,8 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
                     raise ValueError("Grupos mixtos invalidos")
                 available = None
             if catalog in {"tarkett", "offiho"} and line["availability_type"] != "stocked":
+                raise ValueError("Grupos mixtos invalidos")
+            if catalog == "tarkett" and line["stock_status"] != "available":
                 raise ValueError("Grupos mixtos invalidos")
             if line["image_kind"] == "generated_reference":
                 _require_warning(line["warnings"], "Imagen de referencia", "warning")
