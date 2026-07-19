@@ -26,6 +26,11 @@ Comando de construcción offline:
 python .superpowers\sdd\artifacts\lumbro-20260718\seed_local_preview.py
 ```
 
+`seed_local_preview.py` construyó el snapshot auditado, materializó los assets
+por hash y generó el archivo de staging local
+`.superpowers/sdd/artifacts/lumbro-20260718/db.with-lumbro.json`. El script no
+reemplazó por sí mismo el dev-store activo.
+
 Resultado del build real en `8.8 s`:
 
 | Evidencia | Valor |
@@ -72,6 +77,24 @@ Antes de reemplazar los datos locales se creó esta copia byte-for-byte:
   `c983df0fc3e0ac9d4dc334707953ba4e417590b728a8ce4a087534bcad069e49`.
 - Se conservaron `cr-global`, `sonara`, `sunon` y `alma`; sólo se añadió
   `lumbro`.
+
+Comando histórico exacto usado para crear y verificar el backup antes de tocar
+el dev-store:
+
+```powershell
+$ErrorActionPreference='Stop'; $artifact=Resolve-Path '.superpowers\sdd\artifacts\lumbro-20260718'; $backupDir=Join-Path $artifact 'dev-store-backups'; New-Item -ItemType Directory -Force -Path $backupDir | Out-Null; $source=Resolve-Path '.superpowers\sdd\artifacts\task-22-preview\dev-store\db.json'; $stamp=Get-Date -Format 'yyyyMMdd-HHmmss'; $dest=Join-Path $backupDir "db.before-lumbro-$stamp.json"; Copy-Item -LiteralPath $source -Destination $dest; $a=(Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash.ToLowerInvariant(); $b=(Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash.ToLowerInvariant(); if($a -ne $b){ throw 'Backup hash mismatch' }; [pscustomobject]@{Source=$source.Path;Backup=$dest;Bytes=(Get-Item -LiteralPath $dest).Length;SHA256=$b} | Format-List
+```
+
+Comando histórico exacto que comprobó que el dev-store no había cambiado,
+copió el staging y verificó el hash resultante:
+
+```powershell
+$ErrorActionPreference='Stop'; $db=Resolve-Path '.superpowers\sdd\artifacts\task-22-preview\dev-store\db.json'; $current=(Get-FileHash -Algorithm SHA256 -LiteralPath $db).Hash.ToLowerInvariant(); if($current -ne 'b4ccaca73c536ba49aff580f5ef9bd595ea5cabf70c9303e4c5c14e8831bcd64'){ throw "Dev-store changed after backup: $current" }; $staged=Resolve-Path '.superpowers\sdd\artifacts\lumbro-20260718\db.with-lumbro.json'; Copy-Item -LiteralPath $staged -Destination $db -Force; $after=(Get-FileHash -Algorithm SHA256 -LiteralPath $db).Hash.ToLowerInvariant(); $expected=(Get-FileHash -Algorithm SHA256 -LiteralPath $staged).Hash.ToLowerInvariant(); if($after -ne $expected){ throw 'Seeded db hash mismatch' }; $data=Get-Content -Raw -LiteralPath $db | ConvertFrom-Json; [pscustomobject]@{Path=$db.Path;BeforeSHA256=$current;AfterSHA256=$after;Published=(($data.catalog_published_snapshots.psobject.Properties.Name)-join ',');LumbroItems=@($data.catalog_published_snapshots.lumbro.payload.items).Count;LumbroHash=$data.catalog_published_snapshots.lumbro.source_hash} | Format-List
+```
+
+Por tanto, `seed_local_preview.py` sólo preparó staging/assets y el
+`Copy-Item` protegido por hashes reemplazó exclusivamente el `db.json` del
+dev-store local indicado arriba.
 
 La restauración local es recuperable mediante la copia anterior, después de
 detener los procesos locales. No se eliminó ningún archivo.
@@ -193,6 +216,12 @@ prohíbe cambios al sidebar dentro del breakpoint estrecho.
   `.superpowers/sdd/artifacts/lumbro-20260718/mobile-390-napoli-card-viewport.png`.
 - Móvil final, carrito neto:
   `.superpowers/sdd/artifacts/lumbro-20260718/mobile-390-napoli-cart-net.png`.
+- Consola final persistida desde la variable viva del IAB:
+  `.superpowers/sdd/artifacts/lumbro-20260718/browser-console-final.json`.
+  SHA-256:
+  `45f4370df19d2df9231398da608ad5fe29f4c63224d0495f2253971b537a954c`.
+  El artefacto registra niveles `error`, `warn` y `warning`, límite 100,
+  `logs: []` y las métricas desktop/móvil usadas en esta verificación.
 
 Los screenshots, snapshot, assets, backup y logs son artefactos locales y no
 se incluyen en el commit del reporte.
