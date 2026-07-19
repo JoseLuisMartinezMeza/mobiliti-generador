@@ -6,6 +6,12 @@ SETUP = Path("mobiliti_saas/supabase_setup")
 CATALOG_MIGRATION = SETUP / "2026_07_multi_supplier_catalogs.sql"
 JOBS_RLS_MIGRATION = SETUP / "2026_07_jobs_rls.sql"
 BOOTSTRAP = SETUP / "create_tables.sql"
+SQL_FILES = (CATALOG_MIGRATION, BOOTSTRAP)
+EXPECTED_SUPPLIER_ALLOWLISTS = {
+    CATALOG_MIGRATION.name: 7,
+    BOOTSTRAP.name: 7,
+}
+EXPECTED_SUPPLIERS = frozenset({"cr-global", "sonara", "sunon", "alma", "lumbro"})
 
 CATALOG_TABLES = (
     "saas_catalog_sources",
@@ -30,6 +36,30 @@ def _statement(sql, prefix):
     return sql[start : sql.index(";", start) + 1]
 
 
+def _supplier_allowlists(sql):
+    pattern = re.compile(
+        r"""(?isx)
+        \b(?:supplier|p_supplier|p_enabled_suppliers)\b
+        [^;]{0,400}?
+        \b(?:NOT\s+)?IN\s*\(
+        (?P<values>(?=[^)]*'cr-global')[^)]*)
+        \)
+        """
+    )
+    return [
+        frozenset(re.findall(r"'([^']+)'", match.group("values")))
+        for match in pattern.finditer(sql)
+    ]
+
+
+def test_all_supplier_sql_allowlists_include_lumbro():
+    for sql_path in SQL_FILES:
+        allowlists = _supplier_allowlists(sql_path.read_text(encoding="utf-8"))
+
+        assert len(allowlists) == EXPECTED_SUPPLIER_ALLOWLISTS[sql_path.name]
+        assert all(allowlist == EXPECTED_SUPPLIERS for allowlist in allowlists)
+
+
 def test_catalog_migration_is_additive_and_enables_rls():
     sql = CATALOG_MIGRATION.read_text("utf-8")
 
@@ -44,7 +74,7 @@ def test_catalog_migration_is_additive_and_enables_rls():
     assert "DROP TABLE" not in upper_sql
     assert "TRUNCATE" not in upper_sql
     assert "DELETE FROM" not in upper_sql
-    assert "supplier IN ('cr-global','sonara','sunon','alma')" in sql
+    assert "supplier IN ('cr-global','sonara','sunon','alma','lumbro')" in sql
     assert "ALTER TABLE saas_supplier_catalog_snapshots" not in sql
     assert "saas_publish_catalog_snapshot" in sql
     assert "saas_reject_catalog_snapshot" in sql

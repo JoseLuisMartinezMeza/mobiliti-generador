@@ -207,7 +207,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
 
 CREATE TABLE IF NOT EXISTS saas_catalog_sources (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    supplier TEXT NOT NULL UNIQUE CHECK (supplier IN ('cr-global','sonara','sunon','alma')),
+    supplier TEXT NOT NULL UNIQUE CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro')),
     label TEXT NOT NULL,
     adapter TEXT NOT NULL,
     graph_drive_id TEXT NOT NULL,
@@ -289,7 +289,7 @@ CREATE TABLE IF NOT EXISTS saas_catalog_source_files (
 
 CREATE TABLE IF NOT EXISTS saas_catalog_snapshot_versions (
     id UUID PRIMARY KEY,
-    supplier TEXT NOT NULL CHECK (supplier IN ('cr-global','sonara','sunon','alma')),
+    supplier TEXT NOT NULL CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro')),
     source_hash TEXT NOT NULL,
     generated_at TIMESTAMPTZ NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('candidate','published','superseded','rejected')),
@@ -332,7 +332,7 @@ $$;
 
 CREATE TABLE IF NOT EXISTS saas_catalog_reservations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    supplier TEXT NOT NULL CHECK (supplier IN ('cr-global','sonara','sunon','alma')),
+    supplier TEXT NOT NULL CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro')),
     internal_id TEXT NOT NULL,
     sku TEXT NOT NULL,
     quantity NUMERIC NOT NULL CHECK (quantity > 0),
@@ -704,7 +704,7 @@ BEGIN
           <> (SELECT COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value))
        OR EXISTS (
            SELECT 1 FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value)
-           WHERE value NOT IN ('cr-global','sonara','sunon','alma')
+           WHERE value NOT IN ('cr-global','sonara','sunon','alma','lumbro')
        ) THEN
         RAISE EXCEPTION 'invalid catalog sync supplier whitelist';
     END IF;
@@ -751,7 +751,7 @@ BEGIN
           <> (SELECT COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value))
        OR EXISTS (
            SELECT 1 FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value)
-           WHERE value NOT IN ('cr-global','sonara','sunon','alma')
+           WHERE value NOT IN ('cr-global','sonara','sunon','alma','lumbro')
        ) THEN
         RAISE EXCEPTION 'invalid catalog sync supplier whitelist';
     END IF;
@@ -1805,7 +1805,7 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
     IF p_supplier IS NULL
-       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma') THEN
+       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma','lumbro') THEN
         RAISE EXCEPTION 'invalid catalog supplier';
     END IF;
     IF p_usuario_id IS NULL OR p_usuario_id <= 0 THEN
@@ -1858,7 +1858,7 @@ BEGIN
         RAISE EXCEPTION 'invalid quote job';
     END IF;
     IF p_supplier IS NULL
-       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma') THEN
+       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma','lumbro') THEN
         RAISE EXCEPTION 'invalid catalog supplier';
     END IF;
     IF p_lines IS NULL
