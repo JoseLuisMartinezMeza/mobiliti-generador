@@ -421,6 +421,48 @@ def test_pdf_geometry_parser_is_isolated_and_consumes_validated_bytes(source_bun
     assert confirmed_price_sha256 == sonara._SONARA_PRICE_SHA256
 
 
+def test_pdf_geometry_parser_rejects_one_byte_price_pdf_mutation(source_bundle, tmp_path):
+    price_list = tmp_path / "missing-currency.pdf"
+    _write_price_pdf(
+        price_list,
+        [("PANEL 01", "Panel acustico 60 x 120 cm", "1880.00")],
+        currency="Lista vigente marzo 2026",
+    )
+    price_data = price_list.read_bytes()
+    catalog_data = source_bundle[0].local_path.read_bytes()
+    rows, _catalog, _assets = sonara._parse_sonara_documents_isolated(
+        price_data + b"\n% audited mutation\n",
+        catalog_data,
+        False,
+        hashlib.sha256(price_data).hexdigest(),
+    )
+
+    assert rows
+    assert all(row["currency_status"] == "rejected" for row in rows)
+    assert all(row["currency"] is None for row in rows)
+
+
+def test_pdf_geometry_parser_rejects_different_confirmed_price_hash(source_bundle, tmp_path):
+    price_list = tmp_path / "missing-currency.pdf"
+    _write_price_pdf(
+        price_list,
+        [("PANEL 01", "Panel acustico 60 x 120 cm", "1880.00")],
+        currency="Lista vigente marzo 2026",
+    )
+    price_data = price_list.read_bytes()
+    catalog_data = source_bundle[0].local_path.read_bytes()
+    rows, _catalog, _assets = sonara._parse_sonara_documents_isolated(
+        price_data,
+        catalog_data,
+        False,
+        "0" * 64,
+    )
+
+    assert rows
+    assert all(row["currency_status"] == "rejected" for row in rows)
+    assert all(row["currency"] is None for row in rows)
+
+
 def test_duplicate_logical_source_paths_are_rejected(source_bundle):
     duplicate_path = (
         source_bundle[0],
