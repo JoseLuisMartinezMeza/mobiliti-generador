@@ -271,8 +271,8 @@ def _supplier_line(raw: dict[str, Any], browser: dict[str, Any], *, catalog: str
 
 
 def build_mixed_catalog_cart_payload(raw_items: list[dict[str, object]], *, catalogs: dict[str, dict], rate_rows: list[dict], quote_currency: str, commercial_discount_percent: object, today: date | None = None) -> dict:
-    if quote_currency not in MIXED_QUOTE_CURRENCIES:
-        raise ValueError("Moneda de cotizacion mixta invalida")
+    if not isinstance(quote_currency, str) or quote_currency not in MIXED_QUOTE_CURRENCIES:
+        raise ValueError("Grupos mixtos invalidos")
     if not isinstance(catalogs, dict):
         raise ValueError("Catalogos mixtos invalidos")
     discount = _commercial_discount_percent(commercial_discount_percent)
@@ -393,7 +393,10 @@ def _validate_reservation(line: dict[str, Any], catalog: str) -> None:
     if not stocked or not isinstance(reservation, dict) or set(reservation) != {"identity", "sku", "quantity", "stock"}:
         raise ValueError("Reserva mixta invalida")
     identity = _identity_text(reservation["identity"], "identity")
-    _identity_text(reservation["sku"], "sku", allow_empty=line["code_status"] == "needs_review")
+    _identity_text(
+        reservation["sku"], "sku",
+        allow_empty=line["code_status"] == "needs_review" and catalog in {"sonara", "lumbro"},
+    )
     if reservation["quantity"] != line["quantity"] or reservation["stock"] != line["stock"]:
         raise ValueError("Reserva mixta invalida")
     if catalog == "tarkett" and identity != line["code"]:
@@ -428,7 +431,7 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     except (TypeError, ValueError) as exc:
         raise ValueError("Grupos mixtos invalidos") from exc
-    if len(encoded) > MAX_MIXED_PAYLOAD_BYTES or payload["source_type"] != MIXED_CATALOG_CART_SOURCE_TYPE or payload["quote_currency"] not in MIXED_QUOTE_CURRENCIES:
+    if len(encoded) > MAX_MIXED_PAYLOAD_BYTES or payload["source_type"] != MIXED_CATALOG_CART_SOURCE_TYPE or not isinstance(payload["quote_currency"], str) or payload["quote_currency"] not in MIXED_QUOTE_CURRENCIES:
         raise ValueError("Grupos mixtos invalidos")
     _iso_timestamp(payload["created_at"], "created_at")
     groups = payload["groups"]
@@ -481,6 +484,8 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             for field, required in (("name", True), ("description", False), ("unit", True), ("source_reference", True), ("configuration", False), ("variant", False), ("lead_time", False), ("price_source", True)):
                 _bounded(line[field], field, required=required)
             if line["code_status"] not in {"verified", "needs_review"} or (not line["code"] and line["code_status"] != "needs_review"):
+                raise ValueError("Grupos mixtos invalidos")
+            if line["code_status"] == "needs_review" and catalog not in {"sonara", "lumbro"}:
                 raise ValueError("Grupos mixtos invalidos")
             if catalog in {"tarkett", "offiho"} and line["code_status"] != "verified":
                 raise ValueError("Grupos mixtos invalidos")

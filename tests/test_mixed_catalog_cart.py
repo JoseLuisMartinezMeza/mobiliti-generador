@@ -168,6 +168,30 @@ def test_mixed_cart_rejects_duplicate_before_calling_supplier_builder(monkeypatc
     assert called == []
 
 
+def test_mixed_cart_sorts_add_ons_before_supplier_builder(monkeypatch, mixed_catalogs, rate_rows):
+    import mobiliti_saas.quote_engine.mixed_catalog as mixed_module
+
+    item = mixed_catalogs["alma"]["items"][0]
+    item["add_on_options"] = [
+        {"id": "a", "name": "A", "family": "a", "price_net": "1.000000", "available": True},
+        {"id": "b", "name": "B", "family": "b", "price_net": "1.000000", "available": True},
+    ]
+    original = mixed_module.build_supplier_cart_payload
+    seen = []
+    def capture(rows, *args, **kwargs):
+        seen.append(rows[0]["add_on_option_ids"])
+        return original(rows, *args, **kwargs)
+    monkeypatch.setattr(mixed_module, "build_supplier_cart_payload", capture)
+    build_mixed_catalog_cart_payload([{"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1", "add_on_option_ids": ["b", "a"]}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
+    assert seen == [["a", "b"]]
+
+
+@pytest.mark.parametrize("discount", ("-0.01", "100.01", "NaN", "Infinity", "texto"))
+def test_mixed_cart_rejects_invalid_commercial_discount(mixed_catalogs, rate_rows, discount):
+    with pytest.raises(ValueError, match="Descuento comercial"):
+        build_mixed_catalog_cart_payload([{"catalog": "tarkett", "code": "25731726", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent=discount, today=date(2026, 7, 19))
+
+
 def test_mixed_reservations_aggregate_configurations(mixed_catalogs, rate_rows):
     item = mixed_catalogs["alma"]["items"][0]
     item["base_price_options"] = [
@@ -267,8 +291,7 @@ def test_mixed_payload_rejects_tampering(frozen_mixed_payload, mutate, message):
         validate_mixed_catalog_payload(payload)
 
 
-@pytest.mark.parametrize("field", ("reserved_quantity", "available_after_reservations", "reserved_by_others"))
-def test_mixed_payload_rejects_reservation_result_without_reservation(frozen_mixed_payload, field):
+def test_mixed_payload_rejects_reservation_results_without_reservation(frozen_mixed_payload):
     payload = deepcopy(frozen_mixed_payload)
     line = payload["groups"][4]["items"][0]
     line["availability_type"] = "made_to_order"
@@ -276,7 +299,7 @@ def test_mixed_payload_rejects_reservation_result_without_reservation(frozen_mix
     line["stock"] = None
     line["stock_status"] = ""
     line["reservation"] = None
-    line[field] = "0.000000" if field != "reserved_by_others" else False
+    line.update(reserved_quantity="0.000000", available_after_reservations="0.000000", reserved_by_others=False)
     with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
         validate_mixed_catalog_payload(payload)
 
@@ -293,6 +316,49 @@ def test_mixed_payload_preserves_tarkett_authoritative_semantics(frozen_mixed_pa
     mutate(payload["groups"][0]["items"][0])
     with pytest.raises(ValueError, match=message):
         validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_rejects_structurally_coherent_tarkett_insufficient_reservation(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    line = payload["groups"][0]["items"][0]
+    line.update(
+        quantity="11.000000", stock_status="insufficient_stock",
+        reserved_quantity="0.000000", available_after_reservations="10.000000", reserved_by_others=False,
+    )
+    line["reservation"]["quantity"] = "11.000000"
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+@pytest.mark.parametrize("catalog", ("tarkett", "offiho", "cr-global", "sunon", "alma"))
+def test_mixed_payload_rejects_review_status_outside_sonara_and_lumbro(frozen_mixed_payload, catalog):
+    payload = deepcopy(frozen_mixed_payload)
+    line = next(group for group in payload["groups"] if group["catalog"] == catalog)["items"][0]
+    line.update(code_status="needs_review", warnings=["Codigo por verificar"])
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+@pytest.mark.parametrize("catalog", ("sonara", "lumbro"))
+def test_mixed_payload_allows_review_status_only_for_review_families(frozen_mixed_payload, catalog):
+    payload = deepcopy(frozen_mixed_payload)
+    line = next(group for group in payload["groups"] if group["catalog"] == catalog)["items"][0]
+    line.update(code="", code_status="needs_review", warnings=["Codigo por verificar"])
+    line["reservation"]["sku"] = ""
+    assert validate_mixed_catalog_payload(payload) is payload
+
+
+@pytest.mark.parametrize("currency", ([], {}, 1, None))
+def test_mixed_payload_rejects_non_string_quote_currency_stably(frozen_mixed_payload, currency):
+    payload = deepcopy(frozen_mixed_payload)
+    payload["quote_currency"] = currency
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        build_mixed_catalog_cart_payload(
+            [{"catalog": "tarkett", "code": "25731726", "quantity": "1"}], catalogs={},
+            rate_rows=[], quote_currency=currency, commercial_discount_percent="40", today=date(2026, 7, 19),
+        )
 
 
 @pytest.mark.parametrize("field", ("image_url", "product_url"))
@@ -330,6 +396,15 @@ def test_mixed_cart_preserves_review_missing_price_and_generated_reference_warni
     assert "Precio por confirmar" in lines["offiho"]["warnings"]
 
 
+@pytest.mark.parametrize(("catalog", "availability"), (("alma", "made_to_order"), ("sunon", "made_to_order"), ("sonara", "unknown")))
+def test_mixed_cart_keeps_nonstocked_supplier_lines_without_reservation(mixed_catalogs, rate_rows, catalog, availability):
+    item = mixed_catalogs[catalog]["items"][0]
+    item.update(availability_type=availability, stock=None)
+    payload = build_mixed_catalog_cart_payload([{"catalog": catalog, "internal_id": f"{catalog}:desk-1", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
+    line = payload["groups"][0]["items"][0]
+    assert (line["availability_type"], line["reservation"], line["stock_status"]) == (availability, None, "")
+
+
 def test_mixed_payload_keeps_commercial_product_url_inert(frozen_mixed_payload):
     payload = deepcopy(frozen_mixed_payload)
     line = payload["groups"][2]["items"][0]
@@ -359,4 +434,38 @@ def test_mixed_payload_rejects_each_tampered_auto_electrification_rate(frozen_mi
     payload = deepcopy(frozen_mixed_payload)
     payload["auto_electrification_rate"][field] = "tampered"
     with pytest.raises(ValueError, match="Tasa de electrificacion mixta invalida"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_rejects_missing_or_extra_automatic_snapshot_fields(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    payload["auto_electrification_rate"].pop("rate_source")
+    with pytest.raises(ValueError, match="Tasa de electrificacion mixta invalida"):
+        validate_mixed_catalog_payload(payload)
+    payload = deepcopy(frozen_mixed_payload)
+    payload["auto_electrification_rate"]["unexpected"] = "x"
+    with pytest.raises(ValueError, match="Tasa de electrificacion mixta invalida"):
+        validate_mixed_catalog_payload(payload)
+
+
+@pytest.mark.parametrize("field", ("unit_price", "frozen_exchange_rate"))
+def test_mixed_payload_rejects_tampered_converted_price_or_rate(frozen_mixed_payload, field):
+    payload = deepcopy(frozen_mixed_payload)
+    payload["groups"][5]["items"][0][field] = "9.990000" if field == "frozen_exchange_rate" else "9.99"
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_rejects_empty_nonidentity_timestamp(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    group = payload["groups"][5]
+    group["rate_retrieved_at"] = ""
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_rejects_oversized_serialized_payload(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    payload["groups"][2]["items"][0]["description"] = "x" * 5_000_001
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
         validate_mixed_catalog_payload(payload)
