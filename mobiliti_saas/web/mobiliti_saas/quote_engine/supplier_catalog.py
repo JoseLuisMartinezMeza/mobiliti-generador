@@ -53,6 +53,7 @@ MAX_ATTRIBUTES_DEPTH = 8
 MAX_METADATA_JSON_BYTES = 262_144
 MAX_METADATA_DEPTH = 8
 MAX_METADATA_NODES = 10_000
+_METADATA_UTF8_CHUNK_CHARS = 16_384
 DERIVED_DECIMAL_PRECISION = 80
 MAX_DERIVED_EXCHANGE_RATE = Decimal("1000000")
 MAX_CONFIGURED_AMOUNT = Decimal("250000000000")
@@ -812,6 +813,55 @@ def _validate_attributes(attributes: dict[str, Any]) -> None:
         raise ValueError(f"attributes excede el limite de {MAX_ATTRIBUTES_JSON_BYTES} bytes")
 
 
+def _bounded_metadata_string_utf8_size(
+    value: str,
+    maximum_bytes: int = MAX_METADATA_JSON_BYTES,
+    *,
+    encode_chunk=None,
+) -> int:
+    if type(value) is not str or type(maximum_bytes) is not int or maximum_bytes < 0:
+        raise ValueError("metadata contiene un string invalido")
+    if len(value) > maximum_bytes:
+        raise ValueError(f"metadata excede el limite de {maximum_bytes} bytes")
+    encode_chunk = encode_chunk or (lambda chunk: chunk.encode("utf-8"))
+    encoded_bytes = 0
+    for offset in range(0, len(value), _METADATA_UTF8_CHUNK_CHARS):
+        try:
+            encoded = encode_chunk(value[offset:offset + _METADATA_UTF8_CHUNK_CHARS])
+        except (UnicodeEncodeError, ValueError, OverflowError):
+            raise ValueError("metadata contiene un string invalido") from None
+        if type(encoded) is not bytes:
+            raise ValueError("metadata contiene un string invalido")
+        encoded_bytes += len(encoded)
+        if encoded_bytes > maximum_bytes:
+            raise ValueError(f"metadata excede el limite de {maximum_bytes} bytes")
+    return encoded_bytes
+
+
+def _bounded_metadata_integer_text_size(
+    value: int,
+    maximum_bytes: int = MAX_METADATA_JSON_BYTES,
+    *,
+    render_decimal=None,
+) -> int:
+    if type(value) is not int or type(maximum_bytes) is not int or maximum_bytes < 0:
+        raise ValueError("metadata contiene un entero invalido")
+    sign_bytes = 1 if value < 0 else 0
+    digit_upper_bound = (
+        1 if value == 0 else (value.bit_length() * 30_103) // 100_000 + 1
+    )
+    if digit_upper_bound + sign_bytes > maximum_bytes:
+        raise ValueError(f"metadata excede el limite de {maximum_bytes} bytes")
+    render_decimal = render_decimal or str
+    try:
+        rendered = render_decimal(value)
+    except (ValueError, OverflowError):
+        raise ValueError("metadata contiene un entero invalido") from None
+    if type(rendered) is not str or len(rendered) > maximum_bytes:
+        raise ValueError(f"metadata excede el limite de {maximum_bytes} bytes")
+    return len(rendered)
+
+
 def _normalize_metadata(value: Any) -> dict[str, Any]:
     if type(value) is not dict:
         raise ValueError("metadata debe ser un objeto JSON exacto")
@@ -819,14 +869,10 @@ def _normalize_metadata(value: Any) -> dict[str, Any]:
     active: set[int] = set()
 
     def scalar_size(scalar: str | int) -> None:
-        try:
-            size = len(str(scalar).encode("utf-8"))
-        except (UnicodeEncodeError, ValueError, OverflowError):
-            raise ValueError("metadata contiene un escalar invalido") from None
-        if size > MAX_METADATA_JSON_BYTES:
-            raise ValueError(
-                f"metadata excede el limite de {MAX_METADATA_JSON_BYTES} bytes"
-            )
+        if type(scalar) is str:
+            _bounded_metadata_string_utf8_size(scalar)
+        else:
+            _bounded_metadata_integer_text_size(scalar)
 
     def walk(current: Any, depth: int) -> None:
         nonlocal nodes

@@ -327,6 +327,51 @@ def test_metadata_enforces_incremental_byte_node_depth_and_cycle_boundaries():
     assert "metadata" not in load_supplier_catalog_data(payload)
 
 
+def test_oversized_metadata_string_fails_before_any_utf8_encoding():
+    encode_calls = []
+
+    def tracked_encode(chunk):
+        encode_calls.append(len(chunk))
+        return chunk.encode("utf-8")
+
+    with pytest.raises(ValueError, match="metadata.*bytes"):
+        supplier_module._bounded_metadata_string_utf8_size(
+            "x" * (supplier_module.MAX_METADATA_JSON_BYTES + 1),
+            encode_chunk=tracked_encode,
+        )
+
+    assert encode_calls == []
+
+
+def test_metadata_string_encoding_is_chunked_and_huge_int_fails_before_decimal_render():
+    encoded_chunks = []
+
+    def tracked_encode(chunk):
+        encoded_chunks.append(len(chunk))
+        return chunk.encode("utf-8")
+
+    assert supplier_module._bounded_metadata_string_utf8_size(
+        "a" * (supplier_module._METADATA_UTF8_CHUNK_CHARS + 1),
+        encode_chunk=tracked_encode,
+    ) == supplier_module._METADATA_UTF8_CHUNK_CHARS + 1
+    assert encoded_chunks == [supplier_module._METADATA_UTF8_CHUNK_CHARS, 1]
+
+    render_calls = []
+
+    def tracked_render(value):
+        render_calls.append(value)
+        return str(value)
+
+    with pytest.raises(ValueError, match="metadata.*bytes"):
+        supplier_module._bounded_metadata_integer_text_size(
+            1 << 10_000,
+            maximum_bytes=64,
+            render_decimal=tracked_render,
+        )
+
+    assert render_calls == []
+
+
 @pytest.mark.parametrize(
     "metadata",
     [
