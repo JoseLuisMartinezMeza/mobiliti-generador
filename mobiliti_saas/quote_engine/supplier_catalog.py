@@ -62,6 +62,7 @@ RATE_ROW_FIELDS = {"currency", "effective_date", "mxn_per_unit", "retrieved_at"}
 BASE_OPTION_FIELDS = {"id", "name", "price_net", "available"}
 ADD_ON_REQUIRED_FIELDS = BASE_OPTION_FIELDS | {"family"}
 ADD_ON_OPTION_FIELDS = ADD_ON_REQUIRED_FIELDS | {"compatible_base_option_ids"}
+_NORMALIZED_CATALOG_TOKEN = object()
 
 
 @dataclass(frozen=True)
@@ -74,11 +75,30 @@ class RateSnapshot:
     rate_retrieved_at: str
 
 
+class _NormalizedSupplierCatalog(dict):
+    def __init__(self, value: dict[str, Any]):
+        super().__init__(value)
+        self._normalization_token = _NORMALIZED_CATALOG_TOKEN
+
+
 def load_supplier_catalog_data(payload: dict, expected_supplier: str | None = None) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Catalogo de proveedor invalido: raiz no es un objeto")
     required_fields = {"supplier", "source_hash", "generated_at", "items"}
     allowed_fields = required_fields | {"metadata"}
+    is_normalized = (
+        type(payload) is _NormalizedSupplierCatalog
+        and getattr(payload, "_normalization_token", None) is _NORMALIZED_CATALOG_TOKEN
+    )
+    if is_normalized:
+        internal_fields = allowed_fields | {"by_internal_id"}
+        if not required_fields <= set(payload) or set(payload) - internal_fields:
+            raise ValueError("Catalogo de proveedor normalizado invalido")
+        payload = {
+            key: payload[key]
+            for key in allowed_fields
+            if key in payload
+        }
     missing = required_fields - set(payload)
     unexpected = set(payload) - allowed_fields
     if missing or unexpected:
@@ -125,21 +145,15 @@ def load_supplier_catalog_data(payload: dict, expected_supplier: str | None = No
         if sku_key:
             by_sku[sku_key] = item
 
-    result = {
+    result = _NormalizedSupplierCatalog({
         "supplier": supplier,
         "source_hash": source_hash,
         "generated_at": generated_at,
         "items": items,
         "by_internal_id": by_internal_id,
-    }
+    })
     if "metadata" in payload:
-        result["metadata"] = _normalized_json_object(
-            payload["metadata"],
-            "metadata",
-            MAX_METADATA_JSON_BYTES,
-            MAX_METADATA_DEPTH,
-            MAX_METADATA_NODES,
-        )
+        result["metadata"] = _normalize_metadata(payload["metadata"])
     return result
 
 
@@ -153,12 +167,7 @@ def build_supplier_cart_payload(
         raise ValueError("El carrito de proveedor esta vacio")
     if len(raw_items) > MAX_CART_ROWS:
         raise ValueError(f"El carrito excede el limite de filas: {MAX_CART_ROWS}")
-    catalog_input = catalog
-    if isinstance(catalog, dict) and set(catalog) - {
-        "supplier", "source_hash", "generated_at", "items", "metadata"
-    } == {"by_internal_id"}:
-        catalog_input = {key: value for key, value in catalog.items() if key != "by_internal_id"}
-    loaded = load_supplier_catalog_data(catalog_input)
+    loaded = load_supplier_catalog_data(catalog)
     quote_currency = _currency(quote_currency)
     by_id = loaded["by_internal_id"]
     prepared: list[tuple[dict[str, Any], Decimal, dict[str, Any] | None, list[dict[str, Any]]]] = []
@@ -773,62 +782,117 @@ def _validate_url_hostname(host: str, field: str) -> None:
 
 
 def _validate_attributes(attributes: dict[str, Any]) -> None:
-    _normalized_json_object(
-        attributes,
-        "attributes",
-        MAX_ATTRIBUTES_JSON_BYTES,
-        MAX_ATTRIBUTES_DEPTH,
-        MAX_METADATA_NODES,
-    )
-
-
-def _normalized_json_object(
-    value: Any,
-    field: str,
-    maximum_bytes: int,
-    maximum_depth: int,
-    maximum_nodes: int,
-) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError(f"{field} debe ser un objeto")
-    nodes = 0
-
     def walk(value: Any, depth: int) -> None:
-        nonlocal nodes
-        nodes += 1
-        if nodes > maximum_nodes:
-            raise ValueError(f"{field} excede el limite de {maximum_nodes} valores")
-        if depth > maximum_depth:
-            raise ValueError(f"{field} excede la profundidad de {maximum_depth}")
+        if depth > MAX_ATTRIBUTES_DEPTH:
+            raise ValueError(f"attributes excede la profundidad de {MAX_ATTRIBUTES_DEPTH}")
         if isinstance(value, dict):
             if any(not isinstance(key, str) for key in value):
-                raise ValueError(f"{field} requiere claves de texto")
+                raise ValueError("attributes requiere claves de texto")
             for key, nested in value.items():
-                _bounded_string(key, f"{field} key", MAX_TEXT_LENGTH)
+                _bounded_string(key, "attributes key", MAX_TEXT_LENGTH)
                 walk(nested, depth + 1)
         elif isinstance(value, list):
             for nested in value:
                 walk(nested, depth + 1)
         elif not (value is None or isinstance(value, (str, int, float, bool))):
-            raise ValueError(f"{field} contiene un valor no JSON")
+            raise ValueError("attributes contiene un valor no JSON")
 
-    try:
-        walk(value, 0)
-    except RecursionError:
-        raise ValueError(f"{field} excede la profundidad de {maximum_depth}") from None
+    walk(attributes, 0)
     try:
         encoded = json.dumps(
-            value,
+            attributes,
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
-    except (TypeError, ValueError, OverflowError):
-        raise ValueError(f"{field} contiene un valor no JSON") from None
-    if len(encoded) > maximum_bytes:
-        raise ValueError(f"{field} excede el limite de {maximum_bytes} bytes")
-    return json.loads(encoded)
+    except (TypeError, ValueError):
+        raise ValueError("attributes contiene un valor no JSON") from None
+    if len(encoded) > MAX_ATTRIBUTES_JSON_BYTES:
+        raise ValueError(f"attributes excede el limite de {MAX_ATTRIBUTES_JSON_BYTES} bytes")
+
+
+def _normalize_metadata(value: Any) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise ValueError("metadata debe ser un objeto JSON exacto")
+    nodes = 0
+    active: set[int] = set()
+
+    def scalar_size(scalar: str | int) -> None:
+        try:
+            size = len(str(scalar).encode("utf-8"))
+        except (UnicodeEncodeError, ValueError, OverflowError):
+            raise ValueError("metadata contiene un escalar invalido") from None
+        if size > MAX_METADATA_JSON_BYTES:
+            raise ValueError(
+                f"metadata excede el limite de {MAX_METADATA_JSON_BYTES} bytes"
+            )
+
+    def walk(current: Any, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > MAX_METADATA_NODES:
+            raise ValueError(
+                f"metadata excede el limite de {MAX_METADATA_NODES} valores"
+            )
+        current_type = type(current)
+        if current_type in {dict, list} and id(current) in active:
+            raise ValueError("metadata contiene una referencia circular")
+        if depth > MAX_METADATA_DEPTH:
+            raise ValueError(
+                f"metadata excede la profundidad de {MAX_METADATA_DEPTH}"
+            )
+        if current_type is dict:
+            active.add(id(current))
+            try:
+                for key, nested in current.items():
+                    if type(key) is not str:
+                        raise ValueError("metadata requiere claves string exactas")
+                    scalar_size(key)
+                    walk(nested, depth + 1)
+            finally:
+                active.remove(id(current))
+        elif current_type is list:
+            active.add(id(current))
+            try:
+                for nested in current:
+                    walk(nested, depth + 1)
+            finally:
+                active.remove(id(current))
+        elif current_type is str:
+            scalar_size(current)
+        elif current_type is int:
+            scalar_size(current)
+        elif current_type is float:
+            if current != current or current in {float("inf"), float("-inf")}:
+                raise ValueError("metadata contiene un float no finito")
+        elif current is not None:
+            raise ValueError("metadata contiene un tipo JSON no permitido")
+
+    walk(value, 0)
+    encoder = json.JSONEncoder(
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).iterencode(value)
+    encoded_bytes = 0
+    while True:
+        try:
+            chunk = next(encoder)
+        except StopIteration:
+            break
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("metadata contiene un valor no JSON") from None
+        try:
+            encoded_bytes += len(chunk.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise ValueError("metadata contiene un string invalido") from None
+        if encoded_bytes > MAX_METADATA_JSON_BYTES:
+            raise ValueError(
+                f"metadata excede el limite de {MAX_METADATA_JSON_BYTES} bytes"
+            )
+    return deepcopy(value)
 
 
 def _enum_text(raw: dict[str, Any], field: str, allowed: set[str]) -> str:

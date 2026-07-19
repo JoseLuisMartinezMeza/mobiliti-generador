@@ -28,6 +28,15 @@ PUBLIC_FIELDS = {
     "attributes", "image_url", "image_kind", "product_url", "warnings",
     "source_reference",
 }
+LUMBRO_OFFICIAL_SKUS = (
+    "MULT-LIDO-INT",
+    "LIDO.OP-INT",
+    "JUMP-1.5M",
+    "CAJA-FUS",
+)
+LUMBRO_EXPECTED_NET = Decimal("5519.07")
+LUMBRO_EXPECTED_IVA = Decimal("883.05")
+LUMBRO_EXPECTED_TOTAL = Decimal("6402.12")
 
 
 def catalog_payload(*, supplier="alma", items=None):
@@ -102,6 +111,64 @@ def lumbro_catalog_payload():
     return payload
 
 
+@pytest.fixture
+def representative_lumbro_catalog():
+    base = lumbro_catalog_payload()["items"][0]
+    verified = []
+    for index, (sku, price) in enumerate(
+        zip(
+            LUMBRO_OFFICIAL_SKUS,
+            ("3003.000000", "1394.070000", "350.000000", "772.000000"),
+            strict=True,
+        ),
+        start=1,
+    ):
+        row = deepcopy(base)
+        row.update(
+            internal_id=f"lumbro:variant:official-{index}",
+            product_key=f"official-{index}",
+            sku=sku,
+            code_status="verified",
+            name=sku,
+            description=f"Accesorio oficial Lumbro {sku}",
+            price_net=price,
+            image_url="",
+            image_kind="placeholder",
+            product_url="",
+            warnings=[],
+        )
+        row["attributes"] = {"source_code": sku, "configuration": "Interconexion"}
+        verified.append(row)
+    review = deepcopy(base)
+    review.update(
+        internal_id="lumbro:variant:needs-review",
+        product_key="needs-review",
+        sku="",
+        code_status="needs_review",
+        name="Multicontacto por revisar",
+        price_net="3183.000000",
+        image_url="",
+        image_kind="placeholder",
+        product_url="",
+        warnings=["Codigo oficial no verificable"],
+    )
+    review["attributes"] = {"source_code": "", "configuration": "Por revisar"}
+    return {
+        "supplier": "lumbro",
+        "source_hash": "f" * 64,
+        "generated_at": "2026-07-18T12:00:00Z",
+        "items": [*verified, review],
+        "metadata": {
+            "coverage": {
+                "items": 5,
+                "verified_items": 4,
+                "needs_review_items": 1,
+                "priced_items": 5,
+            }
+        },
+    }
+
+
 def rate_rows(*, effective_date=None):
     day = effective_date or (date.today() - timedelta(days=1)).isoformat()
     return [
@@ -129,6 +196,135 @@ def test_load_catalog_preserves_a_normalized_copy_of_optional_metadata():
     assert loaded["metadata"] == payload["metadata"]
     assert loaded["metadata"] is not payload["metadata"]
     assert loaded["metadata"]["coverage"] is not payload["metadata"]["coverage"]
+
+
+def test_normalized_catalog_can_be_reloaded_for_cache_api_flow_without_trusting_plain_index():
+    raw = lumbro_catalog_payload()
+    cached = load_supplier_catalog_data(raw, expected_supplier="lumbro")
+    cached["by_internal_id"] = {"attacker": raw["items"][0]}
+
+    api_loaded = load_supplier_catalog_data(cached, expected_supplier="lumbro")
+
+    assert api_loaded["items"] == cached["items"]
+    assert api_loaded["metadata"] == cached["metadata"]
+    assert api_loaded is not cached
+    assert api_loaded["by_internal_id"] is not cached["by_internal_id"]
+    assert set(api_loaded["by_internal_id"]) == {"lumbro:variant:barcelona"}
+    with pytest.raises(ValueError, match="supplier no coincide"):
+        load_supplier_catalog_data(cached, expected_supplier="alma")
+    plain_with_index = dict(cached)
+    plain_with_index["by_internal_id"] = {"attacker": raw["items"][0]}
+    with pytest.raises(ValueError, match="raiz.*by_internal_id"):
+        load_supplier_catalog_data(plain_with_index)
+
+
+def test_normalized_catalog_output_remains_valid_cart_input():
+    normalized = load_supplier_catalog_data(lumbro_catalog_payload())
+
+    cart = build_supplier_cart_payload(
+        [{"internal_id": "lumbro:variant:barcelona", "quantity": "1", "add_on_option_ids": []}],
+        normalized,
+        "MXN",
+        [],
+    )
+
+    assert cart["items"][0]["sku"] == "BARCELONA"
+
+
+def test_metadata_accepts_only_exact_non_boolean_json_scalar_types():
+    payload = lumbro_catalog_payload()
+    payload["metadata"] = {
+        "object": {"list": [None, "texto", 7, 1.25]},
+    }
+
+    loaded = load_supplier_catalog_data(payload)
+
+    assert loaded["metadata"] == payload["metadata"]
+    payload["items"][0]["attributes"] = {"historical_boolean": True}
+    assert load_supplier_catalog_data(payload)["items"][0]["attributes"] == {
+        "historical_boolean": True
+    }
+
+
+def test_metadata_rejects_boolean_non_finite_bytes_non_string_keys_and_subclasses():
+    class DictSubclass(dict):
+        pass
+
+    class ListSubclass(list):
+        pass
+
+    class StringSubclass(str):
+        pass
+
+    class IntSubclass(int):
+        pass
+
+    class FloatSubclass(float):
+        pass
+
+    invalid_values = (
+        DictSubclass({"value": "x"}),
+        {"value": ListSubclass(["x"])},
+        {"value": DictSubclass({"nested": "x"})},
+        {"value": StringSubclass("x")},
+        {"value": IntSubclass(1)},
+        {"value": FloatSubclass(1.5)},
+        {"value": True},
+        {"value": False},
+        {"value": float("nan")},
+        {"value": float("inf")},
+        {"value": float("-inf")},
+        {"value": b"bytes"},
+        {"value": "\ud800"},
+        {1: "non-string-key"},
+        {StringSubclass("key"): "string-subclass-key"},
+    )
+    for metadata in invalid_values:
+        payload = lumbro_catalog_payload()
+        payload["metadata"] = metadata
+        with pytest.raises(ValueError, match="metadata"):
+            load_supplier_catalog_data(payload)
+
+
+def test_metadata_enforces_incremental_byte_node_depth_and_cycle_boundaries():
+    maximum_bytes = supplier_module.MAX_METADATA_JSON_BYTES
+    encoded_overhead = len('{"value":""}'.encode("utf-8"))
+    payload = lumbro_catalog_payload()
+    payload["metadata"] = {"value": "x" * (maximum_bytes - encoded_overhead)}
+    assert len(load_supplier_catalog_data(payload)["metadata"]["value"]) == (
+        maximum_bytes - encoded_overhead
+    )
+    payload["metadata"] = {"value": "x" * (maximum_bytes - encoded_overhead + 1)}
+    with pytest.raises(ValueError, match="metadata.*bytes"):
+        load_supplier_catalog_data(payload)
+
+    payload = lumbro_catalog_payload()
+    payload["metadata"] = {"values": [None] * (supplier_module.MAX_METADATA_NODES - 2)}
+    load_supplier_catalog_data(payload)
+    payload["metadata"] = {"values": [None] * (supplier_module.MAX_METADATA_NODES - 1)}
+    with pytest.raises(ValueError, match="metadata.*valores"):
+        load_supplier_catalog_data(payload)
+
+    at_limit = "leaf"
+    for _ in range(supplier_module.MAX_METADATA_DEPTH):
+        at_limit = {"level": at_limit}
+    payload = lumbro_catalog_payload()
+    payload["metadata"] = at_limit
+    load_supplier_catalog_data(payload)
+    payload["metadata"] = {"level": at_limit}
+    with pytest.raises(ValueError, match="metadata.*profundidad"):
+        load_supplier_catalog_data(payload)
+
+    circular = {}
+    circular["self"] = circular
+    payload = lumbro_catalog_payload()
+    payload["metadata"] = circular
+    with pytest.raises(ValueError, match="metadata.*circular"):
+        load_supplier_catalog_data(payload)
+
+    payload = lumbro_catalog_payload()
+    payload.pop("metadata")
+    assert "metadata" not in load_supplier_catalog_data(payload)
 
 
 @pytest.mark.parametrize(
@@ -276,6 +472,76 @@ def test_lumbro_cart_requires_integer_piece_quantity_and_preserves_net_tax_total
             "MXN",
             [],
         )
+
+
+def test_representative_lumbro_snapshot_quotes_only_four_literal_official_codes(
+    representative_lumbro_catalog,
+    tmp_path,
+):
+    loaded = load_supplier_catalog_data(
+        representative_lumbro_catalog,
+        expected_supplier="lumbro",
+    )
+    verified = [row for row in loaded["items"] if row["code_status"] == "verified"]
+    review = next(row for row in loaded["items"] if row["code_status"] == "needs_review")
+    assert len(verified) == 4
+    assert loaded["metadata"]["coverage"]["verified_items"] == 4
+    assert tuple(row["sku"] for row in verified) == LUMBRO_OFFICIAL_SKUS
+    assert all(not row["sku"].startswith("lumbro:") for row in verified)
+    assert review["sku"] == ""
+
+    cart = build_supplier_cart_payload(
+        [
+            {"internal_id": row["internal_id"], "quantity": "1", "add_on_option_ids": []}
+            for row in verified
+        ],
+        loaded,
+        "MXN",
+        [],
+    )
+    assert len(cart["items"]) == 4
+    assert tuple(row["sku"] for row in cart["items"]) == LUMBRO_OFFICIAL_SKUS
+    assert tuple(row["line_total"] for row in cart["items"]) == (
+        "3003.00",
+        "1394.07",
+        "350.00",
+        "772.00",
+    )
+    assert {row["tax_rate"] for row in cart["items"]} == {"0.160000"}
+    actual_net = sum((Decimal(row["line_total"]) for row in cart["items"]), Decimal(0))
+    actual_iva = (actual_net * Decimal("0.160000")).quantize(Decimal("0.01"))
+    assert actual_net == LUMBRO_EXPECTED_NET
+    assert actual_iva == LUMBRO_EXPECTED_IVA
+    assert actual_net + actual_iva == LUMBRO_EXPECTED_TOTAL
+
+    with pytest.raises(ValueError, match="codigo por verificar"):
+        build_supplier_cart_payload(
+            [{"internal_id": review["internal_id"], "quantity": "1", "add_on_option_ids": []}],
+            loaded,
+            "MXN",
+            [],
+        )
+    with pytest.raises(ValueError, match="entera"):
+        build_supplier_cart_payload(
+            [{"internal_id": verified[0]["internal_id"], "quantity": "2.5", "add_on_option_ids": []}],
+            loaded,
+            "MXN",
+            [],
+        )
+
+    output = create_supplier_quotation_workbook(cart, tmp_path / "lumbro-representative.xlsx")
+    workbook = load_workbook(output, data_only=False)
+    try:
+        sheet = workbook["Quotation"]
+        assert sheet["A8"].value == "- Lumbro"
+        assert tuple(sheet.cell(row, 10).value for row in range(9, 13)) == (
+            3003,
+            1394.07,
+            350,
+            772,
+        )
+    finally:
+        workbook.close()
 
 
 def test_repeated_kun_source_code_survives_cart_and_embeds_official_image_in_xlsx(
