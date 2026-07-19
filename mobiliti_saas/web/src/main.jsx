@@ -424,7 +424,8 @@ function Sidebar({ view, setView, isAdmin, onLogout }) {
     ["cr-global", "CR Global", PackageSearch],
     ["sonara", "Sonara", PackageSearch],
     ["sunon", "Sunon", PackageSearch],
-    ["alma", "ALMA", PackageSearch]
+    ["alma", "ALMA", PackageSearch],
+    ["lumbro", "Lumbro", PackageSearch]
   ];
   return (
     <aside className="sidebar">
@@ -1930,7 +1931,8 @@ function App() {
     "cr-global": "CR Global",
     sonara: "Sonara",
     sunon: "Sunon",
-    alma: "ALMA"
+    alma: "ALMA",
+    lumbro: "Lumbro"
   };
   async function downloadJob(job) {
     try {

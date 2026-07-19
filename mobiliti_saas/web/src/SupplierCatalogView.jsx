@@ -123,6 +123,12 @@ function quantityRules(item) {
     : { min: "1", step: "1", integer: true };
 }
 
+function quantityInputValue(item, value) {
+  if (!quantityRules(item).integer || value === "") return value;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? String(Math.max(1, Math.trunc(numeric))) : "";
+}
+
 function quantityMicrounits(value) {
   const text = String(value ?? "").trim();
   if (!/^\d+(?:\.\d{1,6})?$/.test(text)) return null;
@@ -152,8 +158,9 @@ function emptyFamilyLabel(family) {
   return family === "cushion" ? "Sin cojín" : "Sin agregado";
 }
 
-function productLinkLabel(item) {
+function productLinkLabel(item, supplier) {
   const status = item.attributes?.product_url_match?.status;
+  if (supplier === "lumbro") return status === "exact_index" ? "Ver producto" : "Ver catálogo Lumbro";
   if (status === "catalog_fallback") return "Ver catálogo general";
   if (status === "collection_index") return "Ver colección";
   return "Ver producto";
@@ -678,7 +685,7 @@ export default function SupplierCatalogView({
               const families = optionFamilies(item);
               const selectedBaseId = configuration.base_option_id;
               const configuredPrice = configuredBasePrice(item, configuration);
-              const linkText = productLinkLabel(item);
+              const linkText = productLinkLabel(item, supplier);
               const productQuantity = quantityRules(item);
               const availabilityBuckets = availabilityByLeadTime(item);
               const hasFixedConfigurableBase = (
@@ -699,7 +706,7 @@ export default function SupplierCatalogView({
                       <div className="supplier-product-code">
                         <strong>{sourceCode(item) || "Sin codigo"}</strong>
                         {item.product_url ? (
-                          <a className="supplier-product-link" href={item.product_url} target="_blank" rel="noreferrer" title={linkText} aria-label={linkText}>
+                          <a className="supplier-product-link" href={item.product_url} target="_blank" rel="noreferrer" title={linkText} aria-label={`${linkText} oficial de ${item.name}; abre en una pestaña nueva`}>
                             <ExternalLink size={17} />
                             <span>{linkText}</span>
                           </a>
@@ -860,7 +867,7 @@ export default function SupplierCatalogView({
                         min={productQuantity.min}
                         step={productQuantity.step}
                         value={quantityByItem[item.internal_id] ?? "1"}
-                        onChange={(event) => setQuantityByItem((current) => ({ ...current, [item.internal_id]: event.target.value }))}
+                        onChange={(event) => setQuantityByItem((current) => ({ ...current, [item.internal_id]: quantityInputValue(item, event.target.value) }))}
                         placeholder="1"
                       />
                     </label>

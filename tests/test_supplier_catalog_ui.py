@@ -17,6 +17,7 @@ CATALOG_TABS = (
     ("sonara", "Sonara"),
     ("sunon", "Sunon"),
     ("alma", "ALMA"),
+    ("lumbro", "Lumbro"),
 )
 SUPPLIER_VIEW_PROPS = (
     "supplier",
@@ -75,6 +76,32 @@ def _has_css_rule(styles, selector_terms, declaration):
             if normalized_declaration in clean_body:
                 return True
     return False
+
+
+def _javascript_function(source, name):
+    start = re.search(rf"function\s+{name}\s*\([^)]*\)\s*\{{", source)
+    assert start, f"Missing JavaScript helper: {name}"
+    depth = 0
+    for index in range(start.start(), len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start.start() : index + 1]
+    raise AssertionError(f"Unclosed JavaScript helper: {name}")
+
+
+def _run_javascript(script):
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        check=True,
+        capture_output=True,
+        input=script,
+        text=True,
+        encoding="utf-8",
+    )
+    return json.loads(completed.stdout)
 
 
 def test_supplier_catalog_ui_static_contracts_are_present():
@@ -256,6 +283,87 @@ def test_kundesign_fallback_link_is_disclosed_as_general_catalog():
         re.IGNORECASE,
     )
     assert _has_css_rule(styles, ("supplier", "drawer"), "position: fixed")
+
+
+def test_lumbro_link_labels_are_truthful_and_other_supplier_labels_are_unchanged():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    helper = _javascript_function(component, "productLinkLabel")
+    cases = [
+        ("lumbro", "exact_index"),
+        ("lumbro", "collection_index"),
+        ("lumbro", "catalog_fallback"),
+        ("lumbro", ""),
+        ("alma", "exact_index"),
+        ("alma", "catalog_fallback"),
+        ("sonara", "collection_index"),
+        ("cr-global", "exact_code"),
+    ]
+    result = _run_javascript(
+        f"{helper}\n"
+        f"const cases = {json.dumps(cases)};\n"
+        "console.log(JSON.stringify(cases.map(([supplier, status]) => "
+        "productLinkLabel({attributes: {product_url_match: {status}}}, supplier))));"
+    )
+
+    assert result == [
+        "Ver producto",
+        "Ver catálogo Lumbro",
+        "Ver catálogo Lumbro",
+        "Ver catálogo Lumbro",
+        "Ver producto",
+        "Ver catálogo general",
+        "Ver colección",
+        "Ver producto",
+    ]
+
+
+def test_official_link_has_visible_adjacent_text_and_an_explanatory_accessible_name():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    link = re.search(
+        r"\{item\.product_url\s*\?\s*\(\s*<a\b(?P<attrs>[^>]*)>(?P<body>.*?)</a>",
+        component,
+        re.DOTALL,
+    )
+
+    assert link, "Official link must remain conditional on the validated product_url"
+    attrs = link.group("attrs")
+    body = link.group("body")
+    assert 'target="_blank"' in attrs
+    assert re.search(r'rel="[^"]*(?:noreferrer|noopener)[^"]*"', attrs)
+    assert re.search(r"aria-label=\{`[^`]*\$\{linkText\}[^`]*\$\{(?:item\.name|sourceCode\(item\))\}[^`]*`\}", attrs)
+    assert re.search(r"<ExternalLink\b[^>]*/>\s*<span>\{linkText\}</span>", body, re.DOTALL)
+
+
+def test_pza_quantity_state_is_integer_without_breaking_fractional_m2():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    helpers = "\n".join(
+        _javascript_function(component, name)
+        for name in ("isSquareMeterUnit", "quantityRules", "quantityInputValue")
+    )
+    result = _run_javascript(
+        f"{helpers}\n"
+        "const pza = {unit: 'PZA'}; const m2 = {unit: 'M2'};"
+        "console.log(JSON.stringify({"
+        "pzaRules: quantityRules(pza), m2Rules: quantityRules(m2),"
+        "pzaInteger: quantityInputValue(pza, '3'),"
+        "pzaFloat: quantityInputValue(pza, '2.75'),"
+        "pzaEmpty: quantityInputValue(pza, ''),"
+        "m2Fraction: quantityInputValue(m2, '2.75')"
+        "}));"
+    )
+
+    assert result == {
+        "pzaRules": {"min": "1", "step": "1", "integer": True},
+        "m2Rules": {"min": "0.000001", "step": "0.000001", "integer": False},
+        "pzaInteger": "3",
+        "pzaFloat": "2",
+        "pzaEmpty": "",
+        "m2Fraction": "2.75",
+    }
+    assert re.search(r"type=\"number\"[\s\S]{0,180}min=\{productQuantity\.min\}[\s\S]{0,100}step=\{productQuantity\.step\}", component)
+    assert "quantityInputValue(item, event.target.value)" in component
+    assert "attributes?.dimensions" in component
+    assert "Dimensiones" in _ascii_text(component)
 
 
 def test_shared_supplier_cards_render_dimensions_button_configurator_and_unit_aware_quantities():
