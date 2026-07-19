@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 import tempfile
 from typing import Any
 import unicodedata
@@ -16,7 +17,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from .catalog_cart import (
+    MAX_EXCEL_CELL_TEXT_LENGTH,
     _set_column_widths,
+    catalog_quotation_item_text,
     write_catalog_quotation_headers,
     write_catalog_quotation_item,
 )
@@ -89,6 +92,7 @@ AUTO_ELECTRIFICATION_RATE_FIELDS = (
 )
 SIX_PLACES = Decimal("0.000001")
 TWO_PLACES = Decimal("0.01")
+EXCEL_ILLEGAL_CONTROL_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 
 
 def _field_family(catalog: str) -> str:
@@ -408,6 +412,62 @@ def _require_warning(warnings: list[str], expected: str, field: str) -> None:
         raise ValueError(f"{field} mixto invalido")
 
 
+def _validate_mixed_attribute_controls(value: object) -> None:
+    if isinstance(value, str):
+        if EXCEL_ILLEGAL_CONTROL_RE.search(value):
+            raise ValueError("attributes mixtos contiene caracteres de control ilegales")
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            _validate_mixed_attribute_controls(key)
+            _validate_mixed_attribute_controls(nested)
+        return
+    if isinstance(value, list):
+        for nested in value:
+            _validate_mixed_attribute_controls(nested)
+
+
+def _validate_mixed_excel_text_cells(
+    line: dict[str, Any],
+    *,
+    catalog: str,
+    source_hash: str,
+    index: int,
+) -> None:
+    extra_description_parts = (
+        f"Fuente: {line['source_reference']}",
+        f"Hash fuente: {source_hash}",
+    )
+    description, _, _ = catalog_quotation_item_text(
+        line,
+        index=index,
+        source_type=MIXED_GROUP_SOURCE_TYPES[catalog],
+        extra_description_parts=extra_description_parts,
+    )
+    attributes = line["attributes"]
+    dimensions = str(attributes.get("dimensions") or "").strip()
+    dimension_cell = (
+        dimensions
+        if MIXED_GROUP_SOURCE_TYPES[catalog] == "supplier_cart" and dimensions
+        else line["unit"]
+    )
+    text_cells = (
+        line["name"],
+        description,
+        dimension_cell,
+        line["product_url"],
+        line["supplier"],
+        line["original_currency"],
+        line["source_reference"],
+        line["price_mode"],
+    )
+    if any(
+        len(safe_excel_text(value)) > MAX_EXCEL_CELL_TEXT_LENGTH
+        for value in text_cells
+    ):
+        raise ValueError("Texto mixto excede limite de Excel de 32767 caracteres")
+
+
 def _validate_reservation(line: dict[str, Any], catalog: str) -> None:
     reservation = line["reservation"]
     stocked = line["availability_type"] == "stocked"
@@ -467,6 +527,7 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
     total = 0
     seen_catalogs: list[str] = []
     eligible: list[dict[str, str]] = []
+    product_index = 1
     for group in groups:
         if not isinstance(group, dict) or set(group) != MIXED_GROUP_FIELDS:
             raise ValueError("Grupos mixtos invalidos")
@@ -524,6 +585,7 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             _https_url(line["product_url"], "product_url")
             if not isinstance(line["attributes"], dict):
                 raise ValueError("Grupos mixtos invalidos")
+            _validate_mixed_attribute_controls(line["attributes"])
             _validate_attributes(line["attributes"])
             if line["availability_type"] not in {"stocked", "made_to_order", "unknown"} or line["image_kind"] not in {"official", "generated_reference", "placeholder"} or line["stock_status"] not in {"", "available", "out_of_stock", "insufficient_stock"}:
                 raise ValueError("Grupos mixtos invalidos")
@@ -562,6 +624,13 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             elif line["price_mode"] != "net" or discount != 0 or type(line["auto_electrification"]) is not bool or line["auto_electrification"] is not False:
                 raise ValueError("Grupos mixtos invalidos")
             _validate_reservation(line, catalog)
+            _validate_mixed_excel_text_cells(
+                line,
+                catalog=catalog,
+                source_hash=source_hash,
+                index=product_index,
+            )
+            product_index += 1
             if line["auto_electrification"]:
                 eligible.append({field: group[field] for field in AUTO_ELECTRIFICATION_RATE_FIELDS})
     if payload["item_count"] != total:
@@ -657,27 +726,21 @@ def create_mixed_catalog_quotation_workbook(
             ws.cell(row, 1).font = Font(bold=True)
             row += 1
             for item in group["items"]:
-                workbook_item = deepcopy(item)
-                workbook_item["description"] = " | ".join(
-                    part
-                    for part in (
-                        str(item.get("description") or "").strip(),
-                        f"Fuente: {item['source_reference']}",
-                        f"Hash fuente: {group['catalog_source_hash']}",
-                    )
-                    if part
-                )
                 write_catalog_quotation_item(
                     ws,
                     row=row,
                     index=product_index,
-                    item=workbook_item,
+                    item=item,
                     source_type=MIXED_GROUP_SOURCE_TYPES[group["catalog"]],
                     images_root=images_root,
                     text_transform=safe_excel_text,
                     image_file_key=(
                         f"{group['catalog']}-{row}-"
                         f"{hashlib.sha256(item['canonical_key'].encode('utf-8')).hexdigest()[:16]}"
+                    ),
+                    extra_description_parts=(
+                        f"Fuente: {item['source_reference']}",
+                        f"Hash fuente: {group['catalog_source_hash']}",
                     ),
                 )
                 ws.cell(row, 12).value = safe_excel_text(item["supplier"])

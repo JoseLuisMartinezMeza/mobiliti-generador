@@ -648,6 +648,10 @@ def test_catalog_downloader_rejects_image_dimensions_over_catalog_limit(monkeypa
     assert list(tmp_path.iterdir()) == []
 
 
+def test_catalog_image_pixel_limit_is_exactly_forty_million():
+    assert catalog_cart.MAX_CATALOG_IMAGE_PIXELS == 40_000_000
+
+
 def test_catalog_downloader_rejects_mime_decoded_format_mismatch(monkeypatch, tmp_path):
     url = "https://www.offiho.com/mismatch.jpg"
     _stub_catalog_image_transport(
@@ -835,3 +839,52 @@ def test_corrupt_image_isolated_before_valid_image(monkeypatch, tmp_path):
     assert not (image_dir / "bad.png").exists()
     assert (image_dir / "good.png").exists()
     saved.close()
+
+
+def test_mixed_workbook_rejects_final_description_over_excel_limit_before_paths(tmp_path):
+    payload = frozen_payload()
+    payload["groups"][2]["items"][0]["warnings"] = [
+        f"Aviso unico {index}: " + (chr(65 + index % 26) * 700)
+        for index in range(50)
+    ]
+    submitted = deepcopy(payload)
+    output = tmp_path / "output" / "oversized-description.xlsx"
+    image_dir = tmp_path / "images"
+
+    with pytest.raises(ValueError, match="limite de Excel"):
+        create_mixed_catalog_quotation_workbook(
+            payload, output, image_dir=image_dir
+        )
+
+    assert not output.parent.exists()
+    assert not image_dir.exists()
+    assert payload == submitted
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    (
+        {"color": "Rojo\x00oculto"},
+        {"dimensions": "10\x0b20 cm"},
+        {"product_notes": ["Visible", "Oculto\x1f"]},
+        {"nested": {"rows": [{"value": "Control\x0c"}]}},
+        {"clave\x07ilegal": "valor"},
+    ),
+)
+def test_mixed_workbook_rejects_recursive_illegal_attribute_controls_before_paths(
+    tmp_path, attributes
+):
+    payload = frozen_payload()
+    payload["groups"][2]["items"][0]["attributes"] = attributes
+    submitted = deepcopy(payload)
+    output = tmp_path / "output" / "illegal-attributes.xlsx"
+    image_dir = tmp_path / "images"
+
+    with pytest.raises(ValueError, match="caracteres de control"):
+        create_mixed_catalog_quotation_workbook(
+            payload, output, image_dir=image_dir
+        )
+
+    assert not output.parent.exists()
+    assert not image_dir.exists()
+    assert payload == submitted

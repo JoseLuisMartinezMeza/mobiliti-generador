@@ -23,6 +23,7 @@ from PIL import Image, UnidentifiedImageError
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_CATALOG_IMAGE_PIXELS = 40_000_000
+MAX_EXCEL_CELL_TEXT_LENGTH = 32_767
 CATALOG_IMAGE_FORMATS = {
     "PNG": ("image/png", ".png"),
     "JPEG": ("image/jpeg", ".jpg"),
@@ -149,6 +150,7 @@ def write_catalog_quotation_item(
     images_root: Path,
     text_transform: Callable[[object], str],
     image_file_key: str | None = None,
+    extra_description_parts: tuple[str, ...] = (),
 ) -> None:
     code = str(item.get("code") or item.get("sku") or "").strip()
     name = str(item.get("name", "")).strip()
@@ -158,18 +160,12 @@ def write_catalog_quotation_item(
     )
     dimensions = str(attributes.get("dimensions") or "").strip()
     url = str(item.get("product_url", "") or "").strip()
-    if source_type == "supplier_cart":
-        quantity_precision = 6 if _is_square_meter_unit(unit) else 0
-    elif source_type == "tarkett_cart":
-        quantity_precision = 6
-    else:
-        quantity_precision = 3
-    quantity = parse_commercial_quantity(
-        item.get("quantity", 0),
-        item_label=code or name or str(index),
-        max_decimal_places=quantity_precision,
+    description, warning, quantity = catalog_quotation_item_text(
+        item,
+        index=index,
+        source_type=source_type,
+        extra_description_parts=extra_description_parts,
     )
-    description, warning = _description_for_item(item, code, url, quantity)
     ws.cell(row, 1).value = index
     ws.cell(row, 2).value = text_transform(name)
     ws.cell(row, 4).value = text_transform(description)
@@ -193,15 +189,50 @@ def write_catalog_quotation_item(
     )
 
 
+def catalog_quotation_item_text(
+    item: dict[str, Any],
+    *,
+    index: int,
+    source_type: str,
+    extra_description_parts: tuple[str, ...] = (),
+) -> tuple[str, str, Decimal]:
+    code = str(item.get("code") or item.get("sku") or "").strip()
+    name = str(item.get("name", "")).strip()
+    unit = str(item.get("unit", "")).strip()
+    url = str(item.get("product_url", "") or "").strip()
+    if source_type == "supplier_cart":
+        quantity_precision = 6 if _is_square_meter_unit(unit) else 0
+    elif source_type == "tarkett_cart":
+        quantity_precision = 6
+    else:
+        quantity_precision = 3
+    quantity = parse_commercial_quantity(
+        item.get("quantity", 0),
+        item_label=code or name or str(index),
+        max_decimal_places=quantity_precision,
+    )
+    description, warning = _description_for_item(
+        item,
+        code,
+        url,
+        quantity,
+        extra_description_parts=extra_description_parts,
+    )
+    return description, warning, quantity
+
+
 def _description_for_item(
     item: dict[str, Any],
     code: str,
     url: str,
     quantity: Decimal,
+    *,
+    extra_description_parts: tuple[str, ...] = (),
 ) -> tuple[str, str]:
     code_label = "SKU" if "sku" in item else "Clave"
     parts = [
         str(item.get("description", "") or "").strip(),
+        *(str(value or "").strip() for value in extra_description_parts),
         f"{code_label}: {code}" if code else "",
     ]
     configuration = str(item.get("configuration") or "").strip()
