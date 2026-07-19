@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import date, datetime, timedelta
 from decimal import Decimal, localcontext
+import hashlib
 import io
 from pathlib import Path
 
@@ -72,6 +73,35 @@ def catalog_payload(*, supplier="alma", items=None):
     }
 
 
+def lumbro_catalog_payload():
+    payload = catalog_payload(supplier="lumbro")
+    payload["items"][0].update(
+        internal_id="lumbro:variant:barcelona",
+        product_key="barcelona",
+        sku="BARCELONA",
+        brand="Lumbro",
+        collection="Empotrables",
+        name="Barcelona",
+        description="Multicontacto empotrable Barcelona",
+        unit="PZA",
+        base_price_options=[],
+        add_on_options=[],
+        base_currency="MXN",
+        price_net="2824.000000",
+        tax_rate="0.160000",
+    )
+    payload["metadata"] = {
+        "coverage": {
+            "parsed_price_rows": 1,
+            "imported_rows": 1,
+            "reconciled_rows": 0,
+            "excluded_rows": 0,
+            "exclusions": [],
+        }
+    }
+    return payload
+
+
 def rate_rows(*, effective_date=None):
     day = effective_date or (date.today() - timedelta(days=1)).isoformat()
     return [
@@ -89,6 +119,41 @@ def test_load_catalog_validates_and_preserves_public_decimal_strings():
     assert item["tax_rate"] == "0.160000"
     assert item["base_price_options"][0]["price_net"] == "250.000000"
     assert loaded["by_internal_id"][item["internal_id"]] is item
+
+
+def test_load_catalog_preserves_a_normalized_copy_of_optional_metadata():
+    payload = lumbro_catalog_payload()
+
+    loaded = load_supplier_catalog_data(payload, expected_supplier="lumbro")
+
+    assert loaded["metadata"] == payload["metadata"]
+    assert loaded["metadata"] is not payload["metadata"]
+    assert loaded["metadata"]["coverage"] is not payload["metadata"]["coverage"]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [],
+        {"unsafe": object()},
+        {"oversized": "x" * 300_000},
+        {"nested": {"level": {"level": {"level": {"level": {"level": {"level": {"level": {"level": {"level": "too deep"}}}}}}}}}},
+    ],
+)
+def test_load_catalog_rejects_invalid_or_unbounded_metadata(metadata):
+    payload = lumbro_catalog_payload()
+    payload["metadata"] = metadata
+
+    with pytest.raises(ValueError, match="metadata"):
+        load_supplier_catalog_data(payload)
+
+
+def test_load_catalog_rejects_unknown_root_key_even_with_valid_metadata():
+    payload = lumbro_catalog_payload()
+    payload["unexpected"] = True
+
+    with pytest.raises(ValueError, match="raiz|inesperado"):
+        load_supplier_catalog_data(payload)
 
 
 def test_unknown_base_currency_is_allowed_only_for_blocked_zero_prices():
@@ -179,6 +244,38 @@ def test_build_cart_uses_only_catalog_values_and_central_rounding_example():
     assert line["quantity"] == "2"
     assert line["configuration"] == "Powder coated aluminium; Cushion A+; Ceramic A"
     assert all(not isinstance(value, float) for value in (cart["exchange_rate"], line["unit_price_base"], line["unit_price"], line["line_total"]))
+
+
+def test_lumbro_cart_requires_integer_piece_quantity_and_preserves_net_tax_totals():
+    catalog = load_supplier_catalog_data(lumbro_catalog_payload())
+    cart = build_supplier_cart_payload(
+        [{"internal_id": "lumbro:variant:barcelona", "quantity": "2", "add_on_option_ids": []}],
+        catalog,
+        "MXN",
+        [],
+    )
+
+    line = cart["items"][0]
+    net = Decimal(line["line_total"])
+    tax = (net * Decimal(line["tax_rate"])).quantize(Decimal("0.01"))
+    total = net + tax
+    assert cart["supplier"] == "lumbro"
+    assert supplier_module.SUPPLIER_LABELS["lumbro"] == "Lumbro"
+    assert cart["base_currency"] == "MXN"
+    assert line["quantity"] == "2"
+    assert line["base_price"] == "2824.000000"
+    assert line["unit_price"] == "2824.00"
+    assert line["line_total"] == "5648.00"
+    assert line["tax_rate"] == "0.160000"
+    assert tax == Decimal("903.68")
+    assert total == Decimal("6551.68")
+    with pytest.raises(ValueError, match="entera"):
+        build_supplier_cart_payload(
+            [{"internal_id": "lumbro:variant:barcelona", "quantity": "2.5", "add_on_option_ids": []}],
+            catalog,
+            "MXN",
+            [],
+        )
 
 
 def test_repeated_kun_source_code_survives_cart_and_embeds_official_image_in_xlsx(
@@ -925,6 +1022,9 @@ def test_supplier_image_allowlist_ignores_insecure_or_credentialed_bases(monkeyp
 def test_supplier_module_copies_are_byte_identical():
     root = Path(__file__).resolve().parents[1]
     for module_name in ("supplier_catalog.py", "catalog_cart.py"):
-        assert (root / "mobiliti_saas/quote_engine" / module_name).read_bytes() == (
+        source = (root / "mobiliti_saas/quote_engine" / module_name).read_bytes()
+        mirror = (
             root / "mobiliti_saas/web/mobiliti_saas/quote_engine" / module_name
         ).read_bytes()
+        assert source == mirror
+        assert hashlib.sha256(source).hexdigest() == hashlib.sha256(mirror).hexdigest()

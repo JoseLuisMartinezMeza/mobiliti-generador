@@ -14,12 +14,13 @@ from urllib.parse import urlsplit
 from .catalog_cart import create_catalog_quotation_workbook
 
 
-ALLOWED_SUPPLIERS = {"cr-global", "sonara", "sunon", "alma"}
+ALLOWED_SUPPLIERS = {"cr-global", "sonara", "sunon", "alma", "lumbro"}
 SUPPLIER_LABELS = {
     "cr-global": "CR Global",
     "sonara": "Sonara",
     "sunon": "Sunon",
     "alma": "ALMA",
+    "lumbro": "Lumbro",
 }
 ALLOWED_CURRENCIES = {"USD", "MXN", "EUR"}
 UNKNOWN_BASE_CURRENCY = "XXX"
@@ -49,6 +50,9 @@ MAX_URL_LENGTH = 2_048
 MAX_WARNING_LENGTH = 2_000
 MAX_ATTRIBUTES_JSON_BYTES = 32_768
 MAX_ATTRIBUTES_DEPTH = 8
+MAX_METADATA_JSON_BYTES = 262_144
+MAX_METADATA_DEPTH = 8
+MAX_METADATA_NODES = 10_000
 DERIVED_DECIMAL_PRECISION = 80
 MAX_DERIVED_EXCHANGE_RATE = Decimal("1000000")
 MAX_CONFIGURED_AMOUNT = Decimal("250000000000")
@@ -73,6 +77,17 @@ class RateSnapshot:
 def load_supplier_catalog_data(payload: dict, expected_supplier: str | None = None) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Catalogo de proveedor invalido: raiz no es un objeto")
+    required_fields = {"supplier", "source_hash", "generated_at", "items"}
+    allowed_fields = required_fields | {"metadata"}
+    missing = required_fields - set(payload)
+    unexpected = set(payload) - allowed_fields
+    if missing or unexpected:
+        problems = []
+        if missing:
+            problems.append("campos raiz faltantes: " + ", ".join(sorted(missing)))
+        if unexpected:
+            problems.append("campos raiz inesperados: " + ", ".join(sorted(map(str, unexpected))))
+        raise ValueError("Catalogo de proveedor invalido: " + "; ".join(problems))
     supplier = _enum_text(payload, "supplier", ALLOWED_SUPPLIERS)
     if expected_supplier is not None and supplier != expected_supplier:
         raise ValueError("Catalogo de proveedor invalido: supplier no coincide")
@@ -110,13 +125,22 @@ def load_supplier_catalog_data(payload: dict, expected_supplier: str | None = No
         if sku_key:
             by_sku[sku_key] = item
 
-    return {
+    result = {
         "supplier": supplier,
         "source_hash": source_hash,
         "generated_at": generated_at,
         "items": items,
         "by_internal_id": by_internal_id,
     }
+    if "metadata" in payload:
+        result["metadata"] = _normalized_json_object(
+            payload["metadata"],
+            "metadata",
+            MAX_METADATA_JSON_BYTES,
+            MAX_METADATA_DEPTH,
+            MAX_METADATA_NODES,
+        )
+    return result
 
 
 def build_supplier_cart_payload(
@@ -129,7 +153,12 @@ def build_supplier_cart_payload(
         raise ValueError("El carrito de proveedor esta vacio")
     if len(raw_items) > MAX_CART_ROWS:
         raise ValueError(f"El carrito excede el limite de filas: {MAX_CART_ROWS}")
-    loaded = load_supplier_catalog_data(catalog)
+    catalog_input = catalog
+    if isinstance(catalog, dict) and set(catalog) - {
+        "supplier", "source_hash", "generated_at", "items", "metadata"
+    } == {"by_internal_id"}:
+        catalog_input = {key: value for key, value in catalog.items() if key != "by_internal_id"}
+    loaded = load_supplier_catalog_data(catalog_input)
     quote_currency = _currency(quote_currency)
     by_id = loaded["by_internal_id"]
     prepared: list[tuple[dict[str, Any], Decimal, dict[str, Any] | None, list[dict[str, Any]]]] = []
@@ -744,34 +773,62 @@ def _validate_url_hostname(host: str, field: str) -> None:
 
 
 def _validate_attributes(attributes: dict[str, Any]) -> None:
+    _normalized_json_object(
+        attributes,
+        "attributes",
+        MAX_ATTRIBUTES_JSON_BYTES,
+        MAX_ATTRIBUTES_DEPTH,
+        MAX_METADATA_NODES,
+    )
+
+
+def _normalized_json_object(
+    value: Any,
+    field: str,
+    maximum_bytes: int,
+    maximum_depth: int,
+    maximum_nodes: int,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} debe ser un objeto")
+    nodes = 0
+
     def walk(value: Any, depth: int) -> None:
-        if depth > MAX_ATTRIBUTES_DEPTH:
-            raise ValueError(f"attributes excede la profundidad de {MAX_ATTRIBUTES_DEPTH}")
+        nonlocal nodes
+        nodes += 1
+        if nodes > maximum_nodes:
+            raise ValueError(f"{field} excede el limite de {maximum_nodes} valores")
+        if depth > maximum_depth:
+            raise ValueError(f"{field} excede la profundidad de {maximum_depth}")
         if isinstance(value, dict):
             if any(not isinstance(key, str) for key in value):
-                raise ValueError("attributes requiere claves de texto")
+                raise ValueError(f"{field} requiere claves de texto")
             for key, nested in value.items():
-                _bounded_string(key, "attributes key", MAX_TEXT_LENGTH)
+                _bounded_string(key, f"{field} key", MAX_TEXT_LENGTH)
                 walk(nested, depth + 1)
         elif isinstance(value, list):
             for nested in value:
                 walk(nested, depth + 1)
         elif not (value is None or isinstance(value, (str, int, float, bool))):
-            raise ValueError("attributes contiene un valor no JSON")
+            raise ValueError(f"{field} contiene un valor no JSON")
 
-    walk(attributes, 0)
+    try:
+        walk(value, 0)
+    except RecursionError:
+        raise ValueError(f"{field} excede la profundidad de {maximum_depth}") from None
     try:
         encoded = json.dumps(
-            attributes,
+            value,
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
-    except (TypeError, ValueError):
-        raise ValueError("attributes contiene un valor no JSON") from None
-    if len(encoded) > MAX_ATTRIBUTES_JSON_BYTES:
-        raise ValueError(f"attributes excede el limite de {MAX_ATTRIBUTES_JSON_BYTES} bytes")
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{field} contiene un valor no JSON") from None
+    if len(encoded) > maximum_bytes:
+        raise ValueError(f"{field} excede el limite de {maximum_bytes} bytes")
+    return json.loads(encoded)
 
 
 def _enum_text(raw: dict[str, Any], field: str, allowed: set[str]) -> str:

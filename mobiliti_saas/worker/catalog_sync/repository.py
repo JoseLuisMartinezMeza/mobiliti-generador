@@ -50,7 +50,7 @@ _FILE_FIELDS = (
     "private_object_path,validation_status,validation_summary,last_sync_run_id,"
     "is_deleted,deleted_at,deleted_sync_run_id,discovered_at,validated_at"
 )
-_SYNC_SUPPLIERS = {"cr-global", "sonara", "sunon", "alma"}
+_SYNC_SUPPLIERS = {"cr-global", "sonara", "sunon", "alma", "lumbro"}
 
 
 class CatalogRepositoryError(ValueError):

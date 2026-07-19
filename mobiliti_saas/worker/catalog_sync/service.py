@@ -27,6 +27,7 @@ from .importers import (
     build_alma_snapshot,
     build_alma_snapshot_with_assets,
     build_cr_global_snapshot_with_assets,
+    build_lumbro_snapshot_with_assets,
     build_sonara_snapshot_with_assets,
     build_sunon_snapshot_with_assets,
 )
@@ -56,12 +57,13 @@ _REPOSITORY_METHODS = (
     "stage_candidate", "finish_no_changes", "finish_failed", "auto_publish_candidate",
 )
 _GRAPH_METHODS = ("iter_delta", "download_content")
-_SUPPLIERS = ("cr-global", "sonara", "sunon", "alma")
+_SUPPLIERS = ("cr-global", "sonara", "sunon", "alma", "lumbro")
 ADAPTERS = {
     "cr_global": build_cr_global_snapshot_with_assets,
     "sonara": build_sonara_snapshot_with_assets,
     "sunon": build_sunon_snapshot_with_assets,
     "alma": build_alma_snapshot_with_assets,
+    "lumbro": build_lumbro_snapshot_with_assets,
 }
 CATALOG_EXIT_WORKED = 0
 CATALOG_EXIT_FAILED = 1
@@ -450,7 +452,12 @@ def _dependencies(
 
 
 def _validate_snapshot(raw, expected_supplier=None):
-    if not isinstance(raw, dict) or set(raw) != {"supplier", "source_hash", "generated_at", "items"}:
+    required_fields = {"supplier", "source_hash", "generated_at", "items"}
+    if (
+        not isinstance(raw, dict)
+        or not required_fields <= set(raw)
+        or set(raw) - required_fields not in (set(), {"metadata"})
+    ):
         raise ValueError("Invalid snapshot")
     raw_items = raw.get("items")
     if not isinstance(raw_items, list):
@@ -465,12 +472,15 @@ def _validate_snapshot(raw, expected_supplier=None):
         loaded = load_supplier_catalog_data(raw, expected_supplier=expected_supplier)
     except Exception:
         raise ValueError("Invalid snapshot") from None
-    return {
+    snapshot = {
         "supplier": loaded["supplier"],
         "source_hash": loaded["source_hash"].lower(),
         "generated_at": raw["generated_at"],
         "items": loaded["items"],
     }
+    if "metadata" in loaded:
+        snapshot["metadata"] = loaded["metadata"]
+    return snapshot
 
 
 def _identity(snapshot):
@@ -480,6 +490,8 @@ def _identity(snapshot):
         "source_hash": loaded["source_hash"],
         "items": sorted(loaded["items"], key=lambda row: row["internal_id"]),
     }
+    if "metadata" in loaded:
+        value["metadata"] = loaded["metadata"]
     encoded = json.dumps(
         value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")

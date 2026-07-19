@@ -447,15 +447,82 @@ def test_due_runner_claims_at_most_one_run_and_uses_explicit_registry(monkeypatc
         )[1],
     )
 
-    assert set(ADAPTERS) == {"cr_global", "sonara", "sunon", "alma"}
+    assert set(ADAPTERS) == {"cr_global", "sonara", "sunon", "alma", "lumbro"}
     assert ADAPTERS["cr_global"].__name__ == "build_cr_global_snapshot_with_assets"
     assert ADAPTERS["sonara"].__name__ == "build_sonara_snapshot_with_assets"
+    assert ADAPTERS["lumbro"].__name__ == "build_lumbro_snapshot_with_assets"
     assert run_due_once() == "no_changes"
     assert seen[0] == ("recover", ("alma", "sunon"))
     assert seen[1] == ("claim", ("alma", "sunon"))
     assert seen[2][0:4] == ("alma", "manual", 7, False)
     assert seen[2][4]["claimed_run_id"] == RUN_ID
     assert seen[2][4]["adapters"] is ADAPTERS
+
+
+def test_due_scheduler_accepts_lumbro_in_generic_supplier_allowlist(monkeypatch):
+    monkeypatch.setenv("CATALOG_SYNC_ENABLED", "true")
+    monkeypatch.setenv("CATALOG_ENABLED_SUPPLIERS", "lumbro")
+
+    assert catalog_service._enabled_suppliers() == ("lumbro",)
+
+
+def test_lumbro_task6_snapshot_metadata_is_valid_preserved_and_deterministic():
+    lumbro_item = item(
+        internal_id="lumbro:variant:barcelona",
+        supplier="lumbro",
+        product_key="barcelona",
+        sku="BARCELONA",
+        brand="Lumbro",
+        collection="Empotrables",
+        name="Barcelona",
+        unit="PZA",
+        base_currency="MXN",
+        price_net="2824.000000",
+        tax_rate="0.160000",
+    )
+    coverage = {
+        "parsed_price_rows": 1,
+        "imported_rows": 1,
+        "reconciled_rows": 0,
+        "excluded_rows": 0,
+        "exclusions": [],
+    }
+    payload = {
+        "supplier": "lumbro",
+        "source_hash": "b" * 64,
+        "generated_at": "2026-07-18T12:00:00Z",
+        "items": [lumbro_item],
+        "metadata": {
+            "sources": [{"path": "LUMBRO/LP/lista.pdf", "sha256": "c" * 64}],
+            "link_manifest_fingerprint": "d" * 64,
+            "coverage": coverage,
+        },
+    }
+
+    loaded = catalog_service._validate_snapshot(payload, expected_supplier="lumbro")
+
+    assert loaded["metadata"]["coverage"] == coverage
+    assert loaded["metadata"] is not payload["metadata"]
+    reordered = deepcopy(payload)
+    reordered["metadata"] = dict(reversed(tuple(reordered["metadata"].items())))
+    assert catalog_service._identity(payload) == catalog_service._identity(reordered)
+    changed = deepcopy(payload)
+    changed["metadata"]["coverage"]["parsed_price_rows"] = 2
+    assert catalog_service._identity(payload) != catalog_service._identity(changed)
+
+
+def test_snapshot_rejects_invalid_unbounded_metadata_and_unknown_root_keys():
+    base = snapshot()
+    invalid_metadata = deepcopy(base)
+    invalid_metadata["metadata"] = []
+    unbounded_metadata = deepcopy(base)
+    unbounded_metadata["metadata"] = {"oversized": "x" * 300_000}
+    unknown_root = deepcopy(base)
+    unknown_root["unexpected"] = True
+
+    for payload in (invalid_metadata, unbounded_metadata, unknown_root):
+        with pytest.raises(ValueError, match="Invalid snapshot"):
+            catalog_service._validate_snapshot(payload)
 
 
 def test_configured_path_rejects_same_name_lumbro_discovery_with_wrong_graph_id():

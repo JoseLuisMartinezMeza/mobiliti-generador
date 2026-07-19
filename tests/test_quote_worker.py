@@ -611,6 +611,10 @@ def test_process_job_converts_supplier_cart_and_sets_frozen_catalog_metadata(mon
     assert {key: seen["metadata"][key] for key in expected_metadata} == expected_metadata
 
 
+def test_worker_uses_lumbro_label_through_generic_supplier_registry():
+    assert quote_worker.SUPPLIER_LABELS["lumbro"] == "Lumbro"
+
+
 def test_process_job_uses_source_type_when_input_name_is_not_json(monkeypatch):
     client = FakeClient()
     client.claim_input_path = "users/7/jobs/job-1/upload.bin"

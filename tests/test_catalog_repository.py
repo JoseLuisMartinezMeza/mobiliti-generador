@@ -312,6 +312,22 @@ def test_claim_next_sync_uses_atomic_rpc_and_validates_the_claim():
     assert repo.claim_next_sync(("sunon",)) is None
 
 
+def test_repository_accepts_lumbro_in_generic_sync_whitelist():
+    claim = {
+        "run_id": RUN_ID,
+        "supplier": "lumbro",
+        "trigger_type": "scheduled",
+        "requested_by": None,
+    }
+    repo, opener = repository([response(200, [claim])])
+
+    assert repo.claim_next_sync(("lumbro",)) == SyncClaim(
+        UUID(RUN_ID), "lumbro", "scheduled", None
+    )
+    request, _, _, _ = request_parts(opener)
+    assert json.loads(request.data) == {"p_enabled_suppliers": ["lumbro"]}
+
+
 def test_recover_stale_syncs_uses_atomic_rpc_and_validates_count():
     repo, opener = repository([response(200, 2)])
 
