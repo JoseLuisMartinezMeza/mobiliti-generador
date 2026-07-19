@@ -6,7 +6,7 @@ from io import BytesIO
 import hashlib
 from zipfile import ZipFile
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from PIL import Image
 import pytest
 
@@ -108,6 +108,39 @@ def _png_bytes(color):
     stream = BytesIO()
     Image.new("RGB", (2, 2), color).save(stream, format="PNG")
     return stream.getvalue()
+
+
+def _stub_catalog_image_transport(monkeypatch, responses):
+    class Response:
+        def __init__(self, data, content_type):
+            self.data = data
+            self.headers = {
+                "content-type": content_type,
+                "content-length": str(len(data)),
+            }
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size):
+            return self.data[:size]
+
+    class Opener:
+        def open(self, request, timeout):
+            assert timeout == 18
+            data, content_type = responses[request.full_url]
+            return Response(data, content_type)
+
+    monkeypatch.setattr(catalog_cart, "_resolve_public_host", lambda host: None)
+    monkeypatch.setattr(catalog_cart, "_validate_connected_peer", lambda response: None)
+    monkeypatch.setattr(
+        catalog_cart.urllib.request,
+        "build_opener",
+        lambda *handlers: Opener(),
+    )
 
 
 def _three_image_payload():
@@ -571,3 +604,234 @@ def test_mixed_workbook_downloads_each_unique_image_url_once(monkeypatch, tmp_pa
     )
     assert sorted(image.anchor._from.row + 1 for image in wb["Quotation"]._images) == [13, 14]
     wb.close()
+
+
+def test_catalog_downloader_validates_real_png_before_writing(monkeypatch, tmp_path):
+    url = "https://www.offiho.com/valid.png"
+    body = _png_bytes("blue")
+    _stub_catalog_image_transport(monkeypatch, {url: (body, "image/png")})
+
+    result = catalog_cart._download_catalog_image(
+        url, tmp_path, "VALID", "offiho_cart"
+    )
+
+    assert result == tmp_path / "VALID.png"
+    assert result.read_bytes() == body
+
+
+def test_catalog_downloader_never_writes_corrupt_image_body(monkeypatch, tmp_path):
+    url = "https://www.offiho.com/corrupt.png"
+    _stub_catalog_image_transport(
+        monkeypatch, {url: (b"not-an-image", "image/png")}
+    )
+
+    result = catalog_cart._download_catalog_image(
+        url, tmp_path, "CORRUPT", "offiho_cart"
+    )
+
+    assert result is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_catalog_downloader_rejects_image_dimensions_over_catalog_limit(monkeypatch, tmp_path):
+    url = "https://www.offiho.com/oversized.png"
+    _stub_catalog_image_transport(
+        monkeypatch, {url: (_png_bytes("orange"), "image/png")}
+    )
+    monkeypatch.setattr(catalog_cart, "MAX_CATALOG_IMAGE_PIXELS", 3)
+
+    result = catalog_cart._download_catalog_image(
+        url, tmp_path, "OVERSIZED", "offiho_cart"
+    )
+
+    assert result is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_catalog_downloader_rejects_mime_decoded_format_mismatch(monkeypatch, tmp_path):
+    url = "https://www.offiho.com/mismatch.jpg"
+    _stub_catalog_image_transport(
+        monkeypatch, {url: (_png_bytes("green"), "image/jpeg")}
+    )
+
+    result = catalog_cart._download_catalog_image(
+        url, tmp_path, "MISMATCH", "offiho_cart"
+    )
+
+    assert result is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_mixed_workbook_persists_exact_reference_and_source_hash_without_mutation(tmp_path):
+    payload = frozen_payload()
+    submitted = deepcopy(payload)
+    output = create_mixed_catalog_quotation_workbook(payload, tmp_path / "source-audit.xlsx")
+    wb = load_workbook(output, data_only=False)
+    ws = wb["Quotation"]
+
+    assert ws["Q9"].value == payload["groups"][0]["items"][0]["source_reference"]
+    assert f"Hash fuente: {'a' * 64}" in ws["D9"].value
+    assert ws["Q11"].value == payload["groups"][1]["items"][0]["source_reference"]
+    assert f"Hash fuente: {'b' * 64}" in ws["D11"].value
+    assert payload == submitted
+    wb.close()
+
+
+def test_legacy_same_url_uses_each_code_filename_and_download(monkeypatch, tmp_path):
+    body = _png_bytes("teal")
+    calls = []
+
+    def fake_download(url, image_dir, code, source_type):
+        calls.append((url, code, source_type))
+        path = image_dir / f"{code}.png"
+        path.write_bytes(body)
+        return path
+
+    monkeypatch.setattr(catalog_cart, "_download_catalog_image", fake_download)
+    shared_url = "https://www.offiho.com/shared.png"
+    payload = {
+        "source_type": "offiho_cart",
+        "items": [
+            {
+                "code": code,
+                "name": f"Producto {code}",
+                "unit": "PZA",
+                "quantity": "1",
+                "unit_price": "10",
+                "image_url": shared_url,
+                "warnings": [],
+            }
+            for code in ("CODE-A", "CODE-B")
+        ],
+    }
+    output = create_catalog_quotation_workbook(
+        payload,
+        tmp_path / "legacy-shared.xlsx",
+        source_type="offiho_cart",
+        category_label="Offiho",
+        image_dir=tmp_path / "images",
+    )
+    wb = load_workbook(output)
+    ws = wb["Quotation"]
+
+    assert calls == [
+        (shared_url, "CODE-A", "offiho_cart"),
+        (shared_url, "CODE-B", "offiho_cart"),
+    ]
+    assert sorted(path.name for path in (tmp_path / "images").iterdir()) == [
+        "CODE-A.png",
+        "CODE-B.png",
+    ]
+    assert sorted(image.anchor._from.row + 1 for image in ws._images) == [9, 10]
+    assert [ws.cell(9, column).value for column in range(1, 12)] == [
+        1,
+        "Producto CODE-A",
+        None,
+        "Clave: CODE-A",
+        "PZA",
+        None,
+        1,
+        None,
+        None,
+        10,
+        None,
+    ]
+    assert [ws.cell(10, column).value for column in range(1, 12)] == [
+        2,
+        "Producto CODE-B",
+        None,
+        "Clave: CODE-B",
+        "PZA",
+        None,
+        1,
+        None,
+        None,
+        10,
+        None,
+    ]
+    wb.close()
+
+
+def test_malformed_supplier_allowlist_is_isolated_before_valid_family_image(monkeypatch, tmp_path):
+    valid_url = "https://www.offiho.com/valid-after-invalid.png"
+    _stub_catalog_image_transport(
+        monkeypatch, {valid_url: (_png_bytes("purple"), "image/png")}
+    )
+    monkeypatch.setenv("CATALOG_ASSET_PUBLIC_BASE_URL", "https://[")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    wb = Workbook()
+    ws = wb.active
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+
+    assert catalog_cart._download_catalog_image(
+        "https://assets.example.test/invalid.png",
+        image_dir,
+        "INVALID",
+        "supplier_cart",
+        destination_key="supplier-invalid",
+    ) is None
+    catalog_cart._add_catalog_image(
+        ws,
+        10,
+        valid_url,
+        image_dir,
+        "VALID",
+        "offiho_cart",
+        destination_key="offiho-valid",
+    )
+    output = tmp_path / "isolated.xlsx"
+    wb.save(output)
+    wb.close()
+    saved = load_workbook(output)
+
+    assert [image.anchor._from.row + 1 for image in saved.active._images] == [10]
+    assert not (image_dir / "supplier-invalid.png").exists()
+    assert (image_dir / "offiho-valid.png").exists()
+    saved.close()
+
+
+@pytest.mark.parametrize(
+    "configured_url",
+    (
+        "https://[",
+        "https://bad host.example/path",
+        "https://assets.example.test:not-a-port/path",
+    ),
+)
+def test_supplier_allowlist_fails_closed_for_malformed_config(monkeypatch, configured_url):
+    monkeypatch.setenv("CATALOG_ASSET_PUBLIC_BASE_URL", configured_url)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    assert catalog_cart._allowed_image_hosts("supplier_cart") == frozenset()
+
+
+def test_corrupt_image_isolated_before_valid_image(monkeypatch, tmp_path):
+    corrupt_url = "https://www.offiho.com/first-corrupt.png"
+    valid_url = "https://www.offiho.com/second-valid.png"
+    _stub_catalog_image_transport(
+        monkeypatch,
+        {
+            corrupt_url: (b"corrupt", "image/png"),
+            valid_url: (_png_bytes("yellow"), "image/png"),
+        },
+    )
+    wb = Workbook()
+    ws = wb.active
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+
+    catalog_cart._add_catalog_image(
+        ws, 9, corrupt_url, image_dir, "BAD", "offiho_cart", destination_key="bad"
+    )
+    catalog_cart._add_catalog_image(
+        ws, 10, valid_url, image_dir, "GOOD", "offiho_cart", destination_key="good"
+    )
+    output = tmp_path / "corrupt-then-valid.xlsx"
+    wb.save(output)
+    wb.close()
+    saved = load_workbook(output)
+
+    assert [image.anchor._from.row + 1 for image in saved.active._images] == [10]
+    assert not (image_dir / "bad.png").exists()
+    assert (image_dir / "good.png").exists()
+    saved.close()

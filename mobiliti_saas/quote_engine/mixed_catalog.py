@@ -663,6 +663,7 @@ def create_mixed_catalog_quotation_workbook(
                     for part in (
                         str(item.get("description") or "").strip(),
                         f"Fuente: {item['source_reference']}",
+                        f"Hash fuente: {group['catalog_source_hash']}",
                     )
                     if part
                 )

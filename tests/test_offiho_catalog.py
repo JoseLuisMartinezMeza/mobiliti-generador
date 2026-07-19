@@ -1,12 +1,14 @@
 from decimal import Decimal
 from datetime import datetime, timezone
 from email.message import Message
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlsplit
 import json
 
 import pytest
 from openpyxl import load_workbook
+from PIL import Image
 
 import scripts.build_offiho_catalog as build
 from scripts.build_offiho_catalog import extract_offiho_identity
@@ -505,8 +507,17 @@ class _FakePeerSocket:
         return (self.address, 443)
 
 
+def _valid_png_bytes():
+    stream = BytesIO()
+    Image.new("RGB", (2, 2), "blue").save(stream, format="PNG")
+    return stream.getvalue()
+
+
+_VALID_PNG_BYTES = _valid_png_bytes()
+
+
 class _FakeImageResponse:
-    def __init__(self, *, peer_address="93.184.216.34", include_peer=True, payload=b"image-bytes"):
+    def __init__(self, *, peer_address="93.184.216.34", include_peer=True, payload=_VALID_PNG_BYTES):
         self.headers = {"content-type": "image/png", "content-length": str(len(payload))}
         self.payload = payload
         self.socket = _FakePeerSocket(peer_address)
@@ -583,7 +594,7 @@ def test_catalog_image_accepts_public_connected_peer(monkeypatch, tmp_path):
 
     assert response.socket.calls == 1
     assert result is not None
-    assert result.read_bytes() == b"image-bytes"
+    assert result.read_bytes() == _VALID_PNG_BYTES
 
 
 def test_catalog_image_rejects_uninspectable_connected_peer(monkeypatch, tmp_path):

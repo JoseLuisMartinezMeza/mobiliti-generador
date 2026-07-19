@@ -1,25 +1,33 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable
 import ipaddress
-import mimetypes
 import os
 import re
 import socket
 import tempfile
 import unicodedata
 import urllib.request
+import warnings
 from urllib.parse import urlsplit
 
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XlsxImage
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
+from PIL import Image, UnidentifiedImageError
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_CATALOG_IMAGE_PIXELS = 40_000_000
+CATALOG_IMAGE_FORMATS = {
+    "PNG": ("image/png", ".png"),
+    "JPEG": ("image/jpeg", ".jpg"),
+    "WEBP": ("image/webp", ".webp"),
+}
 MAX_COMMERCIAL_QUANTITY = Decimal("1000000")
 DEFAULT_QUANTITY_DECIMAL_PLACES = 3
 MAX_QUANTITY_DECIMAL_PLACES = 6
@@ -349,25 +357,25 @@ def _add_catalog_image(
     clean_url = str(image_url or "").strip()
     if not clean_url:
         return
-    cache = getattr(ws, "_mobiliti_catalog_image_cache", None)
-    if cache is None:
-        cache = {}
-        setattr(ws, "_mobiliti_catalog_image_cache", cache)
-    cache_key = (source_type, clean_url)
-    if cache_key in cache:
-        image_path = cache[cache_key]
-    elif destination_key is None:
+    if destination_key is None:
         image_path = _download_catalog_image(image_url, image_dir, code, source_type)
-        cache[cache_key] = image_path
     else:
-        image_path = _download_catalog_image(
-            image_url,
-            image_dir,
-            code,
-            source_type,
-            destination_key=destination_key,
-        )
-        cache[cache_key] = image_path
+        cache = getattr(ws, "_mobiliti_catalog_image_cache", None)
+        if cache is None:
+            cache = {}
+            setattr(ws, "_mobiliti_catalog_image_cache", cache)
+        cache_key = (source_type, clean_url)
+        if cache_key in cache:
+            image_path = cache[cache_key]
+        else:
+            image_path = _download_catalog_image(
+                image_url,
+                image_dir,
+                code,
+                source_type,
+                destination_key=destination_key,
+            )
+            cache[cache_key] = image_path
     if not image_path:
         return
     try:
@@ -401,10 +409,10 @@ def _download_catalog_image(
     destination_key: str | None = None,
 ) -> Path | None:
     clean_url = str(url or "").strip()
-    allowed_hosts = _allowed_image_hosts(source_type)
-    if not allowed_hosts:
-        return None
     try:
+        allowed_hosts = _allowed_image_hosts(source_type)
+        if not allowed_hosts:
+            return None
         _validate_official_https_url(clean_url, allowed_hosts)
         request = urllib.request.Request(clean_url, headers={"User-Agent": "Mobiliti Official Catalog/1.0"})
         opener = urllib.request.build_opener(
@@ -422,7 +430,7 @@ def _download_catalog_image(
             data = response.read(MAX_IMAGE_BYTES + 1)
         if not data or len(data) > MAX_IMAGE_BYTES:
             return None
-        suffix = mimetypes.guess_extension(content_type) or Path(urlsplit(clean_url).path).suffix or ".jpg"
+        suffix = _validated_catalog_image_suffix(data, content_type)
         safe_key = re.sub(
             r"[^A-Za-z0-9_-]+", "_", destination_key or code or "producto"
         )
@@ -433,18 +441,59 @@ def _download_catalog_image(
         return None
 
 
+def _validated_catalog_image_suffix(data: bytes, content_type: str) -> str:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        try:
+            with Image.open(BytesIO(data)) as image:
+                image_format = str(image.format or "").upper()
+                expected = CATALOG_IMAGE_FORMATS.get(image_format)
+                if expected is None or content_type != expected[0]:
+                    raise ValueError("Formato de imagen no coincide con MIME")
+                width, height = image.size
+                if width <= 0 or height <= 0 or width * height > MAX_CATALOG_IMAGE_PIXELS:
+                    raise ValueError("Dimensiones de imagen invalidas")
+                image.verify()
+            with Image.open(BytesIO(data)) as decoded:
+                if str(decoded.format or "").upper() != image_format:
+                    raise ValueError("Formato de imagen inconsistente")
+                decoded.load()
+                width, height = decoded.size
+                if width <= 0 or height <= 0 or width * height > MAX_CATALOG_IMAGE_PIXELS:
+                    raise ValueError("Dimensiones de imagen invalidas")
+        except (Image.DecompressionBombWarning, UnidentifiedImageError):
+            raise
+    return CATALOG_IMAGE_FORMATS[image_format][1]
+
+
 def _allowed_image_hosts(source_type: str) -> frozenset[str]:
     if source_type != "supplier_cart":
         return OFFICIAL_IMAGE_HOSTS.get(source_type, frozenset())
     hosts: set[str] = set()
     for variable in ("CATALOG_ASSET_PUBLIC_BASE_URL", "SUPABASE_URL"):
         value = os.environ.get(variable, "").strip()
-        parsed = urlsplit(value)
-        host = (parsed.hostname or "").lower().rstrip(".")
-        try:
-            port = parsed.port
-        except ValueError:
+        if not value:
             continue
+        try:
+            parsed = urlsplit(value)
+            host = (parsed.hostname or "").lower().rstrip(".")
+            port = parsed.port
+        except (UnicodeError, ValueError):
+            return frozenset()
+        labels = host.split(".")
+        if (
+            not host.isascii()
+            or len(host) > 253
+            or any(
+                not label
+                or len(label) > 63
+                or label.startswith("-")
+                or label.endswith("-")
+                or re.fullmatch(r"[a-z0-9-]+", label) is None
+                for label in labels
+            )
+        ):
+            return frozenset()
         if (
             parsed.scheme.lower() == "https"
             and host
