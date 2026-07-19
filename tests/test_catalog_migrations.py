@@ -45,13 +45,22 @@ def _without_sql_comments(sql):
     return re.sub(r"--[^\n]*(?:\n|$)|/\*.*?\*/", "", sql, flags=re.DOTALL)
 
 
+def _sql_string_spans(sql):
+    return [
+        (match.start(), match.end())
+        for match in re.finditer(r"'(?:''|[^'])*'", sql)
+    ]
+
+
 def _supplier_allowlists(sql):
     sql = _without_sql_comments(sql)
+    string_spans = _sql_string_spans(sql)
+    operand = r"(?:\bp_supplier\b|\b(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)?(?:supplier|value)\b)"
     pattern = re.compile(
-        r"""(?isx)
-        \b(?:NOT\s+)?IN\s*\((?P<in_values>[^)]*)\)
+        rf"""(?isx)
+        (?P<in_operand>{operand})\s+(?:NOT\s+)?IN\s*\((?P<in_values>[^)]*)\)
         |
-        \bANY\s*\(
+        (?P<any_operand>{operand})\s*=\s*ANY\s*\(
         \s*ARRAY\s*\[(?P<any_values>[^\]]*)\]
         \s*(?:::\s*[A-Za-z_][A-Za-z0-9_.]*(?:\s*\[\s*\])?)?
         \s*\)
@@ -59,6 +68,8 @@ def _supplier_allowlists(sql):
     )
     allowlists = []
     for match in pattern.finditer(sql):
+        if any(start <= match.start() < end for start, end in string_spans):
+            continue
         values = tuple(
             re.findall(
                 r"'((?:''|[^'])*)'",
@@ -106,10 +117,13 @@ def test_all_supplier_sql_allowlists_include_lumbro():
             assert _supplier_allowlists(context_sql) == [EXPECTED_SUPPLIERS], label
 
 
-def test_supplier_allowlist_helper_handles_comments_in_and_any_array_casts():
+def test_supplier_allowlist_helper_handles_supplier_operands_and_ignores_false_positives():
     sql = """
         -- p_supplier IN ('cr-global', 'sonara', 'sunon', 'alma')
         /* p_supplier = ANY(ARRAY['cr-global','sonara','sunon','alma']::TEXT[]) */
+        category IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro')
+        OR other_supplier IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro')
+        OR 'supplier IN (''cr-global'', ''sonara'', ''sunon'', ''alma'', ''lumbro'')' = 'example'
         p_supplier IN (
             'cr-global'::TEXT,
             'sonara',
@@ -117,12 +131,20 @@ def test_supplier_allowlist_helper_handles_comments_in_and_any_array_casts():
             'alma',
             'lumbro'
         )
+        OR enabled_supplier.value NOT IN (
+            'cr-global'::public.supplier_code,
+            'sonara', 'sunon', 'alma', 'lumbro'
+        )
         OR p_supplier = ANY(ARRAY[
             'cr-global', 'sonara', 'sunon', 'alma', 'lumbro'
         ]::public.supplier_code[])
     """
 
-    assert _supplier_allowlists(sql) == [EXPECTED_SUPPLIERS, EXPECTED_SUPPLIERS]
+    assert _supplier_allowlists(sql) == [
+        EXPECTED_SUPPLIERS,
+        EXPECTED_SUPPLIERS,
+        EXPECTED_SUPPLIERS,
+    ]
 
 
 def test_no_stale_four_supplier_sequences_remain_after_normalizing_sql():
