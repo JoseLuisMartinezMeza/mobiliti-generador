@@ -3,12 +3,23 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import hashlib
 import json
 import math
+from pathlib import Path
+import tempfile
 from typing import Any
 import unicodedata
 from urllib.parse import urlsplit
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
+
+from .catalog_cart import (
+    _set_column_widths,
+    write_catalog_quotation_headers,
+    write_catalog_quotation_item,
+)
 from .offiho_catalog import build_offiho_cart_payload
 from .supplier_catalog import (
     MAX_ATTRIBUTES_DEPTH,
@@ -16,6 +27,7 @@ from .supplier_catalog import (
     _validate_attributes,
     build_supplier_cart_payload,
     resolve_conversion_rate,
+    safe_excel_text,
 )
 from .tarkett_catalog import build_tarkett_cart_payload
 
@@ -25,6 +37,15 @@ MIXED_CATALOG_ORDER = ("tarkett", "offiho", "cr-global", "sonara", "sunon", "alm
 MIXED_CATALOG_LABELS = {
     "tarkett": "Tarkett", "offiho": "Offiho", "cr-global": "CR Global",
     "sonara": "Sonara", "sunon": "Sunon", "alma": "ALMA", "lumbro": "Lumbro",
+}
+MIXED_GROUP_SOURCE_TYPES = {
+    "tarkett": "tarkett_cart",
+    "offiho": "offiho_cart",
+    "cr-global": "supplier_cart",
+    "sonara": "supplier_cart",
+    "sunon": "supplier_cart",
+    "alma": "supplier_cart",
+    "lumbro": "supplier_cart",
 }
 MIXED_EXPECTED_BASE_CURRENCY = {
     "tarkett": "MXN", "offiho": "MXN", "cr-global": "MXN", "sonara": "MXN",
@@ -589,3 +610,107 @@ def build_mixed_reservation_groups(payload: dict) -> list[dict]:
         if aggregated:
             groups.append({"catalog": group["catalog"], "items": [aggregated[key] for key in sorted(aggregated)]})
     return groups
+
+
+def create_mixed_catalog_quotation_workbook(
+    payload: dict[str, Any],
+    output_path: str | Path,
+    *,
+    image_dir: str | Path | None = None,
+) -> Path:
+    payload = validate_mixed_catalog_payload(payload)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp_context = None
+    if image_dir is None:
+        tmp_context = tempfile.TemporaryDirectory(prefix="mixed_catalog_images_")
+        images_root = Path(tmp_context.name)
+    else:
+        images_root = Path(image_dir)
+        images_root.mkdir(parents=True, exist_ok=True)
+
+    wb = None
+    try:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Quotation"
+        write_catalog_quotation_headers(
+            ws,
+            {
+                12: safe_excel_text("Supplier"),
+                13: safe_excel_text("Discount Percent"),
+                14: safe_excel_text("Original Currency"),
+                15: safe_excel_text("Original Unit Price"),
+                16: safe_excel_text("Frozen Exchange Rate"),
+                17: safe_excel_text("Source Reference"),
+                18: safe_excel_text("Price Mode"),
+                19: safe_excel_text("Auto Electrification"),
+            },
+        )
+
+        row = 8
+        product_index = 1
+        for group in payload["groups"]:
+            ws.cell(row, 1).value = "- " + safe_excel_text(
+                MIXED_CATALOG_LABELS[group["catalog"]]
+            )
+            ws.cell(row, 1).font = Font(bold=True)
+            row += 1
+            for item in group["items"]:
+                workbook_item = deepcopy(item)
+                workbook_item["description"] = " | ".join(
+                    part
+                    for part in (
+                        str(item.get("description") or "").strip(),
+                        f"Fuente: {item['source_reference']}",
+                    )
+                    if part
+                )
+                write_catalog_quotation_item(
+                    ws,
+                    row=row,
+                    index=product_index,
+                    item=workbook_item,
+                    source_type=MIXED_GROUP_SOURCE_TYPES[group["catalog"]],
+                    images_root=images_root,
+                    text_transform=safe_excel_text,
+                    image_file_key=(
+                        f"{group['catalog']}-{row}-"
+                        f"{hashlib.sha256(item['canonical_key'].encode('utf-8')).hexdigest()[:16]}"
+                    ),
+                )
+                ws.cell(row, 12).value = safe_excel_text(item["supplier"])
+                ws.cell(row, 13).value = float(Decimal(item["discount_percent"]))
+                ws.cell(row, 13).number_format = "0.000000"
+                ws.cell(row, 14).value = safe_excel_text(item["original_currency"])
+                ws.cell(row, 15).value = float(Decimal(item["original_unit_price"]))
+                ws.cell(row, 16).value = float(Decimal(item["frozen_exchange_rate"]))
+                ws.cell(row, 17).value = safe_excel_text(item["source_reference"])
+                ws.cell(row, 18).value = safe_excel_text(item["price_mode"])
+                if not isinstance(item["auto_electrification"], bool):
+                    raise ValueError("Auto Electrification mixto debe ser booleano")
+                ws.cell(row, 19).value = item["auto_electrification"]
+                row += 1
+                product_index += 1
+
+        _set_column_widths(ws)
+        for column, width in {
+            "L": 20,
+            "M": 20,
+            "N": 20,
+            "O": 22,
+            "P": 22,
+            "Q": 42,
+            "R": 18,
+            "S": 22,
+        }.items():
+            ws.column_dimensions[column].width = width
+        wb.save(output)
+    finally:
+        try:
+            if wb is not None:
+                wb.close()
+        finally:
+            if tmp_context is not None:
+                tmp_context.cleanup()
+    return output

@@ -81,44 +81,22 @@ def create_catalog_quotation_workbook(
         wb = Workbook()
         ws = wb.active
         ws.title = "Quotation"
-        _write_headers(ws)
+        write_catalog_quotation_headers(ws)
         ws.cell(8, 1).value = f"- {category_label}"
         ws.cell(8, 1).font = Font(bold=True)
 
         transform = text_transform or (lambda value: str(value or ""))
         for index, item in enumerate(items, start=1):
             row = index + 8
-            code = str(item.get("code") or item.get("sku") or "").strip()
-            name = str(item.get("name", "")).strip()
-            unit = str(item.get("unit", "")).strip()
-            attributes = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
-            dimensions = str(attributes.get("dimensions") or "").strip()
-            url = str(item.get("product_url", "") or "").strip()
-            if source_type == "supplier_cart":
-                quantity_precision = 6 if _is_square_meter_unit(unit) else 0
-            elif source_type == "tarkett_cart":
-                quantity_precision = 6
-            else:
-                quantity_precision = 3
-            quantity = parse_commercial_quantity(
-                item.get("quantity", 0),
-                item_label=code or name or str(index),
-                max_decimal_places=quantity_precision,
+            write_catalog_quotation_item(
+                ws,
+                row=row,
+                index=index,
+                item=item,
+                source_type=source_type,
+                images_root=images_root,
+                text_transform=transform,
             )
-            description, warning = _description_for_item(item, code, url, quantity)
-            ws.cell(row, 1).value = index
-            ws.cell(row, 2).value = transform(name)
-            ws.cell(row, 4).value = transform(description)
-            ws.cell(row, 5).value = transform(
-                dimensions if source_type == "supplier_cart" and dimensions else unit
-            )
-            ws.cell(row, 7).value = _excel_number(quantity)
-            ws.cell(row, 10).value = _excel_number(_decimal(item.get("unit_price", 0)))
-            ws.cell(row, 11).value = transform(url)
-            if warning:
-                ws.cell(row, 4).fill = PatternFill("solid", fgColor=WARNING_FILL)
-            ws.row_dimensions[row].height = 72
-            _add_catalog_image(ws, row, item.get("image_url"), images_root, code, source_type)
 
         _set_column_widths(ws)
         wb.save(output)
@@ -132,7 +110,9 @@ def create_catalog_quotation_workbook(
     return output
 
 
-def _write_headers(ws) -> None:
+def write_catalog_quotation_headers(
+    ws, extra_headers: dict[int, str] | None = None
+) -> None:
     headers = {
         1: "No.",
         2: "Item",
@@ -143,11 +123,66 @@ def _write_headers(ws) -> None:
         10: "List Price",
         11: "URL",
     }
+    headers.update(extra_headers or {})
     for col, title in headers.items():
         cell = ws.cell(7, col)
         cell.value = title
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="0B2F6B")
+
+
+def write_catalog_quotation_item(
+    ws,
+    *,
+    row: int,
+    index: int,
+    item: dict[str, Any],
+    source_type: str,
+    images_root: Path,
+    text_transform: Callable[[object], str],
+    image_file_key: str | None = None,
+) -> None:
+    code = str(item.get("code") or item.get("sku") or "").strip()
+    name = str(item.get("name", "")).strip()
+    unit = str(item.get("unit", "")).strip()
+    attributes = (
+        item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    )
+    dimensions = str(attributes.get("dimensions") or "").strip()
+    url = str(item.get("product_url", "") or "").strip()
+    if source_type == "supplier_cart":
+        quantity_precision = 6 if _is_square_meter_unit(unit) else 0
+    elif source_type == "tarkett_cart":
+        quantity_precision = 6
+    else:
+        quantity_precision = 3
+    quantity = parse_commercial_quantity(
+        item.get("quantity", 0),
+        item_label=code or name or str(index),
+        max_decimal_places=quantity_precision,
+    )
+    description, warning = _description_for_item(item, code, url, quantity)
+    ws.cell(row, 1).value = index
+    ws.cell(row, 2).value = text_transform(name)
+    ws.cell(row, 4).value = text_transform(description)
+    ws.cell(row, 5).value = text_transform(
+        dimensions if source_type == "supplier_cart" and dimensions else unit
+    )
+    ws.cell(row, 7).value = _excel_number(quantity)
+    ws.cell(row, 10).value = _excel_number(_decimal(item.get("unit_price", 0)))
+    ws.cell(row, 11).value = text_transform(url)
+    if warning:
+        ws.cell(row, 4).fill = PatternFill("solid", fgColor=WARNING_FILL)
+    ws.row_dimensions[row].height = 72
+    _add_catalog_image(
+        ws,
+        row,
+        item.get("image_url"),
+        images_root,
+        code,
+        source_type,
+        destination_key=image_file_key,
+    )
 
 
 def _description_for_item(
@@ -192,7 +227,7 @@ def _description_for_item(
         parts.append(f"Disponibilidad: {availability}")
     if url:
         parts.append(f"URL: {url}")
-    warnings = [
+    derived_warnings = [
         warning
         for warning in (
             "Codigo por verificar" if item.get("code_status") == "needs_review" else "",
@@ -202,11 +237,44 @@ def _description_for_item(
         )
         if warning
     ]
-    raw_warnings = item.get("warnings") or []
-    if isinstance(raw_warnings, list):
-        warnings.extend(str(value).strip() for value in raw_warnings if str(value).strip())
+    warnings = _merge_catalog_warnings(derived_warnings, item.get("warnings"))
     parts.extend(warnings)
     return " | ".join(part for part in parts if part), " | ".join(warnings)
+
+
+def _catalog_warning_key(value: object) -> str:
+    text = " ".join(str(value or "").strip().casefold().split())
+    normalized = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(character)
+    )
+    for category in (
+        "precio por confirmar",
+        "imagen de referencia",
+        "codigo por verificar",
+        "existencia insuficiente",
+        "producto agotado",
+        "agotado",
+    ):
+        if category in normalized:
+            return "agotado" if category in {"producto agotado", "agotado"} else category
+    return normalized
+
+
+def _merge_catalog_warnings(derived: list[str], raw: object) -> list[str]:
+    candidates = [*derived]
+    if isinstance(raw, list):
+        candidates.extend(str(value).strip() for value in raw if str(value).strip())
+    result = []
+    seen = set()
+    for warning in candidates:
+        key = _catalog_warning_key(warning)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(warning)
+    return result
 
 
 def _availability_bucket_summary(item: dict[str, Any], attributes: dict[str, Any]) -> str:
@@ -269,8 +337,37 @@ def _set_column_widths(ws) -> None:
     ws.column_dimensions["K"].width = 42
 
 
-def _add_catalog_image(ws, row: int, image_url: Any, image_dir: Path, code: str, source_type: str) -> None:
-    image_path = _download_catalog_image(image_url, image_dir, code, source_type)
+def _add_catalog_image(
+    ws,
+    row: int,
+    image_url: Any,
+    image_dir: Path,
+    code: str,
+    source_type: str,
+    destination_key: str | None = None,
+) -> None:
+    clean_url = str(image_url or "").strip()
+    if not clean_url:
+        return
+    cache = getattr(ws, "_mobiliti_catalog_image_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(ws, "_mobiliti_catalog_image_cache", cache)
+    cache_key = (source_type, clean_url)
+    if cache_key in cache:
+        image_path = cache[cache_key]
+    elif destination_key is None:
+        image_path = _download_catalog_image(image_url, image_dir, code, source_type)
+        cache[cache_key] = image_path
+    else:
+        image_path = _download_catalog_image(
+            image_url,
+            image_dir,
+            code,
+            source_type,
+            destination_key=destination_key,
+        )
+        cache[cache_key] = image_path
     if not image_path:
         return
     try:
@@ -296,7 +393,13 @@ class _OfficialRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _download_catalog_image(url: Any, image_dir: Path, code: str, source_type: str) -> Path | None:
+def _download_catalog_image(
+    url: Any,
+    image_dir: Path,
+    code: str,
+    source_type: str,
+    destination_key: str | None = None,
+) -> Path | None:
     clean_url = str(url or "").strip()
     allowed_hosts = _allowed_image_hosts(source_type)
     if not allowed_hosts:
@@ -320,8 +423,10 @@ def _download_catalog_image(url: Any, image_dir: Path, code: str, source_type: s
         if not data or len(data) > MAX_IMAGE_BYTES:
             return None
         suffix = mimetypes.guess_extension(content_type) or Path(urlsplit(clean_url).path).suffix or ".jpg"
-        safe_code = re.sub(r"[^A-Za-z0-9_-]+", "_", code or "producto")
-        destination = image_dir / f"{safe_code}{suffix}"
+        safe_key = re.sub(
+            r"[^A-Za-z0-9_-]+", "_", destination_key or code or "producto"
+        )
+        destination = image_dir / f"{safe_key}{suffix}"
         destination.write_bytes(data)
         return destination
     except Exception:

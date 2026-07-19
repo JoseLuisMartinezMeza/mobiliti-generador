@@ -314,9 +314,13 @@ def test_mixed_constructor_rejects_wrong_direct_rate_base_currency(monkeypatch, 
         build_mixed_catalog_cart_payload([row], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
 
 
-def test_mixed_catalog_module_copies_are_byte_identical():
-    paths = [Path("mobiliti_saas/quote_engine/mixed_catalog.py"), Path("mobiliti_saas/web/mobiliti_saas/quote_engine/mixed_catalog.py")]
-    assert len({hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}) == 1
+def test_quote_engine_module_copies_are_byte_identical():
+    for module in ("catalog_cart.py", "mixed_catalog.py"):
+        paths = [
+            Path("mobiliti_saas/quote_engine") / module,
+            Path("mobiliti_saas/web/mobiliti_saas/quote_engine") / module,
+        ]
+        assert len({hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}) == 1
 
 
 @pytest.fixture
