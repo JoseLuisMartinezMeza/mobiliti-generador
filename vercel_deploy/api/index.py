@@ -18,11 +18,12 @@ import hmac
 import io
 import re
 import threading
+import unicodedata
 import urllib.request
 import urllib.error
 import warnings
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import quote, unquote, urlparse
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -105,6 +106,7 @@ DEV_PUBLIC_BASE_URL = os.environ.get("MOBILITI_DEV_PUBLIC_BASE_URL", "http://127
 DEV_USER_EMAIL = os.environ.get("MOBILITI_DEV_USER_EMAIL", "dev@mobiliti.local")
 DEV_USER_PASSWORD = os.environ.get("MOBILITI_DEV_USER_PASSWORD", "dev12345")
 _DEV_CATALOG_RESERVATION_LOCK = threading.RLock()
+_MIXED_CART_RESERVATION_LOCK = _DEV_CATALOG_RESERVATION_LOCK
 TARKETT_CATALOG_PATH = os.environ.get("TARKETT_CATALOG_PATH")
 TARKETT_CATALOG_DB_ENABLED = _env_bool("TARKETT_CATALOG_DB_ENABLED", bool(os.environ.get("VERCEL")))
 TARKETT_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("TARKETT_CATALOG_DB_TTL_SECONDS", "300")))
@@ -938,65 +940,340 @@ def db_list_tarkett_reservations(status: str = "active"):
     )
 
 
-def db_create_tarkett_reservations(usuario_id: int, quote_job_id: str, lines: list[dict]):
-    now = _iso(datetime.now(timezone.utc))
-    rows = [
+_MIXED_RESERVATION_CATALOGS = (
+    "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro"
+)
+
+
+def _mixed_reservation_decimal(value, field, *, positive):
+    if not isinstance(value, str) or len(value) > 64 or not re.fullmatch(
+        r"(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,6})?", value
+    ):
+        raise RuntimeError("Reserva mixta invalida")
+    try:
+        number = Decimal(value)
+    except (InvalidOperation, TypeError, ValueError):
+        raise RuntimeError("Reserva mixta invalida") from None
+    scale = max(-number.as_tuple().exponent, 0)
+    lower_ok = number > 0 if positive else number >= 0
+    maximum = Decimal("1000000") if positive else Decimal("1000000000")
+    if not number.is_finite() or not lower_ok or number > maximum or scale > 6:
+        raise RuntimeError("Reserva mixta invalida")
+    return f"{number:.6f}"
+
+
+def _mixed_reservation_text(value, field, *, allow_empty=False):
+    if not isinstance(value, str):
+        raise RuntimeError("Reserva mixta invalida")
+    text = value.strip()
+    if (not text and not allow_empty) or len(text) > 500:
+        raise RuntimeError("Reserva mixta invalida")
+    if any(unicodedata.category(character) in {"Cc", "Cf", "Cs"} for character in text):
+        raise RuntimeError("Reserva mixta invalida")
+    return text
+
+
+def _mixed_reservation_result_decimal(value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"(?:0|[1-9][0-9]{0,13})(?:\.[0-9]{1,6})?", value
+    ):
+        raise RuntimeError("Respuesta de reserva mixta invalida")
+    number = Decimal(value)
+    if not number.is_finite() or number > Decimal("99999999999999.999999"):
+        raise RuntimeError("Respuesta de reserva mixta invalida")
+    return f"{number:.6f}"
+
+
+def _normalize_mixed_reservation_groups(groups):
+    if not isinstance(groups, list) or len(groups) > 7:
+        raise RuntimeError("Reserva mixta invalida")
+    normalized = []
+    seen_catalogs = set()
+    seen_keys = set()
+    total = 0
+    for group in groups:
+        if not isinstance(group, dict) or set(group) != {"catalog", "items"}:
+            raise RuntimeError("Reserva mixta invalida")
+        catalog = str(group.get("catalog") or "").strip()
+        items = group.get("items")
+        if catalog not in _MIXED_RESERVATION_CATALOGS or catalog in seen_catalogs:
+            raise RuntimeError("Reserva mixta invalida")
+        if not isinstance(items, list) or not items:
+            raise RuntimeError("Reserva mixta invalida")
+        seen_catalogs.add(catalog)
+        clean_items = []
+        for item in items:
+            if not isinstance(item, dict) or set(item) != {"identity", "sku", "quantity", "stock"}:
+                raise RuntimeError("Reserva mixta invalida")
+            identity = _mixed_reservation_text(item.get("identity"), "identity")
+            sku = _mixed_reservation_text(
+                item.get("sku"), "sku", allow_empty=catalog in {"sonara", "lumbro"}
+            )
+            key = (catalog, identity)
+            if key in seen_keys:
+                raise RuntimeError("Reserva mixta invalida")
+            seen_keys.add(key)
+            clean_items.append({
+                "identity": identity,
+                "sku": sku,
+                "quantity": _mixed_reservation_decimal(
+                    item.get("quantity"), "quantity", positive=True
+                ),
+                "stock": _mixed_reservation_decimal(
+                    item.get("stock"), "stock", positive=False
+                ),
+            })
+            total += 1
+            if total > 500:
+                raise RuntimeError("Reserva mixta invalida")
+        normalized.append({
+            "catalog": catalog,
+            "items": sorted(clean_items, key=lambda row: row["identity"]),
+        })
+    return sorted(
+        normalized, key=lambda group: _MIXED_RESERVATION_CATALOGS.index(group["catalog"])
+    )
+
+
+def _dev_reserve_mixed_cart(clean_user_id, clean_job_id, normalized):
+    with _MIXED_CART_RESERVATION_LOCK:
+        data = _dev_load()
+        job = next(
+            (row for row in data.get("quote_jobs", []) if str(row.get("id")) == clean_job_id),
+            None,
+        )
+        if (
+            not job
+            or int(job.get("usuario_id") or 0) != clean_user_id
+            or job.get("status") != "draft"
+        ):
+            raise RuntimeError("Cotizacion de reserva mixta invalida")
+
+        tables = {
+            "tarkett": data.setdefault("tarkett_reservations", []),
+            "offiho": data.setdefault("offiho_reservations", []),
+            "supplier": data.setdefault("catalog_reservations", []),
+        }
+        if any(
+            str(row.get("quote_job_id") or "") == clean_job_id
+            for rows in tables.values() for row in rows
+        ):
+            raise RuntimeError("La cotizacion ya tiene reservas mixtas")
+
+        now = _iso(datetime.now(timezone.utc))
+        snapshot = []
+        pending = {name: [] for name in tables}
+        for group in normalized:
+            catalog = group["catalog"]
+            table_name = catalog if catalog in {"tarkett", "offiho"} else "supplier"
+            identity_field = "product_code" if table_name != "supplier" else "internal_id"
+            for item in group["items"]:
+                reserved_before = Decimal(0)
+                reserved_by_others = False
+                for row in tables[table_name]:
+                    same_identity = row.get(identity_field) == item["identity"]
+                    same_supplier = table_name != "supplier" or row.get("supplier") == catalog
+                    if not same_identity or not same_supplier or row.get("status") != "active":
+                        continue
+                    try:
+                        stored = Decimal(str(row.get("quantity")))
+                    except (InvalidOperation, TypeError, ValueError):
+                        raise RuntimeError("Reserva mixta almacenada invalida") from None
+                    if not stored.is_finite() or stored <= 0:
+                        raise RuntimeError("Reserva mixta almacenada invalida")
+                    reserved_before += stored
+                    if reserved_before > Decimal("99999999999999.999999"):
+                        raise RuntimeError("Reserva mixta almacenada invalida")
+                    reserved_by_others |= int(row.get("usuario_id") or 0) != clean_user_id
+
+                quantity = Decimal(item["quantity"])
+                stock = Decimal(item["stock"])
+                available_before = max(stock - reserved_before, Decimal(0))
+                snapshot.append({
+                    "catalog": catalog,
+                    "identity": item["identity"],
+                    "reserved_before": f"{reserved_before:.6f}",
+                    "available_before": f"{available_before:.6f}",
+                    "insufficient": quantity > available_before,
+                    "reserved_by_others": reserved_by_others,
+                })
+                common = {
+                    "id": str(uuid.uuid4()), "usuario_id": clean_user_id,
+                    "quote_job_id": clean_job_id, "quantity": item["quantity"],
+                    "status": "active", "created_at": now, "updated_at": now,
+                }
+                if table_name == "supplier":
+                    pending[table_name].append({
+                        **common, "supplier": catalog, "internal_id": item["identity"],
+                        "sku": item["sku"],
+                    })
+                else:
+                    pending[table_name].append({
+                        **common, "product_code": item["identity"]
+                    })
+
+        if snapshot:
+            for name, rows in pending.items():
+                tables[name].extend(rows)
+            _dev_save(data)
+        return snapshot
+
+
+def _validate_mixed_reservation_response(response, normalized):
+    fields = {
+        "catalog", "identity", "reserved_before", "available_before",
+        "insufficient", "reserved_by_others",
+    }
+    expected = {
+        (group["catalog"], item["identity"]): item
+        for group in normalized for item in group["items"]
+    }
+    if not isinstance(response, list) or len(response) != len(expected):
+        raise RuntimeError("Respuesta de reserva mixta invalida")
+    seen = set()
+    result = []
+    for candidate in response:
+        if not isinstance(candidate, dict) or set(candidate) != fields:
+            raise RuntimeError("Respuesta de reserva mixta invalida")
+        key = (candidate.get("catalog"), candidate.get("identity"))
+        if key not in expected or key in seen:
+            raise RuntimeError("Respuesta de reserva mixta invalida")
+        seen.add(key)
+        reserved = _mixed_reservation_result_decimal(candidate.get("reserved_before"))
+        available = _mixed_reservation_result_decimal(candidate.get("available_before"))
+        if type(candidate.get("insufficient")) is not bool or type(
+            candidate.get("reserved_by_others")
+        ) is not bool:
+            raise RuntimeError("Respuesta de reserva mixta invalida")
+        item = expected[key]
+        expected_available = max(
+            Decimal(item["stock"]) - Decimal(reserved), Decimal(0)
+        )
+        expected_insufficient = Decimal(item["quantity"]) > expected_available
+        if Decimal(available) != expected_available or candidate["insufficient"] != expected_insufficient:
+            raise RuntimeError("Respuesta de reserva mixta invalida")
+        result.append({
+            "catalog": key[0], "identity": key[1],
+            "reserved_before": reserved, "available_before": available,
+            "insufficient": candidate["insufficient"],
+            "reserved_by_others": candidate["reserved_by_others"],
+        })
+    if seen != set(expected):
+        raise RuntimeError("Respuesta de reserva mixta invalida")
+    return sorted(
+        result,
+        key=lambda row: (
+            _MIXED_RESERVATION_CATALOGS.index(row["catalog"]), row["identity"]
+        ),
+    )
+
+
+def db_reserve_mixed_cart(usuario_id, quote_job_id, groups):
+    try:
+        clean_user_id = int(usuario_id)
+        clean_job_id = str(uuid.UUID(str(quote_job_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise RuntimeError("Cotizacion de reserva mixta invalida") from None
+    if clean_user_id <= 0:
+        raise RuntimeError("Cotizacion de reserva mixta invalida")
+    normalized = _normalize_mixed_reservation_groups(groups)
+    if DEV_MODE:
+        response = _dev_reserve_mixed_cart(clean_user_id, clean_job_id, normalized)
+    elif _use_postgres():
+        rows = _pg_rows(
+            "SELECT saas_reserve_mixed_cart(%s, %s, %s::jsonb) AS snapshot",
+            (clean_user_id, clean_job_id, json.dumps(normalized, separators=(",", ":"))),
+        )
+        response = rows[0].get("snapshot") if len(rows) == 1 else None
+    else:
+        response = _supabase_req(
+            "POST",
+            "/rpc/saas_reserve_mixed_cart",
+            json_data={
+                "p_usuario_id": clean_user_id,
+                "p_quote_job_id": clean_job_id,
+                "p_groups": normalized,
+            },
+        )
+    return _validate_mixed_reservation_response(response, normalized)
+
+
+def _legacy_reservation_decimal(value, field: str, *, positive: bool) -> str:
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise RuntimeError("Reserva mixta invalida") from None
+    maximum = Decimal("1000000") if positive else Decimal("1000000000")
+    lower_ok = number > 0 if positive else number >= 0
+    if not number.is_finite() or not lower_ok or number > maximum:
+        raise RuntimeError("Reserva mixta invalida")
+    normalized = number.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+    if positive and normalized <= 0:
+        raise RuntimeError("Reserva mixta invalida")
+    return f"{normalized:.6f}"
+
+
+def _legacy_mixed_group(catalog: str, lines: list[dict]) -> list[dict]:
+    identity_field = "code" if catalog == "tarkett" else "inventory_key"
+    return [{
+        "catalog": catalog,
+        "items": [{
+            "identity": str(line[identity_field]),
+            "sku": str(line.get("sku") or line[identity_field]),
+            "quantity": _legacy_reservation_decimal(
+                line["quantity"], "quantity", positive=True
+            ),
+            "stock": _legacy_reservation_decimal(
+                line["available_quantity"], "stock", positive=False
+            ),
+        } for line in lines],
+    }]
+
+
+def _legacy_mixed_reservation_rows(catalog, usuario_id, quote_job_id, lines, snapshots):
+    identity_field = "code" if catalog == "tarkett" else "inventory_key"
+    snapshots_by_identity = {row["identity"]: row for row in snapshots}
+    return [
         {
-            "id": str(uuid.uuid4()),
-            "usuario_id": usuario_id,
-            "quote_job_id": quote_job_id,
-            "product_code": str(line["code"]),
-            "quantity": float(line["quantity"]),
+            "usuario_id": int(usuario_id),
+            "quote_job_id": str(quote_job_id),
+            "product_code": str(line[identity_field]),
+            "quantity": _legacy_reservation_decimal(
+                line["quantity"], "quantity", positive=True
+            ),
             "status": "active",
-            "created_at": now,
-            "updated_at": now,
+            "reserved_before": snapshots_by_identity[str(line[identity_field])]["reserved_before"],
+            "available_before": snapshots_by_identity[str(line[identity_field])]["available_before"],
+            "insufficient": snapshots_by_identity[str(line[identity_field])]["insufficient"],
+            "reserved_by_others": snapshots_by_identity[str(line[identity_field])]["reserved_by_others"],
         }
         for line in lines
     ]
-    if DEV_MODE:
-        data = _dev_load()
-        data.setdefault("tarkett_reservations", []).extend(rows)
-        _dev_save(data)
-        return rows
-    if _use_postgres():
-        created = []
-        for row in rows:
-            created.extend(
-                _pg_write(
-                    """
-                    INSERT INTO saas_tarkett_reservations
-                        (id, usuario_id, quote_job_id, product_code, quantity, status, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING *
-                    """,
-                    (
-                        row["id"],
-                        row["usuario_id"],
-                        row["quote_job_id"],
-                        row["product_code"],
-                        row["quantity"],
-                        row["status"],
-                        row["created_at"],
-                        row["updated_at"],
-                    ),
-                )
-            )
-        return created
-    return _supabase_req("POST", "/saas_tarkett_reservations", json_data=rows)
+
+
+def db_create_tarkett_reservations(usuario_id: int, quote_job_id: str, lines: list[dict]):
+    snapshots = db_reserve_mixed_cart(
+        usuario_id, quote_job_id, _legacy_mixed_group("tarkett", lines)
+    )
+    return _legacy_mixed_reservation_rows(
+        "tarkett", usuario_id, quote_job_id, lines, snapshots
+    )
 
 
 def db_release_tarkett_reservations(quote_job_id: str):
     now = _iso(datetime.now(timezone.utc))
     if DEV_MODE:
-        data = _dev_load()
-        released = []
-        for row in data.setdefault("tarkett_reservations", []):
-            if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
-                row["status"] = "released"
-                row["updated_at"] = now
-                released.append(row)
-        _dev_save(data)
-        return released
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            data = _dev_load()
+            released = []
+            for row in data.setdefault("tarkett_reservations", []):
+                if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
+                    row["status"] = "released"
+                    row["updated_at"] = now
+                    released.append(row)
+            if released:
+                _dev_save(data)
+            return released
     if _use_postgres():
         return _pg_rows(
             """
@@ -1032,64 +1309,28 @@ def db_list_offiho_reservations(status: str = "active"):
 
 
 def db_create_offiho_reservations(usuario_id: int, quote_job_id: str, lines: list[dict]):
-    now = _iso(datetime.now(timezone.utc))
-    rows = [
-        {
-            "id": str(uuid.uuid4()),
-            "usuario_id": usuario_id,
-            "quote_job_id": quote_job_id,
-            "product_code": str(line["inventory_key"]),
-            "quantity": float(line["quantity"]),
-            "status": "active",
-            "created_at": now,
-            "updated_at": now,
-        }
-        for line in lines
-    ]
-    if DEV_MODE:
-        data = _dev_load()
-        data.setdefault("offiho_reservations", []).extend(rows)
-        _dev_save(data)
-        return rows
-    if _use_postgres():
-        created = []
-        for row in rows:
-            created.extend(
-                _pg_write(
-                    """
-                    INSERT INTO saas_offiho_reservations
-                        (id, usuario_id, quote_job_id, product_code, quantity, status, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING *
-                    """,
-                    (
-                        row["id"],
-                        row["usuario_id"],
-                        row["quote_job_id"],
-                        row["product_code"],
-                        row["quantity"],
-                        row["status"],
-                        row["created_at"],
-                        row["updated_at"],
-                    ),
-                )
-            )
-        return created
-    return _supabase_req("POST", "/saas_offiho_reservations", json_data=rows)
+    snapshots = db_reserve_mixed_cart(
+        usuario_id, quote_job_id, _legacy_mixed_group("offiho", lines)
+    )
+    return _legacy_mixed_reservation_rows(
+        "offiho", usuario_id, quote_job_id, lines, snapshots
+    )
 
 
 def db_release_offiho_reservations(quote_job_id: str):
     now = _iso(datetime.now(timezone.utc))
     if DEV_MODE:
-        data = _dev_load()
-        released = []
-        for row in data.setdefault("offiho_reservations", []):
-            if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
-                row["status"] = "released"
-                row["updated_at"] = now
-                released.append(row)
-        _dev_save(data)
-        return released
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            data = _dev_load()
+            released = []
+            for row in data.setdefault("offiho_reservations", []):
+                if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
+                    row["status"] = "released"
+                    row["updated_at"] = now
+                    released.append(row)
+            if released:
+                _dev_save(data)
+            return released
     if _use_postgres():
         return _pg_rows(
             """
@@ -1105,6 +1346,120 @@ def db_release_offiho_reservations(quote_job_id: str):
         f"/saas_offiho_reservations?quote_job_id=eq.{quote_job_id}&status=eq.active",
         json_data={"status": "released", "updated_at": now},
     )
+
+
+def _dev_release_mixed_cart(clean_job_id):
+    with _MIXED_CART_RESERVATION_LOCK:
+        data = _dev_load()
+        job = next(
+            (row for row in data.get("quote_jobs", []) if str(row.get("id")) == clean_job_id),
+            None,
+        )
+        if not job:
+            raise RuntimeError("Cotizacion de reserva mixta invalida")
+        now = _iso(datetime.now(timezone.utc))
+        changed = False
+        if job.get("status") == "draft":
+            job.update({
+                "status": "failed",
+                "error_message": job.get("error_message") or "mixed reservations released",
+                "updated_at": now,
+            })
+            changed = True
+        counts = {"tarkett": 0, "offiho": 0, "supplier": 0}
+        for name, key in (
+            ("tarkett_reservations", "tarkett"),
+            ("offiho_reservations", "offiho"),
+            ("catalog_reservations", "supplier"),
+        ):
+            for row in data.setdefault(name, []):
+                if (
+                    str(row.get("quote_job_id") or "") == clean_job_id
+                    and row.get("status") == "active"
+                ):
+                    row.update({"status": "released", "updated_at": now})
+                    counts[key] += 1
+                    changed = True
+        if changed:
+            _dev_save(data)
+        return counts
+
+
+def _validate_mixed_release_response(response):
+    if (
+        not isinstance(response, dict)
+        or set(response) != {"tarkett", "offiho", "supplier"}
+        or any(type(response[key]) is not int or response[key] < 0 for key in response)
+    ):
+        raise RuntimeError("Respuesta de liberacion mixta invalida")
+    return response
+
+
+def db_release_mixed_cart(quote_job_id: str) -> dict:
+    try:
+        clean_job_id = str(uuid.UUID(str(quote_job_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise RuntimeError("Cotizacion de reserva mixta invalida") from None
+    if DEV_MODE:
+        response = _dev_release_mixed_cart(clean_job_id)
+    elif _use_postgres():
+        rows = _pg_rows(
+            "SELECT saas_release_mixed_cart(%s) AS snapshot", (clean_job_id,)
+        )
+        response = rows[0].get("snapshot") if len(rows) == 1 else None
+    else:
+        response = _supabase_req(
+            "POST",
+            "/rpc/saas_release_mixed_cart",
+            json_data={"p_quote_job_id": clean_job_id},
+        )
+    return _validate_mixed_release_response(response)
+
+
+def db_queue_mixed_quote_job(quote_job_id: str, metadata: dict) -> dict:
+    try:
+        clean_job_id = str(uuid.UUID(str(quote_job_id)))
+    except (TypeError, ValueError, AttributeError):
+        raise RuntimeError("Cotizacion mixta invalida") from None
+    if not isinstance(metadata, dict):
+        raise RuntimeError("Cotizacion mixta invalida")
+    now = _iso(datetime.now(timezone.utc))
+    payload = {
+        "status": "queued", "metadata": deepcopy(metadata),
+        "error_message": None, "updated_at": now,
+    }
+    if DEV_MODE:
+        with _MIXED_CART_RESERVATION_LOCK:
+            data = _dev_load()
+            matches = [
+                row for row in data.get("quote_jobs", [])
+                if str(row.get("id")) == clean_job_id
+            ]
+            if len(matches) != 1 or matches[0].get("status") != "draft":
+                raise RuntimeError("La cotizacion mixta ya no esta en borrador")
+            matches[0].update(payload)
+            _dev_save(data)
+            row = deepcopy(matches[0])
+    elif _use_postgres():
+        row = _pg_write(
+            """
+            UPDATE saas_quote_jobs
+            SET status = 'queued', metadata = %s, error_message = NULL, updated_at = %s
+            WHERE id = %s AND status = 'draft'
+            RETURNING *
+            """,
+            (payload["metadata"], now, clean_job_id),
+        )
+    else:
+        rows = _supabase_req(
+            "PATCH", "/saas_quote_jobs",
+            params={"id": f"eq.{clean_job_id}", "status": "eq.draft"},
+            json_data=payload,
+        )
+        row = rows[0] if isinstance(rows, list) and len(rows) == 1 else None
+    if not isinstance(row, dict) or row.get("status") != "queued":
+        raise RuntimeError("La cotizacion mixta ya no esta en borrador")
+    return row
 
 
 def _catalog_supplier(value: object) -> str:
@@ -1538,15 +1893,17 @@ def db_create_catalog_reservations(
 def db_release_catalog_reservations(quote_job_id: str) -> list[dict]:
     now = _iso(datetime.now(timezone.utc))
     if DEV_MODE:
-        data = _dev_load()
-        released = []
-        for row in data.setdefault("catalog_reservations", []):
-            if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
-                row["status"] = "released"
-                row["updated_at"] = now
-                released.append(row)
-        _dev_save(data)
-        return released
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            data = _dev_load()
+            released = []
+            for row in data.setdefault("catalog_reservations", []):
+                if str(row.get("quote_job_id")) == str(quote_job_id) and row.get("status") == "active":
+                    row["status"] = "released"
+                    row["updated_at"] = now
+                    released.append(row)
+            if released:
+                _dev_save(data)
+            return released
     _require_catalog_service_backend()
     if _use_postgres():
         return _pg_rows(
@@ -2693,6 +3050,10 @@ def _release_quote_reservations(job: dict) -> None:
     job_id = str(job.get("id") or "").strip()
     if not job_id:
         raise RuntimeError("Cotizacion sin identificador")
+    metadata = _quote_job_metadata(job)
+    if metadata.get("source_type") == "mixed_catalog_cart":
+        db_release_mixed_cart(job_id)
+        return
     db_release_tarkett_reservations(job_id)
     db_release_offiho_reservations(job_id)
     db_release_catalog_reservations(job_id)

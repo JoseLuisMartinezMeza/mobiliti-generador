@@ -6,6 +6,7 @@ SETUP = Path("mobiliti_saas/supabase_setup")
 CATALOG_MIGRATION = SETUP / "2026_07_multi_supplier_catalogs.sql"
 JOBS_RLS_MIGRATION = SETUP / "2026_07_jobs_rls.sql"
 BOOTSTRAP = SETUP / "create_tables.sql"
+MIXED_MIGRATION = SETUP / "2026_07_mixed_catalog_cart.sql"
 SQL_FILES = (CATALOG_MIGRATION, BOOTSTRAP)
 EXPECTED_SUPPLIERS = ("cr-global", "sonara", "sunon", "alma", "lumbro")
 SUPPLIER_ALLOWLIST_CONTEXTS = (
@@ -32,8 +33,40 @@ def _function_sql(sql, name):
     start = sql.index(f"CREATE OR REPLACE FUNCTION {name}")
     end = sql.find("\nCREATE OR REPLACE FUNCTION ", start + 1)
     if end == -1:
-        end = sql.index("\nALTER TABLE saas_catalog_sources ENABLE", start)
+        end = sql.find("\nALTER TABLE saas_catalog_sources ENABLE", start)
+    if end == -1:
+        end = len(sql)
     return sql[start:end]
+
+
+def test_mixed_cart_rpcs_are_additive_atomic_and_service_role_only():
+    for path in (MIXED_MIGRATION, BOOTSTRAP):
+        sql = path.read_text(encoding="utf-8")
+        normalized = re.sub(r"\s+", " ", sql.lower())
+        for name in ("saas_reserve_mixed_cart", "saas_release_mixed_cart"):
+            function = _function_sql(sql, name)
+            assert "SECURITY DEFINER" in function
+            assert "SET search_path = public, pg_temp" in function
+        assert "pg_advisory_xact_lock" in normalized
+        assert "order by catalog, identity" in normalized
+        assert "pg_temp.mixed_reservation_lines" in normalized
+        assert "to_char(" in normalized
+        release = _function_sql(sql, "saas_release_mixed_cart").lower()
+        assert "from saas_quote_jobs" in release
+        assert "for update" in release
+        assert "status = 'failed'" in release
+        assert "revoke all on function saas_reserve_mixed_cart" in normalized
+        assert "revoke all on function saas_release_mixed_cart" in normalized
+        assert "from public" in normalized
+        assert "from anon" in normalized
+        assert "from authenticated" in normalized
+        assert "grant execute on function saas_reserve_mixed_cart" in normalized
+        assert "grant execute on function saas_release_mixed_cart" in normalized
+        assert "to service_role" in normalized
+        assert "create temp table if not exists mixed_reservation_lines" in normalized
+        assert "delete from pg_temp.mixed_reservation_lines" in normalized
+        assert "drop table" not in normalized
+        assert "truncate" not in normalized
 
 
 def _statement(sql, prefix):

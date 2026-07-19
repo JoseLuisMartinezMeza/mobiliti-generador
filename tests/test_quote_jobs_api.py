@@ -2,6 +2,8 @@ import os
 import sys
 import hashlib
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from datetime import date, timedelta
 from decimal import Decimal
@@ -20,6 +22,43 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-32-chars-long!!!!!")
 import index
 from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
 from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
+
+
+JOB_MIXED_UUID = "11111111-1111-4111-8111-111111111111"
+JOB_A_UUID = "22222222-2222-4222-8222-222222222222"
+JOB_B_UUID = "33333333-3333-4333-8333-333333333333"
+
+
+def dev_state_with_draft_job(job_id, user_id=7):
+    return {
+        "quote_jobs": [{"id": job_id, "usuario_id": user_id, "status": "draft"}],
+        "tarkett_reservations": [],
+        "offiho_reservations": [],
+        "catalog_reservations": [],
+    }
+
+
+def dev_state_with_two_draft_jobs(first, second, user_id=7):
+    state = dev_state_with_draft_job(first, user_id)
+    state["quote_jobs"].append({"id": second, "usuario_id": user_id, "status": "draft"})
+    return state
+
+
+def configure_thread_safe_dev_store(monkeypatch, state):
+    store_lock = threading.Lock()
+
+    def load():
+        with store_lock:
+            return json.loads(json.dumps(state))
+
+    def save(data):
+        with store_lock:
+            state.clear()
+            state.update(json.loads(json.dumps(data)))
+
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "_dev_load", load)
+    monkeypatch.setattr(index, "_dev_save", save)
 
 
 def _client():
@@ -922,13 +961,17 @@ def test_catalog_quote_cleanup_preserves_job_when_release_fails(monkeypatch, sup
 
 
 def test_offiho_reservations_work_in_dev_mode_without_existing_data(monkeypatch):
-    store = {"quote_jobs": [], "tarkett_reservations": []}
+    store = dev_state_with_draft_job(JOB_MIXED_UUID)
     monkeypatch.setattr(index, "DEV_MODE", True)
     monkeypatch.setattr(index, "_dev_load", lambda: store)
     monkeypatch.setattr(index, "_dev_save", lambda data: None)
 
-    created = index.db_create_offiho_reservations(7, "job-1", [{"inventory_key": "OHE-405 NEGRO ALUFSEN", "quantity": 2}])
-    released = index.db_release_offiho_reservations("job-1")
+    created = index.db_create_offiho_reservations(7, JOB_MIXED_UUID, [{
+        "inventory_key": "OHE-405 NEGRO ALUFSEN",
+        "quantity": 2,
+        "available_quantity": Decimal("5"),
+    }])
+    released = index.db_release_offiho_reservations(JOB_MIXED_UUID)
 
     assert len(created) == 1
     assert store["tarkett_reservations"] == []
@@ -2460,6 +2503,210 @@ def test_deployable_api_copies_have_identical_sha256():
     hashes = {hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
     assert len(hashes) == 1
+
+
+def test_mixed_dev_reservation_saves_once_only_after_all_groups_validate(monkeypatch):
+    state = dev_state_with_draft_job(JOB_MIXED_UUID, user_id=7)
+    saves = []
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "_dev_load", lambda: json.loads(json.dumps(state)))
+    monkeypatch.setattr(index, "_dev_save", lambda data: saves.append(data))
+    groups = [
+        {"catalog": "tarkett", "items": [{"identity": "T-1", "sku": "T-1", "quantity": "1", "stock": "5"}]},
+        {"catalog": "alma", "items": [{"identity": "alma:desk", "sku": "AL-1", "quantity": "bad", "stock": "5"}]},
+    ]
+    with pytest.raises(RuntimeError, match="[Rr]eserva mixta"):
+        index.db_reserve_mixed_cart(7, JOB_MIXED_UUID, groups)
+    assert saves == []
+
+
+def test_mixed_dev_reservation_serializes_availability_under_one_lock(monkeypatch):
+    state = dev_state_with_two_draft_jobs(JOB_A_UUID, JOB_B_UUID, user_id=7)
+    configure_thread_safe_dev_store(monkeypatch, state)
+    groups = [{
+        "catalog": "offiho",
+        "items": [{"identity": "OFF-1", "sku": "OFF-1", "quantity": "3", "stock": "5"}],
+    }]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(index.db_reserve_mixed_cart, 7, JOB_A_UUID, groups)
+        second = pool.submit(index.db_reserve_mixed_cart, 7, JOB_B_UUID, groups)
+        snapshots = [first.result(), second.result()]
+    assert sorted(row[0]["reserved_before"] for row in snapshots) == ["0.000000", "3.000000"]
+    assert all(isinstance(row[0]["available_before"], str) for row in snapshots)
+
+
+def test_mixed_empty_reservation_validates_job_loads_once_and_never_saves(monkeypatch):
+    state = dev_state_with_draft_job(JOB_MIXED_UUID)
+    loads = []
+    saves = []
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "_dev_load", lambda: loads.append(True) or json.loads(json.dumps(state)))
+    monkeypatch.setattr(index, "_dev_save", lambda data: saves.append(data))
+
+    assert index.db_reserve_mixed_cart(7, JOB_MIXED_UUID, []) == []
+    assert loads == [True]
+    assert saves == []
+    with pytest.raises(RuntimeError, match="Cotizacion de reserva mixta invalida"):
+        index.db_reserve_mixed_cart(8, JOB_MIXED_UUID, [])
+
+
+def test_mixed_released_reservation_row_prevents_same_job_retry(monkeypatch):
+    state = dev_state_with_draft_job(JOB_MIXED_UUID)
+    state["tarkett_reservations"].append({
+        "quote_job_id": JOB_MIXED_UUID, "product_code": "T-1", "quantity": "1.000000",
+        "usuario_id": 7, "status": "released",
+    })
+    saves = []
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "_dev_load", lambda: json.loads(json.dumps(state)))
+    monkeypatch.setattr(index, "_dev_save", lambda data: saves.append(data))
+
+    with pytest.raises(RuntimeError, match="ya tiene reservas mixtas"):
+        index.db_reserve_mixed_cart(7, JOB_MIXED_UUID, [{
+            "catalog": "tarkett", "items": [
+                {"identity": "T-1", "sku": "T-1", "quantity": "1", "stock": "5"}
+            ],
+        }])
+    assert saves == []
+
+
+def test_mixed_remote_reservation_uses_one_rpc_and_validates_snapshot(monkeypatch):
+    captured = []
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "_use_postgres", lambda: False)
+
+    def request(method, path, params=None, json_data=None):
+        captured.append({"method": method, "path": path, "json_data": json_data})
+        return [{
+            "catalog": "tarkett", "identity": "T-1", "reserved_before": "0.000000",
+            "available_before": "5.000000", "insufficient": False,
+            "reserved_by_others": False,
+        }]
+
+    monkeypatch.setattr(index, "_supabase_req", request)
+    groups = [{"catalog": "tarkett", "items": [
+        {"identity": "T-1", "sku": "T-1", "quantity": "1", "stock": "5"}
+    ]}]
+    result = index.db_reserve_mixed_cart(7, JOB_MIXED_UUID, groups)
+    normalized_groups = [{"catalog": "tarkett", "items": [
+        {"identity": "T-1", "sku": "T-1", "quantity": "1.000000", "stock": "5.000000"}
+    ]}]
+    assert result[0]["reserved_before"] == "0.000000"
+    assert captured == [{
+        "method": "POST", "path": "/rpc/saas_reserve_mixed_cart",
+        "json_data": {"p_usuario_id": 7, "p_quote_job_id": JOB_MIXED_UUID, "p_groups": normalized_groups},
+    }]
+
+    monkeypatch.setattr(index, "_supabase_req", lambda *_args, **_kwargs: [{
+        "catalog": "tarkett", "identity": "UNKNOWN", "reserved_before": "0.000000",
+        "available_before": "5.000000", "insufficient": False, "reserved_by_others": False,
+    }])
+    with pytest.raises(RuntimeError, match="Respuesta de reserva mixta invalida"):
+        index.db_reserve_mixed_cart(7, JOB_MIXED_UUID, groups)
+
+
+def test_mixed_legacy_reservation_wrappers_project_six_place_decimals(monkeypatch):
+    calls = []
+    monkeypatch.setattr(index, "db_reserve_mixed_cart", lambda user, job, groups: calls.append(groups) or [{
+        "catalog": groups[0]["catalog"], "identity": groups[0]["items"][0]["identity"],
+        "reserved_before": "0.000000", "available_before": "5.000000",
+        "insufficient": False, "reserved_by_others": False,
+    }])
+
+    tarkett = index.db_create_tarkett_reservations(7, JOB_A_UUID, [
+        {"code": "T-1", "quantity": 1, "available_quantity": Decimal("5")}
+    ])
+    offiho = index.db_create_offiho_reservations(7, JOB_B_UUID, [
+        {"inventory_key": "OFF-1", "sku": "OFF-1", "quantity": 2.5, "available_quantity": 7}
+    ])
+
+    assert [call[0]["catalog"] for call in calls] == ["tarkett", "offiho"]
+    assert calls[0][0]["items"][0]["quantity"] == "1.000000"
+    assert calls[1][0]["items"][0]["stock"] == "7.000000"
+    assert tarkett[0]["product_code"] == "T-1"
+    assert offiho[0]["product_code"] == "OFF-1"
+
+
+def test_mixed_legacy_reservation_wrapper_matches_snapshot_by_identity(monkeypatch):
+    monkeypatch.setattr(index, "db_reserve_mixed_cart", lambda *_args: [
+        {
+            "catalog": "tarkett", "identity": "A", "reserved_before": "1.000000",
+            "available_before": "4.000000", "insufficient": False,
+            "reserved_by_others": True,
+        },
+        {
+            "catalog": "tarkett", "identity": "Z", "reserved_before": "2.000000",
+            "available_before": "3.000000", "insufficient": False,
+            "reserved_by_others": False,
+        },
+    ])
+    rows = index.db_create_tarkett_reservations(7, JOB_A_UUID, [
+        {"code": "Z", "quantity": 1, "available_quantity": 5},
+        {"code": "A", "quantity": 1, "available_quantity": 5},
+    ])
+    assert [(row["product_code"], row["reserved_before"]) for row in rows] == [
+        ("Z", "2.000000"), ("A", "1.000000")
+    ]
+
+
+def test_mixed_release_reservation_is_idempotent_and_blocks_queue(monkeypatch):
+    state = dev_state_with_draft_job(JOB_MIXED_UUID)
+    configure_thread_safe_dev_store(monkeypatch, state)
+    index.db_reserve_mixed_cart(7, JOB_MIXED_UUID, [{
+        "catalog": "alma", "items": [
+            {"identity": "alma:desk", "sku": "AL-1", "quantity": "1", "stock": "5"}
+        ],
+    }])
+
+    assert index.db_release_mixed_cart(JOB_MIXED_UUID) == {"tarkett": 0, "offiho": 0, "supplier": 1}
+    assert index.db_release_mixed_cart(JOB_MIXED_UUID) == {"tarkett": 0, "offiho": 0, "supplier": 0}
+    with pytest.raises(RuntimeError, match="ya no esta en borrador"):
+        index.db_queue_mixed_quote_job(JOB_MIXED_UUID, {"source_type": "mixed_catalog_cart"})
+    assert state["quote_jobs"][0]["status"] == "failed"
+    assert state["catalog_reservations"][0]["status"] == "released"
+
+
+def test_mixed_release_first_rejects_waiting_reservation(monkeypatch):
+    state = dev_state_with_draft_job(JOB_MIXED_UUID)
+    configure_thread_safe_dev_store(monkeypatch, state)
+
+    assert index.db_release_mixed_cart(JOB_MIXED_UUID) == {"tarkett": 0, "offiho": 0, "supplier": 0}
+    with pytest.raises(RuntimeError, match="Cotizacion de reserva mixta invalida"):
+        index.db_reserve_mixed_cart(7, JOB_MIXED_UUID, [{
+            "catalog": "offiho", "items": [
+                {"identity": "OFF-1", "sku": "OFF-1", "quantity": "1", "stock": "5"}
+            ],
+        }])
+    assert not state["offiho_reservations"]
+
+
+def test_mixed_reservation_cleanup_routes_atomically_for_mixed_source(monkeypatch):
+    calls = []
+    monkeypatch.setattr(index, "db_release_mixed_cart", lambda job_id: calls.append(("mixed", job_id)))
+    monkeypatch.setattr(index, "db_release_tarkett_reservations", lambda job_id: calls.append(("tarkett", job_id)))
+    monkeypatch.setattr(index, "db_release_offiho_reservations", lambda job_id: calls.append(("offiho", job_id)))
+    monkeypatch.setattr(index, "db_release_catalog_reservations", lambda job_id: calls.append(("supplier", job_id)))
+
+    index._release_quote_reservations({
+        "id": JOB_MIXED_UUID, "metadata": {"source_type": "mixed_catalog_cart"}
+    })
+    assert calls == [("mixed", JOB_MIXED_UUID)]
+
+
+def test_mixed_queue_reservation_postgres_and_supabase_are_compare_and_set(monkeypatch):
+    metadata = {"source_type": "mixed_catalog_cart"}
+    pg_calls = []
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "_use_postgres", lambda: True)
+    monkeypatch.setattr(index, "_pg_write", lambda sql, params: pg_calls.append((sql, params)) or {"status": "queued"})
+    index.db_queue_mixed_quote_job(JOB_MIXED_UUID, metadata)
+    assert "WHERE id = %s AND status = 'draft'" in pg_calls[0][0]
+
+    rest_calls = []
+    monkeypatch.setattr(index, "_use_postgres", lambda: False)
+    monkeypatch.setattr(index, "_supabase_req", lambda method, path, params=None, json_data=None: rest_calls.append((method, path, params, json_data)) or [{"status": "queued"}])
+    index.db_queue_mixed_quote_job(JOB_MIXED_UUID, metadata)
+    assert rest_calls[0][0:3] == ("PATCH", "/saas_quote_jobs", {"id": f"eq.{JOB_MIXED_UUID}", "status": "eq.draft"})
 
 
 def test_supplier_catalog_module_copies_have_identical_sha256():
