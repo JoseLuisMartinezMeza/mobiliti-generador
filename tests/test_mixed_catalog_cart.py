@@ -259,21 +259,17 @@ def test_mixed_catalog_reservations_have_authoritative_identities(frozen_mixed_p
 
 @pytest.mark.parametrize("catalog", MIXED_CATALOG_ORDER)
 def test_mixed_line_projection_has_exact_contract_for_each_family(frozen_mixed_payload, catalog):
-    from mobiliti_saas.quote_engine.mixed_catalog import MIXED_LINE_FIELDS, MIXED_CATALOG_LABELS
-    group = next(group for group in frozen_mixed_payload["groups"] if group["catalog"] == catalog)
-    line = group["items"][0]
-    assert set(line) == MIXED_LINE_FIELDS
-    assert line["supplier"] == MIXED_CATALOG_LABELS[catalog]
-    assert line["canonical_key"].startswith(f"{catalog}:")
-    assert line["quantity"].endswith("000000")
-    assert line["frozen_exchange_rate"] == group["exchange_rate"]
-    assert line["original_currency"] == group["base_currency"]
-    assert line["source_reference"]
-    assert isinstance(line["attributes"], dict)
-    assert line["reservation"] == {
-        "identity": line["reservation"]["identity"], "sku": line["reservation"]["sku"],
-        "quantity": line["quantity"], "stock": line["stock"],
+    expected_by_catalog = {
+        "tarkett": {"canonical_key":"tarkett:25731726","catalog":"tarkett","supplier":"Tarkett","code":"25731726","name":"Piso Tarkett","description":"","unit":"m2","quantity":"1.000000","unit_price":"100.00","discount_percent":"40.000000","original_currency":"MXN","original_unit_price":"100.000000","frozen_exchange_rate":"1.000000","source_reference":"tarkett:" + "a" * 64 + ":25731726","price_mode":"list","auto_electrification":True,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"10.000000","stock":"10.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"25731726","sku":"25731726","quantity":"1.000000","stock":"10.000000"}},
+        "offiho": {"canonical_key":"offiho:offiho:desk-1","catalog":"offiho","supplier":"Offiho","code":"OHE-1","name":"Escritorio","description":"","unit":"PZA","quantity":"1.000000","unit_price":"200.00","discount_percent":"40.000000","original_currency":"MXN","original_unit_price":"200.000000","frozen_exchange_rate":"1.000000","source_reference":"offiho:" + "b" * 64 + ":offiho:desk-1","price_mode":"list","auto_electrification":True,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"","attributes":{},"variant":"Negro","availability_type":"stocked","available_quantity":"8.000000","stock":"8.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"offiho:desk-1","sku":"OHE-1","quantity":"1.000000","stock":"8.000000"}},
+        "cr-global": {"canonical_key":"cr-global:[\"cr-global:desk-1\",\"\",[]]","catalog":"cr-global","supplier":"CR Global","code":"CR-GLOBAL:DESK-1","name":"Producto cr-global","description":"","unit":"pieza","quantity":"1.000000","unit_price":"100.00","discount_percent":"0.000000","original_currency":"MXN","original_unit_price":"100.000000","frozen_exchange_rate":"1.000000","source_reference":"cr-global:source","price_mode":"net","auto_electrification":False,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"Standard","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"5.000000","stock":"5.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"cr-global:desk-1","sku":"CR-GLOBAL:DESK-1","quantity":"1.000000","stock":"5.000000"}},
+        "sonara": {"canonical_key":"sonara:[\"sonara:desk-1\",\"\",[]]","catalog":"sonara","supplier":"Sonara","code":"SONARA:DESK-1","name":"Producto sonara","description":"","unit":"pieza","quantity":"1.000000","unit_price":"100.00","discount_percent":"0.000000","original_currency":"MXN","original_unit_price":"100.000000","frozen_exchange_rate":"1.000000","source_reference":"sonara:source","price_mode":"net","auto_electrification":False,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"Standard","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"5.000000","stock":"5.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"sonara:desk-1","sku":"SONARA:DESK-1","quantity":"1.000000","stock":"5.000000"}},
+        "sunon": {"canonical_key":"sunon:[\"sunon:desk-1\",\"\",[]]","catalog":"sunon","supplier":"Sunon","code":"SUNON:DESK-1","name":"Producto sunon","description":"","unit":"pieza","quantity":"1.000000","unit_price":"1850.00","discount_percent":"0.000000","original_currency":"USD","original_unit_price":"100.000000","frozen_exchange_rate":"18.500000","source_reference":"sunon:source","price_mode":"net","auto_electrification":False,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"Standard","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"5.000000","stock":"5.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"sunon:desk-1","sku":"SUNON:DESK-1","quantity":"1.000000","stock":"5.000000"}},
+        "alma": {"canonical_key":"alma:[\"alma:desk-1\",\"\",[]]","catalog":"alma","supplier":"ALMA","code":"ALMA:DESK-1","name":"Producto alma","description":"","unit":"pieza","quantity":"1.000000","unit_price":"1850.00","discount_percent":"0.000000","original_currency":"USD","original_unit_price":"100.000000","frozen_exchange_rate":"18.500000","source_reference":"alma:source","price_mode":"net","auto_electrification":False,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"Standard","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"5.000000","stock":"5.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"alma:desk-1","sku":"ALMA:DESK-1","quantity":"1.000000","stock":"5.000000"}},
+        "lumbro": {"canonical_key":"lumbro:[\"lumbro:desk-1\",\"\",[]]","catalog":"lumbro","supplier":"Lumbro","code":"LUMBRO:DESK-1","name":"Producto lumbro","description":"","unit":"pieza","quantity":"1.000000","unit_price":"100.00","discount_percent":"0.000000","original_currency":"MXN","original_unit_price":"100.000000","frozen_exchange_rate":"1.000000","source_reference":"lumbro:source","price_mode":"net","auto_electrification":False,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"Standard","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"5.000000","stock":"5.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"lumbro:desk-1","sku":"LUMBRO:DESK-1","quantity":"1.000000","stock":"5.000000"}},
     }
+    line = next(group for group in frozen_mixed_payload["groups"] if group["catalog"] == catalog)["items"][0]
+    assert line == expected_by_catalog[catalog]
 
 
 def test_mixed_cart_offiho_missing_price_insufficient_stock_preserves_all_authoritative_fields(mixed_catalogs, rate_rows):
@@ -307,6 +303,15 @@ def test_mixed_constructor_rejects_wrong_base_currency_in_source_fixture(mixed_c
     item["base_currency"] = "USD" if item["base_currency"] == "MXN" else "MXN"
     with pytest.raises(ValueError, match=catalog):
         build_mixed_catalog_cart_payload([{"catalog": catalog, "internal_id": f"{catalog}:desk-1", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
+
+
+@pytest.mark.parametrize(("catalog", "row"), (("tarkett", {"catalog":"tarkett","code":"25731726","quantity":"1"}), ("offiho", {"catalog":"offiho","inventory_key":"offiho:desk-1","quantity":"1"})))
+def test_mixed_constructor_rejects_wrong_direct_rate_base_currency(monkeypatch, mixed_catalogs, rate_rows, catalog, row):
+    import mobiliti_saas.quote_engine.mixed_catalog as module
+    from mobiliti_saas.quote_engine.supplier_catalog import RateSnapshot
+    monkeypatch.setattr(module, "resolve_conversion_rate", lambda *args: RateSnapshot("USD", "MXN", Decimal("1.000000"), "saas_exchange_rates", date(2026, 7, 19), "2026-07-19T12:00:00+00:00"))
+    with pytest.raises(ValueError, match=catalog):
+        build_mixed_catalog_cart_payload([row], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
 
 
 def test_mixed_catalog_module_copies_are_byte_identical():
