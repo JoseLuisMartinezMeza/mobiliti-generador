@@ -550,6 +550,327 @@ def test_process_job_converts_offiho_json_before_generator(monkeypatch):
     assert seen["metadata"]["offiho_converted"] is True
 
 
+def _valid_mixed_worker_payload():
+    rate = {
+        "catalog": "tarkett",
+        "base_currency": "MXN",
+        "quote_currency": "EUR",
+        "exchange_rate": "0.048780",
+        "rate_source": "saas_exchange_rates",
+        "rate_effective_date": "2026-07-19",
+        "rate_retrieved_at": "2026-07-19T20:00:00Z",
+    }
+    line = {
+        "canonical_key": "tarkett:T-1",
+        "catalog": "tarkett",
+        "supplier": "Tarkett",
+        "code": "T-1",
+        "name": "Piso Tarkett",
+        "description": "Piso de prueba",
+        "unit": "M2",
+        "quantity": "1.000000",
+        "unit_price": "4.88",
+        "discount_percent": "40.000000",
+        "original_currency": "MXN",
+        "original_unit_price": "100.000000",
+        "frozen_exchange_rate": "0.048780",
+        "source_reference": "tarkett:test:T-1",
+        "price_mode": "list",
+        "auto_electrification": True,
+        "tax_rate": "0.160000",
+        "image_url": "",
+        "product_url": "",
+        "warnings": [],
+        "code_status": "verified",
+        "configuration": "",
+        "attributes": {},
+        "variant": "",
+        "availability_type": "stocked",
+        "available_quantity": "10.000000",
+        "stock": "10.000000",
+        "lead_time": "",
+        "price_source": "catalog",
+        "stock_status": "available",
+        "image_kind": "placeholder",
+        "reservation": {
+            "identity": "T-1",
+            "sku": "T-1",
+            "quantity": "1.000000",
+            "stock": "10.000000",
+        },
+    }
+    return {
+        "source_type": "mixed_catalog_cart",
+        "quote_currency": "EUR",
+        "created_at": "2026-07-19T20:00:00+00:00",
+        "item_count": 1,
+        "groups": [
+            {
+                "catalog": "tarkett",
+                "catalog_source_hash": "a" * 64,
+                "base_currency": "MXN",
+                "quote_currency": "EUR",
+                "exchange_rate": "0.048780",
+                "rate_source": "saas_exchange_rates",
+                "rate_effective_date": "2026-07-19",
+                "rate_retrieved_at": "2026-07-19T20:00:00Z",
+                "items": [line],
+            }
+        ],
+        "rate_summary": [rate],
+        "auto_electrification_rate": {
+            "base_currency": "MXN",
+            "quote_currency": "EUR",
+            "exchange_rate": "0.048780",
+            "rate_source": "saas_exchange_rates",
+            "rate_effective_date": "2026-07-19",
+            "rate_retrieved_at": "2026-07-19T20:00:00Z",
+        },
+    }
+
+
+def _valid_mixed_supplier_worker_payload():
+    payload = _valid_mixed_worker_payload()
+    payload["groups"][0].update(
+        {
+            "catalog": "sonara",
+            "catalog_source_hash": "b" * 64,
+        }
+    )
+    line = payload["groups"][0]["items"][0]
+    line.update(
+        {
+            "canonical_key": 'sonara:["sonara:item-1"]',
+            "catalog": "sonara",
+            "supplier": "Sonara",
+            "code": "SON-1",
+            "name": "Producto Sonara",
+            "description": "Producto generico de prueba",
+            "source_reference": "sonara:test:SON-1",
+            "discount_percent": "0.000000",
+            "price_mode": "net",
+            "auto_electrification": False,
+            "reservation": {
+                "identity": "sonara:item-1",
+                "sku": "SON-1",
+                "quantity": "1.000000",
+                "stock": "10.000000",
+            },
+        }
+    )
+    payload["rate_summary"][0]["catalog"] = "sonara"
+    payload["auto_electrification_rate"] = None
+    return payload
+
+
+def test_process_job_converts_mixed_cart_once_and_sets_identity_exchange(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    payload = _valid_mixed_worker_payload()
+    client.input_content = json.dumps(payload).encode("utf-8")
+    seen = {"converter_calls": 0, "generator_calls": 0}
+
+    def fake_convert(source_json, output_xlsx, cart_payload):
+        seen["converter_calls"] += 1
+        seen["payload"] = cart_payload
+        seen["output_name"] = output_xlsx.name
+        output_xlsx.write_bytes(b"converted")
+
+    def fake_generator(job, input_path, output_path):
+        seen["generator_calls"] += 1
+        seen["generator_input"] = input_path.name
+        seen["metadata"] = job["metadata"]
+        seen["payload"]["rate_summary"][0]["exchange_rate"] = "9.999999"
+        seen["payload"]["auto_electrification_rate"]["exchange_rate"] = "8.888888"
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        fake_convert,
+        raising=False,
+    )
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+
+    quote_worker.process_job(
+        client,
+        {
+            "id": "job-1",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-1/input.json",
+            "metadata": {
+                "source_type": "mixed_catalog_cart",
+                "input_extension": ".json",
+            },
+        },
+    )
+
+    assert seen["converter_calls"] == 1
+    assert seen["generator_calls"] == 1
+    assert seen["output_name"] == "quotation_from_mixed_catalog.xlsx"
+    assert seen["generator_input"] == "quotation_from_mixed_catalog.xlsx"
+    assert seen["metadata"]["mixed_catalog_converted"] is True
+    assert seen["metadata"]["catalog_price_mode"] == "mixed_catalog_converted"
+    assert seen["metadata"]["base_currency"] == "EUR"
+    assert seen["metadata"]["quote_currency"] == "EUR"
+    assert seen["metadata"]["exchange_rate"] == "1.000000"
+    assert seen["metadata"]["descuento"] == 0
+    assert seen["metadata"]["rate_summary"] == payload["rate_summary"]
+    assert seen["metadata"]["auto_electrification_rate"] == payload["auto_electrification_rate"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda payload: payload.update(groups=[]), "Grupos mixtos invalidos"),
+        (lambda payload: payload.update(item_count=2), "Conteo mixto inconsistente"),
+        (
+            lambda payload: payload.update(rate_summary=[]),
+            "Resumen de tasas mixtas inconsistente",
+        ),
+        (
+            lambda payload: payload.update(auto_electrification_rate=None),
+            "Tasa de electrificacion mixta invalida",
+        ),
+    ),
+)
+def test_mixed_payload_is_validated_before_converter(
+    monkeypatch,
+    mutation,
+    message,
+):
+    payload = _valid_mixed_worker_payload()
+    mutation(payload)
+    _assert_mixed_worker_preflight_rejects(monkeypatch, payload, message)
+
+
+def _assert_mixed_worker_preflight_rejects(monkeypatch, payload, message):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    client.input_content = json.dumps(payload).encode("utf-8")
+    called = []
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        lambda *_args: called.append("convert"),
+    )
+    monkeypatch.setattr(
+        quote_worker,
+        "_run_generator",
+        lambda *_args: called.append("generate"),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        quote_worker.process_job(
+            client,
+            {
+                "id": "job-1",
+                "usuario_id": 7,
+                "input_path": "users/7/jobs/job-1/input.json",
+                "metadata": {
+                    "source_type": "mixed_catalog_cart",
+                    "input_extension": ".json",
+                },
+            },
+        )
+
+    assert called == []
+
+
+def _mutate_canonical_base_currency(payload):
+    payload["groups"][0]["base_currency"] = "USD"
+    payload["groups"][0]["items"][0]["original_currency"] = "USD"
+    payload["rate_summary"][0]["base_currency"] = "USD"
+    payload["auto_electrification_rate"]["base_currency"] = "USD"
+
+
+def _mutate_line_original_currency(payload):
+    payload["groups"][0]["items"][0]["original_currency"] = "USD"
+
+
+def _mutate_line_frozen_rate(payload):
+    payload["groups"][0]["items"][0]["frozen_exchange_rate"] = "0.050000"
+
+
+def _mutate_group_frozen_rate(payload):
+    payload["groups"][0]["exchange_rate"] = "0.050000"
+    payload["rate_summary"][0]["exchange_rate"] = "0.050000"
+    payload["auto_electrification_rate"]["exchange_rate"] = "0.050000"
+
+
+def _mutate_converted_unit_price(payload):
+    payload["groups"][0]["items"][0]["unit_price"] = "4.89"
+
+
+def _mutate_supplier_label(payload):
+    payload["groups"][0]["items"][0]["supplier"] = "Proveedor falso"
+
+
+def _mutate_generic_price_mode(payload):
+    payload["groups"][0]["items"][0]["price_mode"] = "list"
+
+
+def _mutate_generic_auto_electrification(payload):
+    payload["groups"][0]["items"][0]["auto_electrification"] = True
+
+
+def _mutate_reservation_stock(payload):
+    payload["groups"][0]["items"][0]["reservation"]["stock"] = "9.000000"
+
+
+def _mutate_oversized_attributes(payload):
+    payload["groups"][0]["items"][0]["attributes"] = {"detail": "x" * 33_000}
+
+
+def _mutate_deep_attributes(payload):
+    nested = "leaf"
+    for _ in range(10):
+        nested = {"nested": nested}
+    payload["groups"][0]["items"][0]["attributes"] = nested
+
+
+@pytest.mark.parametrize(
+    ("payload_factory", "mutation"),
+    (
+        (_valid_mixed_worker_payload, _mutate_canonical_base_currency),
+        (_valid_mixed_worker_payload, _mutate_line_original_currency),
+        (_valid_mixed_worker_payload, _mutate_line_frozen_rate),
+        (_valid_mixed_worker_payload, _mutate_group_frozen_rate),
+        (_valid_mixed_worker_payload, _mutate_converted_unit_price),
+        (_valid_mixed_worker_payload, _mutate_supplier_label),
+        (_valid_mixed_supplier_worker_payload, _mutate_generic_price_mode),
+        (_valid_mixed_supplier_worker_payload, _mutate_generic_auto_electrification),
+        (_valid_mixed_worker_payload, _mutate_reservation_stock),
+        (_valid_mixed_worker_payload, _mutate_oversized_attributes),
+        (_valid_mixed_worker_payload, _mutate_deep_attributes),
+    ),
+)
+def test_mixed_payload_invariants_fail_before_converter_and_generator(
+    monkeypatch,
+    payload_factory,
+    mutation,
+):
+    payload = payload_factory()
+    mutation(payload)
+    _assert_mixed_worker_preflight_rejects(
+        monkeypatch,
+        payload,
+        "Grupos mixtos invalidos",
+    )
+
+
+def test_mixed_auto_electrification_rate_mismatch_fails_before_converter(
+    monkeypatch,
+):
+    payload = _valid_mixed_worker_payload()
+    payload["auto_electrification_rate"]["exchange_rate"] = "0.050000"
+    _assert_mixed_worker_preflight_rejects(
+        monkeypatch,
+        payload,
+        "Tasa de electrificacion mixta invalida",
+    )
+
+
 def test_process_job_converts_supplier_cart_and_sets_frozen_catalog_metadata(monkeypatch):
     client = FakeClient()
     client.claim_input_path = "users/7/jobs/job-1/input.json"
@@ -662,6 +983,7 @@ def test_input_extension_uses_cart_source_type_without_json_filename(source_type
         ({"source_type": "unknown_cart", "items": []}, "unknown_cart", "Tipo de fuente JSON no soportado"),
         ({"items": []}, "tarkett_cart", "JSON de entrada sin source_type"),
         ({"source_type": "offiho_cart", "items": []}, "tarkett_cart", "source_type de metadata no coincide"),
+        (_valid_mixed_worker_payload(), "tarkett_cart", "source_type de metadata no coincide"),
         ({"source_type": "offiho_cart", "items": []}, None, "source_type de metadata ausente"),
         (["offiho_cart"], "offiho_cart", "JSON de entrada debe ser un objeto"),
     ],

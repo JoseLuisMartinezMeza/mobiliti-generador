@@ -6,6 +6,7 @@ Default/final: QUOTE_ENGINE=python, sin Microsoft Excel.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from datetime import timedelta
 import argparse
@@ -40,8 +41,14 @@ DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes
 TARKETT_CART_SOURCE_TYPE = "tarkett_cart"
 OFFIHO_CART_SOURCE_TYPE = "offiho_cart"
 SUPPLIER_CART_SOURCE_TYPE = "supplier_cart"
+MIXED_CATALOG_CART_SOURCE_TYPE = "mixed_catalog_cart"
 JSON_CART_SOURCE_TYPES = frozenset(
-    {TARKETT_CART_SOURCE_TYPE, OFFIHO_CART_SOURCE_TYPE, SUPPLIER_CART_SOURCE_TYPE}
+    {
+        TARKETT_CART_SOURCE_TYPE,
+        OFFIHO_CART_SOURCE_TYPE,
+        SUPPLIER_CART_SOURCE_TYPE,
+        MIXED_CATALOG_CART_SOURCE_TYPE,
+    }
 )
 SUPPLIER_LABELS = {
     "cr-global": "CR Global",
@@ -622,6 +629,16 @@ def _convert_supplier_cart_to_quotation(source_json: Path, output_xlsx: Path, pa
     create_supplier_quotation_workbook(payload, output_xlsx)
 
 
+def _convert_mixed_catalog_cart_to_quotation(
+    source_json: Path,
+    output_xlsx: Path,
+    payload: dict,
+) -> None:
+    from mobiliti_saas.quote_engine.mixed_catalog import create_mixed_catalog_quotation_workbook
+
+    create_mixed_catalog_quotation_workbook(payload, output_xlsx)
+
+
 def _read_cart_payload(source_json: Path) -> dict:
     try:
         payload = json.loads(source_json.read_text(encoding="utf-8"))
@@ -653,6 +670,14 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
         if metadata_source_type != source_type:
             raise RuntimeError("source_type de metadata no coincide con JSON de entrada")
 
+        if source_type == MIXED_CATALOG_CART_SOURCE_TYPE:
+            from mobiliti_saas.quote_engine.mixed_catalog import validate_mixed_catalog_payload
+
+            try:
+                payload = validate_mixed_catalog_payload(payload)
+            except ValueError as exc:
+                raise RuntimeError(f"Payload de cotizacion mixta invalido: {exc}") from exc
+
         conversions = {
             TARKETT_CART_SOURCE_TYPE: (
                 "quotation_from_tarkett.xlsx",
@@ -668,6 +693,11 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
                 "quotation_from_supplier.xlsx",
                 _convert_supplier_cart_to_quotation,
                 "supplier_converted",
+            ),
+            MIXED_CATALOG_CART_SOURCE_TYPE: (
+                "quotation_from_mixed_catalog.xlsx",
+                _convert_mixed_catalog_cart_to_quotation,
+                "mixed_catalog_converted",
             ),
         }
         conversion = conversions.get(source_type)
@@ -696,6 +726,21 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
                     "rate_source": payload.get("rate_source"),
                     "rate_effective_date": payload.get("rate_effective_date"),
                     "rate_retrieved_at": payload.get("rate_retrieved_at"),
+                }
+            )
+        if source_type == MIXED_CATALOG_CART_SOURCE_TYPE:
+            quote_currency = payload["quote_currency"]
+            metadata.update(
+                {
+                    "catalog_price_mode": "mixed_catalog_converted",
+                    "base_currency": quote_currency,
+                    "quote_currency": quote_currency,
+                    "exchange_rate": "1.000000",
+                    "rate_summary": deepcopy(payload["rate_summary"]),
+                    "auto_electrification_rate": deepcopy(
+                        payload["auto_electrification_rate"]
+                    ),
+                    "descuento": 0,
                 }
             )
         job["metadata"] = metadata
