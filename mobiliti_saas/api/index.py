@@ -3020,14 +3020,14 @@ def _cleanup_failed_catalog_quote(job_id: str, input_path: str, release_reservat
         mark_pending("release_reservations")
         return
     try:
+        _delete_storage_paths([input_path])
+    except Exception:
+        mark_pending("delete_input")
+        return
+    try:
         db_delete_quote_job(job_id)
     except Exception:
         mark_pending("delete_job")
-        return
-    try:
-        _delete_storage_paths([input_path])
-    except Exception:
-        pass
 
 
 def _append_mixed_warning_once(line: dict[str, Any], warning: str) -> None:

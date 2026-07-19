@@ -312,12 +312,15 @@ def _mock_mixed_quote_dependencies(monkeypatch):
     _mock_user(monkeypatch)
     state = {
         "jobs": [], "uploads": [], "events": [], "requested_catalogs": [],
-        "rate_calls": 0, "released": [], "deleted_jobs": [], "deleted_inputs": [],
+        "loaded_catalogs": [], "rate_calls": 0, "released": [],
+        "deleted_jobs": [], "deleted_inputs": [],
     }
     def tarkett_catalog():
+        state["loaded_catalogs"].append("tarkett")
         return {**_mock_tarkett_catalog(), "source_hash": "a" * 64}
 
     def offiho_catalog():
+        state["loaded_catalogs"].append("offiho")
         return {**_mock_offiho_catalog(available_quantity=8), "source_hash": "b" * 64}
 
     monkeypatch.setattr(index, "_load_tarkett_catalog_cached", tarkett_catalog)
@@ -325,6 +328,7 @@ def _mock_mixed_quote_dependencies(monkeypatch):
 
     def supplier_catalog(supplier):
         state["requested_catalogs"].append(supplier)
+        state["loaded_catalogs"].append(supplier)
         base_currency = "USD" if supplier in {"sunon", "alma"} else "MXN"
         item = {
             "internal_id": f"{supplier}:desk-1", "supplier": supplier,
@@ -460,6 +464,7 @@ def test_mixed_quote_rejects_invalid_container_or_line_count_before_dependencies
     (
         b'{"items":[],"items":[]}',
         b'{"items":[{"catalog":"tarkett","code":"25731726","quantity":NaN}]}',
+        b'{"items":[]} trailing-bytes',
     ),
 )
 def test_mixed_quote_rejects_noncanonical_json_before_catalog_loading(monkeypatch, raw):
@@ -473,6 +478,27 @@ def test_mixed_quote_rejects_noncanonical_json_before_catalog_loading(monkeypatc
     assert state["requested_catalogs"] == []
     assert state["rate_calls"] == 0
     assert state["jobs"] == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("unit_price", "supplier", "metadata", "status", "usuario_id", "source_type"),
+)
+def test_mixed_quote_rejects_every_unexpected_top_level_field_before_dependencies(
+    monkeypatch, field
+):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    body = _valid_mixed_body()
+    body[field] = "tampered"
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=body
+    )
+    assert response.status_code == 400
+    assert "Campo de cotizacion no permitido" in response.json()["detail"]
+    assert state["loaded_catalogs"] == []
+    assert state["rate_calls"] == 0
+    assert state["jobs"] == []
+    assert state["uploads"] == []
 
 
 def test_mixed_quote_rejects_declared_and_streamed_oversize_body(monkeypatch):
@@ -533,6 +559,7 @@ def test_mixed_quote_creates_one_authoritative_job_upload_queue_and_wake(monkeyp
     response = _client().post("/catalogs/mixed-quote", headers=_auth_headers(), json=body)
 
     assert response.status_code == 200, response.json()
+    assert set(response.json()) == {"mensaje", "job"}
     assert state["events"] == ["create_job", "reserve_mixed", "upload", "queue", "wake"]
     assert len(state["jobs"]) == 1
     assert len(state["uploads"]) == 1
@@ -552,6 +579,25 @@ def test_mixed_quote_creates_one_authoritative_job_upload_queue_and_wake(monkeyp
     assert metadata["quote_currency"] == "MXN"
     assert metadata["rate_summary"] == payload["rate_summary"]
     assert metadata["auto_electrification_rate"] == payload["auto_electrification_rate"]
+
+
+def test_mixed_quote_loads_exactly_the_requested_catalogs(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    response = _client().post(
+        "/catalogs/mixed-quote",
+        headers=_auth_headers(),
+        json=_valid_mixed_body([
+            {
+                "catalog": "offiho", "inventory_key": "OHE-405 NEGRO ALUFSEN",
+                "quantity": "1",
+            },
+            {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"},
+        ]),
+    )
+    assert response.status_code == 200
+    assert state["loaded_catalogs"] == ["offiho", "alma"]
+    assert len(state["jobs"]) == 1
+    assert len(state["uploads"]) == 1
 
 
 def _mixed_snapshot_payload(*, catalog="alma", quantity="1.000000", stock="5.000000", warning=None):
@@ -630,11 +676,55 @@ def test_apply_mixed_snapshot_keeps_normalized_insufficient_warning_exactly_once
 
 
 @pytest.mark.parametrize(
+    "case",
+    ("extra_key", "duplicate_key", "nonfinite_decimal", "non_boolean", "bad_available", "bad_insufficient"),
+)
+def test_apply_mixed_snapshot_rejects_contract_violations_without_partial_mutation(case):
+    payload = _mixed_snapshot_payload()
+    second = json.loads(json.dumps(payload["groups"][0]["items"][0]))
+    second["reservation"]["identity"] = "alma:desk-2"
+    second["reservation"]["sku"] = "DESK-2"
+    payload["groups"][0]["items"].append(second)
+    snapshot = [
+        {
+            "catalog": "alma", "identity": "alma:desk-1",
+            "reserved_before": "0.000000", "available_before": "5.000000",
+            "insufficient": False, "reserved_by_others": False,
+        },
+        {
+            "catalog": "alma", "identity": "alma:desk-2",
+            "reserved_before": "0.000000", "available_before": "5.000000",
+            "insufficient": False, "reserved_by_others": False,
+        },
+    ]
+    if case == "extra_key":
+        snapshot[1]["unexpected"] = True
+    elif case == "duplicate_key":
+        snapshot[1] = dict(snapshot[0])
+    elif case == "nonfinite_decimal":
+        snapshot[1]["reserved_before"] = "NaN"
+    elif case == "non_boolean":
+        snapshot[1]["reserved_by_others"] = 0
+    elif case == "bad_available":
+        snapshot[1]["available_before"] = "4.000000"
+    else:
+        snapshot[1]["insufficient"] = True
+
+    with pytest.raises(ValueError, match="Snapshot de reserva mixta invalido"):
+        index._apply_mixed_reservation_snapshot(payload, snapshot)
+
+    for line in payload["groups"][0]["items"]:
+        assert not {
+            "reserved_quantity", "available_after_reservations", "reserved_by_others",
+        } & set(line)
+
+
+@pytest.mark.parametrize(
     ("stage", "expected"),
     (
-        ("reserve", ["create_job", "reserve", "release", "delete_job", "delete_input"]),
-        ("upload", ["create_job", "reserve", "upload", "release", "delete_job", "delete_input"]),
-        ("queue", ["create_job", "reserve", "upload", "queue", "release", "delete_job", "delete_input"]),
+        ("reserve", ["create_job", "reserve", "release", "delete_input", "delete_job"]),
+        ("upload", ["create_job", "reserve", "upload", "release", "delete_input", "delete_job"]),
+        ("queue", ["create_job", "reserve", "upload", "queue", "release", "delete_input", "delete_job"]),
     ),
 )
 def test_mixed_quote_failure_compensates_all_families(monkeypatch, stage, expected):
@@ -695,30 +785,56 @@ def test_mixed_quote_tarkett_concurrent_shortage_compensates_before_upload(monke
     assert "wake" not in state["events"]
 
 
-def test_mixed_quote_release_winning_before_queue_cas_never_wakes(monkeypatch):
-    state = _mock_mixed_quote_dependencies(monkeypatch)
-    released = {"value": False}
+def test_mixed_quote_real_dev_release_wins_before_real_queue_cas(monkeypatch):
+    real_create = index.db_create_quote_job
+    real_reserve = index.db_reserve_mixed_cart
+    real_release = index.db_release_mixed_cart
+    real_queue = index.db_queue_mixed_quote_job
+    real_delete = index.db_delete_quote_job
+    route_state = _mock_mixed_quote_dependencies(monkeypatch)
+    dev_state = {
+        "quote_jobs": [], "tarkett_reservations": [],
+        "offiho_reservations": [], "catalog_reservations": [],
+    }
+    configure_thread_safe_dev_store(monkeypatch, dev_state)
+    releases = []
+    wakes = []
+
+    def tracked_release(job_id):
+        result = real_release(job_id)
+        releases.append(result)
+        return result
 
     def upload(path, content, content_type):
-        state["events"].append("upload")
-        state["uploads"].append({"path": path, "content": content, "content_type": content_type})
-        released["value"] = True
-        state["events"].append("release_race")
+        route_state["uploads"].append({
+            "path": path, "content": content, "content_type": content_type,
+        })
+        job_id = path.split("/jobs/", 1)[1].split("/", 1)[0]
+        index.db_release_mixed_cart(job_id)
 
-    def queue(*_args):
-        state["events"].append("queue")
-        assert released["value"] is True
-        raise RuntimeError("draft CAS lost")
-
+    monkeypatch.setattr(index, "db_create_quote_job", real_create)
+    monkeypatch.setattr(index, "db_reserve_mixed_cart", real_reserve)
+    monkeypatch.setattr(index, "db_release_mixed_cart", tracked_release)
+    monkeypatch.setattr(index, "db_queue_mixed_quote_job", real_queue)
+    monkeypatch.setattr(index, "db_delete_quote_job", real_delete)
     monkeypatch.setattr(index, "_storage_upload_bytes", upload)
-    monkeypatch.setattr(index, "db_queue_mixed_quote_job", queue)
+    monkeypatch.setattr(index, "_delete_storage_paths", lambda _paths: None)
+    monkeypatch.setattr(index, "_wake_worker", lambda: wakes.append("wake"))
     response = _client().post(
         "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body()
     )
     assert response.status_code == 503
-    assert "wake" not in state["events"]
-    assert len(state["released"]) == 1
-    assert len(state["deleted_jobs"]) == 1
+    assert wakes == []
+    assert all(job["status"] != "queued" for job in dev_state["quote_jobs"])
+    assert not any(
+        row["status"] == "active"
+        for table in ("tarkett_reservations", "offiho_reservations", "catalog_reservations")
+        for row in dev_state[table]
+    )
+    assert releases == [
+        {"tarkett": 1, "offiho": 0, "supplier": 0},
+        {"tarkett": 0, "offiho": 0, "supplier": 0},
+    ]
 
 
 def test_mixed_quote_offiho_shortage_uploads_one_normalized_warning(monkeypatch):
@@ -779,6 +895,40 @@ def test_mixed_quote_marks_cleanup_pending_when_release_fails(monkeypatch):
     assert "wake" not in state["events"]
 
 
+def test_mixed_quote_retains_failed_job_when_input_delete_fails(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    marked = []
+    monkeypatch.setattr(
+        index, "db_queue_mixed_quote_job",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("queue failed")),
+    )
+    monkeypatch.setattr(
+        index, "_delete_storage_paths",
+        lambda _paths: (_ for _ in ()).throw(RuntimeError("storage unavailable")),
+    )
+
+    def mark_failed(job_id, updates):
+        job = next(job for job in state["jobs"] if job["id"] == job_id)
+        job.update(updates)
+        marked.append(updates)
+        return job
+
+    monkeypatch.setattr(index, "db_update_quote_job", mark_failed)
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body()
+    )
+    assert response.status_code == 503
+    assert len(state["released"]) == 1
+    assert marked == [{"status": "failed", "error_message": "cleanup_pending:delete_input"}]
+    assert state["deleted_jobs"] == []
+    retained = state["jobs"][0]
+    assert retained["status"] == "failed"
+    assert retained["error_message"] == "cleanup_pending:delete_input"
+    assert retained["input_path"].endswith("/input.json")
+    assert retained["metadata"]["source_type"] == "mixed_catalog_cart"
+    assert "wake" not in state["events"]
+
+
 def test_mixed_quote_marks_cleanup_pending_when_job_delete_fails(monkeypatch):
     state = _mock_mixed_quote_dependencies(monkeypatch)
     marked = []
@@ -797,11 +947,18 @@ def test_mixed_quote_marks_cleanup_pending_when_job_delete_fails(monkeypatch):
     assert response.status_code == 503
     assert len(state["released"]) == 1
     assert marked == [{"status": "failed", "error_message": "cleanup_pending:delete_job"}]
-    assert state["deleted_inputs"] == []
+    assert len(state["deleted_inputs"]) == 1
     assert "wake" not in state["events"]
 
 
-@pytest.mark.parametrize("cleanup_error", ("cleanup_pending:release_reservations", "cleanup_pending:delete_job"))
+@pytest.mark.parametrize(
+    "cleanup_error",
+    (
+        "cleanup_pending:release_reservations",
+        "cleanup_pending:delete_input",
+        "cleanup_pending:delete_job",
+    ),
+)
 def test_retry_rejects_cleanup_pending_jobs_without_update_or_wake(monkeypatch, cleanup_error):
     _mock_user(monkeypatch)
     calls = []
@@ -1432,7 +1589,7 @@ def test_offiho_quote_releases_reservations_and_partial_job_after_failure(monkey
     resp = _client().post("/offiho/quote", headers=_auth_headers(), json=_valid_offiho_body())
 
     assert resp.status_code == 503
-    assert calls == ["upload", "job", "reserve", "release", "delete", "storage-delete"]
+    assert calls == ["upload", "job", "reserve", "release", "storage-delete", "delete"]
 
 
 def _install_catalog_quote_failure_mocks(monkeypatch, supplier, calls, failure_stage):
@@ -1492,7 +1649,7 @@ def test_catalog_quote_requires_queued_update_and_always_cleans_known_job_and_in
         "upload_timeout": ["upload"],
         "job_timeout": ["upload", "job"],
     }[failure_stage]
-    assert calls == prefix + ["release", "delete", "storage-delete"]
+    assert calls == prefix + ["release", "storage-delete", "delete"]
 
 
 @pytest.mark.parametrize("supplier", ["tarkett", "offiho"])
@@ -2294,8 +2451,8 @@ def test_supplier_quote_failed_queue_update_runs_compensating_cleanup(monkeypatc
     job_id = state["created"]["job_id"]
     assert calls == [
         ("release", job_id),
-        ("job", job_id),
         ("storage", f"users/7/jobs/{job_id}/input.json"),
+        ("job", job_id),
     ]
 
 
@@ -2906,10 +3063,43 @@ def test_failed_catalog_cleanup_marks_job_failed_when_delete_fails(monkeypatch):
 
     assert calls == [
         ("release", "job-1"),
+        ("storage", ["users/7/jobs/job-1/input.json"]),
         (
             "mark_failed",
             "job-1",
             {"status": "failed", "error_message": "cleanup_pending:delete_job"},
+        ),
+    ]
+
+
+def test_failed_catalog_cleanup_retains_job_when_input_delete_fails(monkeypatch):
+    calls = []
+
+    def fail_storage(paths):
+        calls.append(("storage", paths))
+        raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(index, "_delete_storage_paths", fail_storage)
+    monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: calls.append(("job", job_id)))
+    monkeypatch.setattr(
+        index,
+        "db_update_quote_job",
+        lambda job_id, updates: calls.append(("mark_failed", job_id, updates)),
+    )
+
+    index._cleanup_failed_catalog_quote(
+        "job-1",
+        "users/7/jobs/job-1/input.json",
+        lambda job_id: calls.append(("release", job_id)),
+    )
+
+    assert calls == [
+        ("release", "job-1"),
+        ("storage", ["users/7/jobs/job-1/input.json"]),
+        (
+            "mark_failed",
+            "job-1",
+            {"status": "failed", "error_message": "cleanup_pending:delete_input"},
         ),
     ]
 
