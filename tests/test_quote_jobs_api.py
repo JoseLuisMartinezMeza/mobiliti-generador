@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 import hashlib
 import json
 import threading
@@ -289,6 +290,530 @@ def _valid_tarkett_body(quantity=1):
         "descuento": 40,
         "items": [{"code": "25731726", "quantity": quantity}],
     }
+
+
+def _valid_mixed_body(items=None):
+    return {
+        "proyecto": "Proyecto mixto",
+        "cliente": "Cliente",
+        "correo": "cliente@example.com",
+        "telefono": "5551234567",
+        "direccion": "Guadalajara",
+        "razon_social": "Cliente SA de CV",
+        "descuento": 40,
+        "quote_currency": "MXN",
+        "items": items or [
+            {"catalog": "tarkett", "code": "25731726", "quantity": "1"},
+        ],
+    }
+
+
+def _mock_mixed_quote_dependencies(monkeypatch):
+    _mock_user(monkeypatch)
+    state = {
+        "jobs": [], "uploads": [], "events": [], "requested_catalogs": [],
+        "rate_calls": 0, "released": [], "deleted_jobs": [], "deleted_inputs": [],
+    }
+    def tarkett_catalog():
+        return {**_mock_tarkett_catalog(), "source_hash": "a" * 64}
+
+    def offiho_catalog():
+        return {**_mock_offiho_catalog(available_quantity=8), "source_hash": "b" * 64}
+
+    monkeypatch.setattr(index, "_load_tarkett_catalog_cached", tarkett_catalog)
+    monkeypatch.setattr(index, "_load_offiho_catalog_cached", offiho_catalog)
+
+    def supplier_catalog(supplier):
+        state["requested_catalogs"].append(supplier)
+        base_currency = "USD" if supplier in {"sunon", "alma"} else "MXN"
+        item = {
+            "internal_id": f"{supplier}:desk-1", "supplier": supplier,
+            "product_key": "desk-1", "sku": f"{supplier.upper()}-1",
+            "code_status": "verified", "brand": supplier, "collection": "Work",
+            "name": f"Escritorio {supplier}", "description": "Escritorio operativo",
+            "unit": "pieza", "availability_type": "stocked", "stock": "5.000000",
+            "lead_time": "Entrega inmediata", "base_price_options": [],
+            "add_on_options": [], "base_currency": base_currency,
+            "price_net": "100.000000", "tax_rate": "0.160000", "attributes": {},
+            "image_url": "", "image_kind": "placeholder", "product_url": "",
+            "warnings": [], "source_reference": f"{supplier}:source",
+        }
+        return {
+            "supplier": supplier,
+            "source_hash": hashlib.sha256(supplier.encode("utf-8")).hexdigest(),
+            "generated_at": "2026-07-19T00:00:00+00:00", "items": [item],
+        }
+
+    monkeypatch.setattr(index, "_require_enabled_catalog_supplier", lambda supplier: supplier)
+    monkeypatch.setattr(index, "_load_supplier_catalog_cached", supplier_catalog)
+
+    def rates():
+        state["rate_calls"] += 1
+        return _supplier_rate_rows()
+
+    monkeypatch.setattr(index, "db_list_exchange_rates", rates)
+    monkeypatch.setattr(index, "_next_quote_number_for_user", lambda user: None)
+
+    def create_job(usuario_id, template, metadata, input_path, job_id=None):
+        state["events"].append("create_job")
+        job = {
+            "id": job_id, "usuario_id": usuario_id, "status": "draft",
+            "template": template, "metadata": metadata, "input_path": input_path,
+        }
+        state["jobs"].append(job)
+        return job
+
+    def reserve(usuario_id, job_id, groups):
+        state["events"].append("reserve_mixed")
+        return [
+            {
+                "catalog": group["catalog"], "identity": item["identity"],
+                "reserved_before": "0.000000", "available_before": item["stock"],
+                "insufficient": False, "reserved_by_others": False,
+            }
+            for group in groups for item in group["items"]
+        ]
+
+    def upload(path, content, content_type="application/octet-stream"):
+        state["events"].append("upload")
+        state["uploads"].append({"path": path, "content": content, "content_type": content_type})
+
+    def queue(job_id, metadata):
+        state["events"].append("queue")
+        return {"id": job_id, "status": "queued", "metadata": metadata}
+
+    monkeypatch.setattr(index, "db_create_quote_job", create_job)
+    monkeypatch.setattr(index, "db_reserve_mixed_cart", reserve)
+    monkeypatch.setattr(index, "db_queue_mixed_quote_job", queue)
+    monkeypatch.setattr(index, "db_release_mixed_cart", lambda job_id: state["released"].append(job_id))
+    monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: state["deleted_jobs"].append(job_id))
+    monkeypatch.setattr(index, "_delete_storage_paths", lambda paths: state["deleted_inputs"].extend(paths))
+    monkeypatch.setattr(index, "_storage_upload_bytes", upload)
+    monkeypatch.setattr(index, "_wake_worker", lambda: state["events"].append("wake"))
+    return state
+
+
+def test_mixed_quote_route_is_registered_before_supplier_quote_route():
+    post_paths = [
+        route.path for route in index.app.routes
+        if "POST" in getattr(route, "methods", set())
+    ]
+    assert "/catalogs/mixed-quote" in post_paths
+    assert post_paths.index("/catalogs/mixed-quote") < post_paths.index("/catalogs/{supplier}/quote")
+
+
+def test_mixed_quote_requires_authentication_before_catalog_loading(monkeypatch):
+    loaded = []
+    monkeypatch.setattr(index, "_load_tarkett_catalog_cached", lambda: loaded.append("tarkett"))
+    response = _client().post("/catalogs/mixed-quote", json=_valid_mixed_body())
+    assert response.status_code == 401
+    assert loaded == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("unit_price", "base_currency", "exchange_rate", "stock", "image_url", "product_url"),
+)
+def test_mixed_quote_rejects_unexpected_browser_fields_before_job_creation(monkeypatch, field):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    body = _valid_mixed_body()
+    body["items"][0][field] = "tampered"
+    response = _client().post("/catalogs/mixed-quote", headers=_auth_headers(), json=body)
+    assert response.status_code == 400
+    assert "Campo mixto no permitido" in response.json()["detail"]
+    assert state["jobs"] == []
+    assert state["uploads"] == []
+
+
+def test_mixed_quote_checks_subscription_with_integer_user_id_before_catalog_loading(monkeypatch):
+    _mock_user(monkeypatch)
+    calls = []
+    monkeypatch.setattr(index, "_require_active_subscription", lambda user_id: calls.append(user_id))
+    monkeypatch.setattr(
+        index, "_load_tarkett_catalog_cached",
+        lambda: (_ for _ in ()).throw(RuntimeError("stop after subscription")),
+    )
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body()
+    )
+    assert response.status_code == 503
+    assert calls == [7]
+    assert type(calls[0]) is int
+
+
+@pytest.mark.parametrize(
+    "body",
+    ([], {"items": []}, {"items": [{"catalog": "tarkett", "code": "25731726", "quantity": "1"}] * 501}),
+)
+def test_mixed_quote_rejects_invalid_container_or_line_count_before_dependencies(monkeypatch, body):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    response = _client().post("/catalogs/mixed-quote", headers=_auth_headers(), json=body)
+    assert response.status_code == 400
+    assert state["requested_catalogs"] == []
+    assert state["rate_calls"] == 0
+    assert state["jobs"] == []
+    assert state["uploads"] == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (
+        b'{"items":[],"items":[]}',
+        b'{"items":[{"catalog":"tarkett","code":"25731726","quantity":NaN}]}',
+    ),
+)
+def test_mixed_quote_rejects_noncanonical_json_before_catalog_loading(monkeypatch, raw):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    response = _client().post(
+        "/catalogs/mixed-quote",
+        headers={**_auth_headers(), "content-type": "application/json"},
+        content=raw,
+    )
+    assert response.status_code == 400
+    assert state["requested_catalogs"] == []
+    assert state["rate_calls"] == 0
+    assert state["jobs"] == []
+
+
+def test_mixed_quote_rejects_declared_and_streamed_oversize_body(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    response = _client().post(
+        "/catalogs/mixed-quote",
+        headers={**_auth_headers(), "content-length": str(index.MAX_MIXED_REQUEST_BYTES + 1)},
+        content=b"{}",
+    )
+    assert response.status_code == 413
+
+    class StreamingRequest:
+        headers = {}
+
+        async def stream(self):
+            yield b"x" * (index.MAX_MIXED_REQUEST_BYTES // 2)
+            yield b"x" * (index.MAX_MIXED_REQUEST_BYTES // 2 + 1)
+
+    with pytest.raises(index.HTTPException) as exc:
+        asyncio.run(index._read_mixed_quote_body(StreamingRequest()))
+    assert exc.value.status_code == 413
+    assert state["rate_calls"] == 0
+    assert state["jobs"] == []
+
+
+@pytest.mark.parametrize(
+    "row",
+    (
+        {"catalog": "tarkett", "code": "x" * 1001, "quantity": "1"},
+        {"catalog": "tarkett", "code": "bad\u0000code", "quantity": "1"},
+        {
+            "catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1",
+            "add_on_option_ids": [f"option-{number}" for number in range(201)],
+        },
+        {"catalog": "tarkett", "code": "25731726", "quantity": "1" * 65},
+    ),
+)
+def test_mixed_quote_rejects_bounded_identity_options_and_quantity_before_dependencies(monkeypatch, row):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body([row])
+    )
+    assert response.status_code == 400
+    assert state["requested_catalogs"] == []
+    assert state["rate_calls"] == 0
+    assert state["jobs"] == []
+    assert state["uploads"] == []
+
+
+def test_mixed_quote_creates_one_authoritative_job_upload_queue_and_wake(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    body = _valid_mixed_body([
+        {"catalog": "tarkett", "code": "25731726", "quantity": "1"},
+        {"catalog": "sonara", "internal_id": "sonara:desk-1", "quantity": "2"},
+        {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "3"},
+    ])
+
+    response = _client().post("/catalogs/mixed-quote", headers=_auth_headers(), json=body)
+
+    assert response.status_code == 200, response.json()
+    assert state["events"] == ["create_job", "reserve_mixed", "upload", "queue", "wake"]
+    assert len(state["jobs"]) == 1
+    assert len(state["uploads"]) == 1
+    payload = json.loads(state["uploads"][0]["content"])
+    assert payload["source_type"] == "mixed_catalog_cart"
+    assert payload["item_count"] == 3
+    assert {group["catalog"] for group in payload["groups"]} == {"tarkett", "sonara", "alma"}
+    assert payload["groups"][0]["items"][0]["unit_price"] == "472.63"
+    assert response.json()["job"]["id"] == state["jobs"][0]["id"]
+    metadata = state["jobs"][0]["metadata"]
+    assert metadata["source_type"] == "mixed_catalog_cart"
+    assert metadata["mixed_item_count"] == 3
+    assert metadata["catalog_item_counts"] == {"tarkett": 1, "sonara": 1, "alma": 1}
+    assert metadata["catalog_source_hashes"] == {
+        group["catalog"]: group["catalog_source_hash"] for group in payload["groups"]
+    }
+    assert metadata["quote_currency"] == "MXN"
+    assert metadata["rate_summary"] == payload["rate_summary"]
+    assert metadata["auto_electrification_rate"] == payload["auto_electrification_rate"]
+
+
+def _mixed_snapshot_payload(*, catalog="alma", quantity="1.000000", stock="5.000000", warning=None):
+    line = {
+        "catalog": catalog,
+        "quantity": quantity,
+        "warnings": [] if warning is None else [warning],
+        "reservation": {
+            "identity": f"{catalog}:desk-1", "sku": "DESK-1",
+            "quantity": quantity, "stock": stock,
+        },
+    }
+    return {"groups": [{"catalog": catalog, "items": [line]}]}
+
+
+def test_apply_mixed_snapshot_validates_completeness_before_mutating_any_line():
+    payload = _mixed_snapshot_payload()
+    with pytest.raises(ValueError, match="Snapshot de reserva mixta invalido"):
+        index._apply_mixed_reservation_snapshot(payload, [])
+    line = payload["groups"][0]["items"][0]
+    assert "reserved_quantity" not in line
+    assert "available_after_reservations" not in line
+
+
+def test_apply_mixed_snapshot_maps_one_aggregated_identity_to_all_configurations():
+    payload = _mixed_snapshot_payload(quantity="1.000000")
+    second = json.loads(json.dumps(payload["groups"][0]["items"][0]))
+    second["quantity"] = "2.000000"
+    second["reservation"]["quantity"] = "2.000000"
+    payload["groups"][0]["items"].append(second)
+    index._apply_mixed_reservation_snapshot(payload, [{
+        "catalog": "alma", "identity": "alma:desk-1",
+        "reserved_before": "1.000000", "available_before": "4.000000",
+        "insufficient": False, "reserved_by_others": True,
+    }])
+    assert [line["reserved_quantity"] for line in payload["groups"][0]["items"]] == [
+        "1.000000", "1.000000"
+    ]
+    assert all(line["reserved_by_others"] is True for line in payload["groups"][0]["items"])
+
+
+def test_apply_mixed_snapshot_accepts_empty_snapshot_for_made_to_order_lines():
+    payload = _mixed_snapshot_payload()
+    payload["groups"][0]["items"][0]["reservation"] = None
+    index._apply_mixed_reservation_snapshot(payload, [])
+    assert "reserved_quantity" not in payload["groups"][0]["items"][0]
+
+
+def test_apply_mixed_snapshot_tarkett_insufficient_fails_closed_before_mutation():
+    payload = _mixed_snapshot_payload(catalog="tarkett", quantity="2.000000", stock="5.000000")
+    with pytest.raises(ValueError, match="tarkett:tarkett:desk-1 sin existencia suficiente"):
+        index._apply_mixed_reservation_snapshot(payload, [{
+            "catalog": "tarkett", "identity": "tarkett:desk-1",
+            "reserved_before": "5.000000", "available_before": "0.000000",
+            "insufficient": True, "reserved_by_others": True,
+        }])
+    assert "reserved_quantity" not in payload["groups"][0]["items"][0]
+
+
+def test_apply_mixed_snapshot_keeps_normalized_insufficient_warning_exactly_once():
+    payload = _mixed_snapshot_payload(
+        catalog="offiho", quantity="2.000000", stock="5.000000",
+        warning="  EXISTÉNCIA insuficiente;   verificar disponibilidad. ",
+    )
+    index._apply_mixed_reservation_snapshot(payload, [{
+        "catalog": "offiho", "identity": "offiho:desk-1",
+        "reserved_before": "5.000000", "available_before": "0.000000",
+        "insufficient": True, "reserved_by_others": True,
+    }])
+    warnings = payload["groups"][0]["items"][0]["warnings"]
+    normalized = [" ".join("".join(
+        character for character in index.unicodedata.normalize("NFKD", warning.casefold())
+        if not index.unicodedata.combining(character)
+    ).split()) for warning in warnings]
+    assert normalized.count("existencia insuficiente; verificar disponibilidad.") == 1
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected"),
+    (
+        ("reserve", ["create_job", "reserve", "release", "delete_job", "delete_input"]),
+        ("upload", ["create_job", "reserve", "upload", "release", "delete_job", "delete_input"]),
+        ("queue", ["create_job", "reserve", "upload", "queue", "release", "delete_job", "delete_input"]),
+    ),
+)
+def test_mixed_quote_failure_compensates_all_families(monkeypatch, stage, expected):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    state["events"].clear()
+
+    def reserve(_user_id, _job_id, groups):
+        state["events"].append("reserve")
+        if stage == "reserve":
+            raise RuntimeError("reserve failed")
+        return [{
+            "catalog": group["catalog"], "identity": item["identity"],
+            "reserved_before": "0.000000", "available_before": item["stock"],
+            "insufficient": False, "reserved_by_others": False,
+        } for group in groups for item in group["items"]]
+
+    def upload(*_args):
+        state["events"].append("upload")
+        if stage == "upload":
+            raise RuntimeError("upload failed")
+
+    def queue(*_args):
+        state["events"].append("queue")
+        if stage == "queue":
+            raise RuntimeError("queue failed")
+        return {"id": JOB_MIXED_UUID, "status": "queued"}
+
+    monkeypatch.setattr(index, "db_reserve_mixed_cart", reserve)
+    monkeypatch.setattr(index, "_storage_upload_bytes", upload)
+    monkeypatch.setattr(index, "db_queue_mixed_quote_job", queue)
+    monkeypatch.setattr(index, "db_release_mixed_cart", lambda job_id: state["events"].append("release"))
+    monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: state["events"].append("delete_job"))
+    monkeypatch.setattr(index, "_delete_storage_paths", lambda paths: state["events"].append("delete_input"))
+
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body()
+    )
+    assert response.status_code == 503
+    assert state["events"] == expected
+
+
+def test_mixed_quote_tarkett_concurrent_shortage_compensates_before_upload(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    stock = "970.200000"
+    monkeypatch.setattr(index, "db_reserve_mixed_cart", lambda *_args: [{
+        "catalog": "tarkett", "identity": "25731726",
+        "reserved_before": stock, "available_before": "0.000000",
+        "insufficient": True, "reserved_by_others": True,
+    }])
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body()
+    )
+    assert response.status_code == 503
+    assert len(state["released"]) == 1
+    assert len(state["deleted_jobs"]) == 1
+    assert state["uploads"] == []
+    assert "queue" not in state["events"]
+    assert "wake" not in state["events"]
+
+
+def test_mixed_quote_release_winning_before_queue_cas_never_wakes(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    released = {"value": False}
+
+    def upload(path, content, content_type):
+        state["events"].append("upload")
+        state["uploads"].append({"path": path, "content": content, "content_type": content_type})
+        released["value"] = True
+        state["events"].append("release_race")
+
+    def queue(*_args):
+        state["events"].append("queue")
+        assert released["value"] is True
+        raise RuntimeError("draft CAS lost")
+
+    monkeypatch.setattr(index, "_storage_upload_bytes", upload)
+    monkeypatch.setattr(index, "db_queue_mixed_quote_job", queue)
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body()
+    )
+    assert response.status_code == 503
+    assert "wake" not in state["events"]
+    assert len(state["released"]) == 1
+    assert len(state["deleted_jobs"]) == 1
+
+
+def test_mixed_quote_offiho_shortage_uploads_one_normalized_warning(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    original_builder = index.build_mixed_catalog_cart_payload
+
+    def builder(*args, **kwargs):
+        payload = original_builder(*args, **kwargs)
+        payload["groups"][0]["items"][0]["warnings"].append(
+            "  EXISTÉNCIA insuficiente;   verificar disponibilidad. "
+        )
+        return payload
+
+    monkeypatch.setattr(index, "build_mixed_catalog_cart_payload", builder)
+    monkeypatch.setattr(index, "db_reserve_mixed_cart", lambda *_args: [{
+        "catalog": "offiho", "identity": "OHE-405 NEGRO ALUFSEN",
+        "reserved_before": "8.000000", "available_before": "0.000000",
+        "insufficient": True, "reserved_by_others": True,
+    }])
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(),
+        json=_valid_mixed_body([{
+            "catalog": "offiho", "inventory_key": "OHE-405 NEGRO ALUFSEN",
+            "quantity": "2",
+        }]),
+    )
+    assert response.status_code == 200, {"body": response.json(), "events": state["events"]}
+    payload = json.loads(state["uploads"][0]["content"])
+    warnings = payload["groups"][0]["items"][0]["warnings"]
+    normalized = [" ".join("".join(
+        character for character in index.unicodedata.normalize("NFKD", warning.casefold())
+        if not index.unicodedata.combining(character)
+    ).split()) for warning in warnings]
+    assert normalized.count("existencia insuficiente; verificar disponibilidad.") == 1
+
+
+def test_mixed_quote_marks_cleanup_pending_when_release_fails(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    marked = []
+    monkeypatch.setattr(
+        index, "db_queue_mixed_quote_job",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("queue failed")),
+    )
+    monkeypatch.setattr(
+        index, "db_release_mixed_cart",
+        lambda _job_id: (_ for _ in ()).throw(RuntimeError("release failed")),
+    )
+    monkeypatch.setattr(index, "db_update_quote_job", lambda job_id, updates: marked.append(updates))
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body()
+    )
+    assert response.status_code == 503
+    assert marked == [{
+        "status": "failed", "error_message": "cleanup_pending:release_reservations",
+    }]
+    assert state["deleted_jobs"] == []
+    assert state["deleted_inputs"] == []
+    assert "wake" not in state["events"]
+
+
+def test_mixed_quote_marks_cleanup_pending_when_job_delete_fails(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    marked = []
+    monkeypatch.setattr(
+        index, "db_queue_mixed_quote_job",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("queue failed")),
+    )
+    monkeypatch.setattr(
+        index, "db_delete_quote_job",
+        lambda _job_id: (_ for _ in ()).throw(RuntimeError("delete failed")),
+    )
+    monkeypatch.setattr(index, "db_update_quote_job", lambda job_id, updates: marked.append(updates))
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body()
+    )
+    assert response.status_code == 503
+    assert len(state["released"]) == 1
+    assert marked == [{"status": "failed", "error_message": "cleanup_pending:delete_job"}]
+    assert state["deleted_inputs"] == []
+    assert "wake" not in state["events"]
+
+
+@pytest.mark.parametrize("cleanup_error", ("cleanup_pending:release_reservations", "cleanup_pending:delete_job"))
+def test_retry_rejects_cleanup_pending_jobs_without_update_or_wake(monkeypatch, cleanup_error):
+    _mock_user(monkeypatch)
+    calls = []
+    monkeypatch.setattr(index, "db_get_quote_job", lambda job_id: {
+        "id": job_id, "usuario_id": 7, "status": "failed",
+        "input_path": "users/7/jobs/job-1/input.json", "error_message": cleanup_error,
+    })
+    monkeypatch.setattr(index, "db_update_quote_job", lambda *_args: calls.append("update"))
+    monkeypatch.setattr(index, "_wake_worker", lambda: calls.append("wake"))
+    response = _client().post("/cotizaciones/job-1/retry", headers=_auth_headers())
+    assert response.status_code == 409
+    assert calls == []
 
 
 @pytest.mark.parametrize("path", ["/tarkett/catalog", "/offiho/catalog"])

@@ -27,6 +27,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import quote, unquote, urlparse
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from jose import JWTError, jwt
 import bcrypt
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, File, Form, UploadFile
@@ -58,6 +59,15 @@ from mobiliti_saas.quote_engine.supplier_catalog import (  # noqa: E402
     load_supplier_catalog_data,
     resolve_conversion_rate,
 )
+from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
+    MAX_MIXED_CATALOG_LINES,
+    MAX_MIXED_REQUEST_BYTES,
+    MIXED_CATALOG_ORDER,
+    build_mixed_catalog_cart_payload,
+    build_mixed_reservation_groups,
+    preflight_mixed_catalog_items,
+    validate_mixed_catalog_payload,
+)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -82,6 +92,12 @@ WORKER_WAKE_URL = os.environ.get("WORKER_WAKE_URL") if WORKER_WAKE_ENABLED else 
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
+MIXED_QUOTE_BODY_FIELDS = frozenset({
+    "items", "quote_currency", "descuento", "proyecto", "cliente", "correo",
+    "telefono", "direccion", "razon_social", "cotizacion", "template",
+    "description_language", "image_provider", "image_cleanup_strength",
+    "image_background", "image_prompt",
+})
 QUOTE_STORAGE_BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
 QUOTE_STORAGE_PROVIDER = os.environ.get("QUOTE_STORAGE_PROVIDER", "supabase").strip().lower()
 R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID", "").strip()
@@ -3014,6 +3030,85 @@ def _cleanup_failed_catalog_quote(job_id: str, input_path: str, release_reservat
         pass
 
 
+def _append_mixed_warning_once(line: dict[str, Any], warning: str) -> None:
+    def normalized(value: object) -> str:
+        decomposed = unicodedata.normalize("NFKD", str(value or "").casefold())
+        without_marks = "".join(
+            character for character in decomposed
+            if not unicodedata.combining(character)
+        )
+        return " ".join(without_marks.split())
+
+    warning_key = normalized(warning)
+    if all(normalized(current) != warning_key for current in line["warnings"]):
+        line["warnings"].append(warning)
+
+
+def _mixed_snapshot_decimal(value: object) -> Decimal:
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise ValueError("Snapshot de reserva mixta invalido")
+    try:
+        number = Decimal(value)
+    except InvalidOperation as exc:
+        raise ValueError("Snapshot de reserva mixta invalido") from exc
+    if not number.is_finite() or number < 0:
+        raise ValueError("Snapshot de reserva mixta invalido")
+    return number
+
+
+def _apply_mixed_reservation_snapshot(cart_payload: dict, snapshot: list[dict]) -> None:
+    reservation_groups = build_mixed_reservation_groups(cart_payload)
+    expected = {
+        (group["catalog"], item["identity"]): item
+        for group in reservation_groups for item in group["items"]
+    }
+    fields = {
+        "catalog", "identity", "reserved_before", "available_before",
+        "insufficient", "reserved_by_others",
+    }
+    if not isinstance(snapshot, list) or len(snapshot) != len(expected):
+        raise ValueError("Snapshot de reserva mixta invalido")
+
+    indexed = {}
+    for candidate in snapshot:
+        if not isinstance(candidate, dict) or set(candidate) != fields:
+            raise ValueError("Snapshot de reserva mixta invalido")
+        key = (candidate.get("catalog"), candidate.get("identity"))
+        if key not in expected or key in indexed:
+            raise ValueError("Snapshot de reserva mixta invalido")
+        reserved_before = _mixed_snapshot_decimal(candidate["reserved_before"])
+        available_before = _mixed_snapshot_decimal(candidate["available_before"])
+        if type(candidate["insufficient"]) is not bool or type(candidate["reserved_by_others"]) is not bool:
+            raise ValueError("Snapshot de reserva mixta invalido")
+        expected_item = expected[key]
+        expected_available = max(
+            Decimal(expected_item["stock"]) - reserved_before, Decimal(0)
+        )
+        expected_insufficient = Decimal(expected_item["quantity"]) > expected_available
+        if available_before != expected_available or candidate["insufficient"] != expected_insufficient:
+            raise ValueError("Snapshot de reserva mixta invalido")
+        indexed[key] = candidate
+
+    for (catalog, identity), row in indexed.items():
+        if catalog == "tarkett" and row["insufficient"]:
+            raise ValueError(f"tarkett:{identity} sin existencia suficiente")
+
+    for group in cart_payload["groups"]:
+        catalog = group["catalog"]
+        for line in group["items"]:
+            reservation = line["reservation"]
+            if reservation is None:
+                continue
+            row = indexed[(catalog, reservation["identity"])]
+            line["reserved_quantity"] = row["reserved_before"]
+            line["available_after_reservations"] = row["available_before"]
+            line["reserved_by_others"] = row["reserved_by_others"]
+            if row["insufficient"]:
+                _append_mixed_warning_once(
+                    line, "Existencia insuficiente; verificar disponibilidad."
+                )
+
+
 def _require_active_subscription(usuario_id: int):
     suscripcion = db_get_suscripcion_by_usuario(usuario_id)
     now = datetime.now(timezone.utc)
@@ -4002,6 +4097,160 @@ def supplier_catalog(supplier: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=503, detail="Catalogo publicado no disponible") from exc
 
 
+def _mixed_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Campo JSON duplicado: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_mixed_json_constant(value):
+    raise ValueError(f"Constante JSON invalida: {value}")
+
+
+async def _read_mixed_quote_body(request: Request) -> object:
+    raw_length = request.headers.get("content-length")
+    if raw_length:
+        try:
+            declared = int(raw_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Content-Length invalido") from exc
+        if declared < 0 or declared > MAX_MIXED_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="Solicitud mixta demasiado grande")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_MIXED_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="Solicitud mixta demasiado grande")
+        chunks.append(chunk)
+    try:
+        return json.loads(
+            b"".join(chunks), object_pairs_hook=_mixed_json_object,
+            parse_constant=_reject_mixed_json_constant,
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Solicitud mixta invalida") from exc
+
+
+@app.post("/catalogs/mixed-quote")
+async def mixed_catalog_quote(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        _require_active_subscription(current_user["id"])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Error leyendo suscripcion") from exc
+    body = await _read_mixed_quote_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Solicitud mixta invalida")
+    unexpected = set(body) - MIXED_QUOTE_BODY_FIELDS
+    if unexpected:
+        raise HTTPException(status_code=400, detail=f"Campo de cotizacion no permitido: {min(unexpected)}")
+    raw_items = body.get("items")
+    if not isinstance(raw_items, list):
+        raise HTTPException(status_code=400, detail="Items mixtos debe ser una lista")
+    if not 1 <= len(raw_items) <= MAX_MIXED_CATALOG_LINES:
+        raise HTTPException(status_code=400, detail="El carrito mixto debe contener entre 1 y 500 filas")
+    try:
+        preflight_items = preflight_mixed_catalog_items(raw_items)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    requested_catalogs = {
+        str(row.get("catalog") or "").strip().lower()
+        for row in preflight_items
+    }
+    if not requested_catalogs or not requested_catalogs <= set(MIXED_CATALOG_ORDER):
+        raise HTTPException(status_code=400, detail="Catalogo mixto no soportado")
+
+    try:
+        catalogs = {}
+        if "tarkett" in requested_catalogs:
+            catalogs["tarkett"] = _load_tarkett_catalog_cached()
+        if "offiho" in requested_catalogs:
+            catalogs["offiho"] = _load_offiho_catalog_cached()
+        for supplier in sorted(requested_catalogs - {"tarkett", "offiho"}):
+            _require_enabled_catalog_supplier(supplier)
+            catalogs[supplier] = _load_supplier_catalog_cached(supplier)
+        rate_rows = db_list_exchange_rates()
+    except HTTPException:
+        raise
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail="Catalogos mixtos no disponibles") from exc
+
+    try:
+        cart_payload = build_mixed_catalog_cart_payload(
+            preflight_items,
+            catalogs=catalogs,
+            rate_rows=rate_rows,
+            quote_currency=str(body.get("quote_currency") or "MXN"),
+            commercial_discount_percent=body.get("descuento", "40"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    metadata = _validate_metadata({
+        **body,
+        "image_provider": body.get("image_provider") or "pillow",
+    })
+    metadata.update({
+        "source_type": "mixed_catalog_cart",
+        "original_filename": "mixed-catalog-cart.json",
+        "input_extension": ".json",
+        "storage_provider": _storage_provider_name(),
+        "input_storage_provider": _storage_provider_name(),
+        "mixed_item_count": cart_payload["item_count"],
+        "catalog_item_counts": {
+            group["catalog"]: len(group["items"]) for group in cart_payload["groups"]
+        },
+        "catalog_source_hashes": {
+            group["catalog"]: group["catalog_source_hash"] for group in cart_payload["groups"]
+        },
+        "quote_currency": cart_payload["quote_currency"],
+        "rate_summary": cart_payload["rate_summary"],
+        "auto_electrification_rate": cart_payload["auto_electrification_rate"],
+        "estimated_duration_seconds": 120,
+    })
+
+    assigned_quote_number = _next_quote_number_for_user(current_user)
+    if assigned_quote_number:
+        metadata["cotizacion"] = assigned_quote_number
+    elif not metadata.get("cotizacion"):
+        metadata["cotizacion"] = metadata["proyecto"]
+
+    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
+    if not template:
+        raise HTTPException(status_code=400, detail="Template requerido")
+    _enforce_active_quote_limit(current_user["id"])
+
+    job_id = str(uuid.uuid4())
+    input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
+    try:
+        db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
+        snapshot = db_reserve_mixed_cart(
+            current_user["id"], job_id, build_mixed_reservation_groups(cart_payload)
+        )
+        _apply_mixed_reservation_snapshot(cart_payload, snapshot)
+        validate_mixed_catalog_payload(cart_payload)
+        content = json.dumps(
+            cart_payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        _storage_upload_bytes(input_path, content, "application/json")
+        updated = db_queue_mixed_quote_job(job_id, metadata)
+    except Exception as exc:
+        _cleanup_failed_catalog_quote(job_id, input_path, db_release_mixed_cart)
+        raise HTTPException(
+            status_code=503, detail="No fue posible crear cotizacion mixta"
+        ) from exc
+
+    _wake_worker()
+    return {"mensaje": "Cotizacion mixta en cola", "job": updated}
+
+
 @app.post("/catalogs/{supplier}/quote")
 def supplier_quote(supplier: str, body: dict, current_user: dict = Depends(get_current_user)):
     supplier = _require_enabled_catalog_supplier(supplier)
@@ -4527,6 +4776,12 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=409, detail="Solo se pueden reintentar cotizaciones fallidas")
     if not job.get("input_path"):
         raise HTTPException(status_code=400, detail="La cotizacion no tiene archivo de entrada")
+    cleanup_error = str(job.get("error_message") or "").strip()
+    if cleanup_error.startswith("cleanup_pending:"):
+        raise HTTPException(
+            status_code=409,
+            detail="La cotizacion requiere limpieza administrativa antes de reintentar",
+        )
 
     _enforce_active_quote_limit(current_user["id"], exclude_job_id=job_id)
     try:
