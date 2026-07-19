@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from PIL import Image
 
 from mobiliti_saas.quote_engine.supplier_catalog import (
     PUBLIC_ITEM_FIELDS,
+    build_supplier_cart_payload,
     load_supplier_catalog_data,
 )
 from mobiliti_saas.worker.catalog_sync.importers.common import SourceSafetyError
@@ -147,6 +149,8 @@ def test_snapshot_contract_coordinates_authority_tax_and_determinism(source_bund
     celosia = by_name["SCC018 Celosia"]
     assert celosia["price_net"] == "1880.000000"
     assert celosia["tax_rate"] == "0.160000"
+    assert celosia["attributes"]["source_currency_status"] == "verified"
+    assert "source_currency_rule" not in celosia["attributes"]
     assert celosia["unit"] == "M2"
     assert celosia["description"].startswith("Ficha oficial:")
     assert celosia["attributes"]["row_description"] == "Panel acustico 12 mm Unidad: M2"
@@ -173,6 +177,32 @@ def test_missing_code_uses_stable_review_identity_and_unique_name_enrichment(sou
     assert any("codigo" in warning.lower() for warning in item["warnings"])
 
 
+def test_local_review_item_crosses_supplier_cart_with_one_canonical_warning(source_bundle):
+    snapshot = build_sonara_snapshot(source_bundle)
+    item = next(row for row in snapshot["items"] if row["code_status"] == "needs_review")
+
+    line = build_supplier_cart_payload(
+        [{"internal_id": item["internal_id"], "quantity": "1", "add_on_option_ids": []}],
+        snapshot,
+        "MXN",
+        [],
+    )["items"][0]
+
+    def normalized(warning):
+        return " ".join(
+            "".join(
+                character for character in unicodedata.normalize("NFKD", warning.casefold())
+                if not unicodedata.combining(character)
+            ).split()
+        )
+
+    assert line["unit_price"] == "2570.00"
+    assert line["sku"] == ""
+    assert line["code_status"] == "needs_review"
+    assert any("faltante" in warning.lower() for warning in line["warnings"])
+    assert [warning for warning in line["warnings"] if normalized(warning) == "codigo por verificar"] == ["Codigo por verificar"]
+
+
 def test_duplicate_normalized_catalog_name_stays_placeholder_without_image(tmp_path):
     price_list = tmp_path / "prices.pdf"
     catalog = tmp_path / "catalog.pdf"
@@ -191,7 +221,7 @@ def test_duplicate_normalized_catalog_name_stays_placeholder_without_image(tmp_p
     assert any("ambigu" in warning.lower() for warning in item["warnings"])
 
 
-def test_conflicting_prices_and_missing_currency_are_blocked(source_bundle, tmp_path):
+def test_conflicting_prices_are_blocked(source_bundle, tmp_path):
     catalog = source_bundle[0].local_path
     conflict = tmp_path / "conflict.pdf"
     _write_price_pdf(
@@ -205,19 +235,62 @@ def test_conflicting_prices_and_missing_currency_are_blocked(source_bundle, tmp_
     assert conflict_item["price_net"] == "0.000000"
     assert any("conflic" in warning.lower() for warning in conflict_item["warnings"])
 
-    missing_currency = tmp_path / "missing-currency.pdf"
+
+def test_missing_currency_uses_auditable_mxn_business_override(source_bundle, tmp_path, monkeypatch):
+    price_list = tmp_path / "missing-currency.pdf"
     _write_price_pdf(
-        missing_currency,
-        (("SCC018 Celosia", "Panel acustico 12 mm", "1,880.00"),),
+        price_list,
+        [("PANEL 01", "Panel acustico 60 x 120 cm", "1880.00")],
         currency="Lista vigente marzo 2026",
     )
-    currency_item = build_sonara_snapshot(_bundle(missing_currency, catalog))["items"][0]
-    assert currency_item["price_net"] == "0.000000"
-    assert currency_item["base_currency"] == "XXX"
-    assert any("moneda" in warning.lower() for warning in currency_item["warnings"])
+    monkeypatch.setattr(
+        sonara,
+        "_SONARA_PRICE_SHA256",
+        hashlib.sha256(price_list.read_bytes()).hexdigest(),
+    )
+    item = build_sonara_snapshot(_bundle(price_list, source_bundle[0].local_path))["items"][0]
+    assert item["base_currency"] == "MXN"
+    assert item["price_net"] == "1880.000000"
+    assert item["tax_rate"] == "0.160000"
+    assert item["attributes"]["source_currency_status"] == "business_override"
+    assert item["attributes"]["source_currency_rule"] == "sonara_mxn_confirmed_2026-07-19"
 
 
-def test_currency_and_iva_require_contextual_explicit_declarations(source_bundle, tmp_path):
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "Moneda: USD", "Moneda: EUR", "Moneda: MXN / Moneda: USD",
+        "Precios USD", "US$ 1,880.00", "Precios en €",
+    ),
+)
+def test_foreign_or_contradictory_currency_fails_closed(source_bundle, tmp_path, declaration):
+    price_list = tmp_path / "rejected-currency.pdf"
+    _write_price_pdf(
+        price_list,
+        [("PANEL 01", "Panel acustico 60 x 120 cm", "1880.00")],
+        currency=declaration,
+    )
+    item = build_sonara_snapshot(_bundle(price_list, source_bundle[0].local_path))["items"][0]
+    assert item["base_currency"] == "XXX"
+    assert item["price_net"] == "0.000000"
+    assert item["attributes"]["source_currency_status"] == "rejected"
+    assert any("moneda" in warning.lower() for warning in item["warnings"])
+
+
+def test_unrecognized_missing_currency_file_fails_closed(source_bundle, tmp_path):
+    price_list = tmp_path / "untrusted-missing-currency.pdf"
+    _write_price_pdf(
+        price_list,
+        [("PANEL 01", "Panel acustico 60 x 120 cm", "1880.00")],
+        currency="Lista sin moneda",
+    )
+    item = build_sonara_snapshot(_bundle(price_list, source_bundle[0].local_path))["items"][0]
+    assert item["base_currency"] == "XXX"
+    assert item["price_net"] == "0.000000"
+    assert item["attributes"]["source_currency_status"] == "rejected"
+
+
+def test_currency_and_iva_require_contextual_explicit_declarations(source_bundle, tmp_path, monkeypatch):
     catalog = source_bundle[0].local_path
     price_list = tmp_path / "ambiguous-commercial-terms.pdf"
     _write_price_pdf(
@@ -226,12 +299,14 @@ def test_currency_and_iva_require_contextual_explicit_declarations(source_bundle
         currency="Referencia interna MXN",
         notice="Precios vigentes",
     )
-
+    monkeypatch.setattr(sonara, "_SONARA_PRICE_SHA256", _sha256(price_list))
     item = build_sonara_snapshot(_bundle(price_list, catalog))["items"][0]
 
+    assert item["base_currency"] == "MXN"
+    assert item["attributes"]["source_currency_status"] == "business_override"
     assert item["price_net"] == "0.000000"
     assert item["tax_rate"] == "0.000000"
-    assert any("moneda" in warning.lower() for warning in item["warnings"])
+    assert not any("moneda" in warning.lower() for warning in item["warnings"])
     assert any("iva" in warning.lower() for warning in item["warnings"])
 
 
@@ -325,9 +400,9 @@ def test_pdf_geometry_parser_is_isolated_and_consumes_validated_bytes(source_bun
     real_isolated = sonara._parse_sonara_documents_isolated
     calls = []
 
-    def audited_isolated(price_data, catalog_data, include_assets):
-        calls.append((price_data, catalog_data, include_assets))
-        return real_isolated(price_data, catalog_data, include_assets)
+    def audited_isolated(price_data, catalog_data, include_assets, confirmed_price_sha256):
+        calls.append((price_data, catalog_data, include_assets, confirmed_price_sha256))
+        return real_isolated(price_data, catalog_data, include_assets, confirmed_price_sha256)
 
     monkeypatch.setattr(sonara, "_parse_sonara_documents_isolated", audited_isolated)
     monkeypatch.setattr(
@@ -339,10 +414,11 @@ def test_pdf_geometry_parser_is_isolated_and_consumes_validated_bytes(source_bun
     build_sonara_snapshot(source_bundle)
 
     assert len(calls) == 1
-    price_data, catalog_data, include_assets = calls[0]
+    price_data, catalog_data, include_assets, confirmed_price_sha256 = calls[0]
     assert hashlib.sha256(price_data).hexdigest() == source_bundle[1].sha256
     assert hashlib.sha256(catalog_data).hexdigest() == source_bundle[0].sha256
     assert include_assets is False
+    assert confirmed_price_sha256 == sonara._SONARA_PRICE_SHA256
 
 
 def test_duplicate_logical_source_paths_are_rejected(source_bundle):
@@ -423,7 +499,12 @@ def test_ignored_real_sources_pass_contract_and_report_metrics():
         ),
     }
     print("SONARA_REAL_METRICS=" + json.dumps(metrics, sort_keys=True))
-    assert len(items) == 39
+    assert metrics["rows"] == 39
+    assert metrics["nonzero_prices"] == 39
+    assert metrics["blocked_prices"] == 0
+    assert metrics["verified_codes"] == 7
+    assert metrics["needs_review"] == 32
+    assert metrics["currency_warnings"] == 0
 
 
 def test_ignored_real_sources_reconcile_only_exact_sacc_variants_and_assets():
@@ -451,8 +532,15 @@ def test_ignored_real_sources_reconcile_only_exact_sacc_variants_and_assets():
         item["attributes"]["product_url_match"]["status"] == "collection_index"
         for item in exact.values()
     )
+    assert len(items) == 39
+    assert all(item["base_currency"] == "MXN" for item in items)
+    assert all(item["price_net"] != "0.000000" for item in items)
     assert all(
-        item["base_currency"] == "XXX" and item["price_net"] == "0.000000"
+        item["attributes"]["source_currency_status"] == "business_override"
+        for item in items
+    )
+    assert all(
+        item["attributes"]["source_currency_rule"] == "sonara_mxn_confirmed_2026-07-19"
         for item in items
     )
     assert all(item["attributes"]["source_price_printed"].startswith("$") for item in items)

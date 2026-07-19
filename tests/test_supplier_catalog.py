@@ -519,7 +519,7 @@ def test_lumbro_cart_requires_integer_piece_quantity_and_preserves_net_tax_total
         )
 
 
-def test_representative_lumbro_snapshot_quotes_only_four_literal_official_codes(
+def test_representative_lumbro_snapshot_quotes_official_codes_and_warns_on_review_item(
     representative_lumbro_catalog,
     tmp_path,
 ):
@@ -559,13 +559,25 @@ def test_representative_lumbro_snapshot_quotes_only_four_literal_official_codes(
     assert actual_iva == LUMBRO_EXPECTED_IVA
     assert actual_net + actual_iva == LUMBRO_EXPECTED_TOTAL
 
-    with pytest.raises(ValueError, match="codigo por verificar"):
-        build_supplier_cart_payload(
-            [{"internal_id": review["internal_id"], "quantity": "1", "add_on_option_ids": []}],
-            loaded,
-            "MXN",
-            [],
-        )
+    review_cart = build_supplier_cart_payload(
+        [{"internal_id": review["internal_id"], "quantity": "1", "add_on_option_ids": []}],
+        loaded,
+        "MXN",
+        [],
+    )
+    review_line = review_cart["items"][0]
+    assert review_line["code_status"] == "needs_review"
+    assert review_line["sku"] == ""
+    assert review_line["warnings"]
+    description, warning = catalog_cart._description_for_item(
+        review_line,
+        review_line["sku"],
+        review_line["product_url"],
+        Decimal(review_line["quantity"]),
+    )
+    assert "Codigo por verificar" in description
+    assert "Codigo por verificar" in warning
+
     with pytest.raises(ValueError, match="entera"):
         build_supplier_cart_payload(
             [{"internal_id": verified[0]["internal_id"], "quantity": "2.5", "add_on_option_ids": []}],
@@ -786,7 +798,7 @@ def test_supplier_cart_rejects_verified_item_with_zero_price():
     payload["items"][0].update(
         code_status="verified",
         sku="ALMA-ZERO",
-        base_currency="MXN",
+        base_currency="USD",
         price_net="0.000000",
         base_price_options=[],
         add_on_options=[],
@@ -844,6 +856,128 @@ def test_build_cart_rejects_review_codes():
     }
     with pytest.raises(ValueError, match="verificar"):
         build_supplier_cart_payload([raw], review_payload, "USD", [])
+
+    cr_global_payload = catalog_payload(supplier="cr-global")
+    cr_global_item = cr_global_payload["items"][0]
+    cr_global_item.update({"code_status": "needs_review", "sku": "", "base_currency": "MXN"})
+    with pytest.raises(ValueError, match="codigo por verificar"):
+        build_supplier_cart_payload(
+            [{"internal_id": cr_global_item["internal_id"], "quantity": "1", "base_option_id": "powder-coated-aluminium", "add_on_option_ids": []}],
+            cr_global_payload,
+            "MXN",
+            [],
+        )
+
+
+def test_sonara_cart_accepts_review_item_with_positive_mxn_price_and_warning():
+    payload = catalog_payload(supplier="sonara")
+    item = payload["items"][0]
+    item.update(
+        internal_id="sonara:review-panel",
+        supplier="sonara",
+        sku="",
+        code_status="needs_review",
+        base_currency="MXN",
+        price_net="77.000000",
+        tax_rate="0.160000",
+        base_price_options=[],
+        add_on_options=[],
+        warnings=["Codigo por verificar"],
+    )
+    cart = build_supplier_cart_payload(
+        [{"internal_id": item["internal_id"], "quantity": "2", "add_on_option_ids": []}],
+        payload,
+        "MXN",
+        [],
+    )
+    line = cart["items"][0]
+    assert line["code_status"] == "needs_review"
+    assert line["sku"] == ""
+    assert line["unit_price"] == "77.00"
+    assert line["tax_rate"] == "0.160000"
+    assert "Codigo por verificar" in line["warnings"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("price_net", "0.000000", "precio por confirmar"),
+        ("base_currency", "XXX", "moneda base por verificar"),
+        ("base_currency", "USD", "moneda base por verificar"),
+        ("tax_rate", "0.080000", "IVA 16"),
+    ),
+)
+def test_sonara_review_item_fails_closed_without_valid_commercial_data(field, value, message):
+    payload = catalog_payload(supplier="sonara")
+    item = payload["items"][0]
+    item.update(
+        internal_id="sonara:review-panel",
+        supplier="sonara",
+        sku="",
+        code_status="needs_review",
+        base_currency="MXN",
+        price_net="77.000000",
+        tax_rate="0.160000",
+        base_price_options=[],
+        add_on_options=[],
+    )
+    item[field] = value
+    with pytest.raises(ValueError, match=message):
+        build_supplier_cart_payload(
+            [{"internal_id": item["internal_id"], "quantity": "1", "add_on_option_ids": []}],
+            payload,
+            "MXN",
+            [],
+        )
+
+
+def test_sonara_verified_item_with_usd_base_currency_fails_closed():
+    payload = catalog_payload(supplier="sonara")
+    item = payload["items"][0]
+    item.update(
+        internal_id="sonara:verified-panel",
+        supplier="sonara",
+        base_currency="USD",
+        price_net="77.000000",
+        base_price_options=[],
+        add_on_options=[],
+    )
+    with pytest.raises(ValueError, match="moneda base por verificar"):
+        build_supplier_cart_payload(
+            [{"internal_id": item["internal_id"], "quantity": "1", "add_on_option_ids": []}],
+            payload,
+            "MXN",
+            [],
+        )
+
+
+def test_review_warning_is_canonicalized_and_verified_warnings_are_preserved():
+    payload = catalog_payload(supplier="sonara")
+    item = payload["items"][0]
+    item.update(
+        internal_id="sonara:review-panel",
+        supplier="sonara",
+        sku="",
+        code_status="needs_review",
+        base_currency="MXN",
+        price_net="77.000000",
+        tax_rate="0.160000",
+        base_price_options=[],
+        add_on_options=[],
+        warnings=["C\u00f3digo por verificar", " codigo por VERIFICAR ", "Evidencia detallada"],
+    )
+    review_line = build_supplier_cart_payload(
+        [{"internal_id": item["internal_id"], "quantity": "1", "add_on_option_ids": []}], payload, "MXN", []
+    )["items"][0]
+    assert review_line["warnings"] == ["Evidencia detallada", "Codigo por verificar"]
+
+    payload = catalog_payload(supplier="sonara")
+    payload["items"][0]["base_currency"] = "MXN"
+    payload["items"][0]["warnings"] = ["Imagen ilustrativa", "Otra advertencia"]
+    verified_line = build_supplier_cart_payload(
+        [{"internal_id": payload["items"][0]["internal_id"], "quantity": "1", "base_option_id": "powder-coated-aluminium", "add_on_option_ids": []}], payload, "MXN", []
+    )["items"][0]
+    assert verified_line["warnings"] == ["Imagen ilustrativa", "Otra advertencia"]
 
 
 @pytest.mark.parametrize(

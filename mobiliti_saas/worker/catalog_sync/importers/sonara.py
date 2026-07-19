@@ -38,6 +38,7 @@ _MEASUREMENT = re.compile(
 )
 _SONARA_CATALOG_SHA256 = "35c4abd3c4b3fef5c11cb8b7b22509f9913343b9ee79bf4cc6ae9c6aac3f0099"
 _SONARA_PRICE_SHA256 = "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128"
+_SONARA_MXN_RULE = "sonara_mxn_confirmed_2026-07-19"
 _SUSPENDED_COLLECTION_URL = "https://sonara.mx/soluciones-sonara/paneles-suspendidos/"
 _MAX_GEOMETRY_RESULT_BYTES = 32 * 1024 * 1024
 _MAX_GEOMETRY_SECONDS = 60
@@ -81,6 +82,10 @@ _SACC_MODELS = {
         "asset_sha256": "ca4479f4bb1066c806c7d9aa59b6922cfeb96be6ed32b74c0fbeee5f88576f65",
     },
 }
+
+_FOREIGN_CURRENCY_EVIDENCE = re.compile(
+    r"(?i)(?:\bUSD\b|\bEUR\b|\bUS\s*\$|€)"
+)
 
 
 def _plain(value) -> str:
@@ -253,8 +258,26 @@ def _bbox(words):
     ]
 
 
-def _price_rows(row, data):
+def _source_currency(
+    currencies: set[str],
+    full_text: str,
+    source_sha256: str,
+    confirmed_price_sha256: str,
+) -> tuple[str | None, str]:
+    if _FOREIGN_CURRENCY_EVIDENCE.search(full_text) or currencies - {"MXN"}:
+        return None, "rejected"
+    if currencies == {"MXN"}:
+        return "MXN", "verified"
+    if not currencies and source_sha256 == confirmed_price_sha256:
+        return "MXN", "business_override"
+    return None, "rejected"
+
+
+def _price_rows(row, data, confirmed_price_sha256):
+    if not re.fullmatch(r"[0-9a-f]{64}", confirmed_price_sha256):
+        raise ValueError("SONARA_PRICE_HASH")
     records = []
+    source_sha256 = hashlib.sha256(data).hexdigest()
     document = fitz.open(stream=data, filetype="pdf")
     try:
         full_text = "\n".join(page.get_text() for page in document)
@@ -262,7 +285,9 @@ def _price_rows(row, data):
             match.group(1).upper()
             for match in re.finditer(r"(?i)\bmoneda\s*:?\s*(MXN|USD|EUR)\b", full_text)
         }
-        currency = next(iter(currencies)) if len(currencies) == 1 else None
+        currency, currency_status = _source_currency(
+            currencies, full_text, source_sha256, confirmed_price_sha256
+        )
         plus_iva = bool(re.search(r"(?i)\bm[aá]s\s+IVA\b", full_text))
         for page_number, page in enumerate(document, 1):
             words = page.get_text("words", sort=False)
@@ -319,7 +344,8 @@ def _price_rows(row, data):
                         "description": _joined(description_words),
                         "price": price,
                         "currency": currency,
-                        "currency_ok": currency is not None,
+                        "currency_ok": currency == "MXN",
+                        "currency_status": currency_status,
                         "plus_iva": plus_iva,
                     }
                 )
@@ -512,7 +538,7 @@ def _geometry_payload(rows, catalog, assets) -> bytes:
     ).encode("utf-8")
 
 
-def _geometry_worker(control, output, price_data, catalog_data, include_assets):
+def _geometry_worker(control, output, price_data, catalog_data, include_assets, confirmed_price_sha256):
     try:
         if os.name != "nt":
             import resource
@@ -526,7 +552,7 @@ def _geometry_worker(control, output, price_data, catalog_data, include_assets):
             resource.setrlimit(resource.RLIMIT_AS, (hard, hard))
         if control.recv_bytes(1) != b"G":
             return
-        rows = _price_rows(None, price_data)
+        rows = _price_rows(None, price_data, confirmed_price_sha256)
         catalog = _catalog_records(None, catalog_data)
         assets = _manifest_assets(catalog_data) if include_assets else {}
         payload = _geometry_payload(rows, catalog, assets)
@@ -543,11 +569,13 @@ def _geometry_worker(control, output, price_data, catalog_data, include_assets):
         output.close()
 
 
-def _parse_sonara_documents_isolated(price_data, catalog_data, include_assets):
+def _parse_sonara_documents_isolated(price_data, catalog_data, include_assets, confirmed_price_sha256):
     if (
         type(price_data) is not bytes
         or type(catalog_data) is not bytes
         or type(include_assets) is not bool
+        or not isinstance(confirmed_price_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", confirmed_price_sha256)
     ):
         raise ValueError("SONARA_PDF_ARGUMENT")
     context = multiprocessing.get_context("spawn")
@@ -555,7 +583,7 @@ def _parse_sonara_documents_isolated(price_data, catalog_data, include_assets):
     output_read, output_write = context.Pipe(duplex=False)
     process = context.Process(
         target=_geometry_worker,
-        args=(control_read, output_write, price_data, catalog_data, include_assets),
+        args=(control_read, output_write, price_data, catalog_data, include_assets, confirmed_price_sha256),
     )
     process.daemon = True
     code = None
@@ -662,17 +690,19 @@ def _item(
     if conflict or code_conflict:
         price = Decimal(0)
         warnings.append("Precio conflictivo en la lista vigente; requiere revision.")
-    if not record["currency_ok"]:
+    if record["currency_status"] == "rejected":
         price = Decimal(0)
-        warnings.append("Moneda no declarada explicitamente; verificar precio.")
+        warnings.append("Moneda no confirmada, extranjera o contradictoria; verificar precio.")
     if not record["plus_iva"]:
         price = Decimal(0)
         warnings.append("Tratamiento de IVA no declarado explicitamente; requiere revision.")
     attributes = {
         "row_description": record["description"],
         "source_price_printed": f"$ {record['price']:,.2f}",
-        "source_currency_status": "undeclared" if not record["currency_ok"] else "verified",
+        "source_currency_status": record["currency_status"],
     }
+    if record["currency_status"] == "business_override":
+        attributes["source_currency_rule"] = _SONARA_MXN_RULE
     dimensions = _dimension_evidence(record)
     if dimensions:
         attributes["dimensions"] = dimensions
@@ -699,6 +729,8 @@ def _item(
         if catalog_row["image"] is not None:
             attributes.update(catalog_row["image"])
         evidence.append(source_ref(catalog_source.sha256, catalog_row["page"], catalog_row["bbox"]))
+    if code_status == "needs_review" and "Codigo por verificar" not in warnings:
+        warnings.append("Codigo por verificar")
     return {
         "internal_id": internal_id,
         "supplier": "sonara",
@@ -732,7 +764,7 @@ def _build_sonara(files, *, include_assets: bool):
     price_source = bundle["price_list"]
     catalog_source = bundle["catalog"]
     rows, catalog, parsed_assets = _parse_sonara_documents_isolated(
-        source_data["price_list"], source_data["catalog"], include_assets
+        source_data["price_list"], source_data["catalog"], include_assets, _SONARA_PRICE_SHA256
     )
     grouped = defaultdict(list)
     for row in rows:

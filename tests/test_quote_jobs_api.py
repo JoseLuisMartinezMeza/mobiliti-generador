@@ -1042,7 +1042,7 @@ def _mock_supplier_catalog(*, availability_type="stocked", code_status="verified
                 "lead_time": "Entrega inmediata" if availability_type == "stocked" else "Sobre pedido",
                 "base_price_options": [],
                 "add_on_options": [],
-                "base_currency": "USD",
+                "base_currency": "MXN",
                 "price_net": "100.000000",
                 "tax_rate": "0.160000",
                 "attributes": {"color": "Negro"},
@@ -1401,7 +1401,7 @@ def test_lumbro_catalog_supplier_quote_accepts_four_verified_items(monkeypatch):
     assert state["reservations"] == []
 
 
-def test_lumbro_catalog_supplier_quote_blocks_needs_review_item_before_upload(monkeypatch):
+def test_lumbro_catalog_supplier_quote_accepts_needs_review_item_with_warning(monkeypatch):
     catalog = _mock_lumbro_catalog()
     state = _install_supplier_quote_mocks(monkeypatch, catalog)
     review_item = next(item for item in catalog["items"] if item["code_status"] == "needs_review")
@@ -1420,11 +1420,49 @@ def test_lumbro_catalog_supplier_quote_blocks_needs_review_item_before_upload(mo
         ),
     )
 
-    assert response.status_code == 400
-    assert "codigo por verificar" in response.json()["detail"].lower()
-    assert state["uploaded"] == {}
-    assert state["created"] == {}
+    assert response.status_code == 200
+    payload = index.json.loads(state["uploaded"]["content"].decode("utf-8"))
+    line = payload["items"][0]
+    assert line["code_status"] == "needs_review"
+    assert line["sku"] == ""
+    assert "Codigo por verificar" in line["warnings"]
+    assert state["created"]["metadata"]["catalog_source_hash"] == "b" * 64
     assert state["reservations"] == []
+
+
+def test_sonara_catalog_supplier_quote_freezes_needs_review_item(monkeypatch):
+    catalog = _mock_lumbro_catalog()
+    catalog["supplier"] = "sonara"
+    for item in catalog["items"]:
+        item["supplier"] = "sonara"
+        item["internal_id"] = item["internal_id"].replace("lumbro:", "sonara:")
+    state = _install_supplier_quote_mocks(monkeypatch, catalog)
+    review_item = next(item for item in catalog["items"] if item["code_status"] == "needs_review")
+    review_item["price_net"] = "77.000000"
+
+    response = _client().post(
+        "/catalogs/sonara/quote",
+        headers=_auth_headers(),
+        json=_valid_supplier_body(
+            items=[
+                {
+                    "internal_id": review_item["internal_id"],
+                    "quantity": "1",
+                    "add_on_option_ids": [],
+                }
+            ]
+        ),
+    )
+
+    assert response.status_code == 200
+    uploaded_payload = index.json.loads(state["uploaded"]["content"].decode("utf-8"))
+    line = uploaded_payload["items"][0]
+    assert line["code_status"] == "needs_review"
+    assert line["sku"] == ""
+    assert line["base_currency"] == "MXN"
+    assert line["unit_price"] == "77.00"
+    assert line["tax_rate"] == "0.160000"
+    assert "Codigo por verificar" in line["warnings"]
 
 
 def test_supplier_quote_freezes_fx_and_creates_stock_reservations(monkeypatch):
@@ -1438,13 +1476,12 @@ def test_supplier_quote_freezes_fx_and_creates_stock_reservations(monkeypatch):
 
     assert response.status_code == 200
     payload = index.json.loads(state["uploaded"]["content"].decode("utf-8"))
-    effective_date = (date.today() - timedelta(days=1)).isoformat()
     frozen = {
         "quote_currency": "MXN",
-        "exchange_rate": "18.500000",
-        "rate_source": "saas_exchange_rates",
-        "rate_effective_date": effective_date,
-        "rate_retrieved_at": f"{effective_date}T20:00:00Z",
+        "exchange_rate": "1.000000",
+        "rate_source": "identity",
+        "rate_effective_date": date.today().isoformat(),
+        "rate_retrieved_at": "",
     }
     assert state["uploaded"]["path"].endswith("/input.json")
     assert payload["source_type"] == "supplier_cart"

@@ -24,6 +24,10 @@ SUPPLIER_LABELS = {
 }
 ALLOWED_CURRENCIES = {"USD", "MXN", "EUR"}
 UNKNOWN_BASE_CURRENCY = "XXX"
+REVIEW_QUOTABLE_SUPPLIERS = frozenset({"lumbro", "sonara"})
+EXPECTED_SUPPLIER_BASE_CURRENCY = {
+    "cr-global": "MXN", "sonara": "MXN", "sunon": "USD", "alma": "USD", "lumbro": "MXN",
+}
 PUBLIC_ITEM_FIELDS = (
     "internal_id", "supplier", "product_key", "sku", "code_status",
     "brand", "collection", "name", "description", "unit",
@@ -185,10 +189,16 @@ def build_supplier_cart_payload(
         item = by_id.get(internal_id)
         if item is None:
             raise ValueError(f"Producto de proveedor no encontrado: {internal_id}")
-        if item["code_status"] != "verified":
-            raise ValueError("codigo por verificar; el producto no se puede cotizar")
-        if item["base_currency"] == UNKNOWN_BASE_CURRENCY:
+        expected_currency = EXPECTED_SUPPLIER_BASE_CURRENCY[loaded["supplier"]]
+        if item["base_currency"] != expected_currency:
             raise ValueError("moneda base por verificar; el producto no se puede cotizar")
+        if item["code_status"] != "verified":
+            if loaded["supplier"] not in REVIEW_QUOTABLE_SUPPLIERS:
+                raise ValueError("codigo por verificar; el producto no se puede cotizar")
+            if item["base_currency"] != "MXN":
+                raise ValueError("moneda base por verificar; el producto no se puede cotizar")
+            if Decimal(item["tax_rate"]) != Decimal("0.160000"):
+                raise ValueError("IVA 16% requerido para codigo por verificar")
         quantity = _quantity(
             raw.get("quantity"),
             allow_fractional=_is_square_meter_unit(item["unit"]),
@@ -623,9 +633,41 @@ def _cart_line(
         "image_url": item["image_url"],
         "image_kind": item["image_kind"],
         "product_url": item["product_url"],
-        "warnings": list(item["warnings"]),
+        "warnings": _supplier_line_warnings(item),
         "source_reference": item["source_reference"],
     }
+
+
+def _normalized_supplier_warning(value: object) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    without_marks = "".join(
+        character for character in normalized
+        if not unicodedata.combining(character)
+    )
+    return " ".join(without_marks.split())
+
+
+def _supplier_line_warnings(item: dict[str, Any]) -> list[str]:
+    canonical = "Codigo por verificar"
+    canonical_key = _normalized_supplier_warning(canonical)
+    review_line = item["code_status"] == "needs_review"
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_warning in item["warnings"]:
+        warning = str(raw_warning).strip()
+        key = _normalized_supplier_warning(warning)
+        if not warning or not key:
+            continue
+        if review_line and key == canonical_key:
+            continue
+        if key not in seen:
+            seen.add(key)
+            result.append(warning)
+    if review_line:
+        if len(result) >= MAX_WARNINGS_PER_ITEM:
+            raise ValueError("Se excede el limite de warnings al agregar codigo por verificar")
+        result.append(canonical)
+    return result
 
 
 def _decimal_string(

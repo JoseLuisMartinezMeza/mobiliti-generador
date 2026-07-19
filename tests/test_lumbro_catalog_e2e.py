@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import unicodedata
 import uuid
 
 from fastapi.testclient import TestClient
@@ -209,6 +210,32 @@ def representative_lumbro_snapshot() -> dict:
     }
 
 
+def test_local_lumbro_review_item_crosses_supplier_cart_with_one_canonical_warning(
+    representative_lumbro_snapshot,
+):
+    review = next(
+        item for item in representative_lumbro_snapshot["items"]
+        if item["code_status"] == "needs_review"
+    )
+    line = build_supplier_cart_payload(
+        [{"internal_id": review["internal_id"], "quantity": "1", "add_on_option_ids": []}],
+        representative_lumbro_snapshot,
+        "MXN",
+        [],
+    )["items"][0]
+
+    def normalized(warning):
+        return " ".join(
+            "".join(
+                character for character in unicodedata.normalize("NFKD", warning.casefold())
+                if not unicodedata.combining(character)
+            ).split()
+        )
+
+    assert any("repetido" in warning.lower() for warning in line["warnings"])
+    assert [warning for warning in line["warnings"] if normalized(warning) == "codigo por verificar"] == ["Codigo por verificar"]
+
+
 def _isolated_barcelona_arithmetic_catalog() -> dict:
     return {
         "supplier": "lumbro",
@@ -408,15 +435,6 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         api_index,
     )
     client = TestClient(api_index.app)
-    blocked = client.post(
-        "/catalogs/lumbro/quote",
-        headers=_auth_headers(api_index),
-        json=_quote_body(BARCELONA_REVIEW_ID),
-    )
-    assert blocked.status_code == 400
-    assert "codigo por verificar" in blocked.json()["detail"].lower()
-    assert state == {"created": [], "uploaded": [], "queued": []}
-
     accepted = client.post(
         "/catalogs/lumbro/quote",
         headers=_auth_headers(api_index),
