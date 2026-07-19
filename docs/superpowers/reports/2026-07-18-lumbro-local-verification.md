@@ -6,6 +6,8 @@ Rama: `codex/offiho-catalog-20260709`
 
 Resultado Task 12: **PASS**
 
+Regresión integral: PASS
+
 Entorno: local y recuperable
 
 ## Alcance verificado
@@ -225,6 +227,51 @@ prohíbe cambios al sidebar dentro del breakpoint estrecho.
 
 Los screenshots, snapshot, assets, backup y logs son artefactos locales y no
 se incluyen en el commit del reporte.
+
+## Regresión integral Task 13
+
+La regresión se ejecutó sobre `4bbccbd`, que ya incluye los fixes locales
+`48ece9a` (precio neto sin descuento duplicado) y `c42517e` (layout móvil
+estrecho). Los gates se ejecutaron en el orden del plan y terminaron con
+código `0`:
+
+```powershell
+python -m pytest tests/test_catalog_source_safety.py tests/test_lumbro_links.py tests/test_catalog_migrations.py -q
+# 101 passed in 8.45s
+
+python -m pytest tests/test_catalog_source_config.py tests/test_catalog_importers_lumbro.py tests/test_lumbro_catalog_audit.py tests/test_catalog_sync_service.py tests/test_catalog_repository.py tests/test_supplier_catalog.py tests/test_supplier_catalog_ui.py tests/test_quote_jobs_api.py tests/test_quote_worker.py tests/test_lumbro_catalog_e2e.py tests/test_quote_engine_lumbro.py tests/test_mobiliti_capacity.py -q
+# 555 passed, 42 warnings in 737.80s (0:12:17)
+
+python -m pytest -q
+# 1260 passed, 9 skipped, 53 warnings in 1595.43s (0:26:35)
+
+python -m compileall -q mobiliti_saas vercel_deploy scripts
+# exit 0; sin errores de sintaxis
+
+python -c "from pathlib import Path; import hashlib; groups=[['mobiliti_saas/api/index.py','mobiliti_saas/web/api/index.py','vercel_deploy/api/index.py'],['mobiliti_saas/quote_engine/supplier_catalog.py','mobiliti_saas/web/mobiliti_saas/quote_engine/supplier_catalog.py']]; assert all(len({hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in g}) == 1 for g in groups)"
+# exit 0
+
+Set-Location mobiliti_saas\web
+npm.cmd run build
+# vite v7.3.5; 1701 modules transformed; built in 2.29s
+```
+
+Los `42` warnings focalizados corresponden a `21` avisos de validación de
+datos y `21` avisos de imágenes WMF emitidos por openpyxl. En la suite total
+hubo `26 + 26` de esos mismos avisos y una deprecación conocida de
+`Pillow.Image.getdata`, para `53` warnings. Los `9` casos omitidos fueron
+reportados por pytest como `skipped`; no hubo fallos ni errores.
+
+Hashes de paridad verificados:
+
+- API raíz, web y Vercel:
+  `023fe204a0b6139b6409c53205c3020113eed8b7ab0662584539a6c73464f3d1`.
+- Dominio `supplier_catalog` raíz y web:
+  `19adedc6648f9dc394387ca49157fcd1af54844bce561ae48e4103eb9031c968`.
+
+El build usó el `package.json` y lockfile existentes; no se instalaron ni
+actualizaron dependencias. Task 13 no necesitó cambios de código: sólo este
+reporte registra los resultados.
 
 ## Límites y estado de producción
 
