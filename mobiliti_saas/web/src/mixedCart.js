@@ -11,15 +11,33 @@ export const MIXED_CATALOGS = Object.freeze([
 const SUPPLIER_CATALOGS = new Set(MIXED_CATALOGS.slice(2));
 const QUANTITY_PATTERN = /^(?:0|[1-9]\d{0,6})(?:\.(\d{1,6}))?$/;
 const IDENTITY_CONTROL_PATTERN = /[\p{Cc}\p{Cf}\p{Cs}]/u;
+const PYTHON_EDGE_WHITESPACE_PATTERN = /^[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/gu;
 const QUANTITY_SCALE = 1000000n;
+const hasOwn = (value, field) => Object.prototype.hasOwnProperty.call(value, field);
+
+function pythonStrip(value) {
+  return value.replace(PYTHON_EDGE_WHITESPACE_PATTERN, "");
+}
 
 function normalizedText(value, field, { allowEmpty = false, limit = 1000 } = {}) {
   if (typeof value !== "string") throw new Error(`${field} requerido`);
-  const text = value.trim();
-  if ((!text && !allowEmpty) || text.length > limit || IDENTITY_CONTROL_PATTERN.test(text)) {
+  const text = pythonStrip(value);
+  const codePointLength = Array.from(text).length;
+  if ((!text && !allowEmpty) || codePointLength > limit || IDENTITY_CONTROL_PATTERN.test(text)) {
     throw new Error(`${field} requerido`);
   }
   return text;
+}
+
+function identityRecord(identity) {
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    throw new Error("Identidad invalida");
+  }
+  const prototype = Object.getPrototypeOf(identity);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("Identidad invalida");
+  }
+  return identity;
 }
 
 function compareUnicodeCodePoints(left, right) {
@@ -36,32 +54,41 @@ function compareUnicodeCodePoints(left, right) {
 function normalizedAddOns(value) {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 200) throw new Error("Add-ons invalidos");
-  const result = value.map((candidate) => normalizedText(candidate, "Add-on", { limit: 500 }));
+  const result = Array.from({ length: value.length }, (_, index) => {
+    if (!hasOwn(value, index)) throw new Error("Add-on requerido");
+    return normalizedText(value[index], "Add-on", { limit: 500 });
+  });
   if (new Set(result).size !== result.length) throw new Error("Add-ons duplicados");
   return result.sort(compareUnicodeCodePoints);
 }
 
 function normalizedIdentity(catalog, identity) {
-  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
-    if (catalog === "tarkett") throw new Error("code requerido");
-    if (catalog === "offiho") throw new Error("inventory_key requerido");
-    throw new Error("internal_id requerido");
-  }
+  const record = identityRecord(identity);
   if (catalog === "tarkett") {
-    return { code: normalizedText(identity.code, "code") };
+    return { code: normalizedText(hasOwn(record, "code") ? record.code : undefined, "code") };
   }
   if (catalog === "offiho") {
-    return { inventory_key: normalizedText(identity.inventory_key, "inventory_key") };
+    return {
+      inventory_key: normalizedText(
+        hasOwn(record, "inventory_key") ? record.inventory_key : undefined,
+        "inventory_key",
+      ),
+    };
   }
   if (!SUPPLIER_CATALOGS.has(catalog)) throw new Error("Catalogo mixto no soportado");
-  const internalId = normalizedText(identity.internal_id, "internal_id");
-  const baseOptionId = identity.base_option_id === undefined
+  const internalId = normalizedText(
+    hasOwn(record, "internal_id") ? record.internal_id : undefined,
+    "internal_id",
+  );
+  const baseOptionId = !hasOwn(record, "base_option_id")
     ? ""
-    : normalizedText(identity.base_option_id, "base_option_id", { allowEmpty: true, limit: 500 });
+    : normalizedText(record.base_option_id, "base_option_id", { allowEmpty: true, limit: 500 });
   return {
     internal_id: internalId,
     base_option_id: baseOptionId,
-    add_on_option_ids: normalizedAddOns(identity.add_on_option_ids),
+    add_on_option_ids: normalizedAddOns(
+      hasOwn(record, "add_on_option_ids") ? record.add_on_option_ids : undefined,
+    ),
   };
 }
 

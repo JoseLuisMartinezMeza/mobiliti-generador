@@ -4,6 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from mobiliti_saas.quote_engine.mixed_catalog import (
+    mixed_cart_key as python_mixed_cart_key,
+    preflight_mixed_catalog_items,
+)
+
 
 MODULE_PATH = Path("mobiliti_saas/web/src/mixedCart.js")
 EXPORTS = (
@@ -602,3 +607,153 @@ def test_catalog_list_is_frozen_and_complete():
         ],
         "mutation": "TypeError",
     }
+
+
+def test_sparse_supplier_add_ons_are_rejected_before_key_or_payload_creation():
+    result = run_mixed_cart_js(
+        """
+      const input = (add_on_option_ids) => ({
+        catalog: "alma",
+        identity: {internal_id: "alma:desk", base_option_id: "", add_on_option_ids},
+        quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+        snapshot: {name: "Desk", code: "AL-1", image_url: "", unit: "PZA", availability: "", configuration: "", warnings: []}
+      });
+      const partlySparse = ["addon-a", "addon-b"];
+      delete partlySparse[1];
+      const attempts = [
+        () => mixedCartKey("alma", input(new Array(1)).identity),
+        () => toMixedQuoteItem(createMixedCartLine(input(partlySparse)))
+      ];
+      console.log(JSON.stringify(attempts.map(run => {
+        try { return {accepted: true, value: run()}; }
+        catch (error) { return {accepted: false, message: error.message}; }
+      })));
+    """
+    )
+    assert result == [
+        {"accepted": False, "message": "Add-on requerido"},
+        {"accepted": False, "message": "Add-on requerido"},
+    ]
+    assert "[null]" not in json.dumps(result)
+
+
+def test_identity_fields_must_be_own_and_prototype_pollution_is_not_consumed():
+    result = run_mixed_cart_js(
+        """
+      const inheritedRequired = Object.create({code: "T-inherited"});
+      const inheritedOptional = Object.create({
+        base_option_id: "base-polluted", add_on_option_ids: ["addon-polluted"]
+      });
+      inheritedOptional.internal_id = "alma:desk";
+      const nullPrototype = Object.create(null);
+      nullPrototype.code = "T-null";
+      const attempts = [
+        () => mixedCartKey("tarkett", inheritedRequired),
+        () => mixedCartKey("alma", inheritedOptional),
+        () => mixedCartKey("tarkett", nullPrototype)
+      ];
+      const originalBase = Object.getOwnPropertyDescriptor(Object.prototype, "base_option_id");
+      const originalAddOns = Object.getOwnPropertyDescriptor(Object.prototype, "add_on_option_ids");
+      let pollutionResult;
+      try {
+        Object.prototype.base_option_id = "base-polluted";
+        Object.prototype.add_on_option_ids = ["addon-polluted"];
+        pollutionResult = mixedCartKey("alma", {internal_id: "alma:safe"});
+      } finally {
+        if (originalBase) Object.defineProperty(Object.prototype, "base_option_id", originalBase);
+        else delete Object.prototype.base_option_id;
+        if (originalAddOns) Object.defineProperty(Object.prototype, "add_on_option_ids", originalAddOns);
+        else delete Object.prototype.add_on_option_ids;
+      }
+      console.log(JSON.stringify({
+        attempts: attempts.map(run => {
+          try { return {accepted: true, value: run()}; }
+          catch (error) { return {accepted: false, message: error.message}; }
+        }),
+        pollutionResult,
+        pollutionCleaned: !Object.hasOwn(Object.prototype, "base_option_id")
+          && !Object.hasOwn(Object.prototype, "add_on_option_ids")
+      }));
+    """
+    )
+    assert result == {
+        "attempts": [
+            {"accepted": False, "message": "Identidad invalida"},
+            {"accepted": False, "message": "Identidad invalida"},
+            {"accepted": True, "value": "tarkett:T-null"},
+        ],
+        "pollutionResult": 'alma:["alma:safe","",[]]',
+        "pollutionCleaned": True,
+    }
+
+
+def test_javascript_identity_validation_matches_actual_python_backend():
+    rows = [
+        {"catalog": "tarkett", "code": "\u2003T-1\u2003", "quantity": "1"},
+        {
+            "catalog": "offiho",
+            "inventory_key": "OHE-405 NEGRO ALUFSEN",
+            "quantity": "1",
+        },
+        {
+            "catalog": "alma",
+            "internal_id": "alma:desk|uno",
+            "base_option_id": "base:a",
+            "add_on_option_ids": ["𐀀", "\ue000", "addon-a"],
+            "quantity": "1",
+        },
+        {"catalog": "tarkett", "code": "😀" * 1000, "quantity": "1"},
+        {"catalog": "tarkett", "code": "😀" * 1001, "quantity": "1"},
+        {"catalog": "tarkett", "code": "\ufeffT-FEFF", "quantity": "1"},
+        {
+            "catalog": "alma",
+            "internal_id": "alma:desk",
+            "base_option_id": "😀" * 500,
+            "add_on_option_ids": ["addon-a"],
+            "quantity": "1",
+        },
+        {
+            "catalog": "alma",
+            "internal_id": "alma:desk",
+            "base_option_id": "😀" * 501,
+            "add_on_option_ids": [],
+            "quantity": "1",
+        },
+    ]
+
+    python_results = []
+    for row in rows:
+        try:
+            normalized = preflight_mixed_catalog_items([row])[0]
+            python_results.append(
+                {"accepted": True, "key": python_mixed_cart_key(normalized)}
+            )
+        except ValueError:
+            python_results.append({"accepted": False})
+
+    javascript_results = run_mixed_cart_js(
+        f"const rows = {json.dumps(rows)};\n"
+        + """
+      const identityFor = (row) => {
+        if (row.catalog === "tarkett") return {code: row.code};
+        if (row.catalog === "offiho") return {inventory_key: row.inventory_key};
+        return {
+          internal_id: row.internal_id,
+          base_option_id: row.base_option_id,
+          add_on_option_ids: row.add_on_option_ids
+        };
+      };
+      console.log(JSON.stringify(rows.map(row => {
+        try { return {accepted: true, key: mixedCartKey(row.catalog, identityFor(row))}; }
+        catch (error) { return {accepted: false}; }
+      })));
+    """
+    )
+
+    assert javascript_results == python_results
+    assert python_results[3]["accepted"] is True  # 1000 astral code points
+    assert python_results[4] == {"accepted": False}
+    assert python_results[5] == {"accepted": False}  # FEFF is Cf, not Python strip
+    assert python_results[6]["accepted"] is True  # 500 astral base-option code points
+    assert python_results[7] == {"accepted": False}
