@@ -167,6 +167,8 @@ def build_supplier_cart_payload(
     catalog: dict,
     quote_currency: str,
     rate_rows: list[dict],
+    *,
+    today: date | None = None,
 ) -> dict:
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError("El carrito de proveedor esta vacio")
@@ -230,7 +232,7 @@ def build_supplier_cart_payload(
     base_currency = next(iter(base_currencies))
     if base_currency == UNKNOWN_BASE_CURRENCY:
         raise ValueError("moneda base por verificar; el producto no se puede cotizar")
-    rate = resolve_conversion_rate(base_currency, quote_currency, rate_rows, date.today())
+    rate = resolve_conversion_rate(base_currency, quote_currency, rate_rows, today or date.today())
     lines = [
         _cart_line(item, quantity, base_option, add_ons, rate.exchange_rate)
         for item, quantity, base_option, add_ons in prepared
