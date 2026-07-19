@@ -61,6 +61,45 @@ def configure_thread_safe_dev_store(monkeypatch, state):
     monkeypatch.setattr(index, "_dev_save", save)
 
 
+def configure_barrier_dev_store(monkeypatch, state):
+    first_load_entered = threading.Event()
+    allow_first_load = threading.Event()
+    overlapping_load = threading.Event()
+    load_threads = []
+
+    def load():
+        load_threads.append(threading.get_ident())
+        if len(load_threads) == 1:
+            first_load_entered.set()
+            if not allow_first_load.wait(5):
+                raise RuntimeError("timeout esperando barrera DEV")
+        elif not allow_first_load.is_set():
+            overlapping_load.set()
+        return json.loads(json.dumps(state))
+
+    def save(data):
+        state.clear()
+        state.update(json.loads(json.dumps(data)))
+
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "_dev_load", load)
+    monkeypatch.setattr(index, "_dev_save", save)
+    return first_load_entered, allow_first_load, overlapping_load, load_threads
+
+
+def submit_after_first_load(pool, first_load_entered, operation):
+    assert first_load_entered.wait(5)
+    second_started = threading.Event()
+
+    def run():
+        second_started.set()
+        return operation()
+
+    future = pool.submit(run)
+    assert second_started.wait(5)
+    return future
+
+
 def _client():
     return TestClient(index.app)
 
@@ -2707,6 +2746,160 @@ def test_mixed_queue_reservation_postgres_and_supabase_are_compare_and_set(monke
     monkeypatch.setattr(index, "_supabase_req", lambda method, path, params=None, json_data=None: rest_calls.append((method, path, params, json_data)) or [{"status": "queued"}])
     index.db_queue_mixed_quote_job(JOB_MIXED_UUID, metadata)
     assert rest_calls[0][0:3] == ("PATCH", "/saas_quote_jobs", {"id": f"eq.{JOB_MIXED_UUID}", "status": "eq.draft"})
+
+
+def test_mixed_reservation_reserve_first_then_release_uses_real_lifecycle_lock(monkeypatch):
+    state = dev_state_with_draft_job(JOB_MIXED_UUID)
+    entered, allow, overlap, _loads = configure_barrier_dev_store(monkeypatch, state)
+    groups = [{"catalog": "tarkett", "items": [
+        {"identity": "T-1", "sku": "T-1", "quantity": "2", "stock": "5"}
+    ]}]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reserve = pool.submit(index.db_reserve_mixed_cart, 7, JOB_MIXED_UUID, groups)
+        release = submit_after_first_load(
+            pool, entered, lambda: index.db_release_mixed_cart(JOB_MIXED_UUID)
+        )
+        try:
+            assert not overlap.wait(0.2)
+            assert not release.done()
+        finally:
+            allow.set()
+        assert reserve.result()[0]["reserved_before"] == "0.000000"
+        assert release.result() == {"tarkett": 1, "offiho": 0, "supplier": 0}
+
+    assert state["quote_jobs"][0]["status"] == "failed"
+    assert [row["status"] for row in state["tarkett_reservations"]] == ["released"]
+
+
+def test_mixed_reservation_release_first_rejects_waiting_reserve_under_real_lock(monkeypatch):
+    state = dev_state_with_draft_job(JOB_MIXED_UUID)
+    entered, allow, overlap, _loads = configure_barrier_dev_store(monkeypatch, state)
+    groups = [{"catalog": "offiho", "items": [
+        {"identity": "OFF-1", "sku": "OFF-1", "quantity": "1", "stock": "5"}
+    ]}]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        release = pool.submit(index.db_release_mixed_cart, JOB_MIXED_UUID)
+        reserve = submit_after_first_load(
+            pool, entered,
+            lambda: index.db_reserve_mixed_cart(7, JOB_MIXED_UUID, groups),
+        )
+        try:
+            assert not overlap.wait(0.2)
+            assert not reserve.done()
+        finally:
+            allow.set()
+        assert release.result() == {"tarkett": 0, "offiho": 0, "supplier": 0}
+        with pytest.raises(RuntimeError, match="Cotizacion de reserva mixta invalida"):
+            reserve.result()
+
+    assert state["quote_jobs"][0]["status"] == "failed"
+    assert state["offiho_reservations"] == []
+
+
+def test_mixed_reservation_legacy_tarkett_reserve_then_release_shares_real_lock(monkeypatch):
+    state = dev_state_with_draft_job(JOB_MIXED_UUID)
+    entered, allow, overlap, _loads = configure_barrier_dev_store(monkeypatch, state)
+    lines = [{"code": "T-LEGACY", "quantity": 2, "available_quantity": 5}]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reserve = pool.submit(
+            index.db_create_tarkett_reservations, 7, JOB_MIXED_UUID, lines
+        )
+        release = submit_after_first_load(
+            pool, entered, lambda: index.db_release_mixed_cart(JOB_MIXED_UUID)
+        )
+        try:
+            assert not overlap.wait(0.2)
+            assert not release.done()
+        finally:
+            allow.set()
+        assert reserve.result()[0]["reserved_before"] == "0.000000"
+        assert release.result()["tarkett"] == 1
+
+    assert state["tarkett_reservations"][0]["status"] == "released"
+
+
+@pytest.mark.parametrize(
+    ("catalog", "wrapper", "identity_field", "identity"),
+    [
+        ("tarkett", "db_create_tarkett_reservations", "code", "T-SHARED"),
+        ("offiho", "db_create_offiho_reservations", "inventory_key", "OFF-SHARED"),
+    ],
+)
+def test_mixed_reservation_legacy_family_and_mixed_snapshot_are_serialized_by_real_lock(
+    monkeypatch, catalog, wrapper, identity_field, identity
+):
+    state = dev_state_with_two_draft_jobs(JOB_A_UUID, JOB_B_UUID)
+    entered, allow, overlap, _loads = configure_barrier_dev_store(monkeypatch, state)
+    line = {identity_field: identity, "quantity": 2, "available_quantity": 5}
+    groups = [{"catalog": catalog, "items": [
+        {"identity": identity, "sku": identity, "quantity": "1", "stock": "5"}
+    ]}]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        legacy = pool.submit(getattr(index, wrapper), 7, JOB_A_UUID, [line])
+        mixed = submit_after_first_load(
+            pool, entered, lambda: index.db_reserve_mixed_cart(7, JOB_B_UUID, groups)
+        )
+        try:
+            assert not overlap.wait(0.2)
+            assert not mixed.done()
+        finally:
+            allow.set()
+        assert legacy.result()[0]["reserved_before"] == "0.000000"
+        assert mixed.result()[0]["reserved_before"] == "2.000000"
+
+
+def test_mixed_reservation_legacy_alma_and_mixed_snapshot_are_serialized_by_real_lock(monkeypatch):
+    state = dev_state_with_two_draft_jobs(JOB_A_UUID, JOB_B_UUID)
+    entered, allow, overlap, _loads = configure_barrier_dev_store(monkeypatch, state)
+    legacy_lines = [
+        {"internal_id": "alma:desk", "sku": "AL-1", "quantity": "2", "stock": "5"}
+    ]
+    groups = [{"catalog": "alma", "items": [
+        {"identity": "alma:desk", "sku": "AL-1", "quantity": "1", "stock": "5"}
+    ]}]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        legacy = pool.submit(
+            index.db_reserve_catalog_items, 7, JOB_A_UUID, "alma", legacy_lines
+        )
+        mixed = submit_after_first_load(
+            pool, entered, lambda: index.db_reserve_mixed_cart(7, JOB_B_UUID, groups)
+        )
+        try:
+            assert not overlap.wait(0.2)
+            assert not mixed.done()
+        finally:
+            allow.set()
+        assert legacy.result()[0]["reserved_before"] == "0.000000"
+        assert mixed.result()[0]["reserved_before"] == "2.000000"
+
+
+def test_mixed_reservation_legacy_release_and_mixed_reserve_preserve_both_updates(monkeypatch):
+    state = dev_state_with_draft_job(JOB_B_UUID)
+    state["catalog_reservations"].append({
+        "id": "legacy-row", "supplier": "alma", "internal_id": "alma:old",
+        "sku": "AL-OLD", "quantity": "1.000000", "usuario_id": 7,
+        "quote_job_id": JOB_A_UUID, "status": "active",
+    })
+    entered, allow, overlap, _loads = configure_barrier_dev_store(monkeypatch, state)
+    groups = [{"catalog": "alma", "items": [
+        {"identity": "alma:new", "sku": "AL-NEW", "quantity": "1", "stock": "5"}
+    ]}]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        release = pool.submit(index.db_release_catalog_reservations, JOB_A_UUID)
+        reserve = submit_after_first_load(
+            pool, entered, lambda: index.db_reserve_mixed_cart(7, JOB_B_UUID, groups)
+        )
+        try:
+            assert not overlap.wait(0.2)
+            assert not reserve.done()
+        finally:
+            allow.set()
+        assert release.result()[0]["status"] == "released"
+        assert reserve.result()[0]["reserved_before"] == "0.000000"
+
+    rows = {row["id"]: row for row in state["catalog_reservations"]}
+    assert rows["legacy-row"]["status"] == "released"
+    assert any(row["internal_id"] == "alma:new" and row["status"] == "active" for row in rows.values())
 
 
 def test_supplier_catalog_module_copies_have_identical_sha256():

@@ -54,6 +54,15 @@ def test_mixed_cart_rpcs_are_additive_atomic_and_service_role_only():
         release = _function_sql(sql, "saas_release_mixed_cart").lower()
         assert "from saas_quote_jobs" in release
         assert "for update" in release
+        assert "pg_advisory_xact_lock" in release
+        assert "order by catalog, identity" in release
+        assert "pg_temp.mixed_release_lines" in release
+        assert "from saas_tarkett_reservations" in release
+        assert "from saas_offiho_reservations" in release
+        assert "from saas_catalog_reservations" in release
+        assert release.index("order by catalog, identity") < release.index(
+            "update saas_tarkett_reservations"
+        )
         assert "status = 'failed'" in release
         assert "revoke all on function saas_reserve_mixed_cart" in normalized
         assert "revoke all on function saas_release_mixed_cart" in normalized

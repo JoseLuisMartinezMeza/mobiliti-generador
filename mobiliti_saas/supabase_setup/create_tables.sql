@@ -2306,6 +2306,8 @@ DECLARE
     v_offiho INTEGER;
     v_supplier INTEGER;
     v_job_status TEXT;
+    v_catalog TEXT;
+    v_identity TEXT;
 BEGIN
     SELECT status
     INTO v_job_status
@@ -2315,6 +2317,42 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'mixed quote job is invalid';
     END IF;
+
+    CREATE TEMP TABLE IF NOT EXISTS mixed_release_lines (
+        catalog TEXT NOT NULL,
+        identity TEXT NOT NULL,
+        PRIMARY KEY (catalog, identity)
+    ) ON COMMIT DROP;
+
+    DELETE FROM pg_temp.mixed_release_lines;
+
+    INSERT INTO pg_temp.mixed_release_lines (catalog, identity)
+    SELECT 'tarkett', product_code
+    FROM saas_tarkett_reservations
+    WHERE quote_job_id = p_quote_job_id AND status = 'active'
+    ON CONFLICT (catalog, identity) DO NOTHING;
+
+    INSERT INTO pg_temp.mixed_release_lines (catalog, identity)
+    SELECT 'offiho', product_code
+    FROM saas_offiho_reservations
+    WHERE quote_job_id = p_quote_job_id AND status = 'active'
+    ON CONFLICT (catalog, identity) DO NOTHING;
+
+    INSERT INTO pg_temp.mixed_release_lines (catalog, identity)
+    SELECT supplier, internal_id
+    FROM saas_catalog_reservations
+    WHERE quote_job_id = p_quote_job_id AND status = 'active'
+    ON CONFLICT (catalog, identity) DO NOTHING;
+
+    FOR v_catalog, v_identity IN
+        SELECT catalog, identity
+        FROM pg_temp.mixed_release_lines
+        ORDER BY catalog, identity
+    LOOP
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended(v_catalog || ':' || v_identity, 0)
+        );
+    END LOOP;
 
     IF v_job_status = 'draft' THEN
         UPDATE saas_quote_jobs
