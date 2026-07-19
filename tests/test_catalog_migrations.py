@@ -7,11 +7,16 @@ CATALOG_MIGRATION = SETUP / "2026_07_multi_supplier_catalogs.sql"
 JOBS_RLS_MIGRATION = SETUP / "2026_07_jobs_rls.sql"
 BOOTSTRAP = SETUP / "create_tables.sql"
 SQL_FILES = (CATALOG_MIGRATION, BOOTSTRAP)
-EXPECTED_SUPPLIER_ALLOWLISTS = {
-    CATALOG_MIGRATION.name: 7,
-    BOOTSTRAP.name: 7,
-}
-EXPECTED_SUPPLIERS = frozenset({"cr-global", "sonara", "sunon", "alma", "lumbro"})
+EXPECTED_SUPPLIERS = ("cr-global", "sonara", "sunon", "alma", "lumbro")
+SUPPLIER_ALLOWLIST_CONTEXTS = (
+    ("catalog sources", "CREATE TABLE IF NOT EXISTS saas_catalog_sources"),
+    ("catalog snapshots", "CREATE TABLE IF NOT EXISTS saas_catalog_snapshot_versions"),
+    ("catalog reservations", "CREATE TABLE IF NOT EXISTS saas_catalog_reservations"),
+    ("recover stale sync runs", "saas_recover_stale_catalog_sync_runs"),
+    ("claim next sync", "saas_claim_next_catalog_sync"),
+    ("reservation summary", "saas_catalog_reservation_summary"),
+    ("reserve catalog items", "saas_reserve_catalog_items"),
+)
 
 CATALOG_TABLES = (
     "saas_catalog_sources",
@@ -36,28 +41,117 @@ def _statement(sql, prefix):
     return sql[start : sql.index(";", start) + 1]
 
 
+def _without_sql_comments(sql):
+    return re.sub(r"--[^\n]*(?:\n|$)|/\*.*?\*/", "", sql, flags=re.DOTALL)
+
+
 def _supplier_allowlists(sql):
+    sql = _without_sql_comments(sql)
     pattern = re.compile(
         r"""(?isx)
-        \b(?:supplier|p_supplier|p_enabled_suppliers)\b
-        [^;]{0,400}?
-        \b(?:NOT\s+)?IN\s*\(
-        (?P<values>(?=[^)]*'cr-global')[^)]*)
-        \)
+        \b(?:NOT\s+)?IN\s*\((?P<in_values>[^)]*)\)
+        |
+        \bANY\s*\(
+        \s*ARRAY\s*\[(?P<any_values>[^\]]*)\]
+        \s*(?:::\s*[A-Za-z_][A-Za-z0-9_.]*(?:\s*\[\s*\])?)?
+        \s*\)
         """
     )
+    allowlists = []
+    for match in pattern.finditer(sql):
+        values = tuple(
+            re.findall(
+                r"'((?:''|[^'])*)'",
+                match.group("in_values") or match.group("any_values"),
+            )
+        )
+        if "cr-global" in values:
+            allowlists.append(values)
+    return allowlists
+
+
+def _supplier_allowlist_context_sql(sql):
+    contexts = {}
+    for label, anchor in SUPPLIER_ALLOWLIST_CONTEXTS:
+        contexts[label] = (
+            _statement(sql, anchor)
+            if anchor.startswith("CREATE TABLE")
+            else _function_sql(sql, anchor)
+        )
+    return contexts
+
+
+def _normalized_sql(sql):
+    return re.sub(r"\s+", "", _without_sql_comments(sql).lower())
+
+
+def _supplier_cardinality_guards(sql):
     return [
-        frozenset(re.findall(r"'([^']+)'", match.group("values")))
-        for match in pattern.finditer(sql)
+        tuple(map(int, match))
+        for match in re.findall(
+            r"(?is)CARDINALITY\s*\(\s*p_enabled_suppliers\s*\)\s*NOT\s+BETWEEN\s*(\d+)\s+AND\s*(\d+)",
+            _without_sql_comments(sql),
+        )
     ]
 
 
 def test_all_supplier_sql_allowlists_include_lumbro():
     for sql_path in SQL_FILES:
-        allowlists = _supplier_allowlists(sql_path.read_text(encoding="utf-8"))
+        sql = sql_path.read_text(encoding="utf-8")
+        contexts = _supplier_allowlist_context_sql(sql)
 
-        assert len(allowlists) == EXPECTED_SUPPLIER_ALLOWLISTS[sql_path.name]
-        assert all(allowlist == EXPECTED_SUPPLIERS for allowlist in allowlists)
+        assert len(_supplier_allowlists(sql)) == len(SUPPLIER_ALLOWLIST_CONTEXTS)
+        assert tuple(contexts) == tuple(label for label, _ in SUPPLIER_ALLOWLIST_CONTEXTS)
+        for label, context_sql in contexts.items():
+            assert _supplier_allowlists(context_sql) == [EXPECTED_SUPPLIERS], label
+
+
+def test_supplier_allowlist_helper_handles_comments_in_and_any_array_casts():
+    sql = """
+        -- p_supplier IN ('cr-global', 'sonara', 'sunon', 'alma')
+        /* p_supplier = ANY(ARRAY['cr-global','sonara','sunon','alma']::TEXT[]) */
+        p_supplier IN (
+            'cr-global'::TEXT,
+            'sonara',
+            'sunon',
+            'alma',
+            'lumbro'
+        )
+        OR p_supplier = ANY(ARRAY[
+            'cr-global', 'sonara', 'sunon', 'alma', 'lumbro'
+        ]::public.supplier_code[])
+    """
+
+    assert _supplier_allowlists(sql) == [EXPECTED_SUPPLIERS, EXPECTED_SUPPLIERS]
+
+
+def test_no_stale_four_supplier_sequences_remain_after_normalizing_sql():
+    stale_allowlist = re.compile(
+        r"'cr-global','sonara','sunon','alma'(?=[\)\]])"
+    )
+
+    for sql_path in SQL_FILES:
+        assert not stale_allowlist.search(_normalized_sql(sql_path.read_text(encoding="utf-8")))
+
+
+def test_supplier_array_cardinality_guards_allow_five_and_reject_invalid_inputs():
+    for sql_path in SQL_FILES:
+        sql = sql_path.read_text(encoding="utf-8")
+        guards = _supplier_cardinality_guards(sql)
+
+        assert len(guards) == 2
+        assert guards == [(1, 5), (1, 5)]
+        for function_name in (
+            "saas_recover_stale_catalog_sync_runs",
+            "saas_claim_next_catalog_sync",
+        ):
+            function_sql = _function_sql(sql, function_name)
+            assert _supplier_cardinality_guards(function_sql) == [(1, 5)]
+            assert "COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers)" in function_sql
+            assert _supplier_allowlists(function_sql) == [EXPECTED_SUPPLIERS]
+
+        assert all(minimum <= len(EXPECTED_SUPPLIERS) <= maximum for minimum, maximum in guards)
+        assert all(6 > maximum for _, maximum in guards)
 
 
 def test_catalog_migration_is_additive_and_enables_rls():

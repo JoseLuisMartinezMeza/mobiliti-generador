@@ -699,7 +699,7 @@ DECLARE
     v_recovered INTEGER;
 BEGIN
     IF p_enabled_suppliers IS NULL
-       OR CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 4
+       OR CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 5
        OR (SELECT COUNT(*) FROM UNNEST(p_enabled_suppliers))
           <> (SELECT COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value))
        OR EXISTS (
@@ -746,7 +746,7 @@ DECLARE
     v_requested_by INTEGER;
 BEGIN
     IF p_enabled_suppliers IS NULL
-       OR CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 4
+       OR CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 5
        OR (SELECT COUNT(*) FROM UNNEST(p_enabled_suppliers))
           <> (SELECT COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value))
        OR EXISTS (
