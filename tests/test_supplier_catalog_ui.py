@@ -444,6 +444,30 @@ def test_shared_supplier_cards_render_dimensions_button_configurator_and_unit_aw
     )
 
 
+def test_shared_supplier_cards_stack_readably_on_narrow_mobile_without_changing_desktop():
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    marker = "@media (max-width: 480px)"
+    assert marker in styles
+    narrow_start = styles.index(marker)
+    narrow_end = styles.index("\n.catalog-admin", narrow_start)
+    narrow = styles[narrow_start:narrow_end]
+
+    assert _has_css_rule(narrow, ("supplier-product-main",), "grid-template-columns: 1fr")
+    assert _has_css_rule(narrow, ("supplier-image-frame",), "width: 100%")
+    assert _has_css_rule(narrow, ("supplier-image-frame",), "height: auto")
+    assert _has_css_rule(narrow, ("supplier-image-frame",), "aspect-ratio: 4 / 3")
+    assert _has_css_rule(narrow, ("supplier-card-footer",), "display: grid")
+    assert _has_css_rule(narrow, ("supplier-card-footer",), "grid-template-columns: 1fr")
+    assert _has_css_rule(narrow, ("supplier-card-footer", "label"), "width: 100%")
+    assert _has_css_rule(narrow, ("supplier-card-footer", "primary-action"), "width: 100%")
+    assert ".sidebar" not in narrow
+    assert _has_css_rule(
+        styles[:narrow_start],
+        ("supplier-product-main",),
+        "grid-template-columns: 180px minmax(0, 1fr)",
+    )
+
+
 def test_unknown_supplier_availability_is_disclosed_as_pending_confirmation():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
     visible_text = _ascii_text(component)
