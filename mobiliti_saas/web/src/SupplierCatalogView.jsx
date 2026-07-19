@@ -1,34 +1,22 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
   ImageOff,
-  Minus,
   PackageSearch,
   Plus,
   RefreshCw,
   Search,
-  ShoppingCart,
-  Trash2,
-  X
+  ShoppingCart
 } from "lucide-react";
+import { createMixedCartLine } from "./mixedCart.js";
 
 const SUPPLIER_CACHE_VERSION = "v1";
 const SUPPLIER_PAGE_SIZE = 24;
 const QUANTITY_SCALE = 1000000;
 const QUANTITY_LIMIT_MICROUNITS = 1000000 * QUANTITY_SCALE;
-const QUOTE_CURRENCIES = ["USD", "MXN", "EUR"];
-const EMPTY_QUOTE = {
-  proyecto: "",
-  cliente: "",
-  correo: "",
-  telefono: "",
-  direccion: "",
-  razon_social: "",
-  template: "Formato Cotizacion 2026 GDL (1).xlsx"
-};
 
 function catalogCacheKey(userId, supplier, source_hash) {
   return `supplier-catalog:${SUPPLIER_CACHE_VERSION}:${userId}:${supplier}:${source_hash}`;
@@ -117,9 +105,20 @@ function isSquareMeterUnit(unit) {
 }
 
 function quantityRules(item) {
-  return isSquareMeterUnit(item?.unit)
-    ? { min: "0.000001", step: "0.000001", integer: false }
-    : { min: "1", step: "1", integer: true };
+  const rules = isSquareMeterUnit(item?.unit)
+    ? { min: "0.000001", step: "0.000001", maxDecimals: 6, max: "1000000", integer: false }
+    : { min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true };
+  if (item?.is_out_of_stock) {
+    return { ...rules, warningAt: "0", confirmOnInsufficient: true };
+  }
+  if (item?.availability_type === "stocked") {
+    const stock = Number(item.stock ?? 0);
+    const warningAt = Number.isFinite(stock)
+      ? String(Math.min(Math.max(stock, 0), 1000000))
+      : "0";
+    return { ...rules, warningAt, confirmOnInsufficient: true };
+  }
+  return rules;
 }
 
 function quantityMicrounits(value) {
@@ -186,24 +185,50 @@ function configuredBasePrice(item, configuration) {
   return basePrice + addOnPrice;
 }
 
-function supplierCartTotals(cart, exchangeRate) {
-  const totals = cart.reduce((current, line) => {
-    const unit = configuredBasePrice(line.item, line.configuration) * exchangeRate;
-    const lineNet = unit * decimal(line.quantity);
-    return {
-      net: current.net + lineNet,
-      tax: current.tax + lineNet * decimal(line.item.tax_rate)
-    };
-  }, { net: 0, tax: 0 });
-  return { ...totals, total: totals.net + totals.tax };
+function canAddSupplierItem(item, supplier, configuredPrice) {
+  const reviewAllowed = ["lumbro", "sonara"].includes(supplier)
+    && item.code_status === "needs_review"
+    && item.base_currency === "MXN"
+    && decimal(item.tax_rate) === 0.16;
+  const codeAllowed = item.code_status === "verified" || reviewAllowed;
+  return codeAllowed && decimal(configuredPrice) > 0 && item.base_currency !== "XXX";
 }
 
-function cartKey(item, configuration) {
-  return [
-    item.internal_id,
-    configuration.base_option_id || "",
-    ...(configuration.add_on_option_ids || []).slice().sort()
-  ].join("|");
+function warningKey(value) {
+  return String(value || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .trim().toLowerCase();
+}
+
+function cartWarnings(item) {
+  const result = [...(item.warnings || [])].map((value) => String(value));
+  if (
+    item.code_status === "needs_review"
+    && !result.some((value) => warningKey(value) === "codigo por verificar")
+  ) {
+    result.push("Codigo por verificar");
+  }
+  const seen = new Set();
+  return result.filter((value) => {
+    const key = warningKey(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function visibleConfiguration(item, configuration) {
+  const selectedBase = (item.base_price_options || []).find(
+    (option) => option.id === (configuration.base_option_id || "")
+  );
+  const selectedAddOns = new Set(configuration.add_on_option_ids || []);
+  const addOnNames = (item.add_on_options || [])
+    .filter((option) => selectedAddOns.has(option.id))
+    .map((option) => String(option.name || "").trim())
+    .filter(Boolean);
+  return [String(selectedBase?.name || "").trim(), ...addOnNames]
+    .filter(Boolean)
+    .join(" + ");
 }
 
 function optionFamilies(item) {
@@ -246,8 +271,10 @@ export default function SupplierCatalogView({
   label,
   request,
   userId,
-  refreshJobs,
-  onJobQueued
+  onAddCartLine,
+  onOpenCart,
+  cartLineCount,
+  cartBusy
 }) {
   const [catalog, setCatalog] = useState(null);
   const [registry, setRegistry] = useState([]);
@@ -262,23 +289,7 @@ export default function SupplierCatalogView({
   const [selectedVariantByProduct, setSelectedVariantByProduct] = useState({});
   const [configurationByItem, setConfigurationByItem] = useState({});
   const [quantityByItem, setQuantityByItem] = useState({});
-  const [cart, setCart] = useState([]);
-  const [quoteCurrency, setQuoteCurrency] = useState("MXN");
-  const [rates, setRates] = useState([]);
-  const [ratesError, setRatesError] = useState("");
-  const [quote, setQuote] = useState(EMPTY_QUOTE);
   const [submitError, setSubmitError] = useState("");
-  const [submitNotice, setSubmitNotice] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(
-    () => typeof window === "undefined" || window.innerWidth > 980
-  );
-  const [isMobileDrawer, setIsMobileDrawer] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(max-width: 980px)").matches
-  );
-  const isSubmittingRef = useRef(false);
-  const drawerRef = useRef(null);
-  const cartToggleRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -310,84 +321,9 @@ export default function SupplierCatalogView({
     };
   }, [request, reloadKey, supplier, userId]);
 
-  const baseCurrency = catalog?.items?.[0]?.base_currency || "USD";
-
-  useEffect(() => {
-    let active = true;
-    async function loadRates() {
-      if (!catalog || baseCurrency === "XXX") {
-        if (active && catalog) {
-          setRates([]);
-          setRatesError("Moneda del proveedor pendiente de confirmar; la cotizacion permanece deshabilitada.");
-        }
-        return;
-      }
-      setRatesError("");
-      try {
-        const data = await request(`/catalogs/exchange-rates?base_currency=${encodeURIComponent(baseCurrency)}`);
-        if (active) setRates(data.rates || []);
-      } catch (rateError) {
-        if (active) {
-          setRates([]);
-          setRatesError(rateError.message || "No se pudieron cargar las tasas");
-        }
-      }
-    }
-    loadRates();
-    return () => {
-      active = false;
-    };
-  }, [baseCurrency, catalog, request]);
-
   useEffect(() => {
     setPage(1);
   }, [query, brand, collection, availability, supplier]);
-
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 980px)");
-    function updateDrawerMode(event) {
-      setIsMobileDrawer(event.matches);
-      if (event.matches) setDrawerOpen(false);
-    }
-    setIsMobileDrawer(media.matches);
-    media.addEventListener("change", updateDrawerMode);
-    return () => media.removeEventListener("change", updateDrawerMode);
-  }, []);
-
-  useEffect(() => {
-    if (!drawerOpen || !isMobileDrawer) return undefined;
-    drawerRef.current?.focus();
-    function handleDrawerKeyDown(event) {
-      if (event.key === "Escape") {
-        setDrawerOpen(false);
-        return;
-      }
-      if (event.key === "Tab") {
-        const focusable = Array.from(drawerRef.current?.querySelectorAll(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        ) || []);
-        if (!focusable.length) {
-          event.preventDefault();
-          drawerRef.current?.focus();
-          return;
-        }
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && (document.activeElement === first || document.activeElement === drawerRef.current)) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    }
-    window.addEventListener("keydown", handleDrawerKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleDrawerKeyDown);
-      cartToggleRef.current?.focus();
-    };
-  }, [drawerOpen, isMobileDrawer]);
 
   const groups = useMemo(() => groupCatalogItems(catalog?.items || []), [catalog]);
   const brands = useMemo(
@@ -432,16 +368,6 @@ export default function SupplierCatalogView({
     (total, group) => total + group.matchingVariants.length,
     0
   );
-  const selectedRate = rates.find((rate) => rate.quote_currency === quoteCurrency && rate.available);
-  const exchange_rate = decimal(selectedRate?.exchange_rate);
-  const rate_source = selectedRate?.rate_source || "";
-  const rate_effective_date = selectedRate?.rate_effective_date || "";
-
-  const totals = useMemo(
-    () => supplierCartTotals(cart, exchange_rate),
-    [cart, exchange_rate]
-  );
-
   function activeVariant(group) {
     const candidates = group.matchingVariants || group.variants;
     const selectedId = selectedVariantByProduct[group.product_key];
@@ -500,90 +426,29 @@ export default function SupplierCatalogView({
       setSubmitError(`Captura ${requirement} para ${item.name}.`);
       return;
     }
-    const key = cartKey(item, configuration);
-    const existingLine = cart.find((line) => line.key === key);
-    const combinedQuantity = existingLine
-      ? quantityFromMicrounits(quantityMicrounits(existingLine.quantity) + quantityMicrounits(quantity))
-      : quantity;
-    if (!combinedQuantity) {
-      setSubmitError(`La cantidad acumulada para ${item.name} excede el limite permitido.`);
-      return;
-    }
-    setCart((current) => {
-      const existing = current.find((line) => line.key === key);
-      if (existing) {
-        return current.map((line) => line.key === key
-          ? { ...line, quantity: combinedQuantity }
-          : line);
-      }
-      return [...current, { key, item, quantity, configuration }];
-    });
-    setDrawerOpen(true);
-  }
-
-  function updateCartQuantity(line, value) {
-    if (!validQuantity(line.item, value)) {
-      const requirement = quantityRules(line.item).integer ? "un número entero" : "una cantidad válida";
-      setSubmitError(`Captura ${requirement} para ${line.item.name}.`);
-      return;
-    }
-    setSubmitError("");
-    setCart((current) => current.map((candidate) => candidate.key === line.key ? { ...candidate, quantity: value } : candidate));
-  }
-
-  function removeCartLine(key) {
-    setCart((current) => current.filter((line) => line.key !== key));
-  }
-
-  function updateQuote(field, value) {
-    setQuote((current) => ({ ...current, [field]: value }));
-  }
-
-  async function submitQuote(event) {
-    event.preventDefault();
-    if (isSubmittingRef.current) return;
-    setSubmitError("");
-    setSubmitNotice("");
-    if (!cart.length) {
-      setSubmitError("Agrega al menos un producto al carrito.");
-      return;
-    }
-    if (!selectedRate) {
-      setSubmitError("La tasa seleccionada no esta disponible.");
-      return;
-    }
-    if (cart.some((line) => line.item.is_out_of_stock)) {
-      const accepted = window.confirm(
-        "El carrito contiene productos agotados. Se cotizara con la advertencia de verificar disponibilidad. Continuar?"
-      );
-      if (!accepted) return;
-    }
-    isSubmittingRef.current = true;
-    setSubmitting(true);
     try {
-      const data = await request(`/catalogs/${supplier}/quote`, {
-        method: "POST",
-        body: JSON.stringify({
-          ...quote,
-          descuento: 0,
-          quote_currency: quoteCurrency,
-          items: cart.map((line) => ({
-            internal_id: line.item.internal_id,
-            quantity: String(line.quantity),
-            base_option_id: line.configuration.base_option_id || undefined,
-            add_on_option_ids: line.configuration.add_on_option_ids
-          }))
-        })
-      });
-      if (data.job) onJobQueued(data.job);
-      await refreshJobs();
-      setCart([]);
-      setSubmitNotice("Cotizacion en cola. Puedes revisar el avance en Cotizaciones.");
-    } catch (submitFailure) {
-      setSubmitError(submitFailure.message || "No se pudo generar la cotizacion");
-    } finally {
-      isSubmittingRef.current = false;
-      setSubmitting(false);
+      const added = onAddCartLine(createMixedCartLine({
+        catalog: supplier,
+        identity: {
+          internal_id: item.internal_id,
+          base_option_id: configuration.base_option_id || "",
+          add_on_option_ids: [...configuration.add_on_option_ids]
+        },
+        quantity,
+        quantityRules: quantityRules(item),
+        snapshot: {
+          name: item.name,
+          code: sourceCode(item) || "Codigo por verificar",
+          image_url: item.image_url || "",
+          unit: item.unit,
+          availability: availabilityLabel(item),
+          configuration: visibleConfiguration(item, configuration),
+          warnings: cartWarnings(item)
+        }
+      }));
+      if (added) onOpenCart();
+    } catch (cartFailure) {
+      setSubmitError(cartFailure.message || "No se pudo agregar el producto");
     }
   }
 
@@ -615,15 +480,12 @@ export default function SupplierCatalogView({
           <button
             className="supplier-cart-toggle"
             type="button"
-            ref={cartToggleRef}
             aria-label="Abrir carrito"
             title="Abrir carrito"
-            aria-expanded={drawerOpen}
-            aria-controls={`supplier-cart-${supplier}`}
-            onClick={() => setDrawerOpen(true)}
+            onClick={onOpenCart}
           >
             <ShoppingCart size={19} />
-            <span>{cart.length}</span>
+            <span>{cartLineCount}</span>
           </button>
         </div>
       </header>
@@ -632,6 +494,7 @@ export default function SupplierCatalogView({
         <div className="supplier-alert"><AlertTriangle size={18} /> Este catalogo no esta habilitado en el entorno actual.</div>
       ) : null}
       {error ? <div className="error-line">{error}</div> : null}
+      {submitError ? <div className="error-line" role="alert">{submitError}</div> : null}
 
       <div className="supplier-filters" aria-label="Filtros de catalogo">
         <label className="supplier-search">
@@ -758,7 +621,7 @@ export default function SupplierCatalogView({
                   {matchingVariants.length > 1 ? (
                     <label className="supplier-config-field">
                       <span>Variante</span>
-                      <select value={item.internal_id} onChange={(event) => selectVariant(group.product_key, event.target.value)}>
+                      <select disabled={cartBusy} value={item.internal_id} onChange={(event) => selectVariant(group.product_key, event.target.value)}>
                         {matchingVariants.map((variant) => (
                           <option value={variant.internal_id} key={variant.internal_id}>
                             {sourceCode(variant) || variant.internal_id} - {variant.attributes?.color || variant.name}
@@ -779,6 +642,7 @@ export default function SupplierCatalogView({
                               type="button"
                               className={`supplier-option-button ${active ? "active" : ""}`}
                               aria-pressed={active}
+                              disabled={cartBusy}
                               onClick={() => changeBaseOption(item, option.id)}
                               key={option.id}
                             >
@@ -821,6 +685,7 @@ export default function SupplierCatalogView({
                             type="button"
                             className={`supplier-option-button ${selectedOptionId ? "" : "active"}`}
                             aria-pressed={!selectedOptionId}
+                            disabled={cartBusy}
                             onClick={() => changeAddOnFamily(item, family, "")}
                           >
                             <span>{emptyFamilyLabel(family)}</span>
@@ -833,6 +698,7 @@ export default function SupplierCatalogView({
                                 type="button"
                                 className={`supplier-option-button ${active ? "active" : ""}`}
                                 aria-pressed={active}
+                                disabled={cartBusy}
                                 onClick={() => changeAddOnFamily(item, family, option.id)}
                                 key={option.id}
                               >
@@ -859,6 +725,7 @@ export default function SupplierCatalogView({
                         min={productQuantity.min}
                         step={productQuantity.step}
                         value={quantityByItem[item.internal_id] ?? "1"}
+                        disabled={cartBusy}
                         onChange={(event) => setQuantityByItem((current) => ({ ...current, [item.internal_id]: event.target.value }))}
                         placeholder="1"
                       />
@@ -866,7 +733,7 @@ export default function SupplierCatalogView({
                     <button
                       className="primary-action"
                       type="button"
-                      disabled={item.code_status !== "verified" || decimal(configuredPrice) <= 0 || item.base_currency === "XXX"}
+                      disabled={cartBusy || !canAddSupplierItem(item, supplier, configuredPrice)}
                       onClick={() => addToCart(item)}
                     >
                       <Plus size={18} /> Agregar
@@ -891,95 +758,6 @@ export default function SupplierCatalogView({
           </nav>
         </div>
 
-        {drawerOpen && isMobileDrawer ? <button className="supplier-drawer-overlay" aria-label="Cerrar carrito" onClick={() => setDrawerOpen(false)} /> : null}
-        <aside
-          id={`supplier-cart-${supplier}`}
-          className={`supplier-cart-drawer ${drawerOpen ? "open" : ""}`}
-          role={isMobileDrawer ? "dialog" : "complementary"}
-          aria-modal={isMobileDrawer ? "true" : undefined}
-          aria-hidden={!drawerOpen}
-          aria-label={`Carrito ${label}`}
-          tabIndex="-1"
-          ref={drawerRef}
-        >
-          <div className="supplier-cart-title">
-            <div><ShoppingCart size={20} /><h3>Carrito</h3></div>
-            <button type="button" onClick={() => setDrawerOpen(false)} aria-label="Cerrar carrito" title="Cerrar carrito"><X size={19} /></button>
-          </div>
-
-          {!cart.length ? <p className="supplier-empty-cart">Selecciona productos del catalogo {label}.</p> : null}
-          <div className="supplier-cart-lines">
-            {cart.map((line) => (
-              <div className="supplier-cart-line" key={line.key}>
-                <div>
-                  <strong>{line.item.name}</strong>
-                  <span>{sourceCode(line.item)}</span>
-                  <small>{availabilityLabel(line.item)}</small>
-                </div>
-                <label>
-                  <span>Cantidad</span>
-                  <input
-                    type="number"
-                    min={quantityRules(line.item).min}
-                    step={quantityRules(line.item).step}
-                    value={line.quantity}
-                    onChange={(event) => updateCartQuantity(line, event.target.value)}
-                  />
-                </label>
-                <button type="button" title="Quitar producto" aria-label="Quitar producto" onClick={() => removeCartLine(line.key)}><Trash2 size={17} /></button>
-              </div>
-            ))}
-          </div>
-
-          <form className="supplier-quote-form" onSubmit={submitQuote}>
-            <div className="supplier-currency-panel">
-              <label>
-                <span>Moneda de cotizacion</span>
-                <select value={quoteCurrency} onChange={(event) => setQuoteCurrency(event.target.value)}>
-                  {QUOTE_CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
-                </select>
-              </label>
-              <dl>
-                <div><dt>Fuente</dt><dd>{rate_source === "saas_exchange_rates" ? "Banco de Mexico / DOF" : rate_source || "No disponible"}</dd></div>
-                <div><dt>Fecha</dt><dd>{rate_effective_date || "-"}</dd></div>
-                <div><dt>Tasa</dt><dd>{selectedRate?.exchange_rate || "-"}</dd></div>
-              </dl>
-              {ratesError ? <div className="error-line">{ratesError}</div> : null}
-            </div>
-
-            <div className="supplier-total-panel">
-              <div><span>Subtotal neto</span><strong>{formatMoney(totals.net, quoteCurrency)}</strong></div>
-              <div><span>IVA</span><strong>{formatMoney(totals.tax, quoteCurrency)}</strong></div>
-              <div><span>Total</span><strong>{formatMoney(totals.total, quoteCurrency)}</strong></div>
-              <small>Precio neto mas IVA. La tasa se congela al cotizar.</small>
-            </div>
-
-            {[
-              ["proyecto", "Proyecto", "text"],
-              ["cliente", "Cliente", "text"],
-              ["correo", "Correo", "email"],
-              ["telefono", "Telefono", "tel"],
-              ["direccion", "Direccion", "text"],
-              ["razon_social", "Razon social", "text"]
-            ].map(([field, fieldLabel, type]) => (
-              <label key={field}>
-                <span>{fieldLabel} *</span>
-                <input type={type} value={quote[field]} onChange={(event) => updateQuote(field, event.target.value)} required />
-              </label>
-            ))}
-
-            {submitError ? <div className="error-line">{submitError}</div> : null}
-            {submitNotice ? <div className="notice-line">{submitNotice}</div> : null}
-            <button
-              className="primary-action supplier-quote-submit"
-              disabled={submitting || !cart.length || !selectedRate}
-              type="submit"
-            >
-              {submitting ? <RefreshCw className="spin" size={18} /> : <ShoppingCart size={18} />}
-              {submitting ? "Cotizando..." : "Cotizar"}
-            </button>
-          </form>
-        </aside>
       </div>
     </section>
   );

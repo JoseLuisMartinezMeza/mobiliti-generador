@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -79,6 +80,76 @@ def supplier_line_source(
             },
         }
     )
+
+
+def test_app_owns_one_mixed_cart_and_one_submit_endpoint():
+    main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    supplier = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    drawer = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx")
+    assert drawer.is_file()
+    assert "const [mixedCart, setMixedCart] = useState([])" in main
+    assert main.count('request("/catalogs/mixed-quote"') == 1
+    assert 'request("/tarkett/quote"' not in main
+    assert 'request("/offiho/quote"' not in main
+    assert "/catalogs/${supplier}/quote" not in supplier
+    assert main.count("<MixedCartDrawer") == 1
+    assert "const [cart, setCart]" not in supplier
+
+
+def test_all_catalog_views_receive_the_same_add_callback():
+    main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    assert re.search(r"<TarkettView[\s\S]*?onAddCartLine=\{addMixedCartLine\}", main)
+    assert re.search(r"<OffihoView[\s\S]*?onAddCartLine=\{addMixedCartLine\}", main)
+    assert re.search(r"<SupplierCatalogView[\s\S]*?onAddCartLine=\{addMixedCartLine\}", main)
+
+
+def test_mixed_drawer_is_accessible_presentational_and_commits_callbacks():
+    source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+    for marker in (
+        'role="dialog"', 'aria-modal="true"', "mixed-cart-overlay", 'event.key === "Escape"',
+        'event.key === "Tab"', "onQuantityChange(line.key", "onRemove(line.key)",
+        "['MXN', 'USD', 'EUR']", "value={currency}", "Codigo por verificar",
+        "quantityDrafts", "validateLineQuantity", "onSubmit(event, committedLines)",
+        "line.snapshot.name", "line.snapshot.configuration",
+    ):
+        assert marker in source
+    assert "name={field}" in source
+    for field in ("proyecto", "cliente", "correo", "telefono", "direccion", "razon_social"):
+        assert f'"{field}"' in source
+    assert "request(" not in source
+    assert "fetch(" not in source
+
+
+def test_app_is_the_only_mixed_quote_request_owner():
+    main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    drawer = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+    assert main.count('request("/catalogs/mixed-quote"') == 1
+    assert "/catalogs/mixed-quote" not in drawer
+
+
+def test_mixed_cart_session_and_submission_guards_are_explicit():
+    main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    assert "const mixedCartRef = useRef([])" in main
+    assert "const mixedQuoteSubmittingRef = useRef(false)" in main
+    assert "const mixedQuoteSessionEpochRef = useRef(0)" in main
+    assert "if (mixedQuoteSubmittingRef.current)" in main
+    assert "mixedQuoteSubmittingRef.current = true" in main
+    assert "submissionEpoch !== mixedQuoteSessionEpochRef.current" in main
+    assert "items: committedLines.map(toMixedQuoteItem)" in main
+    assert "Respuesta de trabajo mixto invalida" in main
+    assert "replaceMixedCart([])" in main
+    assert "localStorage.setItem(\"mixed" not in main
+    assert "sessionStorage.setItem(\"mixed" not in main
+
+
+def test_drawer_focus_trap_does_not_restart_when_parent_callbacks_change():
+    source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+    assert "const onCloseRef = useRef(onClose)" in source
+    assert "onCloseRef.current = onClose" in source
+    assert "onCloseRef.current()" in source
+    assert re.search(r"window\.addEventListener\(\"keydown\"[\s\S]*?\n\s*}, \[open\]\);", source)
+    assert 'className="mixed-cart-overlay"' in source
+    assert "disabled={busy}" in source
 
 
 def test_mixed_cart_keys_are_stable_and_configuration_sensitive():

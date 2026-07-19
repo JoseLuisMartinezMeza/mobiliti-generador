@@ -15,7 +15,6 @@ import {
   LayoutDashboard,
   Loader2,
   LogOut,
-  Minus,
   PackageSearch,
   Plus,
   RefreshCw,
@@ -31,6 +30,17 @@ import {
 } from "lucide-react";
 import SupplierCatalogView from "./SupplierCatalogView";
 import CatalogAdminPanel from "./CatalogAdminPanel";
+import MixedCartDrawer from "./MixedCartDrawer";
+import {
+  createMixedCartLine,
+  lineNeedsAvailabilityConfirmation,
+  lineNeedsPriceConfirmation,
+  removeMixedCartLine,
+  toMixedQuoteItem,
+  updateMixedCartQuantity,
+  upsertMixedCartLine,
+  validateLineQuantity,
+} from "./mixedCart.js";
 import "./styles.css";
 
 const DEFAULT_API_BASE = ["127.0.0.1", "localhost"].includes(
@@ -146,16 +156,17 @@ const emptyQuote = {
   template: "Formato Cotizacion 2026 GDL (1).xlsx"
 };
 
-const emptyTarkettQuote = {
+const EMPTY_MIXED_QUOTE = Object.freeze({
   proyecto: "",
   cliente: "",
   correo: "",
   telefono: "",
   direccion: "",
   razon_social: "",
+  quote_currency: "MXN",
   descuento: "40",
   template: "Formato Cotizacion 2026 GDL (1).xlsx"
-};
+});
 
 const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";
 const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";
@@ -201,14 +212,6 @@ function hasMissingCatalogPrice(item) {
 function stockLimit(item) {
   const numeric = Number(item?.available_quantity);
   return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
-}
-
-function clampQuantity(value, item) {
-  const max = stockLimit(item);
-  if (max <= 0) return 0;
-  const numeric = Number(value);
-  const clean = Number.isFinite(numeric) && numeric > 0 ? numeric : Math.min(1, max);
-  return Math.min(max, Math.max(0.001, clean));
 }
 
 const statusLabels = {
@@ -460,7 +463,7 @@ function Sidebar({ view, setView, isAdmin, onLogout }) {
   );
 }
 
-function Header({ user, subscription }) {
+function Header({ user, subscription, cartCount, onOpenCart }) {
   const initials = (user?.nombre || user?.email || "AV")
     .split(/\s|@/)
     .filter(Boolean)
@@ -479,6 +482,10 @@ function Header({ user, subscription }) {
         <strong>{subscription?.plan || "Plan activo"}</strong>
         <small>Vence: {formatDate(subscription?.fecha_fin)}</small>
       </div>
+      <button className="global-cart-toggle" type="button" onClick={onOpenCart}>
+        <ShoppingCart size={19} />
+        Carrito ({cartCount})
+      </button>
       <div className="user-chip">
         <div>{initials}</div>
         <span>{user?.nombre || user?.email}<small>{user?.es_admin ? "Administrador" : "Usuario"}</small></span>
@@ -768,17 +775,15 @@ function Field({ label, value, onChange, type = "text", wide = false, min, max, 
   );
 }
 
-function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
+function TarkettView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartBusy }) {
   const { request } = useApi(token);
   const [catalog, setCatalog] = useState({ source_hash: "", generated_at: "", total: 0, items: [] });
   const [query, setQuery] = useState("");
   const [unitFilter, setUnitFilter] = useState("all");
-  const [cart, setCart] = useState({});
-  const [form, setForm] = useState(emptyTarkettQuote);
+  const [quantityDraftsByCode, setQuantityDraftsByCode] = useState({});
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [quantityError, setQuantityError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -800,13 +805,6 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
         const data = await request("/tarkett/catalog");
         if (cancelled) return;
         setCatalog(data);
-        setCart((current) => {
-          const visibleCodes = new Set((data.items || []).map((item) => item.code));
-          const next = Object.fromEntries(Object.entries(current).filter(([code]) => visibleCodes.has(code)));
-          const removedCount = Object.keys(current).length - Object.keys(next).length;
-          if (removedCount) setSuccess(`Se eliminaron ${removedCount} producto(s) Tarkett que ya no estan en el catalogo.`);
-          return next;
-        });
         sessionStorage.setItem(TARKETT_CATALOG_CACHE_KEY, JSON.stringify({ ...data, user_id: userId }));
       } catch (err) {
         if (!cancelled) setError(err.message);
@@ -820,12 +818,6 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
       cancelled = true;
     };
   }, [request, reloadKey, userId]);
-
-  const byCode = useMemo(() => {
-    const map = new Map();
-    for (const item of catalog.items || []) map.set(item.code, item);
-    return map;
-  }, [catalog.items]);
 
   const unitOptions = useMemo(() => {
     const units = new Set((catalog.items || []).map((item) => item.unit).filter(Boolean));
@@ -841,89 +833,36 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
     });
   }, [catalog.items, query, unitFilter]);
 
-  const cartRows = useMemo(() => Object.values(cart)
-    .map((line) => ({ ...line, item: byCode.get(line.code) }))
-    .filter((line) => line.item), [cart, byCode]);
-
-  const cartUnits = cartRows.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
-  const missingPriceCount = cartRows.filter((line) => hasMissingCatalogPrice(line.item)).length;
-  const cartAmount = cartRows.reduce(
-    (sum, line) => hasMissingCatalogPrice(line.item)
-      ? sum
-      : sum + (Number(line.item.unit_price || 0) * Number(line.quantity || 0)),
-    0,
-  );
-
-  function updateField(key, value) {
-    setForm((current) => ({ ...current, [key]: value }));
-  }
-
-  function updateDiscount(value) {
-    if (value === "") {
-      updateField("descuento", value);
-      return;
-    }
-    const numeric = Math.max(0, Math.min(Number(value), 100));
-    updateField("descuento", Number.isFinite(numeric) ? String(numeric) : "40");
-  }
-
-  function addItem(item) {
-    const quantity = clampQuantity(cart[item.code]?.quantity || Math.min(1, stockLimit(item)), item);
-    if (!quantity) return;
-    setCart((current) => ({
-      ...current,
-      [item.code]: { code: item.code, quantity }
-    }));
-    setSuccess("");
-  }
-
-  function removeItem(code) {
-    setCart((current) => {
-      const next = { ...current };
-      delete next[code];
-      return next;
-    });
-  }
-
-  function changeQuantity(code, value) {
-    const item = byCode.get(code);
-    if (!item) return;
-    const quantity = clampQuantity(value, item);
-    if (!quantity) {
-      removeItem(code);
-      return;
-    }
-    setCart((current) => ({
-      ...current,
-      [code]: { code, quantity }
-    }));
-  }
-
-  async function createTarkettQuote(event) {
-    event.preventDefault();
-    setError("");
-    setSuccess("");
-    if (!cartRows.length) {
-      setError("Agrega al menos un producto Tarkett.");
-      return;
-    }
-    setBusy(true);
+  function addTarkettItem(item) {
+    const existing = cartLines.find((line) => line.catalog === "tarkett" && line.identity.code === item.code);
+    const available = Math.min(stockLimit(item), 1000000);
+    const draft = quantityDraftsByCode[item.code]
+      ?? existing?.quantity
+      ?? String(Math.min(1, available));
     try {
-      const data = await request("/tarkett/quote", {
-        method: "POST",
-        body: JSON.stringify({
-          ...form,
-          items: cartRows.map((line) => ({ code: line.code, quantity: line.quantity }))
-        })
-      });
-      setCart({});
-      setSuccess(data.mensaje || "Cotizacion Tarkett enviada a cola.");
-      if (data.job) onJobQueued(data.job);
-      refreshJobs();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
+      const added = onAddCartLine(createMixedCartLine({
+        catalog: "tarkett",
+        identity: { code: item.code },
+        quantity: String(draft),
+        quantityRules: {
+          min: "0.000001",
+          step: "0.000001",
+          maxDecimals: 6,
+          max: String(available),
+        },
+        snapshot: {
+          name: item.name,
+          code: item.code,
+          image_url: item.image_url || "",
+          unit: item.unit,
+          availability: String(item.available_quantity),
+          configuration: "",
+          warnings: [],
+        },
+      }));
+      if (added) setQuantityError("");
+    } catch (quantityFailure) {
+      setQuantityError(quantityFailure.message || "Cantidad invalida");
     }
   }
 
@@ -934,13 +873,18 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
           <h2>Tarkett</h2>
           <p>{catalog.total || catalog.items.length} productos indexados{catalog.generated_at ? ` - ${formatDate(catalog.generated_at)}` : ""}</p>
         </div>
-        <button className="ghost-action" type="button" onClick={() => {
-          sessionStorage.removeItem(TARKETT_CATALOG_CACHE_KEY);
-          setReloadKey((value) => value + 1);
-        }}>
-          <RefreshCw size={16} />
-          Refrescar
-        </button>
+        <div className="catalog-head-actions">
+          <button className="ghost-action" type="button" onClick={() => {
+            sessionStorage.removeItem(TARKETT_CATALOG_CACHE_KEY);
+            setReloadKey((value) => value + 1);
+          }}>
+            <RefreshCw size={16} />
+            Refrescar
+          </button>
+          <button className="ghost-action" type="button" onClick={onOpenCart}>
+            <ShoppingCart size={17} /> Carrito ({cartLines.length})
+          </button>
+        </div>
       </div>
 
       <div className="tarkett-layout">
@@ -958,12 +902,16 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
           </div>
 
           {error ? <div className="error-line">{error}</div> : null}
-          {success ? <div className="notice-line">{success}</div> : null}
+          {quantityError ? <div className="error-line" role="alert">{quantityError}</div> : null}
 
           <div className="tarkett-grid">
             {filteredItems.map((item) => {
-              const inCart = Boolean(cart[item.code]);
+              const existing = cartLines.find((line) => line.catalog === "tarkett" && line.identity.code === item.code);
               const reserved = Number(item.reserved_quantity || 0);
+              const available = Math.min(stockLimit(item), 1000000);
+              const draft = quantityDraftsByCode[item.code]
+                ?? existing?.quantity
+                ?? String(Math.min(1, available));
               return (
                 <article className="tarkett-product" key={item.code}>
                   <div className="product-media">
@@ -996,24 +944,26 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
                   <div className="product-actions">
                     <input
                       type="number"
-                      min="0.001"
-                      step="0.001"
-                      max={stockLimit(item) || undefined}
-                      value={cart[item.code]?.quantity || ""}
-                      onChange={(event) => changeQuantity(item.code, event.target.value)}
+                      min="0.000001"
+                      step="0.000001"
+                      max={available || undefined}
+                      value={draft}
+                      disabled={cartBusy}
+                      onChange={(event) => setQuantityDraftsByCode((current) => ({
+                        ...current,
+                        [item.code]: event.target.value,
+                      }))}
                       placeholder="Cant."
                     />
-                    {inCart ? (
-                      <button className="ghost-action" type="button" onClick={() => removeItem(item.code)}>
-                        <Minus size={16} />
-                        Quitar
-                      </button>
-                    ) : (
-                      <button className="primary-action" type="button" onClick={() => addItem(item)} disabled={stockLimit(item) <= 0}>
-                        <Plus size={16} />
-                        Agregar
-                      </button>
-                    )}
+                    <button
+                      className="primary-action"
+                      type="button"
+                      onClick={() => addTarkettItem(item)}
+                      disabled={cartBusy || available <= 0}
+                    >
+                      <Plus size={16} />
+                      Agregar
+                    </button>
                   </div>
                 </article>
               );
@@ -1021,80 +971,23 @@ function TarkettView({ token, userId, refreshJobs, onJobQueued }) {
           </div>
         </div>
 
-        <aside className="tarkett-cart-panel">
-          <div className="cart-head">
-            <ShoppingCart size={22} />
-            <div>
-              <h3>Carrito</h3>
-              <span>{cartRows.length} productos - {formatQuantity(cartUnits)} unidades</span>
-              <strong className="tarkett-cart-total">Total con precios disponibles: {formatCatalogCurrency(cartAmount)}</strong>
-              {missingPriceCount ? <span className="tarkett-price-notice">{missingPriceCount} precios por confirmar</span> : null}
-            </div>
-          </div>
-
-          <div className="cart-list">
-            {cartRows.map((line) => (
-              <div className="cart-row" key={line.code}>
-                <div>
-                  <strong>{line.item.name}</strong>
-                  <span>{line.code} - {hasMissingCatalogPrice(line.item) ? "Precio por confirmar" : formatCatalogCurrency(line.item.unit_price)}</span>
-                </div>
-                <input
-                  type="number"
-                  min="0.001"
-                  step="0.001"
-                  max={stockLimit(line.item) || undefined}
-                  value={line.quantity}
-                  onChange={(event) => changeQuantity(line.code, event.target.value)}
-                />
-                <button type="button" onClick={() => removeItem(line.code)} aria-label={`Quitar ${line.item.name}`}>
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            ))}
-            {!cartRows.length ? <p className="empty">Selecciona productos del catalogo Tarkett.</p> : null}
-          </div>
-
-          <form className="quote-form tarkett-form" onSubmit={createTarkettQuote}>
-            <h3>Datos de cotizacion</h3>
-            <div className="form-grid">
-              <Field label="Proyecto" value={form.proyecto} onChange={(value) => updateField("proyecto", value)} />
-              <Field label="Cliente" value={form.cliente} onChange={(value) => updateField("cliente", value)} />
-              <Field label="Correo" type="email" value={form.correo} onChange={(value) => updateField("correo", value)} />
-              <Field label="Telefono" value={form.telefono} onChange={(value) => updateField("telefono", value)} />
-              <Field label="Direccion" value={form.direccion} onChange={(value) => updateField("direccion", value)} />
-              <Field label="Descuento (%)" type="number" min="0" max="100" value={form.descuento} onChange={updateDiscount} />
-              <Field label="Razon social" value={form.razon_social} onChange={(value) => updateField("razon_social", value)} wide />
-            </div>
-            <div className="actions-row">
-              <button className="primary-action" disabled={busy || !cartRows.length}>
-                {busy ? <Loader2 className="spin" size={18} /> : <FileSpreadsheet size={18} />}
-                Cotizar
-              </button>
-            </div>
-          </form>
-        </aside>
       </div>
     </section>
   );
 }
 
-function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
+function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartBusy }) {
   const { request } = useApi(token);
   const [catalog, setCatalog] = useState({ source_hash: "", generated_at: "", total: 0, items: [] });
   const [query, setQuery] = useState("");
   const [unitFilter, setUnitFilter] = useState("all");
   const [availabilityFilter, setAvailabilityFilter] = useState("all");
   const [page, setPage] = useState(1);
-  const [cart, setCart] = useState({});
-  const [form, setForm] = useState({ proyecto: "", cliente: "", correo: "", telefono: "", direccion: "", razon_social: "", descuento: "40", template: "Formato Cotizacion 2026 GDL (1).xlsx" });
+  const [quantityDraftsByInventoryKey, setQuantityDraftsByInventoryKey] = useState({});
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [quantityError, setQuantityError] = useState("");
-  const [success, setSuccess] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
-  const isSubmittingRef = useRef(false);
   const offihoQuantityFormatter = useMemo(() => new Intl.NumberFormat("es-MX", { maximumFractionDigits: 3 }), []);
   const offihoCurrencyFormatter = useMemo(() => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 2 }), []);
 
@@ -1159,13 +1052,6 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
         const data = await request("/offiho/catalog");
         if (cancelled) return;
         setCatalog(data);
-        setCart((current) => {
-          const visibleKeys = new Set((data.items || []).map((item) => item.inventory_key));
-          const next = Object.fromEntries(Object.entries(current).filter(([inventoryKey]) => visibleKeys.has(inventoryKey)));
-          const removedCount = Object.keys(current).length - Object.keys(next).length;
-          if (removedCount) setSuccess(`Se eliminaron ${removedCount} producto(s) Offiho que ya no estan en el catalogo.`);
-          return next;
-        });
         sessionStorage.setItem(OFFIHO_CATALOG_CACHE_KEY, JSON.stringify({ ...data, user_id: userId }));
       } catch (err) {
         if (!cancelled) setError(err.message);
@@ -1178,7 +1064,6 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
     return () => { cancelled = true; };
   }, [request, reloadKey, userId]);
 
-  const byInventoryKey = useMemo(() => new Map((catalog.items || []).map((item) => [item.inventory_key, item])), [catalog.items]);
   const unitOptions = useMemo(() => Array.from(new Set((catalog.items || []).map((item) => item.unit).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [catalog.items]);
   const filteredItems = useMemo(() => {
     const cleanQuery = normalizeOffihoText(query);
@@ -1197,95 +1082,70 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
   useEffect(() => { setPage(1); }, [availabilityFilter, query, unitFilter]);
   useEffect(() => { setPage((current) => Math.min(current, pageCount)); }, [pageCount]);
 
-  const cartRows = useMemo(() => Object.values(cart).map((line) => ({ ...line, item: byInventoryKey.get(line.inventory_key) })).filter((line) => line.item), [byInventoryKey, cart]);
-  const cartUnits = cartRows.reduce((sum, line) => sum + Number(line.quantity || 0), 0);
-  const missingPriceCount = cartRows.filter((line) => hasMissingPrice(line.item)).length;
-  const cartAmount = cartRows.reduce((sum, line) => hasMissingPrice(line.item) ? sum : sum + (Number(line.item.unit_price || 0) * Number(line.quantity || 0)), 0);
-  const warningRows = cartRows.filter((line) => offihoStockWarning(line.item, line.quantity));
-
-  function updateField(key, value) {
-    setForm((current) => ({ ...current, [key]: value }));
-  }
-
-  function updateDiscount(value) {
-    if (value === "") return updateField("descuento", value);
-    const numeric = Math.max(0, Math.min(Number(value), 100));
-    updateField("descuento", Number.isFinite(numeric) ? String(numeric) : "40");
-  }
-
-  function addItem(item) {
-    setCart((current) => ({ ...current, [item.inventory_key]: current[item.inventory_key] || { inventory_key: item.inventory_key, quantity: 1, rawQuantity: "1" } }));
-    setSuccess("");
-  }
-
-  function removeItem(inventoryKey) {
-    setCart((current) => {
-      const next = { ...current };
-      delete next[inventoryKey];
-      return next;
-    });
-  }
-
-  function changeQuantity(inventoryKey, rawQuantity) {
+  function changeOffihoDraft(inventoryKey, rawQuantity) {
     const raw = String(rawQuantity);
     if (!isOffihoQuantityDraft(raw)) setQuantityError("Usa solo numeros y hasta 3 decimales; no se permiten exponentes.");
     else setQuantityError("");
-    setCart((current) => ({
-      ...current,
-      [inventoryKey]: { inventory_key: inventoryKey, quantity: current[inventoryKey]?.quantity || 1, ...current[inventoryKey], rawQuantity: raw }
-    }));
+    if (isOffihoQuantityDraft(raw)) {
+      setQuantityDraftsByInventoryKey((current) => ({ ...current, [inventoryKey]: raw }));
+    }
   }
 
-  function normalizeQuantity(inventoryKey) {
-    const line = cart[inventoryKey];
-    const normalized = normalizeOffihoQuantity(line?.rawQuantity ?? line?.quantity);
+  function normalizeOffihoDraft(item) {
+    const draft = quantityDraftsByInventoryKey[item.inventory_key] ?? "1";
+    const normalized = normalizeOffihoQuantity(draft);
     if (normalized.error) {
       setQuantityError(normalized.error);
       return false;
     }
     setQuantityError("");
-    setCart((current) => ({ ...current, [inventoryKey]: { ...current[inventoryKey], ...normalized } }));
+    setQuantityDraftsByInventoryKey((current) => ({
+      ...current,
+      [item.inventory_key]: normalized.rawQuantity,
+    }));
     return true;
   }
 
-  async function createOffihoQuote(event) {
-    event.preventDefault();
-    if (isSubmittingRef.current) return;
-    setError("");
-    setSuccess("");
-    if (!cartRows.length) {
-      setError("Agrega al menos un producto Offiho.");
+  function addOffihoItem(item) {
+    const draft = quantityDraftsByInventoryKey[item.inventory_key] ?? "1";
+    const normalized = normalizeOffihoQuantity(draft);
+    if (normalized.error) {
+      setQuantityError(normalized.error);
       return;
     }
-    const normalizedRows = cartRows.map((line) => ({ ...line, normalized: normalizeOffihoQuantity(line.rawQuantity ?? line.quantity) }));
-    const invalidLine = normalizedRows.find((line) => line.normalized.error);
-    if (invalidLine) {
-      setQuantityError(invalidLine.normalized.error);
-      return;
-    }
-
-    isSubmittingRef.current = true;
-    const submissionRows = normalizedRows.map((line) => ({ ...line, quantity: line.normalized.quantity }));
-    const exhausted = submissionRows.filter((line) => offihoStockWarning(line.item, line.quantity) === "Agotado").length;
-    const insufficient = submissionRows.filter((line) => offihoStockWarning(line.item, line.quantity) === "Stock insuficiente").length;
-    const missingPrices = submissionRows.filter((line) => hasMissingPrice(line.item)).length;
-    if ((exhausted || insufficient || missingPrices) && !window.confirm(`El carrito contiene ${exhausted} linea(s) agotada(s), ${insufficient} con stock insuficiente y ${missingPrices} precio(s) por confirmar. Deseas cotizar de todos modos?`)) {
-      isSubmittingRef.current = false;
-      return;
-    }
-
-    setBusy(true);
+    const available = Math.min(offihoStockLimit(item), 1000000);
+    const warning = offihoStockWarning(item, normalized.quantity);
+    const warnings = [
+      ...(warning ? [warning] : []),
+      ...(hasMissingPrice(item) ? ["Precio por confirmar"] : []),
+    ];
     try {
-      const data = await request("/offiho/quote", { method: "POST", body: JSON.stringify({ ...form, items: submissionRows.map((line) => ({ inventory_key: line.inventory_key, quantity: line.quantity })) }) });
-      setCart({});
-      setSuccess(data.mensaje || "Cotizacion Offiho enviada a cola.");
-      if (data.job) onJobQueued(data.job);
-      refreshJobs();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      isSubmittingRef.current = false;
-      setBusy(false);
+      const added = onAddCartLine(createMixedCartLine({
+        catalog: "offiho",
+        identity: { inventory_key: item.inventory_key },
+        quantity: normalized.rawQuantity,
+        quantityRules: {
+          min: "0.001",
+          step: "0.001",
+          maxDecimals: 3,
+          max: "1000000",
+          warningAt: String(available),
+          confirmOnInsufficient: true,
+          confirmOnMissingPrice: hasMissingPrice(item),
+        },
+        snapshot: {
+          name: item.name,
+          code: item.code || item.inventory_key,
+          image_url: item.image_url || "",
+          unit: item.unit,
+          availability: String(item.available_quantity),
+          configuration: String(item.variant || ""),
+          warnings,
+        },
+      }));
+      if (added) setQuantityError("");
+    } catch (quantityFailure) {
+      setQuantityError(quantityFailure.message || "No se pudo agregar el producto");
     }
   }
 
@@ -1293,7 +1153,10 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
     <section className="tarkett-shell offiho-shell">
       <div className="card-head tarkett-head">
         <div><h2>Offiho</h2><p>{catalog.total || catalog.items.length} productos indexados{catalog.generated_at ? ` - ${formatDate(catalog.generated_at)}` : ""}</p></div>
-        <button className="ghost-action" type="button" onClick={() => { sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY); setReloadKey((value) => value + 1); }}><RefreshCw size={16} />Refrescar</button>
+        <div className="catalog-head-actions">
+          <button className="ghost-action" type="button" onClick={() => { sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY); setReloadKey((value) => value + 1); }}><RefreshCw size={16} />Refrescar</button>
+          <button className="ghost-action" type="button" onClick={onOpenCart}><ShoppingCart size={17} /> Carrito ({cartLines.length})</button>
+        </div>
       </div>
 
       <div className="tarkett-layout">
@@ -1306,18 +1169,17 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
           </div>
           {error ? <div className="error-line">{error}</div> : null}
           {quantityError ? <div className="error-line" role="alert">{quantityError}</div> : null}
-          {success ? <div className="notice-line" role="status" aria-live="polite">{success}</div> : null}
           {loading ? <p className="empty">Cargando catalogo Offiho...</p> : null}
           {!loading && !filteredItems.length ? <p className="empty">No hay productos que coincidan con los filtros.</p> : null}
 
           <div className="tarkett-grid offiho-grid">
             {pagedItems.map((item) => {
-              const line = cart[item.inventory_key];
-              const inCart = Boolean(line);
               const reserved = Number(item.reserved_quantity || 0);
-              const stockWarning = line
-                ? offihoStockWarning(item, line.quantity)
-                : offihoStockLimit(item) <= 0 ? "Agotado" : "";
+              const draft = quantityDraftsByInventoryKey[item.inventory_key] ?? "1";
+              const normalizedDraft = normalizeOffihoQuantity(draft);
+              const stockWarning = normalizedDraft.error
+                ? (offihoStockLimit(item) <= 0 ? "Agotado" : "")
+                : offihoStockWarning(item, normalizedDraft.quantity);
               return (
                 <article className="tarkett-product offiho-product" key={item.inventory_key}>
                   <div className="product-media">{item.image_url ? <img src={item.image_url} alt={`${item.name || item.inventory_key} ${item.variant || ""}`.trim()} loading="lazy" /> : <div className="product-placeholder" aria-label="Imagen no disponible"><ImageOff size={24} /></div>}</div>
@@ -1330,8 +1192,8 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
                     <div className="stock-row"><span>Existencia {formatOffihoQuantity(item.available_quantity)}</span>{item.reserved_by_others && reserved > 0 ? <em>Apartado {formatOffihoQuantity(reserved)}</em> : null}{stockWarning ? <b className={`offiho-warning ${stockWarning === "Agotado" ? "out" : "insufficient"}`}>{stockWarning}</b> : null}</div>
                   </div>
                   <div className="product-actions">
-                    <input type="text" inputMode="decimal" value={line?.rawQuantity ?? ""} onChange={(event) => changeQuantity(item.inventory_key, event.target.value)} onBlur={() => line && normalizeQuantity(item.inventory_key)} placeholder="Cant." aria-label={`Cantidad para ${item.name || item.inventory_key}`} />
-                    {inCart ? <button className="ghost-action" type="button" onClick={() => removeItem(item.inventory_key)}><Minus size={16} />Quitar</button> : <button className="primary-action" type="button" onClick={() => addItem(item)}><Plus size={16} />Agregar</button>}
+                    <input type="text" inputMode="decimal" value={draft} disabled={cartBusy} onChange={(event) => changeOffihoDraft(item.inventory_key, event.target.value)} onBlur={() => normalizeOffihoDraft(item)} placeholder="Cant." aria-label={`Cantidad para ${item.name || item.inventory_key}`} />
+                    <button className="primary-action" type="button" disabled={cartBusy} onClick={() => addOffihoItem(item)}><Plus size={16} />Agregar</button>
                   </div>
                 </article>
               );
@@ -1340,25 +1202,6 @@ function OffihoView({ token, userId, refreshJobs, onJobQueued }) {
           {!loading && filteredItems.length ? <div className="offiho-pagination"><button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1} aria-label="Pagina anterior" title="Pagina anterior"><ChevronLeft size={18} /></button><span>Pagina {page} de {pageCount}</span><button type="button" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount} aria-label="Pagina siguiente" title="Pagina siguiente"><ChevronRight size={18} /></button></div> : null}
         </div>
 
-        <aside className="tarkett-cart-panel offiho-cart-panel">
-          <div className="cart-head"><ShoppingCart size={22} /><div><h3>Carrito</h3><span>{cartRows.length} productos - {formatOffihoQuantity(cartUnits)} unidades</span><strong className="offiho-cart-total">Total con precios disponibles: {formatOffihoCurrency(cartAmount)}</strong>{missingPriceCount ? <span className="offiho-price-notice">{missingPriceCount} precios por confirmar</span> : null}</div></div>
-          <div className="cart-list">
-            {cartRows.map((line) => {
-              const warning = offihoStockWarning(line.item, line.quantity);
-              return <div className="cart-row offiho-cart-row" key={line.inventory_key}>
-                <div><strong>{line.item.name || line.inventory_key}</strong><span>{line.item.code} - {hasMissingPrice(line.item) ? "Precio por confirmar" : formatOffihoCurrency(line.item.unit_price)}</span>{warning ? <div className={`offiho-cart-warning ${warning === "Agotado" ? "out" : "insufficient"}`} role="status" aria-live="polite"><b>{warning}</b><span>Solicitada {formatOffihoQuantity(line.quantity)} - disponible {formatOffihoQuantity(line.item.available_quantity)}</span></div> : null}</div>
-                <input type="text" inputMode="decimal" value={line.rawQuantity ?? String(line.quantity)} onChange={(event) => changeQuantity(line.inventory_key, event.target.value)} onBlur={() => normalizeQuantity(line.inventory_key)} aria-label={`Cantidad para ${line.item.name || line.inventory_key}`} />
-                <button type="button" onClick={() => removeItem(line.inventory_key)} aria-label={`Quitar ${line.item.name || line.inventory_key}`} title="Quitar del carrito"><Trash2 size={16} /></button>
-              </div>;
-            })}
-            {!cartRows.length ? <p className="empty">Selecciona productos del catalogo Offiho.</p> : null}
-          </div>
-          <form className="quote-form tarkett-form" onSubmit={createOffihoQuote}>
-            <h3>Datos de cotizacion</h3>
-            <div className="form-grid"><Field label="Proyecto" value={form.proyecto} onChange={(value) => updateField("proyecto", value)} /><Field label="Cliente" value={form.cliente} onChange={(value) => updateField("cliente", value)} /><Field label="Correo" type="email" value={form.correo} onChange={(value) => updateField("correo", value)} /><Field label="Telefono" value={form.telefono} onChange={(value) => updateField("telefono", value)} /><Field label="Direccion" value={form.direccion} onChange={(value) => updateField("direccion", value)} /><Field label="Descuento (%)" type="number" min="0" max="100" value={form.descuento} onChange={updateDiscount} /><Field label="Razon social" value={form.razon_social} onChange={(value) => updateField("razon_social", value)} wide /></div>
-            <div className="actions-row"><button className="primary-action" disabled={busy || !cartRows.length}>{busy ? <Loader2 className="spin" size={18} /> : <FileSpreadsheet size={18} />}Cotizar</button></div>
-          </form>
-        </aside>
       </div>
     </section>
   );
@@ -1880,12 +1723,38 @@ function App() {
   const [jobs, setJobs] = useState([]);
   const [downloadState, setDownloadState] = useState(null);
   const [deleteState, setDeleteState] = useState(null);
+  const [mixedCart, setMixedCart] = useState([]);
+  const mixedCartRef = useRef([]);
+  const [mixedCartOpen, setMixedCartOpen] = useState(false);
+  const [mixedQuote, setMixedQuote] = useState({ ...EMPTY_MIXED_QUOTE });
+  const [mixedQuoteBusy, setMixedQuoteBusy] = useState(false);
+  const [mixedQuoteError, setMixedQuoteError] = useState("");
+  const [mixedQuoteNotice, setMixedQuoteNotice] = useState("");
+  const mixedQuoteSubmittingRef = useRef(false);
+  const mixedQuoteSessionEpochRef = useRef(0);
   const { request } = useApi(session?.access_token);
+
+  function replaceMixedCart(next) {
+    mixedCartRef.current = next;
+    setMixedCart(next);
+  }
+
+  function resetMixedQuoteSession() {
+    mixedQuoteSessionEpochRef.current += 1;
+    mixedQuoteSubmittingRef.current = false;
+    setMixedQuoteBusy(false);
+    replaceMixedCart([]);
+    setMixedCartOpen(false);
+    setMixedQuote({ ...EMPTY_MIXED_QUOTE });
+    setMixedQuoteError("");
+    setMixedQuoteNotice("");
+  }
 
   useEffect(() => {
     function handleAuthExpired() {
       localStorage.removeItem("mobiliti_session");
       clearCatalogCaches();
+      resetMixedQuoteSession();
       setSession(null);
       setJobs([]);
       setDownloadState(null);
@@ -1920,6 +1789,7 @@ function App() {
   function logout() {
     localStorage.removeItem("mobiliti_session");
     clearCatalogCaches();
+    resetMixedQuoteSession();
     setSession(null);
     setSessionNotice("");
   }
@@ -1934,6 +1804,107 @@ function App() {
     alma: "ALMA",
     lumbro: "Lumbro"
   };
+
+  function addMixedCartLine(line) {
+    if (mixedQuoteSubmittingRef.current) {
+      setMixedQuoteError("Espera a que termine la cotizacion en curso");
+      return false;
+    }
+    try {
+      const next = upsertMixedCartLine(mixedCartRef.current, line);
+      replaceMixedCart(next);
+      setMixedQuoteError("");
+      setMixedQuoteNotice("");
+      setMixedCartOpen(true);
+      return true;
+    } catch (cartFailure) {
+      setMixedQuoteError(cartFailure.message || "No se pudo agregar el producto");
+      return false;
+    }
+  }
+
+  function updateMixedCartLine(key, quantity) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    const next = updateMixedCartQuantity(mixedCartRef.current, key, quantity);
+    replaceMixedCart(next);
+  }
+
+  function removeMixedCartLineFromApp(key) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceMixedCart(removeMixedCartLine(mixedCartRef.current, key));
+  }
+
+  function updateMixedQuoteField(field, value) {
+    if (mixedQuoteSubmittingRef.current) return;
+    setMixedQuote((current) => ({ ...current, [field]: value }));
+  }
+
+  function openMixedCart() {
+    setMixedCartOpen(true);
+  }
+
+  async function submitMixedQuote(event, submissionLines = mixedCartRef.current) {
+    event.preventDefault();
+    if (mixedQuoteSubmittingRef.current || !submissionLines.length) return;
+
+    let committedLines;
+    try {
+      committedLines = submissionLines.map((line) => ({
+        ...line,
+        quantity: validateLineQuantity(line, line.quantity)
+      }));
+    } catch (quantityFailure) {
+      setMixedQuoteError(quantityFailure.message || "Cantidad invalida");
+      return;
+    }
+    replaceMixedCart(committedLines);
+
+    const availabilityWarnings = committedLines.filter(lineNeedsAvailabilityConfirmation);
+    const priceWarnings = committedLines.filter(lineNeedsPriceConfirmation);
+    if ((availabilityWarnings.length || priceWarnings.length) && !window.confirm(
+      `Hay ${availabilityWarnings.length} producto(s) agotado(s) o con existencia insuficiente `
+      + `y ${priceWarnings.length} producto(s) con precio por confirmar. ¿Deseas continuar?`
+    )) return;
+
+    mixedQuoteSubmittingRef.current = true;
+    const submissionEpoch = mixedQuoteSessionEpochRef.current;
+    setMixedQuoteBusy(true);
+    setMixedQuoteError("");
+    setMixedQuoteNotice("");
+    try {
+      const data = await request("/catalogs/mixed-quote", {
+        method: "POST",
+        body: JSON.stringify({
+          ...mixedQuote,
+          items: committedLines.map(toMixedQuoteItem)
+        })
+      });
+      if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
+      if (!data?.job?.id) throw new Error("Respuesta de trabajo mixto invalida");
+      setJobs((current) => [data.job, ...current.filter((job) => job.id !== data.job.id)]);
+      replaceMixedCart([]);
+      setMixedCartOpen(false);
+      setMixedQuoteNotice("Cotizacion mixta en cola. Revisa el avance en Cotizaciones.");
+      try {
+        const refreshed = await request("/cotizaciones");
+        if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
+          setJobs(refreshed.cotizaciones || []);
+        }
+      } catch {
+        if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
+          setMixedQuoteNotice("Cotizacion mixta en cola. Actualiza Cotizaciones para ver el avance.");
+        }
+      }
+    } catch (quoteFailure) {
+      if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
+      setMixedQuoteError(quoteFailure.message || "No se pudo generar la cotizacion mixta");
+    } finally {
+      if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
+        mixedQuoteSubmittingRef.current = false;
+        setMixedQuoteBusy(false);
+      }
+    }
+  }
   async function downloadJob(job) {
     try {
       await runDownload(job, session.access_token, setDownloadState);
@@ -1980,11 +1951,11 @@ function App() {
       : view === "historial"
         ? <HistoryView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} downloadState={downloadState} deleteState={deleteState} />
         : view === "tarkett"
-          ? <TarkettView token={session.access_token} userId={session.usuario?.id} refreshJobs={refreshJobs} onJobQueued={(job) => setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])} />
+          ? <TarkettView token={session.access_token} userId={session.usuario?.id} cartLines={mixedCart} onAddCartLine={addMixedCartLine} onOpenCart={openMixedCart} cartBusy={mixedQuoteBusy} />
           : view === "offiho"
-            ? <OffihoView token={session.access_token} userId={session.usuario?.id} refreshJobs={refreshJobs} onJobQueued={(job) => setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])} />
+            ? <OffihoView token={session.access_token} userId={session.usuario?.id} cartLines={mixedCart} onAddCartLine={addMixedCartLine} onOpenCart={openMixedCart} cartBusy={mixedQuoteBusy} />
             : Object.hasOwn(supplierLabels, view)
-              ? <SupplierCatalogView key={view} supplier={view} label={supplierLabels[view]} request={request} userId={session.usuario?.id} refreshJobs={refreshJobs} onJobQueued={(job) => setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])} />
+              ? <SupplierCatalogView key={view} supplier={view} label={supplierLabels[view]} request={request} userId={session.usuario?.id} onAddCartLine={addMixedCartLine} onOpenCart={openMixedCart} cartLineCount={mixedCart.length} cartBusy={mixedQuoteBusy} />
         : (view === "admin" || view === "clientes") && isAdmin
           ? <AdminView token={session.access_token} />
           : quoteForm;
@@ -1993,8 +1964,26 @@ function App() {
     <div className="app-shell">
       <Sidebar view={view} setView={setView} isAdmin={isAdmin} onLogout={logout} />
       <main className="content-shell">
-        <Header user={session.usuario} subscription={session.suscripcion} />
+        <Header user={session.usuario} subscription={session.suscripcion} cartCount={mixedCart.length} onOpenCart={openMixedCart} />
+        {mixedQuoteNotice ? (
+          <div className="mixed-quote-notice" role="status" aria-live="polite">
+            {mixedQuoteNotice}
+          </div>
+        ) : null}
         {mainView}
+        <MixedCartDrawer
+          lines={mixedCart}
+          open={mixedCartOpen}
+          form={mixedQuote}
+          busy={mixedQuoteBusy}
+          error={mixedQuoteError}
+          notice=""
+          onClose={() => setMixedCartOpen(false)}
+          onFieldChange={updateMixedQuoteField}
+          onQuantityChange={updateMixedCartLine}
+          onRemove={removeMixedCartLineFromApp}
+          onSubmit={submitMixedQuote}
+        />
       </main>
     </div>
   );

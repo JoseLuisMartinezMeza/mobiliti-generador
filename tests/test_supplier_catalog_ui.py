@@ -24,8 +24,10 @@ SUPPLIER_VIEW_PROPS = (
     "label",
     "request",
     "userId",
-    "refreshJobs",
-    "onJobQueued",
+    "onAddCartLine",
+    "onOpenCart",
+    "cartLineCount",
+    "cartBusy",
 )
 
 
@@ -139,12 +141,9 @@ def test_supplier_catalog_ui_static_contracts_are_present():
         r"request\(\s*`/catalogs/\$\{[^}]*supplier[^}]*\}(?:\?[^`]*)?`",
         component,
     )
-    assert "/catalogs/exchange-rates" in combined
-    assert re.search(
-        r"request\(\s*`/catalogs/\$\{[^}]*supplier[^}]*\}/quote`\s*,\s*"
-        r"\{(?=[\s\S]{0,400}?\bmethod\s*:\s*[\"']POST[\"'])",
-        component,
-    )
+    assert "/catalogs/exchange-rates" not in component
+    assert "/catalogs/${supplier}/quote" not in component
+    assert "onAddCartLine(createMixedCartLine" in component
 
     assert re.search(
         r"\b\w*CACHE_VERSION\b\s*=\s*(?:[\"']v?\d+[\"']|\d+)",
@@ -171,6 +170,10 @@ def test_supplier_catalog_ui_static_contracts_are_present():
     assert "Pagina siguiente" in visible_text
     assert re.search(r"<img\b(?=[^>]*\bloading=[\"']lazy[\"'])[^>]*>", component, re.DOTALL)
     assert _has_css_rule(styles, ("supplier",), "object-fit: contain")
+    assert _has_css_rule(styles, ("supplier-image-frame", "img"), "width: auto")
+    assert _has_css_rule(styles, ("supplier-image-frame", "img"), "height: auto")
+    assert _has_css_rule(styles, ("supplier-image-frame", "img"), "max-width: 100%")
+    assert _has_css_rule(styles, ("supplier-image-frame", "img"), "max-height: 100%")
     assert _has_css_rule(
         styles,
         ("supplier-product-grid",),
@@ -215,20 +218,9 @@ def test_kundesign_fallback_link_is_disclosed_as_general_catalog():
         re.IGNORECASE,
     )
 
-    for currency in ("USD", "MXN", "EUR"):
-        assert re.search(rf"[\"']{currency}[\"']", component)
-    for field in ("quote_currency", "rate_source", "rate_effective_date", "exchange_rate", "tax_rate"):
-        assert field in component
     for label in (
-        "Banco de Mexico",
-        "Fuente",
-        "Fecha",
-        "Tasa",
         "Precio neto",
         "mas IVA",
-        "Subtotal",
-        "IVA",
-        "Total",
     ):
         assert label in visible_text
 
@@ -249,10 +241,6 @@ def test_kundesign_fallback_link_is_disclosed_as_general_catalog():
         compact_component,
     )
 
-    assert re.search(r"\bisSubmittingRef\s*=\s*useRef\(false\)", component)
-    assert re.search(r"if\s*\(\s*isSubmittingRef\.current\s*\)\s*(?:return|\{)", component)
-    assert "isSubmittingRef.current = true" in component
-    assert "isSubmittingRef.current = false" in component
     assert "is_out_of_stock" in component
     assert "Agotado" in visible_text
     assert any(
@@ -264,25 +252,9 @@ def test_kundesign_fallback_link_is_disclosed_as_general_catalog():
     assert "<ShoppingCart" in component
     assert 'aria-label="Abrir carrito"' in visible_text
     assert 'title="Abrir carrito"' in visible_text
-    assert "aria-expanded=" in component
-    assert "aria-controls=" in component
-    assert re.search(r"role=\{[^}]*dialog[^}]*complementary[^}]*\}", component)
-    assert re.search(r"aria-modal=\{[^}]*true[^}]*undefined[^}]*\}", component)
-    assert 'aria-label="Cerrar carrito"' in visible_text
-    assert "<X" in component
-    assert re.search(r"\.key\s*===\s*[\"']Escape[\"']", component)
-    assert re.search(r"addEventListener\(\s*[\"']keydown[\"']", component)
-    assert re.search(r"removeEventListener\(\s*[\"']keydown[\"']", component)
-    assert re.search(r"\.key\s*===\s*[\"']Tab[\"']", component)
-    assert "cartToggleRef" in component
-    assert "focusable" in component.lower()
-    assert ".focus()" in component or "autoFocus" in component
-    assert re.search(
-        r"@media\s*\(max-width\s*:[^)]+\)[\s\S]*?\.supplier-[^{]*drawer",
-        styles,
-        re.IGNORECASE,
-    )
-    assert _has_css_rule(styles, ("supplier", "drawer"), "position: fixed")
+    assert "onOpenCart" in component
+    assert "cartLineCount" in component
+    assert "supplier-cart-drawer" not in component
 
 
 def test_lumbro_link_labels_are_truthful_and_other_supplier_labels_are_unchanged():
@@ -356,8 +328,8 @@ def test_pza_quantities_are_validated_on_add_without_rewriting_input_state():
     )
 
     assert result == {
-        "pzaRules": {"min": "1", "step": "1", "integer": True},
-        "m2Rules": {"min": "0.000001", "step": "0.000001", "integer": False},
+        "pzaRules": {"min": "1", "step": "1", "maxDecimals": 0, "max": "1000000", "integer": True},
+        "m2Rules": {"min": "0.000001", "step": "0.000001", "maxDecimals": 6, "max": "1000000", "integer": False},
         "validPza": [True, True],
         "invalidPza": [False, False, False, False, False],
         "m2Fraction": True,
@@ -388,34 +360,16 @@ def test_pza_quantities_are_validated_on_add_without_rewriting_input_state():
     assert "Dimensiones" in _ascii_text(component)
 
 
-def test_shared_supplier_totals_use_net_price_plus_iva_without_client_discount():
+def test_shared_supplier_lines_keep_configuration_and_delegate_commercial_quote():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
-    helpers = [
-        _javascript_function(component, name)
-        for name in ("decimal", "configuredBasePrice", "supplierCartTotals")
-    ]
-    result = _run_javascript(
-        f"{' '.join(helpers)}\n"
-        "const item = {price_net: '660.000000', tax_rate: '0.16', "
-        "base_price_options: [], add_on_options: []};"
-        "const cart = [{item, quantity: '2', configuration: {"
-        "base_option_id: '', add_on_option_ids: []}}];"
-        "console.log(JSON.stringify(supplierCartTotals(cart, 1)));"
-    )
-
-    assert result["net"] == 1320
-    assert result["tax"] == pytest.approx(211.2)
-    assert result["total"] == pytest.approx(1531.2)
-    empty_quote = re.search(r"const\s+EMPTY_QUOTE\s*=\s*\{(?P<body>.*?)\};", component, re.DOTALL)
-    assert empty_quote
-    assert "descuento" not in empty_quote.group("body")
-    submit_quote = _javascript_function(component, "submitQuote")
-    assert re.search(r"\bdescuento\s*:\s*0\b", submit_quote)
-    assert "quote.descuento" not in component
+    assert "visibleConfiguration(item, configuration)" in component
+    assert "cartWarnings(item)" in component
+    assert "createMixedCartLine" in component
+    assert "toMixedQuoteItem" not in component
+    assert "submitQuote" not in component
     visible_text = _ascii_text(component)
     assert "Descuento (%)" not in visible_text
     assert "Precio lista" not in visible_text
-    assert "Subtotal neto" in visible_text
 
 
 def test_shared_supplier_cards_render_dimensions_button_configurator_and_unit_aware_quantities():
@@ -493,16 +447,90 @@ def test_supplier_cards_fail_closed_when_price_or_currency_is_pending():
     assert "Precio por confirmar" in visible_text
     assert "source_price_printed" in component
     assert "Precio fuente (moneda por confirmar)" in visible_text
-    assert re.search(
-        r"disabled=\{[^}]*code_status[^}]*configuredPrice[^}]*base_currency[^}]*\}",
-        re.sub(r"\s+", " ", component),
-    )
+    assert "disabled={cartBusy || !canAddSupplierItem(item, supplier, configuredPrice)}" in component
     assert "formatConfiguredPrice" in component
     assert "Por confirmar" in visible_text
-    assert re.search(
-        r"disabled=\{[^}]*submitting[^}]*!cart\.length[^}]*!selectedRate[^}]*\}",
-        re.sub(r"\s+", " ", component),
+    assert "cartBusy" in component
+
+
+def test_sonara_and_lumbro_review_items_can_be_added_with_valid_price_currency_and_tax():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    helpers = "\n".join(
+        _javascript_function(component, name)
+        for name in ("decimal", "canAddSupplierItem")
     )
+    result = _run_javascript(
+        f"{helpers}\n"
+        "const item = (code_status, price_net = '3253.00', base_currency = 'MXN', tax_rate = '0.16') => "
+        "({code_status, price_net, base_currency, tax_rate});"
+        "console.log(JSON.stringify(["
+        "canAddSupplierItem(item('needs_review'), 'sonara', '3253.00'),"
+        "canAddSupplierItem(item('needs_review'), 'lumbro', '3253.00'),"
+        "canAddSupplierItem(item('needs_review'), 'cr-global', '3253.00'),"
+        "canAddSupplierItem(item('verified'), 'sonara', '3253.00'),"
+        "canAddSupplierItem(item('needs_review'), 'lumbro', '0'),"
+        "canAddSupplierItem(item('needs_review', '3253.00', 'XXX'), 'lumbro', '3253.00')"
+        ",canAddSupplierItem(item('needs_review', '3253.00', 'MXN', '0.08'), 'sonara', '3253.00')"
+        "]));"
+    )
+
+    assert result == [True, True, False, True, False, False, False]
+
+
+def test_supplier_cart_snapshot_deduplicates_review_warning_and_names_configuration():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    helpers = "\n".join(
+        _javascript_function(component, name)
+        for name in ("warningKey", "cartWarnings", "visibleConfiguration")
+    )
+    result = _run_javascript(
+        f"{helpers}\n"
+        "const item = {code_status: 'needs_review', warnings: ["
+        "'Código por verificar', ' codigo por VERIFICAR ', 'Evidencia detallada'], "
+        "base_price_options: [{id: 'base-a', name: 'Roble'}], "
+        "add_on_options: [{id: 'addon-b', name: 'Pasacables'}, {id: 'addon-a', name: 'Electrificacion'}]};"
+        "const warnings = cartWarnings(item);"
+        "console.log(JSON.stringify({warnings, reviewCount: warnings.filter(value => "
+        "warningKey(value) === 'codigo por verificar').length, configuration: "
+        "visibleConfiguration(item, {base_option_id: 'base-a', add_on_option_ids: ['addon-a']})}));"
+    )
+
+    assert result == {
+        "warnings": ["Código por verificar", "Evidencia detallada"],
+        "reviewCount": 1,
+        "configuration": "Roble + Electrificacion",
+    }
+
+
+def test_supplier_quantity_rules_confirm_stocked_and_out_of_stock_lines():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    helpers = "\n".join(
+        _javascript_function(component, name)
+        for name in ("isSquareMeterUnit", "quantityRules")
+    )
+    result = _run_javascript(
+        f"{helpers}\n"
+        "console.log(JSON.stringify(["
+        "quantityRules({unit: 'PZA', availability_type: 'stocked', stock: '8'}),"
+        "quantityRules({unit: 'PZA', availability_type: 'unknown', is_out_of_stock: true}),"
+        "quantityRules({unit: 'M2', availability_type: 'made_to_order'})"
+        "]));"
+    )
+
+    assert result == [
+        {
+            "min": "1", "step": "1", "maxDecimals": 0, "max": "1000000",
+            "integer": True, "warningAt": "8", "confirmOnInsufficient": True,
+        },
+        {
+            "min": "1", "step": "1", "maxDecimals": 0, "max": "1000000",
+            "integer": True, "warningAt": "0", "confirmOnInsufficient": True,
+        },
+        {
+            "min": "0.000001", "step": "0.000001", "maxDecimals": 6,
+            "max": "1000000", "integer": False,
+        },
+    ]
 
 
 def test_verified_variant_sku_is_shown_before_a_generic_model_code():
@@ -519,20 +547,11 @@ def test_verified_variant_sku_is_shown_before_a_generic_model_code():
     assert body.index("item.sku") < body.index("source_model_code")
 
 
-def test_pending_supplier_currency_does_not_request_an_exchange_rate():
+def test_supplier_view_does_not_request_or_compute_exchange_rates():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
-    load_rates = re.search(
-        r"async\s+function\s+loadRates\(\)\s*\{(?P<body>.*?)\n\s*\}",
-        component,
-        re.DOTALL,
-    )
-
-    assert load_rates
-    assert re.search(
-        r"if\s*\(\s*!catalog\s*\|\|\s*baseCurrency\s*===\s*[\"']XXX[\"']\s*\)",
-        load_rates.group("body"),
-    )
-    assert "Moneda del proveedor pendiente de confirmar" in component
+    assert "/catalogs/exchange-rates" not in component
+    assert "exchange_rate" not in component
+    assert "supplierCartTotals" not in component
 
 
 def test_sunon_cards_show_source_codes_color_delivery_buckets_and_variant_counts():

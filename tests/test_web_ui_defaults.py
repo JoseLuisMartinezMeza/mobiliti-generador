@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -82,15 +83,15 @@ def test_tarkett_tab_catalog_cache_and_cart_are_present():
     assert '["tarkett", "Tarkett", PackageSearch]' in source
     assert "function TarkettView" in source
     assert 'request("/tarkett/catalog")' in source
-    assert 'request("/tarkett/quote"' in source
+    assert 'request("/tarkett/quote"' not in source
+    assert 'request("/catalogs/mixed-quote"' in source
     assert 'const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";' in source
     assert "Precio unitario" in source
-    assert "Total con precios disponibles" in source
     assert "formatCatalogCurrency(item.unit_price)" in source
     assert "sessionStorage.setItem(TARKETT_CATALOG_CACHE_KEY" in source
     assert "Apartado {formatQuantity(reserved)}" in source
     assert ".tarkett-grid" in styles
-    assert ".tarkett-cart-panel" in styles
+    assert ".mixed-cart-drawer" in styles
     assert '"/tarkett/:path*"' in vercel
 
 
@@ -105,7 +106,8 @@ def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
     assert source.index('["tarkett", "Tarkett", PackageSearch]') < source.index('["offiho", "Offiho", Armchair]')
     assert "function OffihoView" in source
     assert 'request("/offiho/catalog")' in source
-    assert 'request("/offiho/quote"' in source
+    assert 'request("/offiho/quote"' not in source
+    assert source.count('request("/catalogs/mixed-quote"') == 1
     assert 'const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";' in source
     assert "sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY)" in source
     assert "inventory_key" in source
@@ -172,8 +174,8 @@ def test_offiho_quantity_price_and_submit_guard_contracts_are_present():
     source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
 
     assert "Precio por confirmar" in source
-    assert "Total con precios disponibles" in source
-    assert "precios por confirmar" in source
+    assert "confirmOnMissingPrice" in source
+    assert "confirmOnInsufficient" in source
     assert "onBlur" in source
 
 
@@ -189,10 +191,10 @@ def test_completed_quotes_disclose_local_image_fallback():
     assert ".image-provider-warning" in styles
     assert "rawQuantity" in source
     assert "1." in source
-    assert "isSubmittingRef" in source
-    assert "if (isSubmittingRef.current) return;" in source
-    assert "isSubmittingRef.current = true;" in source
-    assert "isSubmittingRef.current = false;" in source
+    assert "mixedQuoteSubmittingRef" in source
+    assert "if (mixedQuoteSubmittingRef.current" in source
+    assert "mixedQuoteSubmittingRef.current = true;" in source
+    assert "mixedQuoteSubmittingRef.current = false;" in source
     assert 'role="status"' in source
     assert 'aria-live="polite"' in source
 
@@ -212,6 +214,17 @@ def test_catalog_shell_is_unframed_and_intermediate_breakpoint_prevents_overlap(
     assert ".tarkett-grid" in intermediate
     assert "text-align: left;" in intermediate
     assert ".product-actions {\n  min-width: 0;" in styles
+
+
+def test_mixed_cart_header_and_drawer_do_not_reintroduce_mobile_overflow():
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    mixed_mobile = styles.rsplit("@media (max-width: 720px)", 1)[1]
+
+    assert "body {" in styles and "overflow-x: hidden;" in styles
+    assert ".content-shell" in styles and "overflow-x: hidden;" in styles
+    assert re.search(r"\.topbar\s*\{[^}]*grid-template-columns:\s*1fr", mixed_mobile)
+    assert re.search(r"\.mixed-cart-drawer\s*\{[^}]*width:\s*100vw", mixed_mobile)
+    assert "overflow-wrap: anywhere;" in styles
 
 
 def test_verify_saas_runs_the_supported_frontend_validation_command():
