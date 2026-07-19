@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,15 @@ MIXED_HEADERS = {
 }
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "mobiliti_saas" / "worker" / "templates" / "Formato Cotizacion 2026 GDL.xlsx"
+
+
+def _converted_price(original, rate):
+    return float(
+        (Decimal(str(original)) * Decimal(str(rate))).quantize(
+            Decimal("0.01"),
+            rounding=ROUND_HALF_UP,
+        )
+    )
 
 
 def _mixed_line(
@@ -229,7 +239,7 @@ def test_mixed_engine_uses_per_line_provider_discount_and_converted_prices(
                 discount=40,
                 mode="list",
                 auto=False,
-                price=123.456,
+                price=_converted_price(123.456, mxn_rate),
                 original_currency="MXN",
                 original_price=123.456,
                 frozen_rate=float(mxn_rate),
@@ -241,7 +251,7 @@ def test_mixed_engine_uses_per_line_provider_discount_and_converted_prices(
                 discount=0,
                 mode="net",
                 auto=False,
-                price=200.125,
+                price=_converted_price(100, usd_rate),
                 original_currency="USD",
                 original_price=100,
                 frozen_rate=float(usd_rate),
@@ -348,7 +358,7 @@ def test_mixed_lumbro_accessories_are_selective_and_use_frozen_rate(
                 discount=40,
                 mode="list",
                 auto=True,
-                price=1000,
+                price=_converted_price(1000, mxn_rate),
                 original_currency="MXN",
                 original_price=1000,
                 frozen_rate=float(mxn_rate),
@@ -360,7 +370,7 @@ def test_mixed_lumbro_accessories_are_selective_and_use_frozen_rate(
                 discount=0,
                 mode="net",
                 auto=False,
-                price=900,
+                price=_converted_price(100, usd_rate),
                 original_currency="USD",
                 original_price=100,
                 frozen_rate=float(usd_rate),
@@ -372,7 +382,7 @@ def test_mixed_lumbro_accessories_are_selective_and_use_frozen_rate(
                 discount=0,
                 mode="net",
                 auto=False,
-                price=120,
+                price=_converted_price(120, mxn_rate),
                 original_currency="MXN",
                 original_price=120,
                 frozen_rate=float(mxn_rate),
@@ -591,3 +601,211 @@ def test_mixed_auto_line_requires_the_complete_frozen_rate_before_saving(tmp_pat
         generate_quote(source, output, metadata, TEMPLATE)
 
     assert not output.exists()
+
+
+def test_mixed_auto_lines_require_one_identical_snapshot_for_every_eligible_provider(
+    monkeypatch, tmp_path
+):
+    source = _write_mixed_source(
+        tmp_path / "two-auto-providers.xlsx",
+        [
+            _mixed_line(
+                name="Piso Tarkett",
+                provider="Tarkett",
+                discount=40,
+                mode="list",
+                auto=True,
+                price=100,
+                original_currency="MXN",
+                original_price=100,
+                frozen_rate=1,
+            ),
+            _mixed_line(
+                name="Escritorio Offiho",
+                provider="Offiho",
+                discount=40,
+                mode="list",
+                auto=True,
+                price=200,
+                original_currency="MXN",
+                original_price=200,
+                frozen_rate=1,
+            ),
+        ],
+    )
+    metadata = _mixed_metadata()
+    metadata["rate_summary"] = [
+        metadata["rate_summary"][0],
+        {
+            **metadata["rate_summary"][0],
+            "catalog": "offiho",
+            "rate_effective_date": "2026-07-14",
+        },
+    ]
+    metadata["auto_electrification_rate"] = {
+        key: metadata["rate_summary"][0][key]
+        for key in (
+            "base_currency",
+            "quote_currency",
+            "exchange_rate",
+            "rate_source",
+            "rate_effective_date",
+            "rate_retrieved_at",
+        )
+    }
+    output = tmp_path / "missing-parent" / "final.xlsx"
+
+    monkeypatch.setattr(
+        engine,
+        "_load_template",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("mixed snapshot validation must run before template loading")
+        ),
+    )
+    with pytest.raises(ValueError, match="Tasa de electrificacion mixta inconsistente"):
+        generate_quote(source, output, metadata, TEMPLATE)
+
+    assert not output.parent.exists()
+    assert not output.exists()
+
+
+def test_mixed_auto_lines_accept_one_matching_snapshot_for_all_eligible_providers(tmp_path):
+    source = _write_mixed_source(
+        tmp_path / "matching-auto-providers.xlsx",
+        [
+            _mixed_line(
+                name="Piso Tarkett",
+                provider="Tarkett",
+                discount=40,
+                mode="list",
+                auto=True,
+                price=100,
+                original_currency="MXN",
+                original_price=100,
+                frozen_rate=1,
+            ),
+            _mixed_line(
+                name="Escritorio Offiho",
+                provider="Offiho",
+                discount=40,
+                mode="list",
+                auto=True,
+                price=200,
+                original_currency="MXN",
+                original_price=200,
+                frozen_rate=1,
+            ),
+        ],
+    )
+    metadata = _mixed_metadata()
+    metadata["rate_summary"] = [
+        metadata["rate_summary"][0],
+        {**metadata["rate_summary"][0], "catalog": "offiho"},
+    ]
+    metadata["auto_electrification_rate"] = {
+        key: metadata["rate_summary"][0][key]
+        for key in (
+            "base_currency",
+            "quote_currency",
+            "exchange_rate",
+            "rate_source",
+            "rate_effective_date",
+            "rate_retrieved_at",
+        )
+    }
+
+    items = read_items(source)[0]
+
+    engine._validate_mixed_catalog_metadata(items, metadata)
+
+
+def test_mixed_converted_price_audit_rejects_arbitrary_final_price_before_paths(
+    monkeypatch, tmp_path
+):
+    source = _write_mixed_source(
+        tmp_path / "tampered-converted-price.xlsx",
+        [
+            _mixed_line(
+                name="Silla ALMA",
+                provider="ALMA",
+                discount=0,
+                mode="net",
+                auto=False,
+                price=999999,
+                original_currency="USD",
+                original_price=100,
+                frozen_rate=18.5,
+            )
+        ],
+    )
+    metadata = _mixed_metadata()
+    metadata["rate_summary"] = metadata["rate_summary"][1:]
+    output = tmp_path / "no-output-dir" / "final.xlsx"
+
+    monkeypatch.setattr(
+        engine,
+        "_load_template",
+        lambda _path: (_ for _ in ()).throw(
+            AssertionError("converted price validation must run before template loading")
+        ),
+    )
+    with pytest.raises(ValueError, match="Precio convertido mixto inconsistente"):
+        generate_quote(source, output, metadata, TEMPLATE)
+
+    assert not output.parent.exists()
+    assert not output.exists()
+
+
+def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets(tmp_path):
+    source = _write_mixed_source(
+        tmp_path / "precision.xlsx",
+        [
+            _mixed_line(
+                name="Piso Tarkett precision alta",
+                provider="Tarkett",
+                discount=12.345678,
+                mode="list",
+                auto=False,
+                price=2.68,
+                original_currency="MXN",
+                original_price=2.675,
+                frozen_rate=1,
+            ),
+            _mixed_line(
+                name="Piso Tarkett precision minima",
+                provider="Tarkett",
+                discount=0.000001,
+                mode="list",
+                auto=False,
+                price=0.01,
+                original_currency="MXN",
+                original_price=0.005,
+                frozen_rate=1,
+            ),
+        ],
+    )
+    metadata = _mixed_metadata()
+    metadata["rate_summary"] = metadata["rate_summary"][:1]
+    output = tmp_path / "precision-final.xlsx"
+
+    generate_quote(source, output, metadata, TEMPLATE)
+
+    wb = load_workbook(output, data_only=False)
+    try:
+        cot = wb["Cotizacion"]
+        mobiliti = wb["Mobiliti"]
+        expectations = {
+            9: (0.12345678, "0.12345678"),
+            10: (0.00000001, "0.00000001"),
+        }
+        for source_row, (fraction, literal) in expectations.items():
+            cot_row = _row_for_formula(cot, 1, f"=Quotation!B{source_row}")
+            mobiliti_row = _row_for_formula(mobiliti, 4, f"=Quotation!B{source_row}")
+            assert cot.cell(cot_row, 7).value == fraction
+            assert mobiliti.cell(mobiliti_row, 27).value == (
+                f"=MIN({literal},Z{mobiliti_row})"
+            )
+            assert mobiliti.cell(mobiliti_row, 23).value == f"=ROUND(J{mobiliti_row},2)"
+            assert mobiliti.cell(mobiliti_row, 24).value == f"=ROUND(J{mobiliti_row},2)"
+    finally:
+        wb.close()

@@ -4,6 +4,7 @@ from collections import OrderedDict
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import hashlib
 import json
@@ -93,6 +94,7 @@ MIXED_RATE_FIELDS = {
     "rate_retrieved_at",
 }
 MIXED_AUTO_RATE_FIELDS = MIXED_RATE_FIELDS - {"catalog"}
+MIXED_MONEY_QUANTUM = Decimal("0.01")
 MIXED_MOBILITI_MONEY_COLS = (
     10,
     13,
@@ -1670,19 +1672,46 @@ def _uses_converted_catalog_prices(metadata: dict[str, Any] | None) -> bool:
 
 def _item_discount_rate(item: QuoteItem, metadata: dict[str, Any]) -> float:
     if _uses_mixed_catalog_prices(metadata):
-        mode = str(item.modo_precio or "").strip().lower()
-        provider = str(item.proveedor or "").strip()
-        if mode not in {"list", "net"}:
-            raise ValueError("Modo de precio mixto invalido")
-        value = _num(item.descuento, -1)
-        if not math.isfinite(value) or value < 0 or value > 100:
-            raise ValueError("Descuento mixto por linea invalido")
-        if mode == "net" and value != 0:
-            raise ValueError("Precio neto mixto no admite descuento")
-        if mode == "list" and provider not in {"Tarkett", "Offiho"}:
-            raise ValueError("Precio de lista mixto solo admite Tarkett u Offiho")
-        return value / 100.0
+        return float(_mixed_item_discount_fraction(item))
     return _discount_rate(metadata)
+
+
+def _mixed_decimal(value: Any, message: str, *, positive: bool = False) -> Decimal:
+    if isinstance(value, bool):
+        raise ValueError(message)
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(message) from exc
+    if not number.is_finite() or number < 0 or (positive and number <= 0):
+        raise ValueError(message)
+    return number
+
+
+def _mixed_item_discount_fraction(item: QuoteItem) -> Decimal:
+    mode = str(item.modo_precio or "").strip().lower()
+    provider = str(item.proveedor or "").strip()
+    if mode not in {"list", "net"}:
+        raise ValueError("Modo de precio mixto invalido")
+    value = _mixed_decimal(item.descuento, "Descuento mixto por linea invalido")
+    if value > Decimal("100") or max(-value.as_tuple().exponent, 0) > 6:
+        raise ValueError("Descuento mixto por linea invalido")
+    if mode == "net" and value != 0:
+        raise ValueError("Precio neto mixto no admite descuento")
+    if mode == "list" and provider not in {"Tarkett", "Offiho"}:
+        raise ValueError("Precio de lista mixto solo admite Tarkett u Offiho")
+    return value / Decimal("100")
+
+
+def _mixed_decimal_literal(value: Decimal) -> str:
+    text = format(value, "f").rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _item_discount_literal(item: QuoteItem, metadata: dict[str, Any]) -> str:
+    if _uses_mixed_catalog_prices(metadata):
+        return _mixed_decimal_literal(_mixed_item_discount_fraction(item))
+    return _excel_decimal(_discount_rate(metadata))
 
 
 def _item_auto_electrification(item: QuoteItem, metadata: dict[str, Any]) -> bool:
@@ -1801,35 +1830,46 @@ def _validate_mixed_catalog_metadata(items: list[QuoteItem], metadata: dict[str,
         if snapshot is None:
             raise ValueError("Proveedor mixto sin tasa congelada")
         original_currency = str(item.moneda_original or "").strip().upper()
-        frozen_rate = _positive_num(item.tipo_cambio_congelado)
-        original_price = _num(item.precio_original, -1)
-        converted_price = _num(item.precio, -1)
+        frozen_rate = _mixed_decimal(
+            item.tipo_cambio_congelado,
+            "Auditoria de precio mixto invalida",
+            positive=True,
+        )
+        original_price = _mixed_decimal(
+            item.precio_original,
+            "Auditoria de precio mixto invalida",
+        )
+        converted_price = _mixed_decimal(
+            item.precio,
+            "Auditoria de precio mixto invalida",
+        )
+        try:
+            expected_converted_price = (original_price * frozen_rate).quantize(
+                MIXED_MONEY_QUANTUM,
+                rounding=ROUND_HALF_UP,
+            )
+        except InvalidOperation as exc:
+            raise ValueError("Auditoria de precio mixto invalida") from exc
         if (
             original_currency != snapshot["base_currency"]
-            or frozen_rate is None
-            or not math.isclose(frozen_rate, float(snapshot["exchange_rate"]), rel_tol=0, abs_tol=1e-9)
-            or not math.isfinite(original_price)
-            or original_price < 0
-            or not math.isfinite(converted_price)
-            or converted_price < 0
+            or frozen_rate != Decimal(snapshot["exchange_rate"])
             or not str(item.referencia_fuente or "").strip()
         ):
             raise ValueError("Auditoria de precio mixto invalida")
+        if converted_price != expected_converted_price:
+            raise ValueError("Precio convertido mixto inconsistente")
     if seen_providers != set(summaries_by_provider):
         raise ValueError("Resumen de tasas mixtas inconsistente")
     if auto_items:
-        rate = _mixed_auto_electrification_rate(metadata)
+        _mixed_auto_electrification_rate(metadata)
         snapshot = metadata["auto_electrification_rate"]
-        matching = [
-            entry
-            for entry in summary
-            if entry["base_currency"] == "MXN"
-            and entry["quote_currency"] == snapshot["quote_currency"]
-            and entry["exchange_rate"] == snapshot["exchange_rate"]
-            and all(entry[field] == snapshot[field] for field in MIXED_AUTO_RATE_FIELDS)
-        ]
-        if not matching or rate <= 0:
-            raise ValueError("Tasa de electrificacion mixta inconsistente")
+        for provider in {str(item.proveedor or "").strip() for item in auto_items}:
+            provider_snapshot = summaries_by_provider[provider]
+            if any(
+                provider_snapshot[field] != snapshot[field]
+                for field in MIXED_AUTO_RATE_FIELDS
+            ):
+                raise ValueError("Tasa de electrificacion mixta inconsistente")
     elif metadata.get("auto_electrification_rate") is not None:
         raise ValueError("Tasa de electrificacion mixta inesperada")
 
@@ -1955,12 +1995,12 @@ def _write_mobiliti(
 
     def mark_written_row(
         row_number: int,
-        line_discount_rate: float,
+        line_discount_literal: str,
         region: str = DEFAULT_MOBILITI_REGION,
     ) -> None:
         ws.cell(row_number, MOBILITI_REGION_COL).value = region
         ws.cell(row_number, MOBILITI_COVER_DISCOUNT_COL).value = (
-            f"=MIN({_excel_decimal(line_discount_rate)},"
+            f"=MIN({line_discount_literal},"
             f"{get_column_letter(MOBILITI_MAX_DISCOUNT_COL)}{row_number})"
         )
         ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).value = f"=X{row_number}*AA{row_number}"
@@ -1975,7 +2015,7 @@ def _write_mobiliti(
         row_number: int,
         code: str,
         quantity: int,
-        line_discount_rate: float,
+        line_discount_literal: str,
         region: str = DEFAULT_MOBILITI_REGION,
     ) -> None:
         price_ref = lumbro_prices.get(code)
@@ -1993,7 +2033,7 @@ def _write_mobiliti(
         else:
             ws.cell(row_number, 10).value = "=0" if mixed_auto_rate is not None else "=0/$K$6"
         ws.cell(row_number, 11).value = 0
-        mark_written_row(row_number, line_discount_rate, region)
+        mark_written_row(row_number, line_discount_literal, region)
 
     for item in items:
         if item.tipo == "categoria":
@@ -2023,8 +2063,8 @@ def _write_mobiliti(
         ws.cell(row, 8).value = _formula(q_sheet, f"{qty_col}{item.row}")
         ws.cell(row, 10).value = _formula(q_sheet, f"{price_col}{item.row}")
         ws.cell(row, 11).value = _formula(q_sheet, f"{m3_col}{item.row}")
-        line_discount_rate = _item_discount_rate(item, metadata)
-        mark_written_row(row, line_discount_rate)
+        line_discount_literal = _item_discount_literal(item, metadata)
+        mark_written_row(row, line_discount_literal)
         row_map[item.row] = row
 
         lumbro_rows: list[int] = []
@@ -2037,7 +2077,7 @@ def _write_mobiliti(
             accessory_row = next_product_row()
             if accessory_row is None:
                 break
-            write_lumbro_row(accessory_row, code, quantity, line_discount_rate)
+            write_lumbro_row(accessory_row, code, quantity, line_discount_literal)
             lumbro_rows.append(accessory_row)
         if lumbro_rows:
             lumbro_row_map[item.row] = lumbro_rows

@@ -1,5 +1,6 @@
-from pathlib import Path
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 import os
 import sys
 
@@ -12,7 +13,12 @@ sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine import generate_quote  # noqa: E402
 from mobiliti_saas.quote_engine.engine import SECTION_PROD_STARTS, _copy_source_sheet, _write_estrategia_comercial  # noqa: E402
+from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
+    build_mixed_catalog_cart_payload,
+    create_mixed_catalog_quotation_workbook,
+)
 from mobiliti_saas.quote_engine.supplier_catalog import create_supplier_quotation_workbook  # noqa: E402
+from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem  # noqa: E402
 
 
 DOWNLOADS = Path(r"C:\Users\pepem\Downloads")
@@ -147,8 +153,8 @@ def _write_mixed_totals_quotation(path: Path) -> None:
         ws.cell(7, column).value = value
     ws["A8"] = "- Catalogos mixtos"
     rows = [
-        (9, "Piso Tarkett", 2, 123.456, "Tarkett", 40, "MXN", 123.456, 1, "list"),
-        (10, "Silla ALMA", 3, 200.125, "ALMA", 0, "USD", 100, 18.5, "net"),
+        (9, "Piso Tarkett", 2, 123.46, "Tarkett", 40, "MXN", 123.456, 1, "list"),
+        (10, "Silla ALMA", 3, 200.13, "ALMA", 0, "USD", 10.817568, 18.5, "net"),
     ]
     for row, name, quantity, price, provider, discount, original_currency, original_price, rate, mode in rows:
         ws.cell(row, 1).value = row - 8
@@ -189,6 +195,94 @@ def _mixed_totals_metadata():
         ],
         "cotizacion": "MIXTA-GOLDEN",
     }
+
+
+def _build_real_mixed_task5_payload():
+    tarkett = TarkettCatalogItem(
+        "25731726",
+        "Piso Tarkett",
+        "m2",
+        Decimal("10"),
+        unit_price=Decimal("123.456"),
+        price_source="catalog",
+    )
+    alma = {
+        "internal_id": "alma:kun:configured",
+        "supplier": "alma",
+        "product_key": "kun-configured",
+        "sku": "KC8611N01ROP",
+        "code_status": "verified",
+        "brand": "KUN",
+        "collection": "KUN",
+        "name": "Silla KUN configurable",
+        "description": "Silla ejecutiva configurable",
+        "unit": "pieza",
+        "availability_type": "made_to_order",
+        "stock": None,
+        "lead_time": "Sobre pedido",
+        "base_price_options": [
+            {
+                "id": "powder-coated-aluminium",
+                "name": "Powder coated aluminium",
+                "price_net": "250.000000",
+                "available": True,
+            }
+        ],
+        "add_on_options": [
+            {
+                "id": "cushion:a-plus",
+                "name": "Cushion A+",
+                "family": "cushion",
+                "price_net": "35.100000",
+                "available": True,
+            }
+        ],
+        "base_currency": "USD",
+        "price_net": "199.990000",
+        "tax_rate": "0.160000",
+        "attributes": {"color": "Black", "dimensions": "65 x 45 x 83 cm"},
+        "image_url": "",
+        "image_kind": "generated_reference",
+        "product_url": "",
+        "warnings": ["Imagen ilustrativa"],
+        "source_reference": "SPEC Guide-Alma-KUN.xlsx:E9:I9",
+    }
+    return build_mixed_catalog_cart_payload(
+        [
+            {"catalog": "tarkett", "code": tarkett.code, "quantity": "2"},
+            {
+                "catalog": "alma",
+                "internal_id": alma["internal_id"],
+                "quantity": "1",
+                "base_option_id": "powder-coated-aluminium",
+                "add_on_option_ids": ["cushion:a-plus"],
+            },
+        ],
+        catalogs={
+            "tarkett": {
+                "source_hash": "a" * 64,
+                "items": [tarkett],
+                "by_code": {tarkett.code: tarkett},
+            },
+            "alma": {
+                "supplier": "alma",
+                "source_hash": "b" * 64,
+                "generated_at": "2026-07-19T00:00:00+00:00",
+                "items": [alma],
+            },
+        },
+        rate_rows=[
+            {
+                "currency": "USD",
+                "effective_date": "2026-07-19",
+                "mxn_per_unit": "18.500000",
+                "retrieved_at": "2026-07-19T12:00:00+00:00",
+            }
+        ],
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
 
 
 def _formula_uses_round_2(value):
@@ -371,7 +465,7 @@ def test_mixed_final_workbook_has_one_rounded_product_and_totals_chain(tmp_path,
         assert reference_totals(
             [
                 (Decimal("123.456"), Decimal("2"), Decimal("0.4")),
-                (Decimal("200.125"), Decimal("3"), Decimal("0")),
+                (Decimal("200.13"), Decimal("3"), Decimal("0")),
             ]
         ) == (
             Decimal("748.55"),
@@ -380,6 +474,69 @@ def test_mixed_final_workbook_has_one_rounded_product_and_totals_chain(tmp_path,
             Decimal("134.14"),
             Decimal("972.52"),
         )
+    finally:
+        wb.close()
+
+
+def test_real_task5_mixed_workbook_preserves_structured_description_and_identity_price(
+    tmp_path, monkeypatch
+):
+    payload = _build_real_mixed_task5_payload()
+    source = tmp_path / "real-task5-mixed.xlsx"
+    output = tmp_path / "real-task6-final.xlsx"
+    create_mixed_catalog_quotation_workbook(
+        payload,
+        source,
+        image_dir=tmp_path / "mixed-images",
+    )
+    metadata = {
+        "catalog_price_mode": "mixed_catalog_converted",
+        "quote_currency": payload["quote_currency"],
+        "rate_summary": payload["rate_summary"],
+        "auto_electrification_rate": payload["auto_electrification_rate"],
+        "cotizacion": "MIXTA-REAL",
+    }
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine._exchange_rate",
+        lambda _metadata: (_ for _ in ()).throw(
+            AssertionError("mixed mode must not use the legacy exchange rate")
+        ),
+    )
+
+    generate_quote(source, output, metadata, WORKER_TEMPLATE)
+
+    wb = load_workbook(output, data_only=False)
+    try:
+        cot = wb["Cotizacion"]
+        mobiliti = wb["Mobiliti"]
+        quotation = wb["Quotation"]
+        alma_source_row = next(
+            row
+            for row in range(8, quotation.max_row + 1)
+            if quotation.cell(row, 12).value == "ALMA"
+        )
+        cot_row = next(
+            row
+            for row in range(1, cot.max_row + 1)
+            if cot.cell(row, 1).value == f"=Quotation!B{alma_source_row}"
+        )
+        mobiliti_row = next(
+            row
+            for row in range(1, mobiliti.max_row + 1)
+            if mobiliti.cell(row, 4).value == f"=Quotation!B{alma_source_row}"
+        )
+        description = str(cot.cell(cot_row, 3).value)
+        for expected in (
+            "Silla ejecutiva configurable",
+            "Powder coated aluminium",
+            "Cushion A+",
+            "Sobre pedido",
+            "Imagen de referencia",
+        ):
+            assert expected in description
+        assert mobiliti.cell(mobiliti_row, 23).value == f"=ROUND(J{mobiliti_row},2)"
+        assert mobiliti.cell(mobiliti_row, 24).value == f"=ROUND(J{mobiliti_row},2)"
+        assert cot.cell(cot_row, 6).value == f"=ROUND(Mobiliti!X{mobiliti_row},2)"
     finally:
         wb.close()
 
