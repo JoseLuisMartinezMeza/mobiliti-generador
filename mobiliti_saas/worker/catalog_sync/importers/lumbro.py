@@ -55,10 +55,7 @@ _INTERCONNECTION_AUTHORITY = 4
 _CATALOG_PATH = "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf"
 _CATALOG_MIME = "application/pdf"
 _CATALOG_SHA256 = "bbd810ebab20336d2a6bdc61123955bd062c5a64d57d4359556fcf6aef57e053"
-_CATALOG_PDF_PROFILE = {
-    "pdf_max_pages": 80,
-    "pdf_max_stream_expanded_bytes": 384 * 1024 * 1024,
-}
+_CATALOG_PDF_PROFILE = {"pdf_profile": "lumbro_catalog_2024"}
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _MONEY = re.compile(
     r"^\s*\$?\s*((?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]{2})?)\s*$"
@@ -88,6 +85,7 @@ class LumbroPriceRecord:
     authority_rank: int
     parse_status: LumbroParseStatus
     warnings: tuple[str, ...] = ()
+    color: str = ""
 
 
 @dataclass(frozen=True)
@@ -156,6 +154,7 @@ class LumbroInterconnectionRecord:
     authority_rank: int
     parse_status: LumbroParseStatus
     warnings: tuple[str, ...] = ()
+    color: str = ""
 
 
 LumbroImageEvidenceStatus = Literal["bound", "excluded"]
@@ -430,12 +429,13 @@ def _parse_page(row, page) -> list[LumbroPriceRecord]:
 
 
 def _mark_conflicting_prices(records: list[LumbroPriceRecord]) -> tuple[LumbroPriceRecord, ...]:
-    prices_by_identity: dict[str, set[Decimal]] = {}
+    prices_by_identity: dict[tuple[str, str, int], set[Decimal]] = {}
     for record in records:
         if record.identity and record.net_price is not None:
-            prices_by_identity.setdefault(record.identity, set()).add(record.net_price)
+            key = (record.identity, _fold(record.color), record.authority_rank)
+            prices_by_identity.setdefault(key, set()).add(record.net_price)
     conflicts = {
-        identity for identity, prices in prices_by_identity.items() if len(prices) > 1
+        key for key, prices in prices_by_identity.items() if len(prices) > 1
     }
     return tuple(
         replace(
@@ -443,7 +443,8 @@ def _mark_conflicting_prices(records: list[LumbroPriceRecord]) -> tuple[LumbroPr
             parse_status="needs_review",
             warnings=record.warnings + ("conflicting_price",),
         )
-        if record.identity in conflicts and "conflicting_price" not in record.warnings
+        if (record.identity, _fold(record.color), record.authority_rank) in conflicts
+        and "conflicting_price" not in record.warnings
         else record
         for record in records
     )
@@ -1397,17 +1398,13 @@ def _json_value(value):
     return str(value)
 
 
-def _variant_sku(code: str, internal_id: str) -> str:
-    suffix = hashlib.sha256(internal_id.encode("utf-8")).hexdigest()[:16]
-    return f"lumbro:{_slug(code)}:{suffix}"
-
-
 def _direct_internal_id(record) -> str:
     if isinstance(record, LumbroInterconnectionRecord):
         return record.internal_id
     material = "\0".join(
         (
             record.identity,
+            _fold(getattr(record, "color", "")),
             format(record.net_price, "f") if record.net_price is not None else "",
             record.source.path,
             str(record.source.page),
@@ -1434,7 +1431,6 @@ def _item(
     references,
 ) -> dict:
     price = price_record.net_price if price_record is not None else None
-    quoteable = bool(source_code and price is not None and price > 0)
     item_warnings = list(dict.fromkeys(warnings))
     if not source_code:
         item_warnings.append("Código oficial por verificar; variante no cotizable.")
@@ -1467,8 +1463,8 @@ def _item(
         "internal_id": internal_id,
         "supplier": "lumbro",
         "product_key": f"lumbro:{_slug(product_key_material) or internal_id[-20:]}",
-        "sku": _variant_sku(source_code, internal_id) if quoteable else "",
-        "code_status": "verified" if quoteable else "needs_review",
+        "sku": "",
+        "code_status": "needs_review",
         "brand": "Lumbro",
         "collection": collection,
         "name": name,
@@ -1522,6 +1518,34 @@ def _selection(entries):
     return selected, tuple(authoritative), rejected
 
 
+def _compatible_variant(spec_record, price_record) -> bool:
+    if _fold(spec_record.model) != _fold(price_record.model):
+        return False
+    if _fold(spec_record.configuration) != _fold(price_record.configuration):
+        return False
+    price_color = _fold(getattr(price_record, "color", ""))
+    return not price_color or price_color == _fold(spec_record.color)
+
+
+def _finalize_official_skus(items) -> None:
+    code_counts = defaultdict(int)
+    for item in items:
+        code = _plain(item["attributes"]["source_code"])
+        if code:
+            code_counts[_fold(code)] += 1
+
+    for item in items:
+        code = _plain(item["attributes"]["source_code"])
+        has_price = Decimal(item["price_net"]) > 0
+        if code and has_price and code_counts[_fold(code)] == 1:
+            item["sku"] = code
+            item["code_status"] = "verified"
+        elif code and code_counts[_fold(code)] > 1:
+            item["warnings"].append(
+                "C\u00f3digo oficial no es \u00fanico entre variantes; variante no cotizable."
+            )
+
+
 def _spec_references(record: LumbroSpecRecord) -> list[dict]:
     return _canonical_references(
         *(record.provenance[key] for key in sorted(record.provenance))
@@ -1565,11 +1589,16 @@ def _build_lumbro(files, *, include_assets: bool):
     items = []
     item_by_id = {}
     for record in spec_build.records:
-        resolution_key = (record.code, record.price_identity)
+        resolution_key = (record.code, record.price_identity, _fold(record.color))
         if resolution_key not in resolution_cache:
             candidates = [
                 *inter_entries_by_code.get(record.code, ()),
                 *pdf_entries_by_identity.get(record.price_identity, ()),
+            ]
+            candidates = [
+                entry
+                for entry in candidates
+                if _compatible_variant(record, entry["record"])
             ]
             selected, _, rejected = _selection(candidates)
             resolution_cache[resolution_key] = selected
@@ -1634,7 +1663,7 @@ def _build_lumbro(files, *, include_assets: bool):
                 source_code="",
                 model=record.model,
                 configuration=record.configuration,
-                color="",
+                color=getattr(record, "color", ""),
                 description=getattr(record, "description", ""),
                 dimensions="",
                 mounting="",
@@ -1655,6 +1684,7 @@ def _build_lumbro(files, *, include_assets: bool):
             if getattr(record, "code", "")
             else f"identity:{record.identity}"
         )
+        key = (key, _fold(getattr(record, "color", "")))
         remaining_groups[key].append(entry)
 
     for entries in remaining_groups.values():
@@ -1679,7 +1709,7 @@ def _build_lumbro(files, *, include_assets: bool):
             source_code=getattr(record, "code", ""),
             model=record.model,
             configuration=record.configuration,
-            color="",
+            color=getattr(record, "color", ""),
             description=getattr(record, "description", ""),
             dimensions="",
             mounting="",
@@ -1706,6 +1736,8 @@ def _build_lumbro(files, *, include_assets: bool):
     for entry in commercial:
         if entry["disposition"] is None:
             entry["disposition"] = ("excluded", "unresolved_commercial_row")
+
+    _finalize_official_skus(items)
 
     bindings_by_id = defaultdict(list)
     for binding in spec_build.bindings:
@@ -1797,6 +1829,7 @@ def _build_lumbro(files, *, include_assets: bool):
                     "identity": record.identity,
                     "model": record.model,
                     "configuration": record.configuration,
+                    "color": getattr(record, "color", ""),
                     "price_net": (
                         f"{record.net_price:.6f}"
                         if record.net_price is not None

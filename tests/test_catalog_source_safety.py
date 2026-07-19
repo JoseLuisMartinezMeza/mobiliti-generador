@@ -1,3 +1,4 @@
+import hashlib
 import inspect
 import io
 import os
@@ -7,7 +8,7 @@ import types
 import warnings
 import zipfile
 from copy import deepcopy
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import Iterator, get_type_hints
 from xml.etree import ElementTree
@@ -674,7 +675,18 @@ def test_pdf_enforces_aggregate_expanded_stream_bound(tmp_path, monkeypatch):
     assert_code("PDF_LIMIT", lambda: list(iter_pdf_pages(source)))
 
 
-def test_pdf_per_call_profile_preserves_default_and_uses_isolated_extraction(
+def _pin_test_pdf_profile(monkeypatch, source, *, expanded_bytes=384 * 1024 * 1024):
+    profile = common_module._PDF_PROFILES["lumbro_catalog_2024"]
+    profiles = dict(common_module._PDF_PROFILES)
+    profiles["lumbro_catalog_2024"] = replace(
+        profile,
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        max_stream_expanded_bytes=expanded_bytes,
+    )
+    monkeypatch.setattr(common_module, "_PDF_PROFILES", profiles)
+
+
+def test_named_pdf_profile_preserves_default_and_uses_isolated_extraction(
     tmp_path, monkeypatch
 ):
     source = tmp_path / "profile.pdf"
@@ -682,6 +694,7 @@ def test_pdf_per_call_profile_preserves_default_and_uses_isolated_extraction(
     monkeypatch.setattr(common_module, "MAX_PDF_STREAM_EXPANDED_BYTES", 1)
 
     assert_code("PDF_LIMIT", lambda: list(iter_pdf_pages(source)))
+    _pin_test_pdf_profile(monkeypatch, source)
     monkeypatch.setattr(
         fitz.Page,
         "get_text",
@@ -691,57 +704,53 @@ def test_pdf_per_call_profile_preserves_default_and_uses_isolated_extraction(
     pages = list(
         iter_pdf_pages(
             source,
-            pdf_max_pages=80,
-            pdf_max_stream_expanded_bytes=384 * 1024 * 1024,
+            pdf_profile="lumbro_catalog_2024",
         )
     )
 
     assert [page.text.strip() for page in pages] == ["Page 1", "Page 2"]
 
 
-@pytest.mark.parametrize(
-    ("pages", "expanded"),
-    [
-        (81, 384 * 1024 * 1024),
-        (80, 384 * 1024 * 1024 + 1),
-        (0, 384 * 1024 * 1024),
-        (80, 0),
-        (True, 384 * 1024 * 1024),
-        (80, True),
-        (80, None),
-        (None, 384 * 1024 * 1024),
-    ],
-)
-def test_pdf_per_call_profile_rejects_invalid_or_over_hard_cap(
-    tmp_path, pages, expanded
-):
+def test_lumbro_profile_registry_is_closed_and_pinned_to_source_contract():
+    profile = common_module._PDF_PROFILES["lumbro_catalog_2024"]
+
+    assert profile.sha256 == "bbd810ebab20336d2a6bdc61123955bd062c5a64d57d4359556fcf6aef57e053"
+    assert profile.max_pages == 80
+    assert profile.max_stream_expanded_bytes == 384 * 1024 * 1024
+    with pytest.raises(TypeError):
+        common_module._PDF_PROFILES["caller_supplied"] = profile
+
+
+def test_named_pdf_profile_rejects_unknown_name_wrong_hash_and_numeric_kwargs(tmp_path):
     source = tmp_path / "profile-invalid.pdf"
     pdf(source)
 
     assert_code(
         "SOURCE_ARGUMENT",
-        lambda: list(
-            iter_pdf_pages(
-                source,
-                pdf_max_pages=pages,
-                pdf_max_stream_expanded_bytes=expanded,
-            )
-        ),
+        lambda: list(iter_pdf_pages(source, pdf_profile="not-registered")),
     )
+    assert_code(
+        "PDF_PROFILE_HASH",
+        lambda: list(iter_pdf_pages(source, pdf_profile="lumbro_catalog_2024")),
+    )
+    with pytest.raises(TypeError):
+        iter_pdf_pages(source, pdf_max_pages=80)
+    with pytest.raises(TypeError):
+        validate_source_file(source, ".pdf", pdf_max_stream_expanded_bytes=384 * 1024 * 1024)
 
 
-def test_pdf_per_call_profile_keeps_page_stream_and_active_content_guards(
-    tmp_path,
+def test_named_pdf_profile_keeps_page_stream_and_active_content_guards(
+    tmp_path, monkeypatch
 ):
     too_many_pages = tmp_path / "too-many-pages.pdf"
     pdf(too_many_pages, pages=81)
+    _pin_test_pdf_profile(monkeypatch, too_many_pages)
     assert_code(
         "PDF_LIMIT",
         lambda: list(
             iter_pdf_pages(
                 too_many_pages,
-                pdf_max_pages=80,
-                pdf_max_stream_expanded_bytes=384 * 1024 * 1024,
+                pdf_profile="lumbro_catalog_2024",
             )
         ),
     )
@@ -756,29 +765,45 @@ def test_pdf_per_call_profile_keeps_page_stream_and_active_content_guards(
     )
     document.save(active)
     document.close()
+    _pin_test_pdf_profile(monkeypatch, active)
     assert_code(
         "PDF_UNSAFE",
         lambda: list(
             iter_pdf_pages(
                 active,
-                pdf_max_pages=80,
-                pdf_max_stream_expanded_bytes=384 * 1024 * 1024,
+                pdf_profile="lumbro_catalog_2024",
             )
         ),
     )
 
     tiny_stream_budget = tmp_path / "tiny-stream-budget.pdf"
     pdf(tiny_stream_budget)
+    _pin_test_pdf_profile(monkeypatch, tiny_stream_budget, expanded_bytes=1)
     assert_code(
         "PDF_LIMIT",
         lambda: list(
             iter_pdf_pages(
                 tiny_stream_budget,
-                pdf_max_pages=80,
-                pdf_max_stream_expanded_bytes=1,
+                pdf_profile="lumbro_catalog_2024",
             )
         ),
     )
+
+
+def test_real_lumbro_catalog_requires_its_exact_named_profile():
+    source = Path(
+        ".cache/catalog_sources/lumbro/sharepoint_2026-07-18/"
+        "CATALOGO LUMBRO 2024 DIGITAL (1).pdf"
+    )
+    if not source.is_file():
+        pytest.skip("real Lumbro source cache is not present")
+
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == (
+        "bbd810ebab20336d2a6bdc61123955bd062c5a64d57d4359556fcf6aef57e053"
+    )
+    assert_code("PDF_LIMIT", lambda: list(iter_pdf_pages(source)))
+    pages = list(iter_pdf_pages(source, pdf_profile="lumbro_catalog_2024"))
+    assert len(pages) == 72
 
 
 def test_pdf_accepts_passive_web_links_and_bounds_highly_compressed_images(tmp_path, monkeypatch):

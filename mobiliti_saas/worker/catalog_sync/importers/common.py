@@ -13,6 +13,7 @@ import zlib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import MappingProxyType
 from typing import Iterator, Literal, Mapping, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 from xml.etree import ElementTree
@@ -59,6 +60,24 @@ MAX_PDF_WORKER_SHUTDOWN_SECONDS = 1
 MAX_PDF_IMAGES = 10_000
 MAX_PDF_IMAGE_BYTES = 128 * 1024 * 1024
 MAX_TEXT_LENGTH = 32_768
+
+
+@dataclass(frozen=True)
+class _PdfProfile:
+    sha256: str
+    max_pages: int
+    max_stream_expanded_bytes: int
+
+
+_PDF_PROFILES = MappingProxyType(
+    {
+        "lumbro_catalog_2024": _PdfProfile(
+            sha256="bbd810ebab20336d2a6bdc61123955bd062c5a64d57d4359556fcf6aef57e053",
+            max_pages=80,
+            max_stream_expanded_bytes=384 * 1024 * 1024,
+        ),
+    }
+)
 
 _REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 _CONTENT_TYPE_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
@@ -347,22 +366,25 @@ def _read_source(path: Path, expected_extension: str, max_bytes: int) -> tuple[V
     return ValidatedSource(extension, len(data), hashlib.sha256(data).hexdigest()), data
 
 
-def _pdf_profile_limits(
-    pdf_max_pages: int | None,
-    pdf_max_stream_expanded_bytes: int | None,
-) -> tuple[int, int]:
-    if pdf_max_pages is None and pdf_max_stream_expanded_bytes is None:
+def _pdf_profile_limits(data: bytes, pdf_profile: str | None) -> tuple[int, int]:
+    if pdf_profile is None:
         return MAX_PDF_PAGES, MAX_PDF_STREAM_EXPANDED_BYTES
+    if type(pdf_profile) is not str or pdf_profile not in _PDF_PROFILES:
+        _fail("SOURCE_ARGUMENT")
+    profile = _PDF_PROFILES[pdf_profile]
     if (
-        type(pdf_max_pages) is not int
-        or not 0 < pdf_max_pages <= MAX_PDF_PROFILE_PAGES
-        or type(pdf_max_stream_expanded_bytes) is not int
+        re.fullmatch(r"[0-9a-f]{64}", profile.sha256) is None
+        or type(profile.max_pages) is not int
+        or not 0 < profile.max_pages <= MAX_PDF_PROFILE_PAGES
+        or type(profile.max_stream_expanded_bytes) is not int
         or not 0
-        < pdf_max_stream_expanded_bytes
+        < profile.max_stream_expanded_bytes
         <= MAX_PDF_PROFILE_STREAM_EXPANDED_BYTES
     ):
         _fail("SOURCE_ARGUMENT")
-    return pdf_max_pages, pdf_max_stream_expanded_bytes
+    if hashlib.sha256(data).hexdigest() != profile.sha256:
+        _fail("PDF_PROFILE_HASH")
+    return profile.max_pages, profile.max_stream_expanded_bytes
 
 
 def validate_source_file(
@@ -370,15 +392,13 @@ def validate_source_file(
     expected_extension: str,
     max_bytes: int = MAX_FILE_BYTES,
     *,
-    pdf_max_pages: int | None = None,
-    pdf_max_stream_expanded_bytes: int | None = None,
+    pdf_profile: str | None = None,
 ) -> ValidatedSource:
     source, _ = read_validated_source(
         path,
         expected_extension,
         max_bytes,
-        pdf_max_pages=pdf_max_pages,
-        pdf_max_stream_expanded_bytes=pdf_max_stream_expanded_bytes,
+        pdf_profile=pdf_profile,
     )
     return source
 
@@ -388,20 +408,15 @@ def read_validated_source(
     expected_extension: str,
     max_bytes: int = MAX_FILE_BYTES,
     *,
-    pdf_max_pages: int | None = None,
-    pdf_max_stream_expanded_bytes: int | None = None,
+    pdf_profile: str | None = None,
 ) -> tuple[ValidatedSource, bytes]:
     source, data = _read_source(path, expected_extension, max_bytes)
-    if source.extension != ".pdf" and (
-        pdf_max_pages is not None or pdf_max_stream_expanded_bytes is not None
-    ):
+    if source.extension != ".pdf" and pdf_profile is not None:
         _fail("SOURCE_ARGUMENT")
     if source.extension == ".xlsx":
         _validate_xlsx(data)
     elif source.extension == ".pdf":
-        page_limit, expanded_limit = _pdf_profile_limits(
-            pdf_max_pages, pdf_max_stream_expanded_bytes
-        )
+        page_limit, expanded_limit = _pdf_profile_limits(data, pdf_profile)
         _pdf_pages(
             data,
             max_pages=page_limit,
@@ -1401,13 +1416,10 @@ def _pdf_pages(
 def iter_pdf_pages(
     path: Path,
     *,
-    pdf_max_pages: int | None = None,
-    pdf_max_stream_expanded_bytes: int | None = None,
+    pdf_profile: str | None = None,
 ) -> Iterator[PdfPage]:
     _, data = _read_source(path, ".pdf", MAX_FILE_BYTES)
-    page_limit, expanded_limit = _pdf_profile_limits(
-        pdf_max_pages, pdf_max_stream_expanded_bytes
-    )
+    page_limit, expanded_limit = _pdf_profile_limits(data, pdf_profile)
     return iter(
         _pdf_pages(
             data,

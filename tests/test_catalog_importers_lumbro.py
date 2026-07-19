@@ -7,6 +7,7 @@ from io import BytesIO
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from xml.etree import ElementTree
 
 import fitz
@@ -890,6 +891,33 @@ def test_snapshot_exact_contract_and_non_quoteable_review_variants(lumbro_build)
         and Decimal(item["price_net"]) > 0
         for item in items
     )
+
+
+def test_snapshot_uses_only_unique_literal_official_codes_as_sku(lumbro_build):
+    items = lumbro_build.snapshot["items"]
+    assert all(not item["sku"].startswith("lumbro:") for item in items)
+
+    unique = next(
+        item
+        for item in items
+        if item["attributes"]["source_code"] == "BARCELONA BOX IN"
+    )
+    assert unique["price_net"] == "2824.000000"
+    assert unique["sku"] == "BARCELONA BOX IN"
+    assert unique["code_status"] == "verified"
+
+    repeated = [
+        item
+        for item in items
+        if item["attributes"]["source_code"] == "BARCELONA"
+    ]
+    assert len(repeated) > 1
+    assert all(item["sku"] == "" for item in repeated)
+    assert all(item["code_status"] == "needs_review" for item in repeated)
+    assert all(
+        any("no es \u00fanico" in warning for warning in item["warnings"])
+        for item in repeated
+    )
     assert any(
         item["code_status"] == "needs_review"
         and not item["sku"]
@@ -997,12 +1025,130 @@ def test_catalog_elevated_profile_requires_exact_pinned_sha(
 
     actual_hash["value"] = pinned_hash
     assert lumbro_importer._parse_lumbro_catalog(pinned) == {}
-    expected_profile = {
-        "pdf_max_pages": 80,
-        "pdf_max_stream_expanded_bytes": 384 * 1024 * 1024,
-    }
+    expected_profile = {"pdf_profile": "lumbro_catalog_2024"}
     assert validations == [expected_profile]
     assert iterations == [expected_profile]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"path": "LUMBRO/CATALOGO/otro.pdf"},
+        {"kind": "price_list"},
+        {"brand": "Lumbro"},
+        {"mime_type": "application/octet-stream"},
+        {"sha256": "a" * 64},
+        {"local_path": Path("catalog.txt")},
+    ],
+)
+def test_catalog_named_profile_requires_complete_pinned_descriptor(
+    catalog_source, change
+):
+    pinned = replace(
+        catalog_source,
+        sha256="bbd810ebab20336d2a6bdc61123955bd062c5a64d57d4359556fcf6aef57e053",
+    )
+
+    assert lumbro_importer._catalog_pdf_profile(pinned) == {
+        "pdf_profile": "lumbro_catalog_2024"
+    }
+    assert lumbro_importer._catalog_pdf_profile(replace(pinned, **change)) == {}
+
+
+def _synthetic_price_record(*, color: str, price: str, page: int):
+    return SimpleNamespace(
+        identity="modelo carga",
+        model="Modelo",
+        configuration="Carga",
+        color=color,
+        net_price=Decimal(price),
+        currency="MXN",
+        tax_rate=Decimal("0.16"),
+        source=lumbro_importer.LumbroPriceSource(GENERAL_PATH, "1" * 64, page),
+        authority_rank=2,
+        parse_status="parsed",
+        warnings=(),
+    )
+
+
+def _synthetic_spec_record(*, color: str, row: int):
+    return lumbro_importer.LumbroSpecRecord(
+        internal_id=f"lumbro:variant:{color.casefold()}",
+        identity=lumbro_importer._identity("Modelo", f"Carga {color}"),
+        price_identity=lumbro_importer._identity("Modelo", "Carga"),
+        model="Modelo",
+        configuration="Carga",
+        color=color,
+        code="COLOR-1",
+        description="Modelo de color explÃ­cito",
+        dimensions="",
+        mounting="",
+        notes=(),
+        currency="MXN",
+        spec_price_evidence=None,
+        source=lumbro_importer.LumbroSpecSource(
+            SPEC_PATH, "2" * 64, "SPEC-GUIDE-LUMBRO", row - 1, row
+        ),
+        provenance={},
+    )
+
+
+def _build_synthetic_color_snapshot(monkeypatch, lumbro_sources, specs, prices):
+    monkeypatch.setattr(
+        lumbro_importer, "parse_lumbro_pdf_prices", lambda _files: tuple(prices)
+    )
+    monkeypatch.setattr(
+        lumbro_importer,
+        "parse_lumbro_spec_guide",
+        lambda _source: lumbro_importer.LumbroSpecBuild(tuple(specs), {}, ()),
+    )
+    monkeypatch.setattr(
+        lumbro_importer,
+        "parse_lumbro_interconnection",
+        lambda _source: lumbro_importer.LumbroInterconnectionBuild((), {}, (), ()),
+    )
+    monkeypatch.setattr(lumbro_importer, "_parse_lumbro_catalog", lambda _source: {})
+    return lumbro_importer.build_lumbro_snapshot(lumbro_sources)
+
+
+def test_reconciliation_keeps_explicit_colors_in_separate_cache_entries(
+    monkeypatch, lumbro_sources
+):
+    snapshot = _build_synthetic_color_snapshot(
+        monkeypatch,
+        lumbro_sources,
+        (
+            _synthetic_spec_record(color="Rojo", row=10),
+            _synthetic_spec_record(color="Azul", row=20),
+        ),
+        (
+            _synthetic_price_record(color="Rojo", price="100", page=1),
+            _synthetic_price_record(color="Azul", price="200", page=2),
+        ),
+    )
+
+    by_color = {item["attributes"]["color"]: item for item in snapshot["items"]}
+    assert by_color["Rojo"]["price_net"] == "100.000000"
+    assert by_color["Azul"]["price_net"] == "200.000000"
+    assert snapshot["metadata"]["coverage"]["reconciled_rows"] == 2
+
+
+def test_reconciliation_rejects_explicit_incompatible_price_color(
+    monkeypatch, lumbro_sources
+):
+    snapshot = _build_synthetic_color_snapshot(
+        monkeypatch,
+        lumbro_sources,
+        (_synthetic_spec_record(color="Azul", row=20),),
+        (_synthetic_price_record(color="Rojo", price="100", page=1),),
+    )
+
+    blue = next(
+        item for item in snapshot["items"] if item["attributes"]["color"] == "Azul"
+    )
+    assert blue["price_net"] == "0.000000"
+    assert blue["code_status"] == "needs_review"
+    assert blue["sku"] == ""
 
 
 def test_link_resolution_preserves_truthful_status_and_label(lumbro_build):
