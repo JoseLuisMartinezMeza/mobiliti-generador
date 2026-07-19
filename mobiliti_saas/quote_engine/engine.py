@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from copy import copy, deepcopy
 from dataclasses import dataclass
+from datetime import date, datetime
 from io import BytesIO
 import hashlib
 import json
@@ -58,6 +59,49 @@ from .sunon_image_provider import (
 
 
 MONEY_FORMAT = '$#,##0.00;[Red]-$#,##0.00;"-"'
+MIXED_MONEY_FORMATS = {
+    "MXN": '"MXN" $#,##0.00;[Red]-"MXN" $#,##0.00;"-"',
+    "USD": '"USD" $#,##0.00;[Red]-"USD" $#,##0.00;"-"',
+    "EUR": '"EUR" €#,##0.00;[Red]-"EUR" €#,##0.00;"-"',
+}
+MIXED_CATALOG_ORDER = ("tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro")
+MIXED_CATALOG_LABELS = {
+    "tarkett": "Tarkett",
+    "offiho": "Offiho",
+    "cr-global": "CR Global",
+    "sonara": "Sonara",
+    "sunon": "Sunon",
+    "alma": "ALMA",
+    "lumbro": "Lumbro",
+}
+MIXED_CATALOG_BASE_CURRENCIES = {
+    "tarkett": "MXN",
+    "offiho": "MXN",
+    "cr-global": "MXN",
+    "sonara": "MXN",
+    "sunon": "USD",
+    "alma": "USD",
+    "lumbro": "MXN",
+}
+MIXED_RATE_FIELDS = {
+    "catalog",
+    "base_currency",
+    "quote_currency",
+    "exchange_rate",
+    "rate_source",
+    "rate_effective_date",
+    "rate_retrieved_at",
+}
+MIXED_AUTO_RATE_FIELDS = MIXED_RATE_FIELDS - {"catalog"}
+MIXED_MOBILITI_MONEY_COLS = (
+    10,
+    13,
+    14,
+    *range(17, 26),
+    *range(28, 31),
+    32,
+    33,
+)
 PERCENT_FORMAT = "0%"
 MOBILITI_SECTION_COUNT = 32
 BASE_PROD_PER_SECTION = 32
@@ -853,6 +897,7 @@ def _normalize_mobiliti_section_capacities(capacities: list[int]) -> list[int]:
 def _mobiliti_section_capacities(
     items: list[QuoteItem],
     category_dictionary: dict[str, str],
+    metadata: dict[str, Any] | None = None,
 ) -> list[int]:
     needs: list[int] = []
 
@@ -868,7 +913,9 @@ def _mobiliti_section_capacities(
             needs.append(0)
 
         category = classify_product_name(str(item.nombre or ""), category_dictionary)
-        rows_needed = 1 + len(_lumbro_accessories_for_item(item, category))
+        rows_needed = 1
+        if _item_auto_electrification(item, metadata or {}):
+            rows_needed += len(_lumbro_accessories_for_item(item, category))
         needs[-1] += rows_needed
 
     return _normalize_mobiliti_section_capacities(needs)
@@ -1613,20 +1660,226 @@ def _uses_catalog_list_prices(metadata: dict[str, Any] | None) -> bool:
     return str((metadata or {}).get("catalog_price_mode") or "").strip() == "list_price_net"
 
 
+def _uses_mixed_catalog_prices(metadata: dict[str, Any] | None) -> bool:
+    return str((metadata or {}).get("catalog_price_mode") or "").strip() == "mixed_catalog_converted"
+
+
+def _uses_converted_catalog_prices(metadata: dict[str, Any] | None) -> bool:
+    return _uses_catalog_list_prices(metadata) or _uses_mixed_catalog_prices(metadata)
+
+
+def _item_discount_rate(item: QuoteItem, metadata: dict[str, Any]) -> float:
+    if _uses_mixed_catalog_prices(metadata):
+        mode = str(item.modo_precio or "").strip().lower()
+        provider = str(item.proveedor or "").strip()
+        if mode not in {"list", "net"}:
+            raise ValueError("Modo de precio mixto invalido")
+        value = _num(item.descuento, -1)
+        if not math.isfinite(value) or value < 0 or value > 100:
+            raise ValueError("Descuento mixto por linea invalido")
+        if mode == "net" and value != 0:
+            raise ValueError("Precio neto mixto no admite descuento")
+        if mode == "list" and provider not in {"Tarkett", "Offiho"}:
+            raise ValueError("Precio de lista mixto solo admite Tarkett u Offiho")
+        return value / 100.0
+    return _discount_rate(metadata)
+
+
+def _item_auto_electrification(item: QuoteItem, metadata: dict[str, Any]) -> bool:
+    if _uses_mixed_catalog_prices(metadata):
+        if not isinstance(item.electrificacion_automatica, bool):
+            raise ValueError("Politica de electrificacion mixta invalida")
+        if item.electrificacion_automatica and str(item.proveedor or "").strip() not in {
+            "Tarkett",
+            "Offiho",
+        }:
+            raise ValueError("Electrificacion automatica mixta solo admite Tarkett u Offiho")
+        return item.electrificacion_automatica
+    return not _uses_catalog_list_prices(metadata)
+
+
+def _mixed_auto_electrification_rate(metadata: dict[str, Any]) -> float:
+    snapshot = metadata.get("auto_electrification_rate")
+    quote_currency = str(metadata.get("quote_currency") or "").strip().upper()
+    if not isinstance(snapshot, dict) or set(snapshot) != MIXED_AUTO_RATE_FIELDS:
+        raise ValueError("Tasa de electrificacion mixta incompleta")
+    if snapshot.get("base_currency") != "MXN" or snapshot.get("quote_currency") != quote_currency:
+        raise ValueError("Par de electrificacion mixta invalido")
+    rate = _positive_num(snapshot.get("exchange_rate"))
+    if rate is None or not math.isfinite(rate):
+        raise ValueError("Tasa de electrificacion mixta invalida")
+    return rate
+
+
+def _money_format(metadata: dict[str, Any]) -> str:
+    if not _uses_mixed_catalog_prices(metadata):
+        return MONEY_FORMAT
+    quote_currency = str(metadata.get("quote_currency") or "").strip().upper()
+    try:
+        return MIXED_MONEY_FORMATS[quote_currency]
+    except KeyError as exc:
+        raise ValueError("Moneda mixta incompleta") from exc
+
+
+def _mixed_rate_summary(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    quote_currency = str(metadata.get("quote_currency") or "").strip().upper()
+    if quote_currency not in MIXED_MONEY_FORMATS:
+        raise ValueError("Moneda mixta incompleta")
+    raw_summary = metadata.get("rate_summary")
+    if not isinstance(raw_summary, list) or not raw_summary:
+        raise ValueError("Resumen de tasas mixtas invalido")
+    summary: list[dict[str, Any]] = []
+    seen: list[str] = []
+    for raw in raw_summary:
+        if not isinstance(raw, dict) or set(raw) != MIXED_RATE_FIELDS:
+            raise ValueError("Resumen de tasas mixtas invalido")
+        catalog = raw.get("catalog")
+        if catalog not in MIXED_CATALOG_ORDER or catalog in seen:
+            raise ValueError("Resumen de tasas mixtas invalido")
+        seen.append(catalog)
+        if seen != sorted(seen, key=MIXED_CATALOG_ORDER.index):
+            raise ValueError("Resumen de tasas mixtas invalido")
+        base_currency = str(raw.get("base_currency") or "").strip().upper()
+        if (
+            base_currency != MIXED_CATALOG_BASE_CURRENCIES[catalog]
+            or raw.get("quote_currency") != quote_currency
+        ):
+            raise ValueError("Resumen de tasas mixtas invalido")
+        rate_text = raw.get("exchange_rate")
+        if not isinstance(rate_text, str) or not re.fullmatch(r"\d+\.\d{6}", rate_text):
+            raise ValueError("Resumen de tasas mixtas invalido")
+        rate = _positive_num(rate_text)
+        source = raw.get("rate_source")
+        effective_date = raw.get("rate_effective_date")
+        retrieved_at = raw.get("rate_retrieved_at")
+        if (
+            rate is None
+            or not math.isfinite(rate)
+            or source not in {"identity", "saas_exchange_rates"}
+            or not isinstance(effective_date, str)
+            or re.fullmatch(r"\d{4}-\d{2}-\d{2}", effective_date) is None
+            or not isinstance(retrieved_at, str)
+            or len(retrieved_at) > 80
+        ):
+            raise ValueError("Resumen de tasas mixtas invalido")
+        try:
+            date.fromisoformat(effective_date)
+            retrieved_datetime = (
+                datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
+                if retrieved_at
+                else None
+            )
+        except ValueError as exc:
+            raise ValueError("Resumen de tasas mixtas invalido") from exc
+        if source == "identity":
+            if base_currency != quote_currency or rate_text != "1.000000" or retrieved_at != "":
+                raise ValueError("Resumen de tasas mixtas invalido")
+        elif not retrieved_at or retrieved_datetime is None or retrieved_datetime.tzinfo is None:
+            raise ValueError("Resumen de tasas mixtas invalido")
+        summary.append(raw)
+    return summary
+
+
+def _validate_mixed_catalog_metadata(items: list[QuoteItem], metadata: dict[str, Any]) -> None:
+    if not _uses_mixed_catalog_prices(metadata):
+        return
+    summary = _mixed_rate_summary(metadata)
+    summaries_by_provider = {
+        MIXED_CATALOG_LABELS[entry["catalog"]]: entry for entry in summary
+    }
+    auto_items: list[QuoteItem] = []
+    seen_providers: set[str] = set()
+    for item in items:
+        if item.tipo != "producto":
+            continue
+        _item_discount_rate(item, metadata)
+        if _item_auto_electrification(item, metadata):
+            auto_items.append(item)
+        provider = str(item.proveedor or "").strip()
+        seen_providers.add(provider)
+        snapshot = summaries_by_provider.get(provider)
+        if snapshot is None:
+            raise ValueError("Proveedor mixto sin tasa congelada")
+        original_currency = str(item.moneda_original or "").strip().upper()
+        frozen_rate = _positive_num(item.tipo_cambio_congelado)
+        original_price = _num(item.precio_original, -1)
+        converted_price = _num(item.precio, -1)
+        if (
+            original_currency != snapshot["base_currency"]
+            or frozen_rate is None
+            or not math.isclose(frozen_rate, float(snapshot["exchange_rate"]), rel_tol=0, abs_tol=1e-9)
+            or not math.isfinite(original_price)
+            or original_price < 0
+            or not math.isfinite(converted_price)
+            or converted_price < 0
+            or not str(item.referencia_fuente or "").strip()
+        ):
+            raise ValueError("Auditoria de precio mixto invalida")
+    if seen_providers != set(summaries_by_provider):
+        raise ValueError("Resumen de tasas mixtas inconsistente")
+    if auto_items:
+        rate = _mixed_auto_electrification_rate(metadata)
+        snapshot = metadata["auto_electrification_rate"]
+        matching = [
+            entry
+            for entry in summary
+            if entry["base_currency"] == "MXN"
+            and entry["quote_currency"] == snapshot["quote_currency"]
+            and entry["exchange_rate"] == snapshot["exchange_rate"]
+            and all(entry[field] == snapshot[field] for field in MIXED_AUTO_RATE_FIELDS)
+        ]
+        if not matching or rate <= 0:
+            raise ValueError("Tasa de electrificacion mixta inconsistente")
+    elif metadata.get("auto_electrification_rate") is not None:
+        raise ValueError("Tasa de electrificacion mixta inesperada")
+
+
+def _mixed_rate_legend(metadata: dict[str, Any]) -> str:
+    summary = _mixed_rate_summary(metadata)
+    quote_currency = str(metadata.get("quote_currency") or "").strip().upper()
+    rates = "; ".join(
+        f"{MIXED_CATALOG_LABELS[entry['catalog']]} "
+        f"{entry['base_currency']}/{entry['quote_currency']} {entry['exchange_rate']}"
+        for entry in summary
+    )
+    external = {
+        (entry["rate_source"], entry["rate_effective_date"])
+        for entry in summary
+        if entry["rate_source"] != "identity"
+    }
+    suffix = ""
+    if len(external) == 1:
+        source, effective_date = next(iter(external))
+        source_label = "Banco de Mexico / DOF" if source == "saas_exchange_rates" else source
+        suffix = f" {source_label} {effective_date}"
+    elif external:
+        suffix = " | " + "; ".join(
+            f"{'Banco de Mexico / DOF' if source == 'saas_exchange_rates' else source} {effective_date}"
+            for source, effective_date in sorted(external)
+        )
+    return safe_excel_text(
+        f"{quote_currency} | precios mixtos mas IVA | {rates}{suffix}"[:1000]
+    )
+
+
 def _write_header(ws, metadata: dict[str, Any]) -> None:
     for row in range(3, 13):
         _unmerge_row(ws, row)
     catalog_list_prices = _uses_catalog_list_prices(metadata)
-    text = safe_excel_text if catalog_list_prices else lambda value: value
+    mixed_catalog_prices = _uses_mixed_catalog_prices(metadata)
+    converted_catalog_prices = _uses_converted_catalog_prices(metadata)
+    text = safe_excel_text if converted_catalog_prices else lambda value: value
     ws["B3"] = text(metadata.get("cotizacion", ""))
-    if catalog_list_prices:
+    if mixed_catalog_prices:
+        ws["B4"] = _mixed_rate_legend(metadata)
+    elif catalog_list_prices:
         base_currency = str(metadata.get("base_currency") or "").strip().upper()
         quote_currency = str(metadata.get("quote_currency") or "").strip().upper()
         exchange_rate = str(metadata.get("exchange_rate") or "").strip()
         effective_date = str(metadata.get("rate_effective_date") or "").strip()
         rate_source = str(metadata.get("rate_source") or "").strip()
         source_label = "Banco de Mexico / DOF" if rate_source == "saas_exchange_rates" else rate_source
-        ws["B4"] = (
+        ws["B4"] = safe_excel_text(
             f"{quote_currency} | precios netos mas IVA | Tipo de cambio "
             f"{base_currency}/{quote_currency}: {exchange_rate} | {source_label} | Fecha {effective_date}"
         )
@@ -1652,16 +1905,25 @@ def _write_mobiliti(
     lumbro_row_map: dict[int, list[int]] = {}
     lumbro_prices = lumbro_prices or {}
     metadata = metadata or {}
-    discount_rate = _discount_rate(metadata)
-    catalog_list_prices = _uses_catalog_list_prices(metadata)
+    converted_catalog_prices = _uses_converted_catalog_prices(metadata)
     provider_label = str(metadata.get("catalog_supplier_label") or "Sunon Inc").strip() or "Sunon Inc"
     written_rows: set[int] = set()
+    auto_items = [
+        item
+        for item in items
+        if item.tipo == "producto" and _item_auto_electrification(item, metadata)
+    ]
+    mixed_auto_rate = None
+    if _uses_mixed_catalog_prices(metadata) and auto_items:
+        mixed_auto_rate = _mixed_auto_electrification_rate(metadata)
+    elif _uses_mixed_catalog_prices(metadata) and metadata.get("auto_electrification_rate") is not None:
+        raise ValueError("Tasa de electrificacion mixta inesperada")
     category_dictionary = load_category_dictionary(
         [str(item.nombre or "") for item in items if item.tipo == "producto"]
     )
     section_layouts = _ensure_mobiliti_capacity(
         ws,
-        _mobiliti_section_capacities(items, category_dictionary),
+        _mobiliti_section_capacities(items, category_dictionary, metadata),
     )
     m3_col = column_map.get("m3", column_map.get("dimension", "E"))
     qty_col = column_map.get("cantidad", "G")
@@ -1691,32 +1953,47 @@ def _write_mobiliti(
         prod_in_section += 1
         return row_number
 
-    def mark_written_row(row_number: int, region: str = DEFAULT_MOBILITI_REGION) -> None:
+    def mark_written_row(
+        row_number: int,
+        line_discount_rate: float,
+        region: str = DEFAULT_MOBILITI_REGION,
+    ) -> None:
         ws.cell(row_number, MOBILITI_REGION_COL).value = region
         ws.cell(row_number, MOBILITI_COVER_DISCOUNT_COL).value = (
-            f"=MIN({_excel_decimal(discount_rate)},"
+            f"=MIN({_excel_decimal(line_discount_rate)},"
             f"{get_column_letter(MOBILITI_MAX_DISCOUNT_COL)}{row_number})"
         )
         ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).value = f"=X{row_number}*AA{row_number}"
         ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).value = f'=IF(AA{row_number}>Z{row_number},"ERROR",(X{row_number}-AB{row_number}))'
         ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).value = f"=AC{row_number}*H{row_number}"
-        if catalog_list_prices:
+        if converted_catalog_prices:
             ws.cell(row_number, MOBILITI_UNIT_PRICE_COL).value = f"=ROUND(J{row_number},2)"
             ws.cell(row_number, MOBILITI_MIN_UNIT_PRICE_COL).value = f"=ROUND(J{row_number},2)"
         written_rows.add(row_number)
 
-    def write_lumbro_row(row_number: int, code: str, quantity: int, region: str = DEFAULT_MOBILITI_REGION) -> None:
+    def write_lumbro_row(
+        row_number: int,
+        code: str,
+        quantity: int,
+        line_discount_rate: float,
+        region: str = DEFAULT_MOBILITI_REGION,
+    ) -> None:
         price_ref = lumbro_prices.get(code)
         ws.cell(row_number, 4).value = code
         ws.cell(row_number, 5).value = LUMBRO_CATEGORY
         ws.cell(row_number, 6).value = LUMBRO_PROVIDER
         ws.cell(row_number, 8).value = quantity
-        if price_ref:
+        if price_ref and mixed_auto_rate is not None:
+            ws.cell(row_number, 10).value = (
+                f"=ROUND('SPEC-GUIDE-LUMBRO'!E{price_ref.row}*"
+                f"{_excel_decimal(mixed_auto_rate)},2)"
+            )
+        elif price_ref:
             ws.cell(row_number, 10).value = f"='SPEC-GUIDE-LUMBRO'!E{price_ref.row}/$K$6"
         else:
-            ws.cell(row_number, 10).value = "=0/$K$6"
+            ws.cell(row_number, 10).value = "=0" if mixed_auto_rate is not None else "=0/$K$6"
         ws.cell(row_number, 11).value = 0
-        mark_written_row(row_number, region)
+        mark_written_row(row_number, line_discount_rate, region)
 
     for item in items:
         if item.tipo == "categoria":
@@ -1738,24 +2015,42 @@ def _write_mobiliti(
         ws.cell(row, 4).value = _formula(q_sheet, f"B{item.row}")
         category = classify_product_name(str(item.nombre or ""), category_dictionary)
         ws.cell(row, 5).value = category
-        ws.cell(row, 6).value = provider_label
+        ws.cell(row, 6).value = (
+            safe_excel_text(item.proveedor)
+            if _uses_mixed_catalog_prices(metadata)
+            else provider_label
+        )
         ws.cell(row, 8).value = _formula(q_sheet, f"{qty_col}{item.row}")
         ws.cell(row, 10).value = _formula(q_sheet, f"{price_col}{item.row}")
         ws.cell(row, 11).value = _formula(q_sheet, f"{m3_col}{item.row}")
-        mark_written_row(row)
+        line_discount_rate = _item_discount_rate(item, metadata)
+        mark_written_row(row, line_discount_rate)
         row_map[item.row] = row
 
         lumbro_rows: list[int] = []
-        accessories = [] if catalog_list_prices else _lumbro_accessories_for_item(item, category)
+        accessories = (
+            _lumbro_accessories_for_item(item, category)
+            if _item_auto_electrification(item, metadata)
+            else []
+        )
         for code, quantity in accessories:
             accessory_row = next_product_row()
             if accessory_row is None:
                 break
-            write_lumbro_row(accessory_row, code, quantity)
+            write_lumbro_row(accessory_row, code, quantity, line_discount_rate)
             lumbro_rows.append(accessory_row)
         if lumbro_rows:
             lumbro_row_map[item.row] = lumbro_rows
     _clear_unused_mobiliti_product_rows(ws, written_rows)
+    if _uses_mixed_catalog_prices(metadata):
+        money_format = _money_format(metadata)
+        format_rows = written_rows | {layout.subtotal_row for layout in section_layouts}
+        total_row = _find_mobiliti_total_row(ws)
+        if total_row is not None:
+            format_rows.add(total_row)
+        for row in format_rows:
+            for column in MIXED_MOBILITI_MONEY_COLS:
+                ws.cell(row, column).number_format = money_format
     return row_map, lumbro_row_map
 
 
@@ -1820,7 +2115,13 @@ def _write_fletes(ws, mobiliti_total_row: int | None = None) -> None:
 
 
 def _write_mobiliti_settings(ws, metadata: dict[str, Any]) -> None:
-    if _uses_catalog_list_prices(metadata):
+    if _uses_mixed_catalog_prices(metadata):
+        quote_currency = str(metadata.get("quote_currency") or "").strip().upper()
+        if quote_currency not in MIXED_MONEY_FORMATS:
+            raise ValueError("Moneda mixta incompleta")
+        exchange_pair = f"{quote_currency}/{quote_currency}"
+        exchange_rate = 1
+    elif _uses_catalog_list_prices(metadata):
         exchange_rate = _positive_num(metadata.get("exchange_rate"))
         if exchange_rate is None:
             raise ValueError("Tipo de cambio congelado invalido")
@@ -2012,6 +2313,9 @@ def _write_cotizacion(
     last_product = None
     discount_rate = _discount_rate(metadata)
     catalog_list_prices = _uses_catalog_list_prices(metadata)
+    mixed_catalog_prices = _uses_mixed_catalog_prices(metadata)
+    converted_catalog_prices = _uses_converted_catalog_prices(metadata)
+    money_format = _money_format(metadata)
     quote_to_cot: dict[int, int] = {}
     category_by_quote_row: dict[int, str] = {}
     user_count_by_quote_row: dict[int, int | None] = {}
@@ -2059,7 +2363,19 @@ def _write_cotizacion(
         if mob_row:
             ws.cell(current_row, 5).value = f"=Mobiliti!H{mob_row}"
             lumbro_rows = lumbro_row_map.get(item.row, [])
-            if catalog_list_prices:
+            if mixed_catalog_prices:
+                if lumbro_rows:
+                    price_terms = [
+                        f"Mobiliti!X{mob_row}*Mobiliti!H{mob_row}",
+                        *(f"Mobiliti!X{row}*Mobiliti!H{row}" for row in lumbro_rows),
+                    ]
+                    total_formula = "+".join(price_terms)
+                    ws.cell(current_row, 6).value = (
+                        f"=ROUND(IFERROR(({total_formula})/Mobiliti!H{mob_row},0),2)"
+                    )
+                else:
+                    ws.cell(current_row, 6).value = f"=ROUND(Mobiliti!X{mob_row},2)"
+            elif catalog_list_prices:
                 ws.cell(current_row, 6).value = f"=ROUND(Mobiliti!X{mob_row},2)"
             elif lumbro_rows:
                 price_terms = [
@@ -2073,10 +2389,17 @@ def _write_cotizacion(
         else:
             ws.cell(current_row, 5).value = item.cantidad
             ws.cell(current_row, 6).value = (
-                f"=ROUND({_excel_decimal(item.precio)},2)" if catalog_list_prices else item.precio
+                f"=ROUND({_excel_decimal(item.precio)},2)"
+                if converted_catalog_prices
+                else item.precio
             )
-        ws.cell(current_row, 7).value = discount_rate if current_row == first_product else f"=G${first_product}"
-        if catalog_list_prices:
+        if mixed_catalog_prices:
+            ws.cell(current_row, 7).value = _item_discount_rate(item, metadata)
+        else:
+            ws.cell(current_row, 7).value = (
+                discount_rate if current_row == first_product else f"=G${first_product}"
+            )
+        if converted_catalog_prices:
             ws.cell(current_row, 8).value = f"=ROUND(F{current_row}*G{current_row},2)"
             ws.cell(current_row, 9).value = f"=ROUND(F{current_row}-H{current_row},2)"
             ws.cell(current_row, 10).value = f"=ROUND(E{current_row}*I{current_row},2)"
@@ -2086,7 +2409,7 @@ def _write_cotizacion(
             ws.cell(current_row, 10).value = f"=E{current_row}*I{current_row}"
         ws.cell(current_row, 7).number_format = PERCENT_FORMAT
         for col in [6, 8, 9, 10]:
-            ws.cell(current_row, col).number_format = MONEY_FORMAT
+            ws.cell(current_row, col).number_format = money_format
         _format_product_row_text(ws, current_row)
         _align_description_top_for_category(ws, current_row, category)
         current_row += 1
@@ -2095,7 +2418,7 @@ def _write_cotizacion(
         raise ValueError("No se encontraron productos en Quotation")
 
     total_labels = ["SUBTOTAL:", "COSTO DE FLETE:", "SUBTOTAL:", "IVA:", "TOTAL:"]
-    if catalog_list_prices:
+    if converted_catalog_prices:
         total_formulas = [
             f"=ROUND(SUM(J{first_product}:J{last_product}),2)",
             f"=ROUND(H{current_row}*12%,2)",
@@ -2117,7 +2440,7 @@ def _write_cotizacion(
         row = current_row + offset
         ws.cell(row, 4).value = label
         ws.cell(row, 8).value = formula
-        ws.cell(row, 8).number_format = MONEY_FORMAT
+        ws.cell(row, 8).number_format = money_format
         value_alignment = copy(ws.cell(row, 8).alignment)
         ws.cell(row, 8).alignment = Alignment(
             horizontal="right",
@@ -2428,9 +2751,10 @@ def generate_quote(
 ) -> Path:
     metadata = metadata or {}
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     items, column_map = read_items(source_path)
+    _validate_mixed_catalog_metadata(items, metadata)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     lumbro_prices = _load_lumbro_prices(template_path)
     wb = _load_template(template_path)
     if "Cotizacion" not in wb.sheetnames:

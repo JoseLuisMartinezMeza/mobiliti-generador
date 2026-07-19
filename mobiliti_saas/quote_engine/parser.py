@@ -24,6 +24,14 @@ class QuoteItem:
     cantidad: Any = None
     precio: Any = None
     categoria: str = ""
+    proveedor: Any = ""
+    descuento: Any = None
+    moneda_original: Any = ""
+    precio_original: Any = None
+    tipo_cambio_congelado: Any = None
+    referencia_fuente: Any = ""
+    modo_precio: Any = ""
+    electrificacion_automatica: Any = None
 
 
 def normalize_header(value: Any) -> str:
@@ -52,6 +60,14 @@ def detect_columns(ws) -> dict[str, str]:
         "list_price": ["list price", "listprice", "price list"],
         "descripcion": ["description", "desc", "descripcion"],
         "dimension": ["dimension", "dimensions", "size", "medida"],
+        "proveedor": ["supplier", "provider", "proveedor"],
+        "descuento": ["discount percent", "discount", "descuento"],
+        "moneda_original": ["original currency", "base currency", "moneda original"],
+        "precio_original": ["original unit price", "base unit price", "precio original"],
+        "tipo_cambio_congelado": ["frozen exchange rate", "exchange rate", "tipo de cambio"],
+        "referencia_fuente": ["source reference", "referencia fuente"],
+        "modo_precio": ["price mode", "modo precio"],
+        "electrificacion_automatica": ["auto electrification", "electrificacion automatica"],
     }
     column_map: dict[str, str] = {}
 
@@ -91,6 +107,12 @@ def read_items(source_path: str | Path) -> tuple[list[QuoteItem], dict[str, str]
     qty_col = col_index(column_map, "cantidad", "G")
     price_col = col_index(column_map, "list_price", column_map.get("unit_price", "J"))
 
+    def optional_value(row: int, key: str, default: Any) -> Any:
+        column = column_map.get(key)
+        if column is None:
+            return default
+        return ws.cell(row=row, column=column_index_from_string(column)).value
+
     last_row = ws.max_row
     for row in range(last_row, 0, -1):
         if ws.cell(row=row, column=1).value is not None:
@@ -122,6 +144,16 @@ def read_items(source_path: str | Path) -> tuple[list[QuoteItem], dict[str, str]
                     cantidad=ws.cell(row=row, column=qty_col).value,
                     precio=ws.cell(row=row, column=price_col).value,
                     categoria=current_category,
+                    proveedor=optional_value(row, "proveedor", ""),
+                    descuento=optional_value(row, "descuento", None),
+                    moneda_original=optional_value(row, "moneda_original", ""),
+                    precio_original=optional_value(row, "precio_original", None),
+                    tipo_cambio_congelado=optional_value(row, "tipo_cambio_congelado", None),
+                    referencia_fuente=optional_value(row, "referencia_fuente", ""),
+                    modo_precio=optional_value(row, "modo_precio", ""),
+                    electrificacion_automatica=optional_value(
+                        row, "electrificacion_automatica", None
+                    ),
                 )
             )
         elif (no_val is None or no_val == "") and item_name:

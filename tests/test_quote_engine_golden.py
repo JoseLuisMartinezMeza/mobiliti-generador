@@ -1,4 +1,5 @@
 from pathlib import Path
+from decimal import Decimal, ROUND_HALF_UP
 import os
 import sys
 
@@ -42,6 +43,25 @@ EXPECTED_TEMPLATE_SHEETS = {
     "Meses Sin Intereses Tarjetas",
     "Quotation",
 }
+MONEY = Decimal("0.01")
+
+
+def money(value: Decimal) -> Decimal:
+    return value.quantize(MONEY, rounding=ROUND_HALF_UP)
+
+
+def reference_totals(rows: list[tuple[Decimal, Decimal, Decimal]]):
+    subtotal = Decimal("0")
+    for price, quantity, discount in rows:
+        unit = money(price)
+        discount_amount = money(unit * discount)
+        net_unit = money(unit - discount_amount)
+        subtotal += money(quantity * net_unit)
+    subtotal = money(subtotal)
+    freight = money(subtotal * Decimal("0.12"))
+    before_tax = money(subtotal + freight)
+    tax = money(before_tax * Decimal("0.16"))
+    return subtotal, freight, before_tax, tax, money(before_tax + tax)
 
 
 def _supplier_line(**overrides):
@@ -111,6 +131,64 @@ def _write_minimal_quotation(path: Path, *, unit_price=123.456) -> None:
     ws["K9"] = "https://example.test/producto"
     wb.save(path)
     wb.close()
+
+
+def _write_mixed_totals_quotation(path: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Quotation"
+    headers = {
+        1: "No.", 2: "Item", 4: "Description", 5: "Dimension", 7: "Qty",
+        10: "List Price", 11: "URL", 12: "Supplier", 13: "Discount Percent",
+        14: "Original Currency", 15: "Original Unit Price", 16: "Frozen Exchange Rate",
+        17: "Source Reference", 18: "Price Mode", 19: "Auto Electrification",
+    }
+    for column, value in headers.items():
+        ws.cell(7, column).value = value
+    ws["A8"] = "- Catalogos mixtos"
+    rows = [
+        (9, "Piso Tarkett", 2, 123.456, "Tarkett", 40, "MXN", 123.456, 1, "list"),
+        (10, "Silla ALMA", 3, 200.125, "ALMA", 0, "USD", 100, 18.5, "net"),
+    ]
+    for row, name, quantity, price, provider, discount, original_currency, original_price, rate, mode in rows:
+        ws.cell(row, 1).value = row - 8
+        ws.cell(row, 2).value = name
+        ws.cell(row, 4).value = f"Descripcion {name}"
+        ws.cell(row, 5).value = "pieza"
+        ws.cell(row, 7).value = quantity
+        ws.cell(row, 10).value = price
+        ws.cell(row, 12).value = provider
+        ws.cell(row, 13).value = discount
+        ws.cell(row, 14).value = original_currency
+        ws.cell(row, 15).value = original_price
+        ws.cell(row, 16).value = rate
+        ws.cell(row, 17).value = f"source:{provider.lower()}"
+        ws.cell(row, 18).value = mode
+        ws.cell(row, 19).value = False
+    wb.save(path)
+    wb.close()
+
+
+def _mixed_totals_metadata():
+    return {
+        "catalog_price_mode": "mixed_catalog_converted",
+        "quote_currency": "MXN",
+        "auto_electrification_rate": None,
+        "rate_summary": [
+            {
+                "catalog": "tarkett", "base_currency": "MXN", "quote_currency": "MXN",
+                "exchange_rate": "1.000000", "rate_source": "identity",
+                "rate_effective_date": "2026-07-15", "rate_retrieved_at": "",
+            },
+            {
+                "catalog": "alma", "base_currency": "USD", "quote_currency": "MXN",
+                "exchange_rate": "18.500000", "rate_source": "saas_exchange_rates",
+                "rate_effective_date": "2026-07-15",
+                "rate_retrieved_at": "2026-07-15T23:00:00Z",
+            },
+        ],
+        "cotizacion": "MIXTA-GOLDEN",
+    }
 
 
 def _formula_uses_round_2(value):
@@ -230,6 +308,80 @@ def test_supplier_final_workbook_uses_frozen_currency_net_prices_and_separate_va
     assert all(_formula_uses_round_2(cot.cell(row, 8).value) for row in totals)
     assert "16%" in str(cot.cell(totals[3], 8).value)
     wb.close()
+
+
+def test_mixed_final_workbook_has_one_rounded_product_and_totals_chain(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine._exchange_rate",
+        lambda _metadata: (_ for _ in ()).throw(
+            AssertionError("mixed mode must not use the legacy exchange rate")
+        ),
+    )
+    source = tmp_path / "mixed-totals.xlsx"
+    output = tmp_path / "mixed-totals-final.xlsx"
+    _write_mixed_totals_quotation(source)
+
+    generate_quote(source, output, _mixed_totals_metadata(), WORKER_TEMPLATE)
+
+    wb = load_workbook(output, data_only=False)
+    try:
+        assert {"Cotizacion", "Mobiliti", "Quotation"} <= set(wb.sheetnames)
+        assert wb.sheetnames.count("Cotizacion") == 1
+        assert wb.sheetnames.count("Mobiliti") == 1
+        assert wb.sheetnames.count("Quotation") == 1
+        cot = wb["Cotizacion"]
+        mobiliti = wb["Mobiliti"]
+        product_row_map = []
+        for source_row in (9, 10):
+            cot_row = next(
+                row for row in range(1, cot.max_row + 1)
+                if cot.cell(row, 1).value == f"=Quotation!B{source_row}"
+            )
+            mobiliti_row = next(
+                row for row in range(1, mobiliti.max_row + 1)
+                if mobiliti.cell(row, 4).value == f"=Quotation!B{source_row}"
+            )
+            product_row_map.append((cot_row, mobiliti_row))
+
+        first_product, last_product = product_row_map[0][0], product_row_map[-1][0]
+        labels = [
+            cot.cell(row, 4).value
+            for row in range(1, cot.max_row + 1)
+            if cot.cell(row, 4).value
+            in {"SUBTOTAL:", "COSTO DE FLETE:", "IVA:", "TOTAL:"}
+        ]
+        assert labels == ["SUBTOTAL:", "COSTO DE FLETE:", "SUBTOTAL:", "IVA:", "TOTAL:"]
+        total_rows = [
+            row for row in range(last_product + 1, cot.max_row + 1)
+            if cot.cell(row, 4).value in {"SUBTOTAL:", "COSTO DE FLETE:", "IVA:", "TOTAL:"}
+        ][:5]
+        subtotal_row, freight_row, before_tax_row, iva_row, total_row = total_rows
+        assert "16%" in str(cot.cell(iva_row, 8).value)
+        assert all(_formula_uses_round_2(cot.cell(row, 8).value) for row in total_rows)
+        for cot_row, mobiliti_row in product_row_map:
+            assert cot.cell(cot_row, 6).value == f"=ROUND(Mobiliti!X{mobiliti_row},2)"
+            assert cot.cell(cot_row, 8).value == f"=ROUND(F{cot_row}*G{cot_row},2)"
+            assert cot.cell(cot_row, 9).value == f"=ROUND(F{cot_row}-H{cot_row},2)"
+            assert cot.cell(cot_row, 10).value == f"=ROUND(E{cot_row}*I{cot_row},2)"
+        assert cot.cell(subtotal_row, 8).value == f"=ROUND(SUM(J{first_product}:J{last_product}),2)"
+        assert cot.cell(freight_row, 8).value == f"=ROUND(H{subtotal_row}*12%,2)"
+        assert cot.cell(before_tax_row, 8).value == f"=ROUND(H{subtotal_row}+H{freight_row},2)"
+        assert cot.cell(iva_row, 8).value == f"=ROUND(H{before_tax_row}*16%,2)"
+        assert cot.cell(total_row, 8).value == f"=ROUND(H{before_tax_row}+H{iva_row},2)"
+        assert reference_totals(
+            [
+                (Decimal("123.456"), Decimal("2"), Decimal("0.4")),
+                (Decimal("200.125"), Decimal("3"), Decimal("0")),
+            ]
+        ) == (
+            Decimal("748.55"),
+            Decimal("89.83"),
+            Decimal("838.38"),
+            Decimal("134.14"),
+            Decimal("972.52"),
+        )
+    finally:
+        wb.close()
 
 
 def test_legacy_workbook_keeps_existing_provider_header_and_formulas(tmp_path):

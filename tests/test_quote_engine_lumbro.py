@@ -8,7 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine import engine  # noqa: E402
-from mobiliti_saas.quote_engine.engine import _load_lumbro_prices, _lumbro_accessories_for_item, _write_mobiliti  # noqa: E402
+from mobiliti_saas.quote_engine.engine import (  # noqa: E402
+    _item_auto_electrification,
+    _load_lumbro_prices,
+    _lumbro_accessories_for_item,
+    _write_mobiliti,
+)
 from mobiliti_saas.quote_engine.parser import QuoteItem  # noqa: E402
 from mobiliti_saas.quote_engine.parser import read_items  # noqa: E402
 
@@ -27,6 +32,30 @@ def test_lumbro_accessories_for_workstation_pax_multiplies_quantity():
         ("JUMP-1.5M", 16),
         ("CAJA-FUS", 4),
     ]
+
+
+def test_mixed_auto_electrification_is_per_line_while_legacy_remains_enabled():
+    enabled = QuoteItem(
+        tipo="producto",
+        row=9,
+        proveedor="Tarkett",
+        electrificacion_automatica=True,
+    )
+    disabled = QuoteItem(
+        tipo="producto",
+        row=10,
+        proveedor="ALMA",
+        electrificacion_automatica=False,
+    )
+    mixed = {"catalog_price_mode": "mixed_catalog_converted"}
+
+    assert _item_auto_electrification(enabled, mixed) is True
+    assert _item_auto_electrification(disabled, mixed) is False
+    assert _item_auto_electrification(QuoteItem(tipo="producto", row=11), {}) is True
+    assert _item_auto_electrification(
+        QuoteItem(tipo="producto", row=12),
+        {"catalog_price_mode": "list_price_net"},
+    ) is False
 
 
 def test_lumbro_price_rows_keep_exact_automatic_codes_and_source_rows():
