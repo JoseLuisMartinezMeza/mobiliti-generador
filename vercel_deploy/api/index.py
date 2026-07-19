@@ -109,21 +109,43 @@ TARKETT_CATALOG_PATH = os.environ.get("TARKETT_CATALOG_PATH")
 TARKETT_CATALOG_DB_ENABLED = _env_bool("TARKETT_CATALOG_DB_ENABLED", bool(os.environ.get("VERCEL")))
 TARKETT_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("TARKETT_CATALOG_DB_TTL_SECONDS", "300")))
 OFFIHO_CATALOG_PATH = os.environ.get("OFFIHO_CATALOG_PATH")
-CATALOG_SUPPLIER_ORDER = ("cr-global", "sonara", "sunon", "alma")
+CATALOG_SUPPLIER_ORDER = ("cr-global", "sonara", "sunon", "alma", "lumbro")
 CATALOG_SUPPLIER_LABELS = {
     "cr-global": "CR Global",
     "sonara": "Sonara",
     "sunon": "Sunon",
     "alma": "ALMA",
+    "lumbro": "Lumbro",
 }
-CATALOG_ENABLED_SUPPLIERS = tuple(
-    supplier
-    for supplier in CATALOG_SUPPLIER_ORDER
-    if supplier in {
-        value.strip().lower()
-        for value in os.environ.get("CATALOG_ENABLED_SUPPLIERS", "").split(",")
-        if value.strip().lower() in ALLOWED_SUPPLIERS
-    }
+
+
+def _canonical_enabled_catalog_suppliers(values) -> tuple[str, ...]:
+    if not isinstance(values, (list, tuple)):
+        return ()
+    seen: set[str] = set()
+    for value in values:
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or value != value.lower()
+            or value not in ALLOWED_SUPPLIERS
+            or value not in CATALOG_SUPPLIER_ORDER
+            or value in seen
+        ):
+            return ()
+        seen.add(value)
+    return tuple(supplier for supplier in CATALOG_SUPPLIER_ORDER if supplier in seen)
+
+
+def _parse_enabled_catalog_suppliers(raw: str) -> tuple[str, ...]:
+    if raw == "":
+        return ()
+    return _canonical_enabled_catalog_suppliers(raw.split(","))
+
+
+CATALOG_ENABLED_SUPPLIERS = _parse_enabled_catalog_suppliers(
+    os.environ.get("CATALOG_ENABLED_SUPPLIERS", "")
 )
 CATALOG_ASSET_BUCKET = "catalog-assets"
 CATALOG_ASSET_MAX_BYTES = 8 * 1024 * 1024
@@ -1811,8 +1833,7 @@ _SUPPLIER_CATALOG_CACHE: dict[str, dict] = {}
 
 
 def _enabled_catalog_suppliers() -> tuple[str, ...]:
-    enabled = {str(value).strip().lower() for value in CATALOG_ENABLED_SUPPLIERS}
-    return tuple(supplier for supplier in CATALOG_SUPPLIER_ORDER if supplier in enabled)
+    return _canonical_enabled_catalog_suppliers(CATALOG_ENABLED_SUPPLIERS)
 
 
 def _require_enabled_catalog_supplier(supplier: str) -> str:

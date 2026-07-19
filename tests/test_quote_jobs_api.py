@@ -1056,6 +1056,50 @@ def _mock_supplier_catalog(*, availability_type="stocked", code_status="verified
     }
 
 
+def _mock_lumbro_catalog():
+    items = []
+    for number in range(1, 6):
+        verified = number <= 4
+        items.append(
+            {
+                "internal_id": f"lumbro:contact-{number}",
+                "supplier": "lumbro",
+                "product_key": f"contact-{number}",
+                "sku": f"LUM-{number:03d}" if verified else "",
+                "code_status": "verified" if verified else "needs_review",
+                "brand": "Lumbro",
+                "collection": "Interconexion",
+                "name": f"Multicontacto Lumbro {number}",
+                "description": "Multicontacto para mobiliario de oficina",
+                "unit": "PZA",
+                "availability_type": "unknown",
+                "stock": None,
+                "lead_time": "",
+                "base_price_options": [],
+                "add_on_options": [],
+                "base_currency": "MXN",
+                "price_net": f"{number * 1000:.6f}",
+                "tax_rate": "0.160000",
+                "attributes": {"color": "Negro"},
+                "image_url": f"https://lumbro.com.mx/assets/contact-{number}.png",
+                "image_kind": "official",
+                "product_url": "https://lumbro.com.mx/productos",
+                "warnings": [] if verified else ["Codigo por verificar"],
+                "source_reference": f"LISTA DE PRECIOS MULTICONTACTOS 2026.pdf:{number}",
+            }
+        )
+    return {
+        "supplier": "lumbro",
+        "source_hash": "b" * 64,
+        "generated_at": "2026-07-18T00:00:00Z",
+        "items": items,
+        "metadata": {
+            "coverage": {"verified_items": 4, "needs_review_items": 1},
+            "source_files": ["internal-audit-only"],
+        },
+    }
+
+
 def _supplier_rate_rows():
     effective_date = (date.today() - timedelta(days=1)).isoformat()
     return [
@@ -1098,7 +1142,7 @@ def _valid_supplier_body(*, items=None, quote_currency="MXN"):
 
 def _install_supplier_quote_mocks(monkeypatch, catalog):
     _mock_user(monkeypatch)
-    _enable_generic_catalogs(monkeypatch, "cr-global")
+    _enable_generic_catalogs(monkeypatch, catalog["supplier"])
     state = {
         "uploaded": {},
         "created": {},
@@ -1187,6 +1231,68 @@ def test_generic_catalog_registry_respects_feature_flags_and_canonical_order(mon
     ] == [("cr-global", "CR Global"), ("alma", "ALMA")]
 
 
+def test_generic_catalog_supplier_registry_includes_lumbro_in_canonical_order(monkeypatch):
+    _mock_user(monkeypatch)
+    _enable_generic_catalogs(monkeypatch, "lumbro", "alma", "sunon", "sonara", "cr-global")
+
+    response = _client().get("/catalogs", headers=_auth_headers())
+
+    assert response.status_code == 200
+    assert [
+        (row["supplier"], row["label"])
+        for row in response.json()["suppliers"]
+    ] == [
+        ("cr-global", "CR Global"),
+        ("sonara", "Sonara"),
+        ("sunon", "Sunon"),
+        ("alma", "ALMA"),
+        ("lumbro", "Lumbro"),
+    ]
+
+
+def test_lumbro_catalog_supplier_is_disabled_by_default(monkeypatch):
+    _mock_user(monkeypatch)
+    _enable_generic_catalogs(monkeypatch)
+    monkeypatch.setattr(
+        index,
+        "_load_supplier_catalog_cached",
+        lambda supplier: (_ for _ in ()).throw(AssertionError("disabled catalog must not load")),
+        raising=False,
+    )
+
+    registry = _client().get("/catalogs", headers=_auth_headers())
+    detail = _client().get("/catalogs/lumbro", headers=_auth_headers())
+    quote = _client().post(
+        "/catalogs/lumbro/quote",
+        headers=_auth_headers(),
+        json=_valid_supplier_body(items=[]),
+    )
+
+    assert registry.status_code == 200
+    assert registry.json()["suppliers"] == []
+    assert detail.status_code == 404
+    assert quote.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        ("lumbro", "lumbro"),
+        ("lumbro", "unknown"),
+        (" lumbro",),
+        ("lumbro ",),
+        ("cr-global", "lumbro", "unknown"),
+    ],
+)
+def test_catalog_supplier_feature_flag_fails_closed_for_invalid_duplicate_or_spaced_values(
+    monkeypatch,
+    configured,
+):
+    monkeypatch.setattr(index, "CATALOG_ENABLED_SUPPLIERS", configured, raising=False)
+
+    assert index._enabled_catalog_suppliers() == ()
+
+
 def test_exchange_rates_route_precedes_dynamic_supplier_route():
     get_paths = [
         route.path
@@ -1246,6 +1352,79 @@ def test_supplier_catalog_returns_published_stock_and_reservations(monkeypatch):
     assert item["reserved_by_others"] is True
     assert item["is_out_of_stock"] is False
     assert item["image_url"] == "https://example.test/chair.png"
+
+
+def test_lumbro_catalog_supplier_returns_public_items_without_snapshot_metadata(monkeypatch):
+    _mock_user(monkeypatch)
+    _enable_generic_catalogs(monkeypatch, "lumbro")
+    monkeypatch.setattr(index, "_load_supplier_catalog_cached", lambda supplier: _mock_lumbro_catalog())
+    monkeypatch.setattr(index, "db_catalog_reservation_summary", lambda supplier, usuario_id: [])
+
+    response = _client().get("/catalogs/lumbro", headers=_auth_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["supplier"] == "lumbro"
+    assert payload["total"] == 5
+    assert [item["code_status"] for item in payload["items"]] == [
+        "verified",
+        "verified",
+        "verified",
+        "verified",
+        "needs_review",
+    ]
+    assert "metadata" not in payload
+    assert "source_files" not in payload
+
+
+def test_lumbro_catalog_supplier_quote_accepts_four_verified_items(monkeypatch):
+    catalog = _mock_lumbro_catalog()
+    state = _install_supplier_quote_mocks(monkeypatch, catalog)
+    items = [
+        {"internal_id": item["internal_id"], "quantity": "1", "add_on_option_ids": []}
+        for item in catalog["items"]
+        if item["code_status"] == "verified"
+    ]
+
+    response = _client().post(
+        "/catalogs/lumbro/quote",
+        headers=_auth_headers(),
+        json=_valid_supplier_body(items=items),
+    )
+
+    assert response.status_code == 200
+    payload = index.json.loads(state["uploaded"]["content"].decode("utf-8"))
+    assert payload["supplier"] == "lumbro"
+    assert len(payload["items"]) == 4
+    assert payload["exchange_rate"] == "1.000000"
+    assert state["created"]["metadata"]["catalog_source_hash"] == "b" * 64
+    assert state["reservations"] == []
+
+
+def test_lumbro_catalog_supplier_quote_blocks_needs_review_item_before_upload(monkeypatch):
+    catalog = _mock_lumbro_catalog()
+    state = _install_supplier_quote_mocks(monkeypatch, catalog)
+    review_item = next(item for item in catalog["items"] if item["code_status"] == "needs_review")
+
+    response = _client().post(
+        "/catalogs/lumbro/quote",
+        headers=_auth_headers(),
+        json=_valid_supplier_body(
+            items=[
+                {
+                    "internal_id": review_item["internal_id"],
+                    "quantity": "1",
+                    "add_on_option_ids": [],
+                }
+            ]
+        ),
+    )
+
+    assert response.status_code == 400
+    assert "codigo por verificar" in response.json()["detail"].lower()
+    assert state["uploaded"] == {}
+    assert state["created"] == {}
+    assert state["reservations"] == []
 
 
 def test_supplier_quote_freezes_fx_and_creates_stock_reservations(monkeypatch):

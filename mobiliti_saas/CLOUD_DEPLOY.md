@@ -238,7 +238,9 @@ Variables adicionales del worker, documentadas solo por nombre:
 - `CATALOG_SYNC_TIMEOUT_SECONDS`
 - `CATALOG_ASSET_PUBLIC_BASE_URL`
 
-Los proveedores habilitables son `cr-global`, `sonara`, `sunon` y `alma`.
+Los proveedores habilitables son `cr-global`, `sonara`, `sunon`, `alma` y
+`lumbro`. El valor vacío mantiene todos los catálogos deshabilitados; configura
+solo una lista CSV de estos identificadores, sin duplicados ni espacios.
 Vercel no descarga ni parsea archivos de SharePoint: esa responsabilidad queda
 en el worker. Verifica `/health` y sus campos `last_catalog_sync_at` y
 `last_catalog_sync_status` antes de ampliar la lista. El mismo health expone
