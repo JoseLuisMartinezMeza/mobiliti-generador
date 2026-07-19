@@ -38,9 +38,31 @@ def run_mixed_cart_js(source):
         text=True,
         encoding="utf-8",
         capture_output=True,
-        check=True,
+        check=False,
     )
+    assert completed.returncode == 0, completed.stderr
     return json.loads(completed.stdout)
+
+
+def javascript_function(source, name):
+    start = re.search(rf"function\s+{name}\s*\([^)]*\)\s*\{{", source)
+    assert start, f"Missing JavaScript helper: {name}"
+    depth = 0
+    body_start = start.end() - 1
+    for index in range(body_start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start.start() : index + 1]
+    raise AssertionError(f"Unclosed JavaScript helper: {name}")
+
+
+def run_ui_helper_js(path, names, source):
+    module = Path(path).read_text(encoding="utf-8")
+    helpers = "\n".join(javascript_function(module, name) for name in names)
+    return run_mixed_cart_js(f"{helpers}\n{source}")
 
 
 def supplier_line_source(
@@ -137,7 +159,7 @@ def test_mixed_cart_session_and_submission_guards_are_explicit():
     assert "submissionEpoch !== mixedQuoteSessionEpochRef.current" in main
     assert "items: committedLines.map(toMixedQuoteItem)" in main
     assert "Respuesta de trabajo mixto invalida" in main
-    assert "replaceMixedCart([])" in main
+    assert "replaceCart([])" in main
     assert "localStorage.setItem(\"mixed" not in main
     assert "sessionStorage.setItem(\"mixed" not in main
 
@@ -146,10 +168,228 @@ def test_drawer_focus_trap_does_not_restart_when_parent_callbacks_change():
     source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
     assert "const onCloseRef = useRef(onClose)" in source
     assert "onCloseRef.current = onClose" in source
-    assert "onCloseRef.current()" in source
+    assert "handleMixedCartEscape(event, busyRef.current, onCloseRef.current)" in source
     assert re.search(r"window\.addEventListener\(\"keydown\"[\s\S]*?\n\s*}, \[open\]\);", source)
     assert 'className="mixed-cart-overlay"' in source
     assert "disabled={busy}" in source
+
+
+def test_controller_commits_edits_before_confirmation_and_cancel_retains_state():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("createMixedQuoteController",),
+        r"""
+      const makeLine = (quantity = "1", missingPrice = false) => createMixedCartLine({
+        catalog: "offiho", identity: {inventory_key: `OFF-${missingPrice ? "P" : "S"}`},
+        quantity,
+        quantityRules: {
+          min: "0.001", step: "0.001", maxDecimals: 3, max: "1000000",
+          warningAt: "1", confirmOnInsufficient: true,
+          confirmOnMissingPrice: missingPrice
+        },
+        snapshot: {name: "Offiho", code: "OFF", image_url: "", unit: "PZA",
+          availability: "1", configuration: "", warnings: []}
+      });
+      const makeHarness = () => {
+        const state = {cart: [], form: {proyecto: "Inicial"}, open: false, busy: false,
+          error: "", notice: "", jobs: []};
+        const cartRef = {current: []}; const submittingRef = {current: false};
+        const sessionEpochRef = {current: 0}; const requests = []; const confirms = [];
+        const controller = createMixedQuoteController({
+          cartRef, submittingRef, sessionEpochRef, emptyForm: {proyecto: ""},
+          replaceCart(next) { state.cart = next; cartRef.current = next; },
+          setOpen(value) { state.open = value; },
+          setForm(value) { state.form = typeof value === "function" ? value(state.form) : value; },
+          getForm() { return state.form; }, setBusy(value) { state.busy = value; },
+          setError(value) { state.error = value; }, setNotice(value) { state.notice = value; },
+          setJobs(value) { state.jobs = typeof value === "function" ? value(state.jobs) : value; },
+          async request(path) { requests.push(path); return path === "/cotizaciones" ? {cotizaciones: []} : {job: {id: "job-1"}}; },
+          confirmQuote(message) { confirms.push(message); return false; }
+        });
+        return {state, requests, confirms, controller};
+      };
+      const availability = makeHarness();
+      const stockLine = makeLine();
+      availability.controller.add(stockLine);
+      availability.controller.updateField("proyecto", "Proyecto retenido");
+      await availability.controller.submit({preventDefault() {}}, [{...stockLine, quantity: "2"}]);
+
+      const price = makeHarness();
+      const priceLine = makeLine("1", true);
+      price.controller.add(priceLine);
+      await price.controller.submit({preventDefault() {}}, [priceLine]);
+      console.log(JSON.stringify({
+        availability: {
+          postCount: availability.requests.filter(path => path === "/catalogs/mixed-quote").length,
+          quantity: availability.state.cart[0].quantity,
+          proyecto: availability.state.form.proyecto,
+          confirmation: availability.confirms[0]
+        },
+        price: {
+          postCount: price.requests.filter(path => path === "/catalogs/mixed-quote").length,
+          confirmation: price.confirms[0]
+        }
+      }));
+    """,
+    )
+    assert result["availability"]["postCount"] == 0
+    assert result["availability"]["quantity"] == "2"
+    assert result["availability"]["proyecto"] == "Proyecto retenido"
+    assert "Hay 1 producto(s)" in result["availability"]["confirmation"]
+    assert result["price"]["postCount"] == 0
+    assert "y 1 producto(s) con precio por confirmar" in result["price"]["confirmation"]
+
+
+def test_controller_locks_mutations_deduplicates_submit_and_keeps_malformed_response_state():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("createMixedQuoteController",),
+        r"""
+      const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return {promise, resolve}; };
+      const line = createMixedCartLine({catalog: "tarkett", identity: {code: "T-1"}, quantity: "1",
+        quantityRules: {min: "0.000001", step: "0.000001", maxDecimals: 6, max: "10"},
+        snapshot: {name: "Tarkett", code: "T-1", image_url: "", unit: "M2", availability: "10", configuration: "", warnings: []}});
+      const harness = (mixedResponse) => {
+        const state = {cart: [], form: {proyecto: "Retenido"}, open: false, busy: false, error: "", notice: "", jobs: []};
+        const cartRef = {current: []}; const submittingRef = {current: false}; const sessionEpochRef = {current: 0};
+        const requests = [];
+        const controller = createMixedQuoteController({cartRef, submittingRef, sessionEpochRef, emptyForm: {proyecto: ""},
+          replaceCart(next) { state.cart = next; cartRef.current = next; }, setOpen(value) { state.open = value; },
+          setForm(value) { state.form = typeof value === "function" ? value(state.form) : value; }, getForm() { return state.form; },
+          setBusy(value) { state.busy = value; }, setError(value) { state.error = value; }, setNotice(value) { state.notice = value; },
+          setJobs(value) { state.jobs = typeof value === "function" ? value(state.jobs) : value; },
+          request(path) { requests.push(path); return path === "/catalogs/mixed-quote" ? mixedResponse : Promise.resolve({cotizaciones: state.jobs}); },
+          confirmQuote() { return true; }});
+        return {state, cartRef, requests, controller};
+      };
+
+      const pending = deferred(); const locked = harness(pending.promise); locked.controller.add(line);
+      const first = locked.controller.submit({preventDefault() {}});
+      const second = locked.controller.submit({preventDefault() {}});
+      const before = JSON.stringify(locked.cartRef.current);
+      const busyAdd = locked.controller.add({...line, quantity: "2"});
+      let editError = ""; let removeError = "";
+      try { locked.controller.update(line.key, "2"); } catch (error) { editError = error.message; }
+      try { locked.controller.remove(line.key); } catch (error) { removeError = error.message; }
+      const lockedSnapshot = {postCount: locked.requests.filter(path => path === "/catalogs/mixed-quote").length,
+        busy: locked.state.busy, busyAdd, open: locked.state.open, error: locked.state.error,
+        unchanged: before === JSON.stringify(locked.cartRef.current), editError, removeError};
+      pending.resolve({job: {id: "job-ok"}}); await Promise.all([first, second]);
+
+      const rejected = harness(Promise.resolve({job: {id: "unused"}}));
+      const rejectedAdd = rejected.controller.add({...line, catalog: "unsupported"});
+      const malformed = harness(Promise.resolve({job: {}})); malformed.controller.add(line);
+      await malformed.controller.submit({preventDefault() {}});
+      console.log(JSON.stringify({locked: lockedSnapshot, finished: {cart: locked.state.cart, notice: locked.state.notice},
+        rejected: {accepted: rejectedAdd, open: rejected.state.open, error: rejected.state.error},
+        malformed: {error: malformed.state.error, cart: malformed.state.cart, form: malformed.state.form}}));
+    """,
+    )
+    assert result["locked"] == {
+        "postCount": 1,
+        "busy": True,
+        "busyAdd": False,
+        "open": True,
+        "error": "Espera a que termine la cotizacion en curso",
+        "unchanged": True,
+        "editError": "Cotizacion en curso",
+        "removeError": "Cotizacion en curso",
+    }
+    assert result["finished"]["cart"] == []
+    assert "Cotizacion mixta en cola" in result["finished"]["notice"]
+    assert result["rejected"] == {
+        "accepted": False,
+        "open": True,
+        "error": "Catalogo mixto no soportado",
+    }
+    assert result["malformed"]["error"] == "Respuesta de trabajo mixto invalida"
+    assert result["malformed"]["cart"][0]["quantity"] == "1"
+    assert result["malformed"]["form"]["proyecto"] == "Retenido"
+
+
+def test_controller_session_reset_ignores_late_logout_and_auth_expiry_responses():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("createMixedQuoteController",),
+        r"""
+      const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return {promise, resolve}; };
+      const line = code => createMixedCartLine({catalog: "tarkett", identity: {code}, quantity: "1",
+        quantityRules: {min: "0.000001", step: "0.000001", maxDecimals: 6, max: "10"},
+        snapshot: {name: code, code, image_url: "", unit: "M2", availability: "10", configuration: "", warnings: []}});
+      const runExit = async label => {
+        const pending = deferred();
+        const state = {cart: [], form: {proyecto: "Viejo"}, open: false, busy: false, error: "", notice: "", jobs: []};
+        const cartRef = {current: []}; const submittingRef = {current: false}; const sessionEpochRef = {current: 0};
+        const controller = createMixedQuoteController({cartRef, submittingRef, sessionEpochRef, emptyForm: {proyecto: ""},
+          replaceCart(next) { state.cart = next; cartRef.current = next; }, setOpen(value) { state.open = value; },
+          setForm(value) { state.form = typeof value === "function" ? value(state.form) : value; }, getForm() { return state.form; },
+          setBusy(value) { state.busy = value; }, setError(value) { state.error = value; }, setNotice(value) { state.notice = value; },
+          setJobs(value) { state.jobs = typeof value === "function" ? value(state.jobs) : value; },
+          request(path) { return path === "/catalogs/mixed-quote" ? pending.promise : Promise.resolve({cotizaciones: []}); },
+          confirmQuote() { return true; }});
+        controller.add(line(`OLD-${label}`)); const submission = controller.submit({preventDefault() {}});
+        controller.resetSession(); controller.add(line(`NEW-${label}`));
+        pending.resolve({job: {id: `late-${label}`}}); await submission;
+        return {cartCode: state.cart[0].identity.code, jobs: state.jobs, notice: state.notice, busy: state.busy, form: state.form};
+      };
+      console.log(JSON.stringify({logout: await runExit("logout"), authExpiry: await runExit("auth")}));
+    """,
+    )
+    for exit_state, new_code in ((result["logout"], "NEW-logout"), (result["authExpiry"], "NEW-auth")):
+        assert exit_state == {
+            "cartCode": new_code,
+            "jobs": [],
+            "notice": "",
+            "busy": False,
+            "form": {"proyecto": ""},
+        }
+    main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    assert main.count("resetMixedQuoteSession();") == 2
+
+
+def test_drawer_invalid_transient_draft_focuses_error_and_never_submits():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/MixedCartDrawer.jsx",
+        ("submitMixedDrawerDrafts",),
+        r"""
+      const line = createMixedCartLine({catalog: "tarkett", identity: {code: "T-1"}, quantity: "1",
+        quantityRules: {min: "0.000001", step: "0.000001", maxDecimals: 6, max: "10"},
+        snapshot: {name: "Tarkett", code: "T-1", image_url: "", unit: "M2", availability: "10", configuration: "", warnings: []}});
+      const drafts = {[line.key]: ""}; let errors = {}; let focused = ""; let posts = 0; let prevented = 0;
+      const accepted = submitMixedDrawerDrafts({event: {preventDefault() { prevented += 1; }}, lines: [line],
+        quantityDrafts: drafts, setErrors(value) { errors = value; }, focusFirst(key) { focused = key; },
+        onSubmit() { posts += 1; }});
+      console.log(JSON.stringify({accepted, errors, focused, posts, prevented, draft: drafts[line.key]}));
+    """,
+    )
+    assert result["accepted"] is False
+    assert result["posts"] == 0
+    assert result["prevented"] == 1
+    assert result["draft"] == ""
+    assert result["focused"] in result["errors"]
+    assert result["errors"][result["focused"]] == "Cantidad invalida"
+
+
+def test_drawer_escape_handler_executes_only_when_not_busy():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/MixedCartDrawer.jsx",
+        ("handleMixedCartEscape",),
+        r"""
+      const run = busy => { let prevented = 0; let closed = 0;
+        const handled = handleMixedCartEscape({key: "Escape", preventDefault() { prevented += 1; }}, busy, () => { closed += 1; });
+        return {handled, prevented, closed}; };
+      console.log(JSON.stringify({busy: run(true), idle: run(false)}));
+    """,
+    )
+    assert result == {
+        "busy": {"handled": False, "prevented": 0, "closed": 0},
+        "idle": {"handled": True, "prevented": 1, "closed": 1},
+    }
+    source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+    assert "const busyRef = useRef(busy)" in source
+    assert "busyRef.current = busy" in source
+    assert "handleMixedCartEscape(event, busyRef.current" in source
+    assert re.search(r"window\.addEventListener\(\"keydown\"[\s\S]*?\n\s*}, \[open\]\);", source)
 
 
 def test_mixed_cart_keys_are_stable_and_configuration_sensitive():

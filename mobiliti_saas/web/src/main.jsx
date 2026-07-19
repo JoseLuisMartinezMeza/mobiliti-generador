@@ -1708,6 +1708,134 @@ function AdminView({ token }) {
   );
 }
 
+function createMixedQuoteController({
+  cartRef: mixedCartRef,
+  submittingRef: mixedQuoteSubmittingRef,
+  sessionEpochRef: mixedQuoteSessionEpochRef,
+  emptyForm,
+  replaceCart,
+  setOpen,
+  setForm,
+  getForm,
+  setBusy,
+  setError,
+  setNotice,
+  setJobs,
+  request,
+  confirmQuote,
+}) {
+  function add(line) {
+    if (mixedQuoteSubmittingRef.current) {
+      setError("Espera a que termine la cotizacion en curso");
+      setOpen(true);
+      return false;
+    }
+    try {
+      const next = upsertMixedCartLine(mixedCartRef.current, line);
+      replaceCart(next);
+      setError("");
+      setNotice("");
+      setOpen(true);
+      return true;
+    } catch (cartFailure) {
+      setError(cartFailure.message || "No se pudo agregar el producto");
+      setOpen(true);
+      return false;
+    }
+  }
+
+  function update(key, quantity) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceCart(updateMixedCartQuantity(mixedCartRef.current, key, quantity));
+  }
+
+  function remove(key) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceCart(removeMixedCartLine(mixedCartRef.current, key));
+  }
+
+  function updateField(field, value) {
+    if (mixedQuoteSubmittingRef.current) return;
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function resetSession() {
+    mixedQuoteSessionEpochRef.current += 1;
+    mixedQuoteSubmittingRef.current = false;
+    setBusy(false);
+    replaceCart([]);
+    setOpen(false);
+    setForm({ ...emptyForm });
+    setError("");
+    setNotice("");
+  }
+
+  async function submit(event, submissionLines = mixedCartRef.current) {
+    event.preventDefault();
+    if (mixedQuoteSubmittingRef.current || !submissionLines.length) return;
+
+    let committedLines;
+    try {
+      committedLines = submissionLines.map((line) => ({
+        ...line,
+        quantity: validateLineQuantity(line, line.quantity),
+      }));
+    } catch (quantityFailure) {
+      setError(quantityFailure.message || "Cantidad invalida");
+      return;
+    }
+    replaceCart(committedLines);
+
+    const availabilityWarnings = committedLines.filter(lineNeedsAvailabilityConfirmation);
+    const priceWarnings = committedLines.filter(lineNeedsPriceConfirmation);
+    if ((availabilityWarnings.length || priceWarnings.length) && !confirmQuote(
+      `Hay ${availabilityWarnings.length} producto(s) agotado(s) o con existencia insuficiente `
+      + `y ${priceWarnings.length} producto(s) con precio por confirmar. ¿Deseas continuar?`,
+    )) return;
+
+    mixedQuoteSubmittingRef.current = true;
+    const submissionEpoch = mixedQuoteSessionEpochRef.current;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const data = await request("/catalogs/mixed-quote", {
+        method: "POST",
+        body: JSON.stringify({
+          ...getForm(),
+          items: committedLines.map(toMixedQuoteItem),
+        }),
+      });
+      if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
+      if (!data?.job?.id) throw new Error("Respuesta de trabajo mixto invalida");
+      setJobs((current) => [data.job, ...current.filter((job) => job.id !== data.job.id)]);
+      replaceCart([]);
+      setOpen(false);
+      setNotice("Cotizacion mixta en cola. Revisa el avance en Cotizaciones.");
+      try {
+        const refreshed = await request("/cotizaciones");
+        if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
+          setJobs(refreshed.cotizaciones || []);
+        }
+      } catch {
+        if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
+          setNotice("Cotizacion mixta en cola. Actualiza Cotizaciones para ver el avance.");
+        }
+      }
+    } catch (quoteFailure) {
+      if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
+      setError(quoteFailure.message || "No se pudo generar la cotizacion mixta");
+    } finally {
+      if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
+        mixedQuoteSubmittingRef.current = false;
+        setBusy(false);
+      }
+    }
+  }
+
+  return { add, update, remove, updateField, resetSession, submit };
+}
+
 function App() {
   const [session, setSession] = useState(() => {
     try {
@@ -1739,15 +1867,25 @@ function App() {
     setMixedCart(next);
   }
 
+  const mixedQuoteController = createMixedQuoteController({
+    cartRef: mixedCartRef,
+    submittingRef: mixedQuoteSubmittingRef,
+    sessionEpochRef: mixedQuoteSessionEpochRef,
+    emptyForm: EMPTY_MIXED_QUOTE,
+    replaceCart: replaceMixedCart,
+    setOpen: setMixedCartOpen,
+    setForm: setMixedQuote,
+    getForm: () => mixedQuote,
+    setBusy: setMixedQuoteBusy,
+    setError: setMixedQuoteError,
+    setNotice: setMixedQuoteNotice,
+    setJobs,
+    request,
+    confirmQuote: (message) => window.confirm(message),
+  });
+
   function resetMixedQuoteSession() {
-    mixedQuoteSessionEpochRef.current += 1;
-    mixedQuoteSubmittingRef.current = false;
-    setMixedQuoteBusy(false);
-    replaceMixedCart([]);
-    setMixedCartOpen(false);
-    setMixedQuote({ ...EMPTY_MIXED_QUOTE });
-    setMixedQuoteError("");
-    setMixedQuoteNotice("");
+    mixedQuoteController.resetSession();
   }
 
   useEffect(() => {
@@ -1806,37 +1944,19 @@ function App() {
   };
 
   function addMixedCartLine(line) {
-    if (mixedQuoteSubmittingRef.current) {
-      setMixedQuoteError("Espera a que termine la cotizacion en curso");
-      return false;
-    }
-    try {
-      const next = upsertMixedCartLine(mixedCartRef.current, line);
-      replaceMixedCart(next);
-      setMixedQuoteError("");
-      setMixedQuoteNotice("");
-      setMixedCartOpen(true);
-      return true;
-    } catch (cartFailure) {
-      setMixedQuoteError(cartFailure.message || "No se pudo agregar el producto");
-      return false;
-    }
+    return mixedQuoteController.add(line);
   }
 
   function updateMixedCartLine(key, quantity) {
-    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
-    const next = updateMixedCartQuantity(mixedCartRef.current, key, quantity);
-    replaceMixedCart(next);
+    mixedQuoteController.update(key, quantity);
   }
 
   function removeMixedCartLineFromApp(key) {
-    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
-    replaceMixedCart(removeMixedCartLine(mixedCartRef.current, key));
+    mixedQuoteController.remove(key);
   }
 
   function updateMixedQuoteField(field, value) {
-    if (mixedQuoteSubmittingRef.current) return;
-    setMixedQuote((current) => ({ ...current, [field]: value }));
+    mixedQuoteController.updateField(field, value);
   }
 
   function openMixedCart() {
@@ -1844,66 +1964,7 @@ function App() {
   }
 
   async function submitMixedQuote(event, submissionLines = mixedCartRef.current) {
-    event.preventDefault();
-    if (mixedQuoteSubmittingRef.current || !submissionLines.length) return;
-
-    let committedLines;
-    try {
-      committedLines = submissionLines.map((line) => ({
-        ...line,
-        quantity: validateLineQuantity(line, line.quantity)
-      }));
-    } catch (quantityFailure) {
-      setMixedQuoteError(quantityFailure.message || "Cantidad invalida");
-      return;
-    }
-    replaceMixedCart(committedLines);
-
-    const availabilityWarnings = committedLines.filter(lineNeedsAvailabilityConfirmation);
-    const priceWarnings = committedLines.filter(lineNeedsPriceConfirmation);
-    if ((availabilityWarnings.length || priceWarnings.length) && !window.confirm(
-      `Hay ${availabilityWarnings.length} producto(s) agotado(s) o con existencia insuficiente `
-      + `y ${priceWarnings.length} producto(s) con precio por confirmar. ¿Deseas continuar?`
-    )) return;
-
-    mixedQuoteSubmittingRef.current = true;
-    const submissionEpoch = mixedQuoteSessionEpochRef.current;
-    setMixedQuoteBusy(true);
-    setMixedQuoteError("");
-    setMixedQuoteNotice("");
-    try {
-      const data = await request("/catalogs/mixed-quote", {
-        method: "POST",
-        body: JSON.stringify({
-          ...mixedQuote,
-          items: committedLines.map(toMixedQuoteItem)
-        })
-      });
-      if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
-      if (!data?.job?.id) throw new Error("Respuesta de trabajo mixto invalida");
-      setJobs((current) => [data.job, ...current.filter((job) => job.id !== data.job.id)]);
-      replaceMixedCart([]);
-      setMixedCartOpen(false);
-      setMixedQuoteNotice("Cotizacion mixta en cola. Revisa el avance en Cotizaciones.");
-      try {
-        const refreshed = await request("/cotizaciones");
-        if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
-          setJobs(refreshed.cotizaciones || []);
-        }
-      } catch {
-        if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
-          setMixedQuoteNotice("Cotizacion mixta en cola. Actualiza Cotizaciones para ver el avance.");
-        }
-      }
-    } catch (quoteFailure) {
-      if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
-      setMixedQuoteError(quoteFailure.message || "No se pudo generar la cotizacion mixta");
-    } finally {
-      if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
-        mixedQuoteSubmittingRef.current = false;
-        setMixedQuoteBusy(false);
-      }
-    }
+    return mixedQuoteController.submit(event, submissionLines);
   }
   async function downloadJob(job) {
     try {

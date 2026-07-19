@@ -21,6 +21,41 @@ const CUSTOMER_FIELDS = Object.freeze([
   ["Razon social *", "razon_social", "text"],
 ]);
 
+function handleMixedCartEscape(event, busy, onClose) {
+  if (event.key !== "Escape" || busy) return false;
+  event.preventDefault();
+  onClose();
+  return true;
+}
+
+function submitMixedDrawerDrafts({
+  event,
+  lines,
+  quantityDrafts,
+  setErrors,
+  focusFirst,
+  onSubmit,
+}) {
+  event.preventDefault();
+  const errors = {};
+  const committedLines = lines.map((line) => {
+    try {
+      const quantity = validateLineQuantity(line, quantityDrafts[line.key] ?? line.quantity);
+      return { ...line, quantity };
+    } catch (quantityError) {
+      errors[line.key] = quantityError.message || "Cantidad invalida";
+      return null;
+    }
+  });
+  setErrors(errors);
+  if (Object.keys(errors).length) {
+    focusFirst(Object.keys(errors)[0]);
+    return false;
+  }
+  onSubmit(event, committedLines);
+  return true;
+}
+
 export default function MixedCartDrawer({
   lines,
   open,
@@ -41,10 +76,15 @@ export default function MixedCartDrawer({
   const quantityInputRefs = useRef({});
   const previousFocusRef = useRef(null);
   const onCloseRef = useRef(onClose);
+  const busyRef = useRef(busy);
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   useEffect(() => {
     const visibleKeys = new Set(lines.map((line) => line.key));
@@ -74,8 +114,7 @@ export default function MixedCartDrawer({
     drawerRef.current?.focus();
     function handleDrawerKeyDown(event) {
       if (event.key === "Escape") {
-        event.preventDefault();
-        onCloseRef.current();
+        handleMixedCartEscape(event, busyRef.current, onCloseRef.current);
         return;
       }
       if (event.key === "Tab") {
@@ -125,23 +164,14 @@ export default function MixedCartDrawer({
   }
 
   function handleDrawerSubmit(event) {
-    event.preventDefault();
-    const errors = {};
-    const committedLines = lines.map((line) => {
-      try {
-        const quantity = validateLineQuantity(line, quantityDrafts[line.key] ?? line.quantity);
-        return { ...line, quantity };
-      } catch (quantityError) {
-        errors[line.key] = quantityError.message || "Cantidad invalida";
-        return null;
-      }
+    submitMixedDrawerDrafts({
+      event,
+      lines,
+      quantityDrafts,
+      setErrors: setQuantityErrors,
+      focusFirst: (key) => quantityInputRefs.current[key]?.focus(),
+      onSubmit,
     });
-    setQuantityErrors(errors);
-    if (Object.keys(errors).length) {
-      quantityInputRefs.current[Object.keys(errors)[0]]?.focus();
-      return;
-    }
-    onSubmit(event, committedLines);
   }
 
   return (
