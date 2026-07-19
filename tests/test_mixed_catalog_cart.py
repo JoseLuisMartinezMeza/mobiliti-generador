@@ -257,6 +257,25 @@ def test_mixed_catalog_reservations_have_authoritative_identities(frozen_mixed_p
         assert reservation["identity"] == json.loads(line["canonical_key"].split(":", 1)[1])[0]
 
 
+@pytest.mark.parametrize("catalog", MIXED_CATALOG_ORDER)
+def test_mixed_line_projection_has_exact_contract_for_each_family(frozen_mixed_payload, catalog):
+    from mobiliti_saas.quote_engine.mixed_catalog import MIXED_LINE_FIELDS, MIXED_CATALOG_LABELS
+    group = next(group for group in frozen_mixed_payload["groups"] if group["catalog"] == catalog)
+    line = group["items"][0]
+    assert set(line) == MIXED_LINE_FIELDS
+    assert line["supplier"] == MIXED_CATALOG_LABELS[catalog]
+    assert line["canonical_key"].startswith(f"{catalog}:")
+    assert line["quantity"].endswith("000000")
+    assert line["frozen_exchange_rate"] == group["exchange_rate"]
+    assert line["original_currency"] == group["base_currency"]
+    assert line["source_reference"]
+    assert isinstance(line["attributes"], dict)
+    assert line["reservation"] == {
+        "identity": line["reservation"]["identity"], "sku": line["reservation"]["sku"],
+        "quantity": line["quantity"], "stock": line["stock"],
+    }
+
+
 def test_mixed_catalog_module_copies_are_byte_identical():
     paths = [Path("mobiliti_saas/quote_engine/mixed_catalog.py"), Path("mobiliti_saas/web/mobiliti_saas/quote_engine/mixed_catalog.py")]
     assert len({hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}) == 1
@@ -325,6 +344,15 @@ def test_mixed_payload_rejects_structurally_coherent_tarkett_insufficient_reserv
         quantity="11.000000", stock_status="insufficient_stock",
         reserved_quantity="0.000000", available_after_reservations="10.000000", reserved_by_others=False,
     )
+    line["reservation"]["quantity"] = "11.000000"
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_rejects_tarkett_insufficient_without_reservation_snapshot(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    line = payload["groups"][0]["items"][0]
+    line.update(quantity="11.000000", stock_status="insufficient_stock")
     line["reservation"]["quantity"] = "11.000000"
     with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
         validate_mixed_catalog_payload(payload)
@@ -467,5 +495,52 @@ def test_mixed_payload_rejects_empty_nonidentity_timestamp(frozen_mixed_payload)
 def test_mixed_payload_rejects_oversized_serialized_payload(frozen_mixed_payload):
     payload = deepcopy(frozen_mixed_payload)
     payload["groups"][2]["items"][0]["description"] = "x" * 5_000_001
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_cart_tarkett_only_copies_exact_automatic_snapshot(mixed_catalogs, rate_rows):
+    payload = build_mixed_catalog_cart_payload([{"catalog": "tarkett", "code": "25731726", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="USD", commercial_discount_percent="40", today=date(2026, 7, 19))
+    fields = ("base_currency", "quote_currency", "exchange_rate", "rate_source", "rate_effective_date", "rate_retrieved_at")
+    assert payload["auto_electrification_rate"] == {field: payload["groups"][0][field] for field in fields}
+
+
+def test_mixed_cart_tarkett_and_offiho_share_exact_automatic_snapshot(mixed_catalogs, rate_rows):
+    payload = build_mixed_catalog_cart_payload([{"catalog": "tarkett", "code": "25731726", "quantity": "1"}, {"catalog": "offiho", "inventory_key": "offiho:desk-1", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="EUR", commercial_discount_percent="40", today=date(2026, 7, 19))
+    fields = ("base_currency", "quote_currency", "exchange_rate", "rate_source", "rate_effective_date", "rate_retrieved_at")
+    snapshots = [{field: group[field] for field in fields} for group in payload["groups"]]
+    assert snapshots[0] == snapshots[1] == payload["auto_electrification_rate"]
+
+
+def test_mixed_cart_alma_only_does_not_lookup_mxn_rate(monkeypatch, mixed_catalogs, rate_rows):
+    import mobiliti_saas.quote_engine.mixed_catalog as module
+    monkeypatch.setattr(module, "resolve_conversion_rate", lambda *args: (_ for _ in ()).throw(AssertionError("no MXN lookup")))
+    payload = build_mixed_catalog_cart_payload([{"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="USD", commercial_discount_percent="40", today=date(2026, 7, 19))
+    assert payload["auto_electrification_rate"] is None
+
+
+@pytest.mark.parametrize("field", ("original_currency", "quote_currency"))
+def test_mixed_payload_rejects_individually_valid_but_inconsistent_currencies(frozen_mixed_payload, field):
+    payload = deepcopy(frozen_mixed_payload)
+    if field == "original_currency":
+        payload["groups"][5]["items"][0][field] = "MXN"
+    else:
+        payload["groups"][5][field] = "EUR"
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_rejects_net_mode_with_nonzero_discount(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    payload["groups"][2]["items"][0]["discount_percent"] = "1.000000"
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_rejects_missing_insufficient_warning_after_valid_reservation_result(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    line = payload["groups"][2]["items"][0]
+    line.update(quantity="6.000000", stock_status="insufficient_stock", reserved_quantity="0.000000", available_after_reservations="5.000000", reserved_by_others=False, warnings=[])
+    line["reservation"]["quantity"] = "6.000000"
     with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
         validate_mixed_catalog_payload(payload)
