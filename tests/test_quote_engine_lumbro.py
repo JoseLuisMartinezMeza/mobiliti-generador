@@ -14,8 +14,7 @@ from mobiliti_saas.quote_engine.parser import read_items  # noqa: E402
 
 
 DOWNLOADS = Path(r"C:\Users\pepem\Downloads")
-TEMPLATE_DIR = ROOT / "versiones historial" / "HISTORIAL DE VERSIONES" / "Mobiliti_Generador_Windows"
-TEMPLATE = next(TEMPLATE_DIR.glob("Formato*.xlsx"), TEMPLATE_DIR / "Formato Cotizacion 2026 GDL (1).xlsx")
+TEMPLATE = ROOT / "mobiliti_saas" / "worker" / "templates" / "Formato Cotizacion 2026 GDL.xlsx"
 
 
 def test_lumbro_accessories_for_workstation_pax_multiplies_quantity():
@@ -68,8 +67,9 @@ def test_lumbro_accessories_for_workstation_without_pax_respects_quantity():
 
 def test_mobiliti_lumbro_rows_use_safe_discount_and_region_formulas():
     source = DOWNLOADS / "IZA REFORMA-Quotation Sheet - V1.xlsx"
-    if not source.exists() or not TEMPLATE.exists():
-        pytest.skip("IZA input/template not available on this machine")
+    if not source.exists():
+        pytest.skip("external IZA input is not available on this machine")
+    assert TEMPLATE.exists()
 
     items, column_map = read_items(source)
     wb = load_workbook(TEMPLATE, data_only=False)
@@ -92,8 +92,7 @@ def test_mobiliti_lumbro_rows_use_safe_discount_and_region_formulas():
 
 
 def test_load_lumbro_prices_preserves_source_row_reference():
-    if not TEMPLATE.exists():
-        pytest.skip("template not available on this machine")
+    assert TEMPLATE.exists()
 
     prices = _load_lumbro_prices(TEMPLATE)
 

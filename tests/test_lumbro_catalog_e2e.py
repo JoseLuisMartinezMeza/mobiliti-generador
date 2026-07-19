@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 from io import BytesIO
+import importlib.util
 import json
-import os
 from pathlib import Path
+import subprocess
 import sys
+import uuid
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
@@ -15,20 +17,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_DIR = ROOT / "mobiliti_saas" / "worker"
-if str(WORKER_DIR) not in sys.path:
-    sys.path.insert(0, str(WORKER_DIR))
 
-os.environ.setdefault("SUPABASE_URL", "http://localhost:54321")
-os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-key")
-os.environ.setdefault("JWT_SECRET_KEY", "test-secret-32-chars-long!!!!!")
-
-from mobiliti_saas.api import index as api_index  # noqa: E402
-from mobiliti_saas.quote_engine import catalog_cart  # noqa: E402
-from mobiliti_saas.quote_engine.supplier_catalog import (  # noqa: E402
+from mobiliti_saas.quote_engine import catalog_cart
+from mobiliti_saas.quote_engine.supplier_catalog import (
     build_supplier_cart_payload,
     load_supplier_catalog_data,
 )
-import quote_worker  # noqa: E402
 
 
 VERIFIED_CODES = (
@@ -43,6 +37,73 @@ INTERCONNECTION_SOURCE = (
 GENERAL_PRICE_SOURCE = "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf:5"
 SELECTED_INTERNAL_ID = "lumbro:variant:mult-lido-int"
 BARCELONA_REVIEW_ID = "lumbro:variant:barcelona-gris"
+
+
+def test_module_import_does_not_mutate_environment_or_sys_path():
+    script = f"""
+import importlib.util
+import os
+from pathlib import Path
+import sys
+
+for key in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", "JWT_SECRET_KEY"):
+    os.environ.pop(key, None)
+before_environment = dict(os.environ)
+before_path = list(sys.path)
+module_path = Path({str(Path(__file__).resolve())!r})
+spec = importlib.util.spec_from_file_location("lumbro_e2e_isolation_probe", module_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert dict(os.environ) == before_environment
+assert sys.path == before_path
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture
+def isolated_quote_runtime(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "http://localhost:54321")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "test-key")
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-32-chars-long!!!!!")
+    monkeypatch.syspath_prepend(str(WORKER_DIR))
+    modules_before = set(sys.modules)
+    suffix = uuid.uuid4().hex
+
+    def load_module(name: str, path: Path):
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    api_index = load_module(
+        f"lumbro_e2e_api_{suffix}",
+        ROOT / "mobiliti_saas" / "api" / "index.py",
+    )
+    quote_worker = load_module(
+        f"lumbro_e2e_worker_{suffix}",
+        WORKER_DIR / "quote_worker.py",
+    )
+    try:
+        yield api_index, quote_worker
+    finally:
+        for name in set(sys.modules) - modules_before:
+            module_path = getattr(sys.modules.get(name), "__file__", None)
+            if name.endswith(suffix) or (
+                module_path
+                and Path(module_path).resolve().is_relative_to(WORKER_DIR.resolve())
+            ):
+                sys.modules.pop(name, None)
 
 
 def _item(**overrides) -> dict:
@@ -206,7 +267,7 @@ def test_generic_net_price_arithmetic_for_isolated_barcelona_contract():
     assert iva == Decimal("903.68")
 
 
-def _install_api_boundary(monkeypatch, catalog: dict) -> dict:
+def _install_api_boundary(monkeypatch, catalog: dict, api_index) -> dict:
     state = {"created": [], "uploaded": [], "queued": []}
     monkeypatch.setattr(
         api_index,
@@ -268,7 +329,7 @@ def _install_api_boundary(monkeypatch, catalog: dict) -> dict:
     return state
 
 
-def _auth_headers() -> dict[str, str]:
+def _auth_headers(api_index) -> dict[str, str]:
     token = api_index.create_access_token(
         {"sub": "7", "email": "cliente@example.com"}
     )
@@ -324,9 +385,11 @@ class _MemoryWorkerClient:
 
 def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_discount(
     representative_lumbro_snapshot,
+    isolated_quote_runtime,
     monkeypatch,
     tmp_path,
 ):
+    api_index, quote_worker = isolated_quote_runtime
     loaded = load_supplier_catalog_data(
         representative_lumbro_snapshot,
         expected_supplier="lumbro",
@@ -339,11 +402,15 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
     assert review["name"] == "Barcelona"
     assert review["sku"] == ""
 
-    state = _install_api_boundary(monkeypatch, representative_lumbro_snapshot)
+    state = _install_api_boundary(
+        monkeypatch,
+        representative_lumbro_snapshot,
+        api_index,
+    )
     client = TestClient(api_index.app)
     blocked = client.post(
         "/catalogs/lumbro/quote",
-        headers=_auth_headers(),
+        headers=_auth_headers(api_index),
         json=_quote_body(BARCELONA_REVIEW_ID),
     )
     assert blocked.status_code == 400
@@ -352,7 +419,7 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
 
     accepted = client.post(
         "/catalogs/lumbro/quote",
-        headers=_auth_headers(),
+        headers=_auth_headers(api_index),
         json=_quote_body(SELECTED_INTERNAL_ID),
     )
     assert accepted.status_code == 200
@@ -428,7 +495,17 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
             if cotizacion.cell(row, 4).value == "IVA:"
         ]
         assert len(iva_rows) == 1
-        assert str(cotizacion.cell(iva_rows[0], 8).value).count("16%") == 1
+        iva_row = iva_rows[0]
+        assert cotizacion.cell(iva_row, 8).value == f"=ROUND(H{iva_row - 1}*16%,2)"
+        total_row = next(
+            row
+            for row in range(iva_row + 1, cotizacion.max_row + 1)
+            if cotizacion.cell(row, 4).value == "TOTAL:"
+        )
+        assert total_row == iva_row + 1
+        assert cotizacion.cell(total_row, 8).value == (
+            f"=ROUND(H{iva_row - 1}+H{iva_row},2)"
+        )
         output_product_rows = [
             row
             for row in range(9, quotation.max_row + 1)
