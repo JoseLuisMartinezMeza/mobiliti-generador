@@ -27,7 +27,6 @@ const EMPTY_QUOTE = {
   telefono: "",
   direccion: "",
   razon_social: "",
-  descuento: "40",
   template: "Formato Cotizacion 2026 GDL (1).xlsx"
 };
 
@@ -185,6 +184,18 @@ function configuredBasePrice(item, configuration) {
     .filter((option) => selectedAddOns.has(option.id))
     .reduce((sum, option) => sum + decimal(option.price_net), 0);
   return basePrice + addOnPrice;
+}
+
+function supplierCartTotals(cart, exchangeRate) {
+  const totals = cart.reduce((current, line) => {
+    const unit = configuredBasePrice(line.item, line.configuration) * exchangeRate;
+    const lineNet = unit * decimal(line.quantity);
+    return {
+      net: current.net + lineNet,
+      tax: current.tax + lineNet * decimal(line.item.tax_rate)
+    };
+  }, { net: 0, tax: 0 });
+  return { ...totals, total: totals.net + totals.tax };
 }
 
 function cartKey(item, configuration) {
@@ -426,23 +437,10 @@ export default function SupplierCatalogView({
   const rate_source = selectedRate?.rate_source || "";
   const rate_effective_date = selectedRate?.rate_effective_date || "";
 
-  const totals = useMemo(() => {
-    const list = cart.reduce((current, line) => {
-      const unit = configuredBasePrice(line.item, line.configuration) * exchange_rate;
-      const lineNet = unit * decimal(line.quantity);
-      return {
-        net: current.net + lineNet,
-        tax: current.tax + lineNet * decimal(line.item.tax_rate)
-      };
-    }, { net: 0, tax: 0 });
-    const discountRate = Math.min(100, Math.max(0, decimal(quote.descuento))) / 100;
-    return {
-      listNet: list.net,
-      discount: list.net * discountRate,
-      net: list.net * (1 - discountRate),
-      tax: list.tax * (1 - discountRate)
-    };
-  }, [cart, exchange_rate, quote.descuento]);
+  const totals = useMemo(
+    () => supplierCartTotals(cart, exchange_rate),
+    [cart, exchange_rate]
+  );
 
   function activeVariant(group) {
     const candidates = group.matchingVariants || group.variants;
@@ -567,7 +565,7 @@ export default function SupplierCatalogView({
         method: "POST",
         body: JSON.stringify({
           ...quote,
-          descuento: decimal(quote.descuento),
+          descuento: 0,
           quote_currency: quoteCurrency,
           items: cart.map((line) => ({
             internal_id: line.item.internal_id,
@@ -950,11 +948,9 @@ export default function SupplierCatalogView({
             </div>
 
             <div className="supplier-total-panel">
-              <div><span>Precio lista</span><strong>{formatMoney(totals.listNet, quoteCurrency)}</strong></div>
-              <div><span>Descuento</span><strong>-{formatMoney(totals.discount, quoteCurrency)}</strong></div>
-              <div><span>Subtotal</span><strong>{formatMoney(totals.net, quoteCurrency)}</strong></div>
+              <div><span>Subtotal neto</span><strong>{formatMoney(totals.net, quoteCurrency)}</strong></div>
               <div><span>IVA</span><strong>{formatMoney(totals.tax, quoteCurrency)}</strong></div>
-              <div><span>Total</span><strong>{formatMoney(totals.net + totals.tax, quoteCurrency)}</strong></div>
+              <div><span>Total</span><strong>{formatMoney(totals.total, quoteCurrency)}</strong></div>
               <small>Precio neto mas IVA. La tasa se congela al cotizar.</small>
             </div>
 
@@ -971,10 +967,6 @@ export default function SupplierCatalogView({
                 <input type={type} value={quote[field]} onChange={(event) => updateQuote(field, event.target.value)} required />
               </label>
             ))}
-            <label>
-              <span>Descuento (%) *</span>
-              <input type="number" min="0" max="100" step="0.01" value={quote.descuento} onChange={(event) => updateQuote("descuento", event.target.value)} required />
-            </label>
 
             {submitError ? <div className="error-line">{submitError}</div> : null}
             {submitNotice ? <div className="notice-line">{submitNotice}</div> : null}

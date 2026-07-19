@@ -388,6 +388,36 @@ def test_pza_quantities_are_validated_on_add_without_rewriting_input_state():
     assert "Dimensiones" in _ascii_text(component)
 
 
+def test_shared_supplier_totals_use_net_price_plus_iva_without_client_discount():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    helpers = [
+        _javascript_function(component, name)
+        for name in ("decimal", "configuredBasePrice", "supplierCartTotals")
+    ]
+    result = _run_javascript(
+        f"{' '.join(helpers)}\n"
+        "const item = {price_net: '660.000000', tax_rate: '0.16', "
+        "base_price_options: [], add_on_options: []};"
+        "const cart = [{item, quantity: '2', configuration: {"
+        "base_option_id: '', add_on_option_ids: []}}];"
+        "console.log(JSON.stringify(supplierCartTotals(cart, 1)));"
+    )
+
+    assert result["net"] == 1320
+    assert result["tax"] == pytest.approx(211.2)
+    assert result["total"] == pytest.approx(1531.2)
+    empty_quote = re.search(r"const\s+EMPTY_QUOTE\s*=\s*\{(?P<body>.*?)\};", component, re.DOTALL)
+    assert empty_quote
+    assert "descuento" not in empty_quote.group("body")
+    submit_quote = _javascript_function(component, "submitQuote")
+    assert re.search(r"\bdescuento\s*:\s*0\b", submit_quote)
+    assert "quote.descuento" not in component
+    visible_text = _ascii_text(component)
+    assert "Descuento (%)" not in visible_text
+    assert "Precio lista" not in visible_text
+    assert "Subtotal neto" in visible_text
+
+
 def test_shared_supplier_cards_render_dimensions_button_configurator_and_unit_aware_quantities():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
     styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
