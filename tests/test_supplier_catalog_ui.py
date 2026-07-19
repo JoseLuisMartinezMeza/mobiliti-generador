@@ -334,34 +334,44 @@ def test_official_link_has_visible_adjacent_text_and_an_explanatory_accessible_n
     assert re.search(r"<ExternalLink\b[^>]*/>\s*<span>\{linkText\}</span>", body, re.DOTALL)
 
 
-def test_pza_quantity_state_is_integer_without_breaking_fractional_m2():
+def test_pza_quantities_are_validated_on_add_without_rewriting_input_state():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
-    helpers = "\n".join(
+    constants = [
+        re.search(rf"const\s+{name}\s*=.*?;", component).group(0)
+        for name in ("QUANTITY_SCALE", "QUANTITY_LIMIT_MICROUNITS")
+    ]
+    helpers = constants + [
         _javascript_function(component, name)
-        for name in ("isSquareMeterUnit", "quantityRules", "quantityInputValue")
-    )
+        for name in ("isSquareMeterUnit", "quantityRules", "quantityMicrounits", "validQuantity")
+    ]
     result = _run_javascript(
-        f"{helpers}\n"
+        f"{' '.join(helpers)}\n"
         "const pza = {unit: 'PZA'}; const m2 = {unit: 'M2'};"
         "console.log(JSON.stringify({"
         "pzaRules: quantityRules(pza), m2Rules: quantityRules(m2),"
-        "pzaInteger: quantityInputValue(pza, '3'),"
-        "pzaFloat: quantityInputValue(pza, '2.75'),"
-        "pzaEmpty: quantityInputValue(pza, ''),"
-        "m2Fraction: quantityInputValue(m2, '2.75')"
+        "validPza: ['1', '3'].map(value => validQuantity(pza, value)),"
+        "invalidPza: ['2.75', '0', '-1', 'NaN', ''].map(value => validQuantity(pza, value)),"
+        "m2Fraction: validQuantity(m2, '2.75')"
         "}));"
     )
 
     assert result == {
         "pzaRules": {"min": "1", "step": "1", "integer": True},
         "m2Rules": {"min": "0.000001", "step": "0.000001", "integer": False},
-        "pzaInteger": "3",
-        "pzaFloat": "2",
-        "pzaEmpty": "",
-        "m2Fraction": "2.75",
+        "validPza": [True, True],
+        "invalidPza": [False, False, False, False, False],
+        "m2Fraction": True,
     }
     assert re.search(r"type=\"number\"[\s\S]{0,180}min=\{productQuantity\.min\}[\s\S]{0,100}step=\{productQuantity\.step\}", component)
-    assert "quantityInputValue(item, event.target.value)" in component
+    assert "quantityInputValue" not in component
+    assert re.search(
+        r"setQuantityByItem\(\(current\)\s*=>\s*\(\{[^}]*\[item\.internal_id\]:\s*event\.target\.value",
+        component,
+    )
+    add_to_cart = _javascript_function(component, "addToCart")
+    assert "if (!validQuantity(item, quantity))" in add_to_cart
+    assert '"un número entero"' in add_to_cart
+    assert "setSubmitError(`Captura ${requirement} para ${item.name}.`)" in add_to_cart
     assert "attributes?.dimensions" in component
     assert "Dimensiones" in _ascii_text(component)
 

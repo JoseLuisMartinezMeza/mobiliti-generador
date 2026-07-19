@@ -123,12 +123,6 @@ function quantityRules(item) {
     : { min: "1", step: "1", integer: true };
 }
 
-function quantityInputValue(item, value) {
-  if (!quantityRules(item).integer || value === "") return value;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? String(Math.max(1, Math.trunc(numeric))) : "";
-}
-
 function quantityMicrounits(value) {
   const text = String(value ?? "").trim();
   if (!/^\d+(?:\.\d{1,6})?$/.test(text)) return null;
@@ -867,7 +861,7 @@ export default function SupplierCatalogView({
                         min={productQuantity.min}
                         step={productQuantity.step}
                         value={quantityByItem[item.internal_id] ?? "1"}
-                        onChange={(event) => setQuantityByItem((current) => ({ ...current, [item.internal_id]: quantityInputValue(item, event.target.value) }))}
+                        onChange={(event) => setQuantityByItem((current) => ({ ...current, [item.internal_id]: event.target.value }))}
                         placeholder="1"
                       />
                     </label>
