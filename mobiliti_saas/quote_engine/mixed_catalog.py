@@ -301,7 +301,12 @@ def build_mixed_catalog_cart_payload(raw_items: list[dict[str, object]], *, cata
                 if not builder_row.get("base_option_id"):
                     builder_row.pop("base_option_id", None)
                 builder_rows.append(builder_row)
-            source = build_supplier_cart_payload(builder_rows, source_catalog, quote_currency, rate_rows, today=effective_today)
+            try:
+                source = build_supplier_cart_payload(builder_rows, source_catalog, quote_currency, rate_rows, today=effective_today)
+            except ValueError as exc:
+                if "moneda base" in str(exc).casefold():
+                    raise ValueError(f"Moneda base mixta invalida: {catalog}") from exc
+                raise
             items = [_supplier_line(line, row, catalog=catalog, payload=source) for line, row in zip(source["items"], rows, strict=True)]
             rate = {field: source[field] for field in AUTO_ELECTRIFICATION_RATE_FIELDS}
         if rate["base_currency"] != MIXED_EXPECTED_BASE_CURRENCY[catalog]:

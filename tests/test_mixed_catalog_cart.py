@@ -276,6 +276,39 @@ def test_mixed_line_projection_has_exact_contract_for_each_family(frozen_mixed_p
     }
 
 
+def test_mixed_cart_offiho_missing_price_insufficient_stock_preserves_all_authoritative_fields(mixed_catalogs, rate_rows):
+    item = OffihoCatalogItem("offiho:short", "OHE-S", "Escritorio", "Nogal", "PZA", Decimal("1"), Decimal("2"), Decimal("200"), price_source="missing")
+    mixed_catalogs["offiho"] = {"source_hash": "b" * 64, "items": [item], "by_inventory_key": {item.inventory_key: item}}
+    payload = build_mixed_catalog_cart_payload([{"catalog": "offiho", "inventory_key": "offiho:short", "quantity": "3"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
+    line = payload["groups"][0]["items"][0]
+    assert line["variant"] == "Nogal"
+    assert line["warnings"].count("Precio por confirmar") == 1
+    assert line["stock_status"] == "insufficient_stock"
+    assert line["quantity"] == line["reservation"]["quantity"] == "3.000000"
+    assert line["available_quantity"] == line["stock"] == line["reservation"]["stock"] == "2.000000"
+    assert line["reservation"] == {"identity": "offiho:short", "sku": "OHE-S", "quantity": "3.000000", "stock": "2.000000"}
+
+
+def test_mixed_cart_rejects_divergent_eligible_snapshots_during_constructor(monkeypatch, mixed_catalogs, rate_rows):
+    import mobiliti_saas.quote_engine.mixed_catalog as module
+    from mobiliti_saas.quote_engine.supplier_catalog import RateSnapshot
+    snapshots = iter((
+        RateSnapshot("MXN", "USD", Decimal("0.054054"), "saas_exchange_rates", date(2026, 7, 19), "2026-07-19T12:00:00+00:00"),
+        RateSnapshot("MXN", "USD", Decimal("0.050000"), "saas_exchange_rates", date(2026, 7, 19), "2026-07-19T12:00:00+00:00"),
+    ))
+    monkeypatch.setattr(module, "resolve_conversion_rate", lambda *args: next(snapshots))
+    with pytest.raises(ValueError, match="Tasa de electrificacion mixta inconsistente"):
+        build_mixed_catalog_cart_payload([{"catalog": "tarkett", "code": "25731726", "quantity": "1"}, {"catalog": "offiho", "inventory_key": "offiho:desk-1", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="USD", commercial_discount_percent="40", today=date(2026, 7, 19))
+
+
+@pytest.mark.parametrize("catalog", ("cr-global", "sonara", "sunon", "alma", "lumbro"))
+def test_mixed_constructor_rejects_wrong_base_currency_in_source_fixture(mixed_catalogs, rate_rows, catalog):
+    item = mixed_catalogs[catalog]["items"][0]
+    item["base_currency"] = "USD" if item["base_currency"] == "MXN" else "MXN"
+    with pytest.raises(ValueError, match=catalog):
+        build_mixed_catalog_cart_payload([{"catalog": catalog, "internal_id": f"{catalog}:desk-1", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
+
+
 def test_mixed_catalog_module_copies_are_byte_identical():
     paths = [Path("mobiliti_saas/quote_engine/mixed_catalog.py"), Path("mobiliti_saas/web/mobiliti_saas/quote_engine/mixed_catalog.py")]
     assert len({hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}) == 1
