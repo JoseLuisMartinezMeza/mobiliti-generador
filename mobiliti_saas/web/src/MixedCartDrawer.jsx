@@ -228,6 +228,7 @@ export default function MixedCartDrawer({
                 <input
                   ref={(element) => { quantityInputRefs.current[line.key] = element; }}
                   inputMode="decimal"
+                  aria-label={`Cantidad para ${line.snapshot.name || line.snapshot.code}`}
                   value={quantityDrafts[line.key] ?? line.quantity}
                   disabled={busy}
                   aria-invalid={Boolean(quantityErrors[line.key])}
