@@ -56,6 +56,9 @@ def isolated_quote_runtime(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "http://localhost:54321")
     monkeypatch.setenv("SUPABASE_SERVICE_KEY", "test-key")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-32-chars-long!!!!!")
+    monkeypatch.setenv(
+        "CATALOG_ENABLED_SUPPLIERS", "cr-global,sonara,sunon,alma,lumbro"
+    )
     monkeypatch.syspath_prepend(str(WORKER_DIR))
     modules_before = set(sys.modules)
     suffix = uuid.uuid4().hex
@@ -76,6 +79,7 @@ def isolated_quote_runtime(monkeypatch):
         f"mixed_quote_e2e_worker_{suffix}",
         WORKER_DIR / "quote_worker.py",
     )
+    assert api_index._enabled_catalog_suppliers() == CATALOGS[2:]
     try:
         yield api_index, quote_worker
     finally:
@@ -150,12 +154,8 @@ def authoritative_catalogs() -> dict[str, dict]:
         pieces_per_box=Decimal("1"),
         available_quantity=Decimal("20"),
         unit_price=Decimal("500"),
+        image_url="https://offiho.com.mx/e2e-offiho.png",
         price_source="catalog",
-    )
-    # The acceptance fixture deliberately freezes the canonical browser URL.
-    # The transport is replaced locally below, so no request leaves the test.
-    object.__setattr__(
-        offiho, "image_url", "https://offiho.com.mx/e2e-offiho.png"
     )
     alma_options = [
         {
@@ -330,9 +330,6 @@ def install_api_boundary(monkeypatch, api_index, catalogs: dict) -> dict:
         api_index, "_load_offiho_catalog_cached", lambda: catalogs["offiho"]
     )
     monkeypatch.setattr(
-        api_index, "_require_enabled_catalog_supplier", lambda supplier: supplier
-    )
-    monkeypatch.setattr(
         api_index,
         "_load_supplier_catalog_cached",
         lambda supplier: catalogs[supplier],
@@ -401,43 +398,100 @@ def install_api_boundary(monkeypatch, api_index, catalogs: dict) -> dict:
 
 
 class EndToEndWorkerClient:
+    EXPECTED_EVENTS = (
+        "claim",
+        "progress:45",
+        "download",
+        "progress:55",
+        "converter",
+        "generator",
+        "progress:90",
+        "upload",
+        "delete",
+        "completed",
+    )
+
     def __init__(self, job: dict, objects: dict[str, bytes]):
         self.job = deepcopy(job)
         self.objects = dict(objects)
+        self.events: list[str] = []
         self.downloads: list[str] = []
         self.uploads: list[tuple[str, bytes]] = []
         self.deleted_inputs: list[str] = []
         self.completed_updates: list[dict] = []
         self.failed_updates: list[dict] = []
 
+    def record_event(self, event: str) -> None:
+        assert len(self.events) < len(self.EXPECTED_EVENTS)
+        assert event == self.EXPECTED_EVENTS[len(self.events)]
+        self.events.append(event)
+
     def rest(self, method, path, params=None, data=None):
         assert method == "PATCH"
+        assert params is None
         data = deepcopy(data or {})
-        if "status=eq.queued" in path:
+        job_path = f"/saas_quote_jobs?id=eq.{self.job['id']}"
+        if path == job_path + "&status=eq.queued":
+            assert set(data) == {"status", "updated_at"}
+            assert data["status"] == "processing"
+            assert isinstance(data["updated_at"], str) and data["updated_at"]
+            self.record_event("claim")
             claimed = {**self.job, **data}
             self.job = claimed
             return [deepcopy(claimed)]
-        if data.get("status") == "completed":
+        if path == job_path and set(data) == {"metadata", "updated_at"}:
+            metadata = data["metadata"]
+            assert isinstance(metadata, dict)
+            progress = metadata.get("progress_percent")
+            assert progress in {45, 55, 90}
+            self.record_event(f"progress:{progress}")
+            self.job = {**self.job, **data}
+            return [deepcopy(self.job)]
+        if path == job_path and data.get("status") == "completed":
+            assert set(data) == {
+                "status", "input_path", "output_path", "metadata",
+                "error_message", "updated_at", "completed_at",
+            }
+            assert data["input_path"] is None
+            assert data["output_path"] == (
+                f"users/{self.job['usuario_id']}/jobs/{self.job['id']}/output.xlsx"
+            )
+            assert data["metadata"]["progress_percent"] == 100
+            assert data["error_message"] is None
+            self.record_event("completed")
             completed = {**self.job, **data}
             self.job = completed
             self.completed_updates.append(deepcopy(completed))
             return [deepcopy(completed)]
-        if data.get("status") == "failed":
+        if path == job_path and data.get("status") == "failed":
+            assert set(data) == {
+                "status", "metadata", "error_message", "updated_at"
+            }
             failed = {**self.job, **data}
             self.job = failed
             self.failed_updates.append(deepcopy(failed))
             return [deepcopy(failed)]
-        self.job = {**self.job, **data}
-        return [deepcopy(self.job)]
+        raise AssertionError(f"Contrato REST worker inesperado: {method} {path} {data}")
 
     def storage_download(self, object_path, destination):
+        self.record_event("download")
+        assert object_path == self.job["input_path"]
+        assert object_path in self.objects
         self.downloads.append(object_path)
         Path(destination).write_bytes(self.objects[object_path])
 
     def storage_upload(self, object_path, source):
+        self.record_event("upload")
+        assert object_path == (
+            f"users/{self.job['usuario_id']}/jobs/{self.job['id']}/output.xlsx"
+        )
+        assert Path(source).is_file()
         self.uploads.append((object_path, Path(source).read_bytes()))
 
     def storage_delete(self, object_path):
+        self.record_event("delete")
+        assert object_path == self.job["input_path"]
+        assert object_path in self.objects
         self.deleted_inputs.append(object_path)
         self.objects.pop(object_path)
 
@@ -535,16 +589,21 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
         "image_provider": "pillow",
         "template": WORKER_TEMPLATE.name,
     }
-    response = TestClient(api_index.app).post(
-        "/catalogs/mixed-quote",
-        headers=auth_headers(api_index),
-        json=body,
-    )
+    with TestClient(api_index.app) as api_client:
+        response = api_client.post(
+            "/catalogs/mixed-quote",
+            headers=auth_headers(api_index),
+            json=body,
+        )
     assert response.status_code == 200, response.json()
     queued_job = response.json()["job"]
     assert api_state["events"] == [
         "create_job", "reserve_mixed", "upload", "queue", "wake"
     ]
+    assert len(api_state["jobs"]) == 1
+    assert api_state["released"] == []
+    assert api_state["deleted_jobs"] == []
+    assert api_state["deleted_inputs"] == []
     assert len(api_state["uploads"]) == 1
     input_path, input_bytes, content_type = api_state["uploads"][0]
     assert input_path == queued_job["input_path"]
@@ -564,6 +623,11 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
         "Base operativa; Pasacables B",
     }
     assert payload["auto_electrification_rate"]["exchange_rate"] == automatic_rate
+    for line in (item for group in payload["groups"] for item in group["items"]):
+        assert line["reservation"] is not None
+        assert line["reserved_quantity"] == "0.000000"
+        assert line["available_after_reservations"] == "20.000000"
+        assert line["reserved_by_others"] is False
 
     worker_client = EndToEndWorkerClient(
         queued_job,
@@ -573,6 +637,15 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
     generator_calls = []
 
     def counted_run_generator(job, generator_input, local_output):
+        assert generator_input.name == "quotation_from_mixed_catalog.xlsx"
+        assert generator_input.is_file()
+        converted = load_workbook(generator_input, data_only=False, read_only=True)
+        try:
+            assert converted.sheetnames == ["Quotation"]
+        finally:
+            converted.close()
+        worker_client.record_event("converter")
+        worker_client.record_event("generator")
         generator_calls.append(generator_input.name)
         return real_run_generator(job, generator_input, local_output)
 
@@ -582,6 +655,10 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
 
     completed = quote_worker.process_job(worker_client, queued_job)
     assert completed
+    assert worker_client.events == [
+        "claim", "progress:45", "download", "progress:55", "converter",
+        "generator", "progress:90", "upload", "delete", "completed",
+    ]
     assert generator_calls == ["quotation_from_mixed_catalog.xlsx"]
     assert worker_client.downloads == [input_path]
     assert len(worker_client.uploads) == 1
@@ -606,6 +683,7 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
     assert completed_metadata["catalog_source_hashes"] == SOURCE_HASHES
     assert completed_metadata["descuento"] == 0
     assert completed_job["input_path"] is None
+    assert completed_job["output_path"] == uploaded_path
     assert payload == frozen_payload
 
     assert [(source, url) for source, url, _key in image_calls] == list(
@@ -672,7 +750,9 @@ def _assert_final_workbook(
     assert [quotation.cell(row, 19).value for row in source_rows] == [
         True, True, False, False, False, False, False, False,
     ]
-    assert "Codigo por verificar" in str(quotation.cell(source_rows[3], 4).value)
+    sonara_description = str(quotation.cell(source_rows[3], 4).value)
+    assert "Revision documental local" in sonara_description
+    assert "Codigo por verificar" in sonara_description
     alma_a_description = str(quotation.cell(source_rows[5], 4).value)
     alma_b_description = str(quotation.cell(source_rows[6], 4).value)
     assert "electrificacion a" in alma_a_description.casefold()
@@ -687,6 +767,14 @@ def _assert_final_workbook(
         mobiliti_row = _row_for_formula(mobiliti, 4, f"=Quotation!B{source_row}")
         cot_row = _row_for_formula(cot, 1, f"=Quotation!B{source_row}")
         row_maps.append((source_row, mobiliti_row, cot_row))
+    assert [
+        (row, cot.cell(row, 1).value)
+        for row in range(1, cot.max_row + 1)
+        if str(cot.cell(row, 1).value or "").startswith("=Quotation!B")
+    ] == [
+        (cot_row, f"=Quotation!B{source_row}")
+        for source_row, _mobiliti_row, cot_row in row_maps
+    ]
     assert [mobiliti.cell(row, 6).value for _source, row, _cot in row_maps] == [
         "Tarkett", "Offiho", "CR Global", "Sonara", "Sunon", "ALMA",
         "ALMA", "Lumbro",
@@ -717,25 +805,43 @@ def _assert_final_workbook(
         if mobiliti.cell(row, 4).value in {"LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"}
     ]
     assert len(automatic_rows) == 3
+    automatic_by_code = {
+        mobiliti.cell(row, 4).value: row for row in automatic_rows
+    }
+    assert list(automatic_by_code) == ["LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"]
+    expected_template_rows = {
+        "LIDO.OP-INT": 380,
+        "JUMP-1.5M": 396,
+        "CAJA-FUS": 406,
+    }
     assert {
-        mobiliti.cell(row, 4).value: mobiliti.cell(row, 8).value
-        for row in automatic_rows
+        code: mobiliti.cell(row, 8).value
+        for code, row in automatic_by_code.items()
     } == {"LIDO.OP-INT": 8, "JUMP-1.5M": 8, "CAJA-FUS": 2}
     expected_rate_literal = str(float(automatic_rate)).rstrip("0").rstrip(".") or "0"
-    for row in automatic_rows:
-        formula = str(mobiliti.cell(row, 10).value)
-        assert formula.startswith("=ROUND('SPEC-GUIDE-LUMBRO'!E")
-        assert formula.endswith(f"*{expected_rate_literal},2)")
-        assert "$K$6" not in formula
+    for code, template_row in expected_template_rows.items():
+        row = automatic_by_code[code]
+        assert mobiliti.cell(row, 10).value == (
+            f"=ROUND('SPEC-GUIDE-LUMBRO'!E{template_row}*"
+            f"{expected_rate_literal},2)"
+        )
     parent_cot_row = row_maps[0][2]
     parent_mobiliti_row = row_maps[0][1]
     parent_formula = str(cot.cell(parent_cot_row, 6).value)
-    assert parent_formula.count(
-        f"Mobiliti!X{parent_mobiliti_row}*Mobiliti!H{parent_mobiliti_row}"
-    ) == 1
-    for row in automatic_rows:
-        assert parent_formula.count(f"Mobiliti!X{row}*Mobiliti!H{row}") == 1
-        assert f"Mobiliti!Y{row}" not in parent_formula
+    expected_terms = [
+        f"Mobiliti!X{parent_mobiliti_row}*Mobiliti!H{parent_mobiliti_row}",
+        *(
+            f"Mobiliti!X{automatic_by_code[code]}*"
+            f"Mobiliti!H{automatic_by_code[code]}"
+            for code in expected_template_rows
+        ),
+    ]
+    assert parent_formula == (
+        f"=ROUND(IFERROR(({'+'.join(expected_terms)})/"
+        f"Mobiliti!H{parent_mobiliti_row},0),2)"
+    )
+    assert "Mobiliti!Y" not in parent_formula
+    assert "$K$6" not in parent_formula
     for _source, _mob, cot_row in row_maps[1:]:
         formula = str(cot.cell(cot_row, 6).value)
         assert all(
@@ -745,10 +851,10 @@ def _assert_final_workbook(
 
     total_rows = [
         row
-        for row in range(row_maps[-1][2] + 1, cot.max_row + 1)
+        for row in range(1, cot.max_row + 1)
         if cot.cell(row, 4).value
         in {"SUBTOTAL:", "COSTO DE FLETE:", "IVA:", "TOTAL:"}
-    ][:5]
+    ]
     assert len(total_rows) == 5
     assert [cot.cell(row, 4).value for row in total_rows] == [
         "SUBTOTAL:", "COSTO DE FLETE:", "SUBTOTAL:", "IVA:", "TOTAL:",
@@ -766,18 +872,19 @@ def _assert_final_workbook(
     try:
         lumbro = template_values["SPEC-GUIDE-LUMBRO"]
         unit_prices = {
-            "LIDO.OP-INT": Decimal(str(lumbro["E380"].value)),
-            "JUMP-1.5M": Decimal(str(lumbro["E396"].value)),
-            "CAJA-FUS": Decimal(str(lumbro["E406"].value)),
+            code: Decimal(str(lumbro[f"E{template_row}"].value))
+            for code, template_row in expected_template_rows.items()
         }
     finally:
         template_values.close()
     tarkett_key = payload["groups"][0]["items"][0]["canonical_key"]
     accessories = {
         tarkett_key: [
-            (unit_prices["LIDO.OP-INT"], Decimal("8")),
-            (unit_prices["JUMP-1.5M"], Decimal("8")),
-            (unit_prices["CAJA-FUS"], Decimal("2")),
+            (
+                unit_prices[code],
+                Decimal(str(mobiliti.cell(automatic_by_code[code], 8).value)),
+            )
+            for code in expected_template_rows
         ]
     }
     totals = expected_mixed_totals(payload, accessories)
