@@ -1,3 +1,14 @@
+ALTER TABLE public.saas_quote_jobs
+    ADD COLUMN IF NOT EXISTS attempt_token UUID,
+    ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+
+ALTER TABLE public.saas_quote_jobs
+    ALTER COLUMN input_path DROP NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_quote_jobs_processing_lease
+    ON public.saas_quote_jobs(lease_expires_at)
+    WHERE status = 'processing';
+
 CREATE OR REPLACE FUNCTION saas_reserve_mixed_cart(
     p_usuario_id INTEGER,
     p_quote_job_id UUID,

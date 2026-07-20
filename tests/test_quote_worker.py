@@ -2,6 +2,9 @@ import os
 import subprocess
 import sys
 import json
+import threading
+import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -365,8 +368,14 @@ class FakeClient:
         self.calls.append((method, path, data))
         if method == "PATCH" and "status=eq.queued" in path and data and data.get("status") == "processing":
             return [{"id": "job-1", "usuario_id": 7, "input_path": self.claim_input_path, **data}]
-        if method == "PATCH" and data and data.get("status") == "completed":
-            return [{"id": "job-1", **data}]
+        if method == "PATCH" and "status=eq.processing" in path:
+            return [{
+                "id": "job-1", "usuario_id": 7, "input_path": self.claim_input_path,
+                "attempt_token": path.split("attempt_token=eq.", 1)[1].split("&", 1)[0],
+                **(data or {}),
+            }]
+        if method == "PATCH" and "status=eq.completed" in path:
+            return [{"id": "job-1", "status": "completed", **(data or {})}]
         return []
 
     def storage_download(self, object_path, dest):
@@ -376,6 +385,9 @@ class FakeClient:
     def storage_upload(self, object_path, source):
         assert Path(source).exists()
         self.calls.append(("UPLOAD", object_path, None))
+
+    def storage_delete(self, object_path):
+        self.calls.append(("DELETE", object_path, None))
 
 
 def test_process_job_marks_completed(monkeypatch):
@@ -398,7 +410,7 @@ def test_process_job_marks_completed(monkeypatch):
 
     statuses = [data["status"] for _, _, data in client.calls if isinstance(data, dict) and "status" in data]
     assert statuses == ["processing", "completed"]
-    assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
+    assert any(method == "UPLOAD" and "/attempts/" in path for method, path, _data in client.calls)
     completed_payload = next(data for _, _, data in client.calls if isinstance(data, dict) and data.get("status") == "completed")
     assert completed_payload["metadata"]["generation_seconds"] >= 0
 
@@ -475,7 +487,7 @@ def test_process_job_converts_pdf_before_generator(monkeypatch):
     assert seen["generator_input"] == "quotation_from_pdf.xlsx"
     assert seen["metadata"]["input_extension"] == ".pdf"
     assert seen["metadata"]["pdf_converted"] is True
-    assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
+    assert any(method == "UPLOAD" and "/attempts/" in path for method, path, _data in client.calls)
 
 
 def test_process_job_converts_tarkett_json_before_generator(monkeypatch):
@@ -512,7 +524,7 @@ def test_process_job_converts_tarkett_json_before_generator(monkeypatch):
     assert seen["generator_input"] == "quotation_from_tarkett.xlsx"
     assert seen["metadata"]["input_extension"] == ".json"
     assert seen["metadata"]["tarkett_converted"] is True
-    assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) in client.calls
+    assert any(method == "UPLOAD" and "/attempts/" in path for method, path, _data in client.calls)
 
 
 def test_process_job_converts_offiho_json_before_generator(monkeypatch):
@@ -1171,12 +1183,21 @@ def test_process_job_skips_when_not_claimed(monkeypatch):
 
 def test_recover_stale_jobs_requeues_processing(monkeypatch):
     client = FakeClient()
+    calls = []
 
     def fake_rest(method, path, params=None, data=None):
+        calls.append((method, path, params, data))
+        if method == "GET":
+            assert path == "/saas_quote_jobs"
+            assert params["status"] == "eq.processing"
+            return [{
+                "id": "job-1", "status": "processing", "attempt_token": "attempt-1",
+                "lease_expires_at": "2000-01-01T00:00:00Z",
+                "updated_at": "2000-01-01T00:00:00Z",
+            }]
         assert method == "PATCH"
-        assert path == "/saas_quote_jobs"
-        assert params["status"] == "eq.processing"
-        assert params["updated_at"].startswith("lt.")
+        assert "id=eq.job-1&status=eq.processing&attempt_token=eq.attempt-1" in path
+        assert "lease_expires_at=lt." in path
         assert data["status"] == "queued"
         return [{"id": "job-1", **data}]
 
@@ -1184,6 +1205,7 @@ def test_recover_stale_jobs_requeues_processing(monkeypatch):
     monkeypatch.setattr(quote_worker, "STALE_MINUTES", 30)
 
     assert quote_worker.recover_stale_jobs(client) == 1
+    assert [method for method, *_rest in calls] == ["GET", "PATCH"]
 
 
 def test_recover_stale_jobs_can_be_disabled(monkeypatch):
@@ -1249,6 +1271,233 @@ def test_process_job_rejects_output_larger_than_storage_limit(monkeypatch):
     else:
         raise AssertionError("oversized output should fail before storage upload")
 
-    assert ("UPLOAD", "users/7/jobs/job-1/output.xlsx", None) not in client.calls
+    assert not any(method == "UPLOAD" for method, _path, _data in client.calls)
     failed_payload = next(data for _, _, data in client.calls if isinstance(data, dict) and data.get("status") == "failed")
     assert "supera el limite de Storage" in failed_payload["error_message"]
+
+
+class FencedWorkerClient:
+    def __init__(self, *, completion_mode="ok"):
+        self.lock = threading.RLock()
+        self.job = {
+            "id": "job-fenced",
+            "usuario_id": 7,
+            "status": "queued",
+            "input_path": "users/7/jobs/job-fenced/input.xlsx",
+            "output_path": None,
+            "metadata": {},
+            "attempt_token": None,
+            "lease_expires_at": None,
+            "updated_at": "2026-07-19T00:00:00Z",
+        }
+        self.objects = {self.job["input_path"]: b"input"}
+        self.uploads = []
+        self.deletes = []
+        self.completion_mode = completion_mode
+        self.completion_attempts = 0
+        self.heartbeat_count = 0
+
+    @staticmethod
+    def _filters(path):
+        query = path.split("?", 1)[1] if "?" in path else ""
+        filters = []
+        for part in query.split("&"):
+            if "=eq." in part:
+                key, value = part.split("=eq.", 1)
+                filters.append((key, "eq", value.replace("%2B", "+")))
+            elif "=lt." in part:
+                key, value = part.split("=lt.", 1)
+                filters.append((key, "lt", value.replace("%2B", "+")))
+            elif part.endswith("=is.null"):
+                filters.append((part[:-8], "null", None))
+        return filters
+
+    def _matches(self, filters):
+        for key, operator, value in filters:
+            current = self.job.get(key)
+            if operator == "eq" and str(current) != value:
+                return False
+            if operator == "null" and current is not None:
+                return False
+            if operator == "lt":
+                if current is None or datetime.fromisoformat(str(current).replace("Z", "+00:00")) >= datetime.fromisoformat(value.replace("Z", "+00:00")):
+                    return False
+        return True
+
+    def rest(self, method, path, params=None, data=None):
+        with self.lock:
+            if method == "GET" and path == "/saas_quote_jobs":
+                wanted = str((params or {}).get("status", "eq.queued")).split(".", 1)[1]
+                return [dict(self.job)] if self.job["status"] == wanted else []
+            assert method == "PATCH"
+            assert path.startswith("/saas_quote_jobs?")
+            if not self._matches(self._filters(path)):
+                return []
+            if (data or {}).get("status") == "completed":
+                self.completion_attempts += 1
+                if self.completion_mode == "exception":
+                    self.completion_mode = "ok"
+                    raise RuntimeError("completion unavailable")
+                if self.completion_mode == "empty":
+                    self.completion_mode = "ok"
+                    return []
+            if set(data or {}) == {"lease_expires_at", "updated_at"}:
+                self.heartbeat_count += 1
+            self.job.update(data or {})
+            return [dict(self.job)]
+
+    def storage_download(self, object_path, destination):
+        Path(destination).write_bytes(self.objects[object_path])
+
+    def storage_upload(self, object_path, source):
+        self.uploads.append(object_path)
+        self.objects[object_path] = Path(source).read_bytes()
+
+    def storage_delete(self, object_path):
+        self.deletes.append(object_path)
+        self.objects.pop(object_path, None)
+
+
+@pytest.mark.parametrize("completion_mode", ["exception", "empty"])
+def test_completion_cas_failure_retains_input_and_allows_retry(monkeypatch, completion_mode):
+    client = FencedWorkerClient(completion_mode=completion_mode)
+    monkeypatch.setattr(
+        quote_worker,
+        "_run_generator",
+        lambda _job, _input, output: output.write_bytes(b"output"),
+    )
+    monkeypatch.setattr(quote_worker, "WORKER_HEARTBEAT_SECONDS", 3600)
+
+    with pytest.raises((RuntimeError, quote_worker.WorkerLeaseLost)):
+        quote_worker.process_job(client, dict(client.job))
+
+    assert client.job["status"] == "failed"
+    assert client.job["input_path"] in client.objects
+    assert client.deletes == []
+    first_output = client.uploads[0]
+    assert "/attempts/" in first_output and first_output.endswith("/output.xlsx")
+
+    client.job.update(
+        status="queued", attempt_token=None, lease_expires_at=None,
+        error_message=None, output_path=None, completed_at=None,
+    )
+    completed = quote_worker.process_job(client, dict(client.job))
+
+    assert completed and completed[0]["status"] == "completed"
+    assert client.job["input_path"] is None
+    assert client.deletes == ["users/7/jobs/job-fenced/input.xlsx"]
+    assert len(client.uploads) == 2
+    assert client.uploads[0] != client.uploads[1]
+
+
+def test_stale_worker_loses_lease_without_clobbering_recovery_attempt(monkeypatch):
+    client = FencedWorkerClient()
+    monkeypatch.setattr(quote_worker, "WORKER_HEARTBEAT_SECONDS", 3600)
+    generator_calls = []
+
+    def interleaved_generator(_job, _input, output):
+        generator_calls.append(_job["attempt_token"])
+        if len(generator_calls) == 1:
+            client.job["lease_expires_at"] = "2000-01-01T00:00:00Z"
+            assert quote_worker.recover_stale_jobs(client) == 1
+            recovered = dict(client.job)
+            assert recovered["status"] == "queued"
+            quote_worker.process_job(client, recovered)
+            output.write_bytes(b"stale-output")
+            return
+        output.write_bytes(b"winning-output")
+
+    monkeypatch.setattr(quote_worker, "_run_generator", interleaved_generator)
+
+    with pytest.raises(quote_worker.WorkerLeaseLost):
+        quote_worker.process_job(client, dict(client.job))
+
+    assert len(generator_calls) == 2
+    assert generator_calls[0] != generator_calls[1]
+    assert client.job["status"] == "completed"
+    assert client.job["attempt_token"] == generator_calls[1]
+    assert client.job["output_path"] == client.uploads[0]
+    assert generator_calls[1] in client.job["output_path"]
+    assert generator_calls[0] not in client.job["output_path"]
+    assert client.deletes == ["users/7/jobs/job-fenced/input.xlsx"]
+
+
+def test_long_generator_heartbeats_current_attempt(monkeypatch):
+    client = FencedWorkerClient()
+    entered = threading.Event()
+    release = threading.Event()
+    result = []
+
+    def slow_generator(_job, _input, output):
+        entered.set()
+        assert release.wait(5)
+        output.write_bytes(b"output")
+
+    monkeypatch.setattr(quote_worker, "_run_generator", slow_generator)
+    monkeypatch.setattr(quote_worker, "WORKER_HEARTBEAT_SECONDS", 0.01)
+    thread = threading.Thread(
+        target=lambda: result.append(quote_worker.process_job(client, dict(client.job))),
+        daemon=True,
+    )
+    thread.start()
+    assert entered.wait(5)
+    deadline = time.time() + 5
+    while client.heartbeat_count < 1 and time.time() < deadline:
+        time.sleep(0.01)
+    release.set()
+    thread.join(5)
+
+    assert not thread.is_alive()
+    assert client.heartbeat_count >= 1
+    assert result and result[0][0]["status"] == "completed"
+
+
+def test_postgres_client_threads_attempt_and_lease_filters_into_update(monkeypatch):
+    client = quote_worker.PostgresClient.__new__(quote_worker.PostgresClient)
+    seen = {}
+
+    def update(data, where_sql, where_params):
+        seen.update(data=data, where_sql=where_sql, where_params=where_params)
+        return [{"id": "job-1", **data}]
+
+    monkeypatch.setattr(client, "_update_jobs", update)
+    rows = client.rest(
+        "PATCH",
+        "/saas_quote_jobs?id=eq.job-1&status=eq.processing"
+        "&attempt_token=eq.11111111-1111-4111-8111-111111111111"
+        "&lease_expires_at=lt.2026-07-19T00:00:00Z",
+        data={"status": "queued"},
+    )
+
+    assert rows == [{"id": "job-1", "status": "queued"}]
+    assert seen["where_sql"] == (
+        "id = %s AND status = %s AND attempt_token = %s AND lease_expires_at < %s"
+    )
+    assert seen["where_params"] == (
+        "job-1", "processing", "11111111-1111-4111-8111-111111111111",
+        "2026-07-19T00:00:00Z",
+    )
+
+
+def test_local_dev_client_rejects_patch_from_lost_attempt(monkeypatch, tmp_path):
+    monkeypatch.setattr(quote_worker, "DEV_STORE_DIR", tmp_path)
+    client = quote_worker.LocalDevClient()
+    client.db_path.parent.mkdir(parents=True, exist_ok=True)
+    client.db_path.write_text(json.dumps({"quote_jobs": [{
+        "id": "job-1", "status": "processing", "attempt_token": "current-attempt",
+        "lease_expires_at": "2026-07-19T01:00:00Z", "updated_at": "2026-07-19T00:00:00Z",
+    }]}), encoding="utf-8")
+
+    lost = client.rest(
+        "PATCH",
+        "/saas_quote_jobs?id=eq.job-1&status=eq.processing&attempt_token=eq.stale-attempt",
+        data={"status": "failed"},
+    )
+    current = client.rest(
+        "PATCH",
+        "/saas_quote_jobs?id=eq.job-1&status=eq.processing&attempt_token=eq.current-attempt",
+        data={"status": "completed"},
+    )
+
+    assert lost == []
+    assert current[0]["status"] == "completed"

@@ -3455,12 +3455,18 @@ def test_mixed_queue_reservation_postgres_and_supabase_are_compare_and_set(monke
     monkeypatch.setattr(index, "_pg_write", lambda sql, params: pg_calls.append((sql, params)) or {"status": "queued"})
     index.db_queue_mixed_quote_job(JOB_MIXED_UUID, metadata)
     assert "WHERE id = %s AND status = 'draft'" in pg_calls[0][0]
+    assert "attempt_token = NULL" in pg_calls[0][0]
+    assert "lease_expires_at = NULL" in pg_calls[0][0]
+    assert pg_calls[0][1][0] == metadata
+    assert pg_calls[0][1][1] is not None
 
     rest_calls = []
     monkeypatch.setattr(index, "_use_postgres", lambda: False)
     monkeypatch.setattr(index, "_supabase_req", lambda method, path, params=None, json_data=None: rest_calls.append((method, path, params, json_data)) or [{"status": "queued"}])
     index.db_queue_mixed_quote_job(JOB_MIXED_UUID, metadata)
     assert rest_calls[0][0:3] == ("PATCH", "/saas_quote_jobs", {"id": f"eq.{JOB_MIXED_UUID}", "status": "eq.draft"})
+    assert rest_calls[0][3]["attempt_token"] is None
+    assert rest_calls[0][3]["lease_expires_at"] is None
 
 
 def test_mixed_reservation_reserve_first_then_release_uses_real_lifecycle_lock(monkeypatch):
@@ -3693,7 +3699,8 @@ def test_submit_moves_job_to_queued(monkeypatch):
         },
     )
 
-    def fake_update(job_id, updates):
+    def fake_update(job_id, updates, *, expected_status=None):
+        assert expected_status == "draft"
         return {"id": job_id, **updates}
 
     monkeypatch.setattr(index, "db_update_quote_job", fake_update)
@@ -3748,7 +3755,8 @@ def test_submit_assigns_locked_quote_number_for_known_user(monkeypatch):
         ],
     )
 
-    def fake_update(job_id, updates):
+    def fake_update(job_id, updates, *, expected_status=None):
+        assert expected_status == "draft"
         return {"id": job_id, **updates}
 
     monkeypatch.setattr(index, "db_update_quote_job", fake_update)
@@ -3786,7 +3794,8 @@ def test_submit_defaults_to_dezgo_for_missing_product_images(monkeypatch):
         },
     )
 
-    def fake_update(job_id, updates):
+    def fake_update(job_id, updates, *, expected_status=None):
+        assert expected_status == "draft"
         return {"id": job_id, **updates}
 
     monkeypatch.setattr(index, "db_update_quote_job", fake_update)
@@ -3809,6 +3818,8 @@ def test_submit_defaults_to_dezgo_for_missing_product_images(monkeypatch):
     assert resp.json()["job"]["metadata"]["image_provider"] == "dezgo"
     assert resp.json()["job"]["metadata"]["image_prompt"] == "Mejora la calidad de imagen y que este en fondo blanco"
     assert resp.json()["job"]["metadata"]["estimated_duration_seconds"] == 360
+    assert resp.json()["job"]["attempt_token"] is None
+    assert resp.json()["job"]["lease_expires_at"] is None
 
 
 def test_submit_accepts_sunon_web_image_provider(monkeypatch):
@@ -3825,7 +3836,8 @@ def test_submit_accepts_sunon_web_image_provider(monkeypatch):
         },
     )
 
-    def fake_update(job_id, updates):
+    def fake_update(job_id, updates, *, expected_status=None):
+        assert expected_status == "draft"
         return {"id": job_id, **updates}
 
     monkeypatch.setattr(index, "db_update_quote_job", fake_update)
@@ -3864,7 +3876,8 @@ def test_submit_accepts_sunon_catalog_image_provider(monkeypatch):
         },
     )
 
-    def fake_update(job_id, updates):
+    def fake_update(job_id, updates, *, expected_status=None):
+        assert expected_status == "draft"
         return {"id": job_id, **updates}
 
     monkeypatch.setattr(index, "db_update_quote_job", fake_update)
@@ -3980,7 +3993,8 @@ def test_retry_requeues_failed_job(monkeypatch):
         },
     )
 
-    def fake_update(job_id, updates):
+    def fake_update(job_id, updates, *, expected_status=None):
+        assert expected_status == "failed"
         return {"id": job_id, **updates}
 
     monkeypatch.setattr(index, "db_update_quote_job", fake_update)
@@ -3990,6 +4004,8 @@ def test_retry_requeues_failed_job(monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["job"]["status"] == "queued"
     assert resp.json()["job"]["error_message"] is None
+    assert resp.json()["job"]["attempt_token"] is None
+    assert resp.json()["job"]["lease_expires_at"] is None
 
 
 def test_retry_rejects_non_failed_job(monkeypatch):
@@ -4008,6 +4024,35 @@ def test_retry_rejects_non_failed_job(monkeypatch):
     resp = _client().post("/cotizaciones/job-1/retry", headers=_auth_headers())
 
     assert resp.status_code == 409
+
+
+def test_retry_compare_and_set_rejects_status_race_without_waking(monkeypatch):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(
+        index,
+        "db_get_quote_job",
+        lambda job_id: {
+            "id": job_id, "usuario_id": 7, "status": "failed",
+            "input_path": "users/7/jobs/job-1/input.xlsx", "error_message": "boom",
+        },
+    )
+    seen = {}
+
+    def raced_update(job_id, updates, *, expected_status=None):
+        seen.update(job_id=job_id, updates=updates, expected_status=expected_status)
+        return {}
+
+    wakes = []
+    monkeypatch.setattr(index, "db_update_quote_job", raced_update)
+    monkeypatch.setattr(index, "_wake_worker", lambda: wakes.append(True))
+
+    resp = _client().post("/cotizaciones/job-1/retry", headers=_auth_headers())
+
+    assert resp.status_code == 409
+    assert seen["expected_status"] == "failed"
+    assert seen["updates"]["attempt_token"] is None
+    assert seen["updates"]["lease_expires_at"] is None
+    assert wakes == []
 
 
 def test_delete_quote_releases_tarkett_reservations(monkeypatch):

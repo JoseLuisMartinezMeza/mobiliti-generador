@@ -407,8 +407,9 @@ class EndToEndWorkerClient:
         "generator",
         "progress:90",
         "upload",
-        "delete",
         "completed",
+        "delete",
+        "clear_input",
     )
 
     def __init__(self, job: dict, objects: dict[str, bytes]):
@@ -432,14 +433,28 @@ class EndToEndWorkerClient:
         data = deepcopy(data or {})
         job_path = f"/saas_quote_jobs?id=eq.{self.job['id']}"
         if path == job_path + "&status=eq.queued":
-            assert set(data) == {"status", "updated_at"}
+            assert set(data) == {
+                "status", "attempt_token", "lease_expires_at", "updated_at",
+            }
             assert data["status"] == "processing"
+            assert data["attempt_token"]
+            assert data["lease_expires_at"]
             assert isinstance(data["updated_at"], str) and data["updated_at"]
             self.record_event("claim")
             claimed = {**self.job, **data}
             self.job = claimed
             return [deepcopy(claimed)]
-        if path == job_path and set(data) == {"metadata", "updated_at"}:
+        fenced_processing = (
+            job_path + "&status=eq.processing"
+            f"&attempt_token=eq.{self.job.get('attempt_token')}"
+        )
+        fenced_completed = (
+            job_path + "&status=eq.completed"
+            f"&attempt_token=eq.{self.job.get('attempt_token')}"
+        )
+        if path == fenced_processing and set(data) == {
+            "metadata", "lease_expires_at", "updated_at",
+        }:
             metadata = data["metadata"]
             assert isinstance(metadata, dict)
             progress = metadata.get("progress_percent")
@@ -447,25 +462,34 @@ class EndToEndWorkerClient:
             self.record_event(f"progress:{progress}")
             self.job = {**self.job, **data}
             return [deepcopy(self.job)]
-        if path == job_path and data.get("status") == "completed":
+        if path == fenced_processing and data.get("status") == "completed":
             assert set(data) == {
-                "status", "input_path", "output_path", "metadata",
-                "error_message", "updated_at", "completed_at",
+                "status", "output_path", "metadata", "error_message",
+                "lease_expires_at", "updated_at", "completed_at",
             }
-            assert data["input_path"] is None
-            assert data["output_path"] == (
-                f"users/{self.job['usuario_id']}/jobs/{self.job['id']}/output.xlsx"
+            assert data["output_path"].startswith(
+                f"users/{self.job['usuario_id']}/jobs/{self.job['id']}/attempts/"
+            )
+            assert data["output_path"].endswith(
+                f"/{self.job['attempt_token']}/output.xlsx"
             )
             assert data["metadata"]["progress_percent"] == 100
             assert data["error_message"] is None
+            assert data["lease_expires_at"] is None
             self.record_event("completed")
             completed = {**self.job, **data}
             self.job = completed
             self.completed_updates.append(deepcopy(completed))
             return [deepcopy(completed)]
-        if path == job_path and data.get("status") == "failed":
+        if path == fenced_completed and set(data) == {"input_path", "updated_at"}:
+            assert data["input_path"] is None
+            self.record_event("clear_input")
+            self.job = {**self.job, **data}
+            self.completed_updates[-1] = deepcopy(self.job)
+            return [deepcopy(self.job)]
+        if path == fenced_processing and data.get("status") == "failed":
             assert set(data) == {
-                "status", "metadata", "error_message", "updated_at"
+                "status", "metadata", "error_message", "lease_expires_at", "updated_at"
             }
             failed = {**self.job, **data}
             self.job = failed
@@ -482,9 +506,10 @@ class EndToEndWorkerClient:
 
     def storage_upload(self, object_path, source):
         self.record_event("upload")
-        assert object_path == (
-            f"users/{self.job['usuario_id']}/jobs/{self.job['id']}/output.xlsx"
+        assert object_path.startswith(
+            f"users/{self.job['usuario_id']}/jobs/{self.job['id']}/attempts/"
         )
+        assert object_path.endswith(f"/{self.job['attempt_token']}/output.xlsx")
         assert Path(source).is_file()
         self.uploads.append((object_path, Path(source).read_bytes()))
 
@@ -657,13 +682,14 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
     assert completed
     assert worker_client.events == [
         "claim", "progress:45", "download", "progress:55", "converter",
-        "generator", "progress:90", "upload", "delete", "completed",
+        "generator", "progress:90", "upload", "completed", "delete", "clear_input",
     ]
     assert generator_calls == ["quotation_from_mixed_catalog.xlsx"]
     assert worker_client.downloads == [input_path]
     assert len(worker_client.uploads) == 1
     uploaded_path, output_bytes = worker_client.uploads[0]
-    assert uploaded_path == f"users/7/jobs/{queued_job['id']}/output.xlsx"
+    assert uploaded_path.startswith(f"users/7/jobs/{queued_job['id']}/attempts/")
+    assert uploaded_path.endswith("/output.xlsx")
     assert output_bytes.startswith(b"PK")
     assert worker_client.deleted_inputs == [input_path]
     assert input_path not in worker_client.objects

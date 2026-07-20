@@ -43,6 +43,11 @@ def test_mixed_cart_rpcs_are_additive_atomic_and_service_role_only():
     for path in (MIXED_MIGRATION, BOOTSTRAP):
         sql = path.read_text(encoding="utf-8")
         normalized = re.sub(r"\s+", " ", sql.lower())
+        assert "add column if not exists attempt_token uuid" in normalized
+        assert "add column if not exists lease_expires_at timestamptz" in normalized
+        assert "alter column input_path drop not null" in normalized
+        assert "idx_quote_jobs_processing_lease" in normalized
+        assert "where status = 'processing'" in normalized
         for name in ("saas_reserve_mixed_cart", "saas_release_mixed_cart"):
             function = _function_sql(sql, name)
             assert "SECURITY DEFINER" in function
@@ -855,7 +860,9 @@ def test_bootstrap_mirrors_catalog_migrations():
     bootstrap = BOOTSTRAP.read_bytes()
     catalog_migration = CATALOG_MIGRATION.read_bytes()
     jobs_migration = JOBS_RLS_MIGRATION.read_bytes()
+    mixed_migration = MIXED_MIGRATION.read_bytes()
 
     assert bootstrap.count(catalog_migration) == 1
     assert bootstrap.count(jobs_migration) == 1
+    assert bootstrap.count(mixed_migration) == 1
     assert b"saas_supplier_catalog_snapshots (\n    supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett'))" in bootstrap

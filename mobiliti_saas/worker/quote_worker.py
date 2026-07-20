@@ -15,10 +15,12 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 
 BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
@@ -31,6 +33,11 @@ R2_BUCKET = os.environ.get("R2_BUCKET", BUCKET).strip() or BUCKET
 R2_REGION = os.environ.get("R2_REGION", "auto").strip() or "auto"
 POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "10"))
 STALE_MINUTES = int(os.environ.get("WORKER_STALE_MINUTES", "30"))
+WORKER_LEASE_SECONDS = max(60, STALE_MINUTES * 60 if STALE_MINUTES > 0 else 1800)
+WORKER_HEARTBEAT_SECONDS = max(
+    1.0,
+    float(os.environ.get("WORKER_HEARTBEAT_SECONDS", str(min(60, WORKER_LEASE_SECONDS / 3)))),
+)
 MAX_QUOTE_OUTPUT_MB = int(os.environ.get("MAX_QUOTE_OUTPUT_MB", "100"))
 QUOTE_ENGINE = os.environ.get("QUOTE_ENGINE", "python").strip().lower()
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -370,12 +377,24 @@ class PostgresClient(SupabaseClient):
             )
 
         if method == "PATCH" and path.startswith("/saas_quote_jobs?id=eq."):
-            filters = _parse_eq_filters(path)
-            where = ["id = %s"]
-            values = [filters["id"]]
-            if "status" in filters:
-                where.append("status = %s")
-                values.append(filters["status"])
+            filters = _parse_rest_filters(path)
+            where = []
+            values = []
+            for key, operator, value in filters:
+                if key not in {"id", "status", "attempt_token", "lease_expires_at", "updated_at"}:
+                    raise RuntimeError(f"Filtro Postgres no soportado: {key}")
+                if operator == "eq":
+                    where.append(f"{key} = %s")
+                    values.append(value)
+                elif operator == "lt":
+                    where.append(f"{key} < %s")
+                    values.append(value)
+                elif operator == "null":
+                    where.append(f"{key} IS NULL")
+                else:
+                    raise RuntimeError(f"Operador Postgres no soportado: {operator}")
+            if not any(key == "id" for key, _operator, _value in filters):
+                raise RuntimeError("PATCH saas_quote_jobs requiere id")
             return self._update_jobs(data, " AND ".join(where), tuple(values))
 
         raise RuntimeError(f"Operacion Postgres no soportada: {method} {path}")
@@ -432,19 +451,18 @@ def _jsonable_row(row: dict | None) -> dict | None:
     return clean
 
 
-def _parse_eq_filters(path: str) -> dict[str, str]:
-    query = path.split("?", 1)[0]
-    if "?" in path:
-        query = path.split("?", 1)[1]
-    elif "id=eq." in path:
-        query = path.split("/saas_quote_jobs?", 1)[-1]
-    filters: dict[str, str] = {}
+def _parse_rest_filters(path: str) -> list[tuple[str, str, str | None]]:
+    query = path.split("?", 1)[1] if "?" in path else ""
+    filters: list[tuple[str, str, str | None]] = []
     for part in query.split("&"):
         if "=eq." in part:
             key, value = part.split("=eq.", 1)
-            filters[key] = value
-    if "id" not in filters and "id=eq." in path:
-        filters["id"] = path.split("id=eq.", 1)[1].split("&", 1)[0]
+            filters.append((key, "eq", urllib.parse.unquote(value)))
+        elif "=lt." in part:
+            key, value = part.split("=lt.", 1)
+            filters.append((key, "lt", urllib.parse.unquote(value)))
+        elif part.endswith("=is.null"):
+            filters.append((part[:-8], "null", None))
     return filters
 
 
@@ -493,17 +511,22 @@ class LocalDevClient:
             return rows
 
         if path.startswith("/saas_quote_jobs?id=eq.") and method == "PATCH":
-            filters = {}
-            for part in path.split("?", 1)[0].split("&"):
-                if "=eq." in part:
-                    key, value = part.split("=eq.", 1)
-                    filters[key.rsplit("?", 1)[-1]] = value
-            job_id = filters.get("id") or path.split("id=eq.", 1)[1].split("&", 1)[0]
+            filters = _parse_rest_filters(path)
             for row in store.get("quote_jobs", []):
-                if row["id"] == job_id and all(str(row.get(k)) == str(v) for k, v in filters.items() if k != "id"):
+                matches = True
+                for key, operator, value in filters:
+                    current = row.get(key)
+                    if operator == "eq" and str(current) != str(value):
+                        matches = False
+                    elif operator == "null" and current is not None:
+                        matches = False
+                    elif operator == "lt":
+                        if current is None or datetime.fromisoformat(str(current).replace("Z", "+00:00")) >= datetime.fromisoformat(str(value).replace("Z", "+00:00")):
+                            matches = False
+                if matches:
                     row.update(data or {})
                     self._save(store)
-                    return [{"id": job_id, **row}]
+                    return [dict(row)]
             return []
 
         raise RuntimeError(f"Operacion dev no soportada: {method} {path}")
@@ -553,6 +576,10 @@ class LocalDevClient:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _lease_deadline() -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=WORKER_LEASE_SECONDS)).isoformat()
 
 
 def _resolve_project_root() -> Path:
@@ -849,44 +876,192 @@ def fetch_next_job(client: SupabaseClient) -> dict | None:
     return rows[0] if rows else None
 
 
+class WorkerLeaseLost(RuntimeError):
+    """El trabajo ya no pertenece al intento que sigue ejecutandose."""
+
+
+class WorkerCompletionFailed(RuntimeError):
+    """El resultado se genero, pero no se pudo confirmar durablemente."""
+
+
+def _attempt_patch_path(
+    job: dict,
+    *,
+    status: str = "processing",
+    lease_before: str | None = None,
+) -> str:
+    job_id = str(job.get("id") or "").strip()
+    attempt_token = str(job.get("attempt_token") or "").strip()
+    if not job_id or not attempt_token:
+        raise WorkerLeaseLost("El intento del worker no tiene un lease valido")
+    path = (
+        f"/saas_quote_jobs?id=eq.{urllib.parse.quote(job_id, safe='-')}"
+        f"&status=eq.{urllib.parse.quote(status, safe='-')}"
+        f"&attempt_token=eq.{urllib.parse.quote(attempt_token, safe='-')}"
+    )
+    if lease_before is not None:
+        path += f"&lease_expires_at=lt.{urllib.parse.quote(lease_before, safe=':-TZ')}"
+    return path
+
+
+def _single_attempt_row(rows, action: str) -> dict:
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        if not rows:
+            raise WorkerLeaseLost(f"Lease perdido durante {action}")
+        raise RuntimeError(f"Actualizacion ambigua durante {action}")
+    return rows[0]
+
+
+def _patch_current_attempt(client: SupabaseClient, job: dict, data: dict, action: str) -> dict:
+    row = _single_attempt_row(
+        client.rest("PATCH", _attempt_patch_path(job), data=data),
+        action,
+    )
+    job.update(row)
+    return row
+
+
+def _heartbeat_attempt(client: SupabaseClient, job: dict) -> None:
+    _patch_current_attempt(
+        client,
+        job,
+        {"lease_expires_at": _lease_deadline(), "updated_at": _utc_now()},
+        "heartbeat",
+    )
+
+
+class _LeaseHeartbeat:
+    def __init__(self, client: SupabaseClient, job: dict):
+        self.client = client
+        self.job = job
+        self.stop_event = threading.Event()
+        self.failure: BaseException | None = None
+        self.thread = threading.Thread(
+            target=self._run,
+            name=f"quote-heartbeat-{job.get('id')}",
+            daemon=True,
+        )
+
+    def _run(self) -> None:
+        while not self.stop_event.wait(WORKER_HEARTBEAT_SECONDS):
+            try:
+                _heartbeat_attempt(self.client, self.job)
+            except BaseException as exc:  # la hebra principal valida antes de efectos finales
+                self.failure = exc
+                self.stop_event.set()
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def ensure_owned(self) -> None:
+        if self.failure is not None:
+            if isinstance(self.failure, WorkerLeaseLost):
+                raise self.failure
+            raise WorkerLeaseLost("No se pudo renovar el lease del worker") from self.failure
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        self.stop_event.set()
+        self.thread.join(timeout=35.0)
+        if _exc_type is None:
+            if self.thread.is_alive():
+                raise WorkerLeaseLost("El heartbeat no termino antes de finalizar")
+            self.ensure_owned()
+        return False
+
+
 def recover_stale_jobs(client: SupabaseClient) -> int:
     if STALE_MINUTES <= 0:
         return 0
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES)).isoformat()
-    rows = client.rest(
-        "PATCH",
-        "/saas_quote_jobs",
-        params={"status": "eq.processing", "updated_at": f"lt.{cutoff}"},
-        data={
-            "status": "queued",
-            "error_message": "Reintentado automaticamente: worker anterior quedo stale",
-            "updated_at": _utc_now(),
-        },
+    now = datetime.now(timezone.utc)
+    legacy_cutoff = (now - timedelta(minutes=STALE_MINUTES)).isoformat()
+    candidates = client.rest(
+        "GET", "/saas_quote_jobs",
+        params={"status": "eq.processing", "select": "*", "order": "updated_at.asc", "limit": "100"},
     )
-    if rows:
-        print(f"Jobs stale reencolados: {len(rows)}")
-    return len(rows)
+    recovered = 0
+    for candidate in candidates or []:
+        token = str(candidate.get("attempt_token") or "").strip()
+        lease_expires_at = candidate.get("lease_expires_at")
+        updated_at = candidate.get("updated_at")
+        try:
+            stale = (
+                bool(token)
+                and lease_expires_at is not None
+                and datetime.fromisoformat(str(lease_expires_at).replace("Z", "+00:00")) < now
+            ) or (
+                not token
+                and updated_at is not None
+                and datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+                < now - timedelta(minutes=STALE_MINUTES)
+            )
+        except (TypeError, ValueError):
+            stale = False
+        if not stale:
+            continue
+        if token:
+            path = _attempt_patch_path(candidate, lease_before=now.isoformat())
+        else:
+            job_id = urllib.parse.quote(str(candidate.get("id") or ""), safe="-")
+            path = (
+                f"/saas_quote_jobs?id=eq.{job_id}&status=eq.processing"
+                f"&attempt_token=is.null&updated_at=lt.{urllib.parse.quote(legacy_cutoff, safe=':-TZ')}"
+            )
+        rows = client.rest(
+            "PATCH",
+            path,
+            data={
+                "status": "queued",
+                "attempt_token": None,
+                "lease_expires_at": None,
+                "error_message": "Reintentado automaticamente: worker anterior quedo stale",
+                "updated_at": _utc_now(),
+            },
+        )
+        if rows:
+            if not isinstance(rows, list) or len(rows) != 1:
+                raise RuntimeError("Recuperacion stale devolvio un resultado ambiguo")
+            recovered += 1
+    if recovered:
+        print(f"Jobs stale reencolados: {recovered}")
+    return recovered
 
 
 def claim_job(client: SupabaseClient, job: dict) -> dict | None:
     job_id = job["id"]
+    attempt_token = str(uuid.uuid4())
     rows = client.rest(
         "PATCH",
         f"/saas_quote_jobs?id=eq.{job_id}&status=eq.queued",
-        data={"status": "processing", "updated_at": _utc_now()},
+        data={
+            "status": "processing",
+            "attempt_token": attempt_token,
+            "lease_expires_at": _lease_deadline(),
+            "updated_at": _utc_now(),
+        },
     )
-    return rows[0] if rows else None
+    if not rows:
+        return None
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise RuntimeError("Claim de cotizacion devolvio un resultado ambiguo")
+    claimed = rows[0]
+    if claimed.get("attempt_token") != attempt_token or claimed.get("status") != "processing":
+        raise WorkerLeaseLost("Claim de cotizacion no confirmo el lease")
+    return claimed
 
 
 def update_progress(client: SupabaseClient, job: dict, percent: int) -> None:
     metadata = {**(job.get("metadata") or {}), "progress_percent": percent}
-    rows = client.rest(
-        "PATCH",
-        f"/saas_quote_jobs?id=eq.{job['id']}",
-        data={"metadata": metadata, "updated_at": _utc_now()},
+    _patch_current_attempt(
+        client,
+        job,
+        {
+            "metadata": metadata,
+            "lease_expires_at": _lease_deadline(),
+            "updated_at": _utc_now(),
+        },
+        f"progreso {percent}",
     )
-    if rows:
-        job["metadata"] = rows[0].get("metadata") or metadata
 
 
 def process_job(client: SupabaseClient, job: dict) -> dict | None:
@@ -897,7 +1072,8 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
 
     job = {**job, **claimed}
     job_id = job["id"]
-    output_path = f"users/{job['usuario_id']}/jobs/{job_id}/output.xlsx"
+    attempt_token = job["attempt_token"]
+    output_path = f"users/{job['usuario_id']}/jobs/{job_id}/attempts/{attempt_token}/output.xlsx"
 
     with tempfile.TemporaryDirectory(prefix="mobiliti-quote-") as tmp:
         tmp_dir = Path(tmp)
@@ -905,59 +1081,102 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
         local_output = tmp_dir / "output.xlsx"
         started_at = time.perf_counter()
         try:
-            update_progress(client, job, 45)
-            _download_job_input(client, job, local_input)
-            update_progress(client, job, 55)
-            generator_input = _prepare_generator_input(job, local_input, tmp_dir)
-            _run_generator(job, generator_input, local_output)
-            generation_seconds = round(time.perf_counter() - started_at, 1)
-            update_progress(client, job, 90)
-            _validate_output_size(local_output)
-            client.storage_upload(output_path, local_output)
-            input_deleted = False
-            try:
-                _delete_job_input(client, job)
-                input_deleted = True
-            except Exception as exc:
-                print(f"WARN: no se pudo borrar input de job {job_id}: {exc}")
+            with _LeaseHeartbeat(client, job) as heartbeat:
+                update_progress(client, job, 45)
+                _download_job_input(client, job, local_input)
+                update_progress(client, job, 55)
+                generator_input = _prepare_generator_input(job, local_input, tmp_dir)
+                heartbeat.ensure_owned()
+                _run_generator(job, generator_input, local_output)
+                heartbeat.ensure_owned()
+                generation_seconds = round(time.perf_counter() - started_at, 1)
+                update_progress(client, job, 90)
+                _validate_output_size(local_output)
+                client.storage_upload(output_path, local_output)
+                heartbeat.ensure_owned()
             metadata = {
                 **(job.get("metadata") or {}),
                 "progress_percent": 100,
                 "generation_seconds": generation_seconds,
             }
-            return client.rest(
-                "PATCH",
-                f"/saas_quote_jobs?id=eq.{job_id}",
-                data={
-                    "status": "completed",
-                    "input_path": None if input_deleted else job.get("input_path"),
-                    "output_path": output_path,
-                    "metadata": metadata,
-                    "error_message": None,
-                    "updated_at": _utc_now(),
-                    "completed_at": _utc_now(),
-                },
-            )
+            try:
+                completed = _patch_current_attempt(
+                    client,
+                    job,
+                    {
+                        "status": "completed",
+                        "output_path": output_path,
+                        "metadata": metadata,
+                        "error_message": None,
+                        "lease_expires_at": None,
+                        "updated_at": _utc_now(),
+                        "completed_at": _utc_now(),
+                    },
+                    "finalizacion",
+                )
+            except WorkerLeaseLost as completion_error:
+                try:
+                    _patch_current_attempt(
+                        client,
+                        job,
+                        {
+                            "status": "failed",
+                            "metadata": metadata,
+                            "error_message": "No se pudo confirmar la finalizacion; reintenta la cotizacion",
+                            "lease_expires_at": None,
+                            "updated_at": _utc_now(),
+                        },
+                        "fallo de finalizacion",
+                    )
+                except WorkerLeaseLost:
+                    raise completion_error
+                raise WorkerCompletionFailed(
+                    "No se pudo confirmar durablemente la finalizacion"
+                ) from completion_error
+            try:
+                _delete_job_input(client, job)
+            except Exception as exc:
+                print(f"WARN: no se pudo borrar input de job {job_id}: {exc}")
+                return [completed]
+            try:
+                cleared_rows = client.rest(
+                    "PATCH",
+                    _attempt_patch_path(job, status="completed"),
+                    data={"input_path": None, "updated_at": _utc_now()},
+                )
+                if isinstance(cleared_rows, list) and len(cleared_rows) == 1 and isinstance(cleared_rows[0], dict):
+                    job.update(cleared_rows[0])
+                    completed = cleared_rows[0]
+                else:
+                    print(f"WARN: no se pudo limpiar input_path del job completado {job_id}")
+            except Exception as exc:
+                print(f"WARN: no se pudo limpiar input_path del job completado {job_id}: {exc}")
+            return [completed]
+        except WorkerLeaseLost:
+            raise
+        except WorkerCompletionFailed:
+            raise
         except Exception as exc:
             generation_seconds = round(time.perf_counter() - started_at, 1)
             try:
-                update_progress(client, job, 100)
-            except Exception:
-                pass
-            client.rest(
-                "PATCH",
-                f"/saas_quote_jobs?id=eq.{job_id}",
-                data={
-                    "status": "failed",
-                    "metadata": {
-                        **(job.get("metadata") or {}),
-                        "progress_percent": 100,
-                        "generation_seconds": generation_seconds,
+                _patch_current_attempt(
+                    client,
+                    job,
+                    {
+                        "status": "failed",
+                        "metadata": {
+                            **(job.get("metadata") or {}),
+                            "progress_percent": 100,
+                            "generation_seconds": generation_seconds,
+                        },
+                        "error_message": str(exc)[:1000],
+                        "lease_expires_at": None,
+                        "updated_at": _utc_now(),
                     },
-                    "error_message": str(exc)[:1000],
-                    "updated_at": _utc_now(),
-                },
-            )
+                    "fallo",
+                )
+            except WorkerLeaseLost:
+                raise WorkerLeaseLost("Lease perdido antes de registrar el fallo") from exc
             raise
 
 

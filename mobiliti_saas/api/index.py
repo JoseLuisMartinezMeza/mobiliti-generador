@@ -842,6 +842,8 @@ def db_create_quote_job(usuario_id: int, template: str, metadata: dict, input_pa
         "created_at": now,
         "updated_at": now,
         "completed_at": None,
+        "attempt_token": None,
+        "lease_expires_at": None,
     }
     if DEV_MODE:
         store = _dev_load()
@@ -852,8 +854,8 @@ def db_create_quote_job(usuario_id: int, template: str, metadata: dict, input_pa
         return _pg_write(
             """
             INSERT INTO saas_quote_jobs
-                (id, usuario_id, status, input_path, output_path, template, metadata, error_message, created_at, updated_at, completed_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (id, usuario_id, status, input_path, output_path, template, metadata, error_message, created_at, updated_at, completed_at, attempt_token, lease_expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -868,6 +870,8 @@ def db_create_quote_job(usuario_id: int, template: str, metadata: dict, input_pa
                 data["created_at"],
                 data["updated_at"],
                 data["completed_at"],
+                data["attempt_token"],
+                data["lease_expires_at"],
             ),
         )
     rows = _supabase_req("POST", "/saas_quote_jobs", json_data=data)
@@ -908,19 +912,30 @@ def db_list_quote_jobs(usuario_id: int):
     )
 
 
-def db_update_quote_job(job_id: str, updates: dict):
+def db_update_quote_job(job_id: str, updates: dict, *, expected_status: str | None = None):
     payload = {**updates, "updated_at": _iso(datetime.now(timezone.utc))}
     if DEV_MODE:
         data = _dev_load()
         for row in data["quote_jobs"]:
-            if row["id"] == job_id:
+            if row["id"] == job_id and (
+                expected_status is None or row.get("status") == expected_status
+            ):
                 row.update(payload)
                 _dev_save(data)
                 return row
         return {}
     if _use_postgres():
-        return _pg_update("saas_quote_jobs", "id", job_id, payload)
-    rows = _supabase_req("PATCH", f"/saas_quote_jobs?id=eq.{job_id}", json_data=payload)
+        if expected_status is None:
+            return _pg_update("saas_quote_jobs", "id", job_id, payload)
+        set_clause = ", ".join(f"{key} = %s" for key in payload)
+        return _pg_write(
+            f"UPDATE saas_quote_jobs SET {set_clause} WHERE id = %s AND status = %s RETURNING *",
+            tuple(payload.values()) + (job_id, expected_status),
+        ) or {}
+    path = f"/saas_quote_jobs?id=eq.{job_id}"
+    if expected_status is not None:
+        path += f"&status=eq.{expected_status}"
+    rows = _supabase_req("PATCH", path, json_data=payload)
     return rows[0] if rows else {}
 
 
@@ -1442,7 +1457,8 @@ def db_queue_mixed_quote_job(quote_job_id: str, metadata: dict) -> dict:
     now = _iso(datetime.now(timezone.utc))
     payload = {
         "status": "queued", "metadata": deepcopy(metadata),
-        "error_message": None, "updated_at": now,
+        "error_message": None, "attempt_token": None,
+        "lease_expires_at": None, "updated_at": now,
     }
     if DEV_MODE:
         with _MIXED_CART_RESERVATION_LOCK:
@@ -1460,7 +1476,8 @@ def db_queue_mixed_quote_job(quote_job_id: str, metadata: dict) -> dict:
         row = _pg_write(
             """
             UPDATE saas_quote_jobs
-            SET status = 'queued', metadata = %s, error_message = NULL, updated_at = %s
+            SET status = 'queued', metadata = %s, error_message = NULL,
+                attempt_token = NULL, lease_expires_at = NULL, updated_at = %s
             WHERE id = %s AND status = 'draft'
             RETURNING *
             """,
@@ -4755,11 +4772,16 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
                 "template": template,
                 "metadata": metadata,
                 "error_message": None,
+                "attempt_token": None,
+                "lease_expires_at": None,
             },
+            expected_status=job["status"],
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error actualizando cotizacion: {e}")
 
+    if not updated:
+        raise HTTPException(status_code=409, detail="La cotizacion cambio de estado")
     _wake_worker()
     return {"mensaje": "Cotizacion en cola", "job": updated}
 
@@ -4792,11 +4814,16 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
                 "error_message": None,
                 "output_path": None,
                 "completed_at": None,
+                "attempt_token": None,
+                "lease_expires_at": None,
             },
+            expected_status="failed",
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error reintentando cotizacion: {e}")
 
+    if not updated:
+        raise HTTPException(status_code=409, detail="La cotizacion ya no esta fallida")
     _wake_worker()
     return {"mensaje": "Cotizacion reencolada", "job": updated}
 
