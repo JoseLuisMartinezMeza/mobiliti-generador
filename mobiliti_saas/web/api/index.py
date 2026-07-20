@@ -4742,6 +4742,18 @@ async def cotizaciones_dev_upload(job_id: str, file: UploadFile = File(...), cur
     return {"ok": True, "path": job["input_path"], "size": len(content)}
 
 
+def _require_retryable_failed_quote(job: dict) -> None:
+    if job.get("status") != "failed":
+        return
+    if not job.get("input_path"):
+        raise HTTPException(status_code=400, detail="La cotizacion no tiene archivo de entrada")
+    if str(job.get("error_message") or "").strip().startswith("cleanup_pending:"):
+        raise HTTPException(
+            status_code=409,
+            detail="La cotizacion requiere limpieza administrativa antes de reintentar",
+        )
+
+
 @app.post("/cotizaciones/{job_id}/submit")
 def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(get_current_user)):
     try:
@@ -4752,6 +4764,7 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
 
     if job["status"] not in {"draft", "failed"}:
         raise HTTPException(status_code=409, detail="La cotizacion ya fue enviada")
+    _require_retryable_failed_quote(job)
 
     metadata = {**(job.get("metadata") or {}), **_validate_metadata(body)}
     assigned_quote_number = _next_quote_number_for_user(current_user)
@@ -4796,14 +4809,7 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
 
     if job["status"] != "failed":
         raise HTTPException(status_code=409, detail="Solo se pueden reintentar cotizaciones fallidas")
-    if not job.get("input_path"):
-        raise HTTPException(status_code=400, detail="La cotizacion no tiene archivo de entrada")
-    cleanup_error = str(job.get("error_message") or "").strip()
-    if cleanup_error.startswith("cleanup_pending:"):
-        raise HTTPException(
-            status_code=409,
-            detail="La cotizacion requiere limpieza administrativa antes de reintentar",
-        )
+    _require_retryable_failed_quote(job)
 
     _enforce_active_quote_limit(current_user["id"], exclude_job_id=job_id)
     try:

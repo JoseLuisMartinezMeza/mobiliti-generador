@@ -308,6 +308,19 @@ def _valid_mixed_body(items=None):
     }
 
 
+def _valid_submit_body():
+    return {
+        "cotizacion": "COT-001",
+        "proyecto": "Proyecto",
+        "cliente": "Cliente",
+        "correo": "cliente@example.com",
+        "telefono": "555",
+        "direccion": "Direccion",
+        "razon_social": "Empresa SA",
+        "template": "Template.xlsx",
+    }
+
+
 def _mock_mixed_quote_dependencies(monkeypatch):
     _mock_user(monkeypatch)
     state = {
@@ -3820,6 +3833,70 @@ def test_submit_defaults_to_dezgo_for_missing_product_images(monkeypatch):
     assert resp.json()["job"]["metadata"]["estimated_duration_seconds"] == 360
     assert resp.json()["job"]["attempt_token"] is None
     assert resp.json()["job"]["lease_expires_at"] is None
+
+
+@pytest.mark.parametrize(
+    ("input_path", "error_message", "expected_status"),
+    [
+        (None, "boom", 400),
+        ("users/7/jobs/job-1/input.json", "cleanup_pending:release_reservations", 409),
+        ("users/7/jobs/job-1/input.json", "cleanup_pending:delete_input", 409),
+        ("users/7/jobs/job-1/input.json", "cleanup_pending:delete_job", 409),
+    ],
+)
+def test_submit_failed_job_reuses_retry_preconditions_without_queue_or_lease_reset(
+    monkeypatch, input_path, error_message, expected_status,
+):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(index, "db_get_quote_job", lambda job_id: {
+        "id": job_id, "usuario_id": 7, "status": "failed",
+        "input_path": input_path, "error_message": error_message,
+        "metadata": {"source_type": "mixed_catalog_cart"},
+        "template": "Template.xlsx", "attempt_token": "old-attempt",
+        "lease_expires_at": "2026-07-19T00:00:00Z",
+    })
+    calls = []
+    monkeypatch.setattr(index, "db_update_quote_job", lambda *_args, **_kwargs: calls.append("update"))
+    monkeypatch.setattr(index, "_wake_worker", lambda: calls.append("wake"))
+
+    response = _client().post(
+        "/cotizaciones/job-1/submit", headers=_auth_headers(), json=_valid_submit_body()
+    )
+
+    assert response.status_code == expected_status
+    assert calls == []
+
+
+def test_submit_failed_job_queues_when_central_retry_preconditions_pass(monkeypatch):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(index, "db_get_quote_job", lambda job_id: {
+        "id": job_id, "usuario_id": 7, "status": "failed",
+        "input_path": "users/7/jobs/job-1/input.json", "error_message": "generator failed",
+        "metadata": {"source_type": "mixed_catalog_cart"},
+        "template": "Template.xlsx", "attempt_token": "old-attempt",
+        "lease_expires_at": "2026-07-19T00:00:00Z",
+    })
+    seen = {}
+
+    def update(job_id, updates, *, expected_status=None):
+        seen.update(job_id=job_id, updates=updates, expected_status=expected_status)
+        return {"id": job_id, **updates}
+
+    wakes = []
+    monkeypatch.setattr(index, "db_update_quote_job", update)
+    monkeypatch.setattr(index, "_wake_worker", lambda: wakes.append(True))
+
+    response = _client().post(
+        "/cotizaciones/job-1/submit", headers=_auth_headers(), json=_valid_submit_body()
+    )
+
+    assert response.status_code == 200
+    assert seen["expected_status"] == "failed"
+    assert seen["updates"]["attempt_token"] is None
+    assert seen["updates"]["lease_expires_at"] is None
+    assert wakes == [True]
+    assert response.json()["job"]["attempt_token"] is None
+    assert response.json()["job"]["lease_expires_at"] is None
 
 
 def test_submit_accepts_sunon_web_image_provider(monkeypatch):
