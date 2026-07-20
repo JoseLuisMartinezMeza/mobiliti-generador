@@ -466,6 +466,31 @@ def test_mixed_cart_preserves_review_missing_price_and_generated_reference_warni
     assert "Precio por confirmar" in lines["offiho"]["warnings"]
 
 
+def test_mixed_cart_preserves_supplier_warning_alongside_review_warning(
+    mixed_catalogs, rate_rows
+):
+    sonara = mixed_catalogs["sonara"]["items"][0]
+    sonara.update(
+        code_status="needs_review",
+        sku="",
+        warnings=["Revision documental local"],
+    )
+
+    payload = build_mixed_catalog_cart_payload(
+        [{"catalog": "sonara", "internal_id": "sonara:desk-1", "quantity": "1"}],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+
+    assert payload["groups"][0]["items"][0]["warnings"] == [
+        "Revision documental local",
+        "Codigo por verificar",
+    ]
+
+
 @pytest.mark.parametrize(("catalog", "availability"), (("alma", "made_to_order"), ("sunon", "made_to_order"), ("sonara", "unknown")))
 def test_mixed_cart_keeps_nonstocked_supplier_lines_without_reservation(mixed_catalogs, rate_rows, catalog, availability):
     item = mixed_catalogs[catalog]["items"][0]

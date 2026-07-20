@@ -284,6 +284,7 @@ def _supplier_line(raw: dict[str, Any], browser: dict[str, Any], *, catalog: str
         "available_quantity": stock, "stock": stock, "lead_time": str(raw.get("lead_time") or ""),
         "price_source": "catalog", "stock_status": "",
         "image_kind": str(raw.get("image_kind") or "placeholder"),
+        "warnings": list(raw.get("warnings") or []),
     }
     if availability == "stocked":
         available = Decimal(stock or "0")
