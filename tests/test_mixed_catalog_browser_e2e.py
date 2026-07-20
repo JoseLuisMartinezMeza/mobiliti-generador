@@ -581,6 +581,31 @@ def test_synchronous_double_submit_creates_one_mixed_job(vite_url, browser):
         context.close()
 
 
+def test_tarkett_card_rejects_invalid_draft_without_adding_line(vite_url, browser):
+    stub = ApiStub([])
+    context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
+    console_errors = capture_console_errors(page)
+    page_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    try:
+        page.goto(vite_url)
+        page.get_by_role("button", name=re.compile(r"^Tarkett")).click()
+        card = page.locator("article.tarkett-product", has_text="Piso Tarkett")
+        card.wait_for()
+        quantity = card.locator('input[type="number"]')
+        quantity.fill("")
+        card.get_by_role("button", name="Agregar", exact=True).click()
+
+        assert page.get_by_role("alert").filter(has_text="Cantidad invalida").is_visible()
+        assert page.get_by_role("button", name="Carrito (0)").first.is_visible()
+        assert page.locator(".mixed-cart-overlay").count() == 0
+        assert stub.mixed_post_bodies == []
+        assert stub.unexpected_requests == []
+        assert_no_browser_failures(page, console_errors, page_errors)
+    finally:
+        context.close()
+
+
 def test_mobile_drawer_traps_focus_closes_on_escape_and_never_overflows(vite_url, browser):
     stub = ApiStub([])
     context, page = new_page(browser, {"width": 390, "height": 844}, stub, vite_url)

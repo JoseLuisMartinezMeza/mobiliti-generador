@@ -634,7 +634,7 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             product_index += 1
             if line["auto_electrification"]:
                 eligible.append({field: group[field] for field in AUTO_ELECTRIFICATION_RATE_FIELDS})
-    if payload["item_count"] != total:
+    if type(payload["item_count"]) is not int or payload["item_count"] != total:
         raise ValueError("Conteo mixto inconsistente")
     expected_summary = [{key: group[key] for key in ("catalog", *AUTO_ELECTRIFICATION_RATE_FIELDS)} for group in groups]
     if payload["rate_summary"] != expected_summary:

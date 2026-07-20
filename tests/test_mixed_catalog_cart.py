@@ -604,6 +604,23 @@ def test_mixed_payload_rejects_net_mode_with_nonzero_discount(frozen_mixed_paylo
         validate_mixed_catalog_payload(payload)
 
 
+def test_mixed_payload_rejects_boolean_item_count(frozen_mixed_payload):
+    payload = deepcopy(frozen_mixed_payload)
+    payload["groups"] = payload["groups"][:1]
+    payload["rate_summary"] = payload["rate_summary"][:1]
+    payload["auto_electrification_rate"] = {
+        key: payload["groups"][0][key]
+        for key in (
+            "base_currency", "quote_currency", "exchange_rate", "rate_source",
+            "rate_effective_date", "rate_retrieved_at",
+        )
+    }
+    payload["item_count"] = True
+
+    with pytest.raises(ValueError, match="Conteo mixto inconsistente"):
+        validate_mixed_catalog_payload(payload)
+
+
 def test_mixed_payload_rejects_missing_insufficient_warning_after_valid_reservation_result(frozen_mixed_payload):
     payload = deepcopy(frozen_mixed_payload)
     line = payload["groups"][2]["items"][0]

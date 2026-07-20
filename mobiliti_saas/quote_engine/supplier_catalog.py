@@ -86,7 +86,10 @@ class _NormalizedSupplierCatalog(dict):
         self._normalization_token = _NORMALIZED_CATALOG_TOKEN
 
 
-def load_supplier_catalog_data(payload: dict, expected_supplier: str | None = None) -> dict:
+def load_supplier_catalog_data(
+    payload: dict[str, Any],
+    expected_supplier: str | None = None,
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Catalogo de proveedor invalido: raiz no es un objeto")
     required_fields = {"supplier", "source_hash", "generated_at", "items"}
@@ -163,13 +166,13 @@ def load_supplier_catalog_data(payload: dict, expected_supplier: str | None = No
 
 
 def build_supplier_cart_payload(
-    raw_items: list[dict],
-    catalog: dict,
+    raw_items: list[dict[str, Any]],
+    catalog: dict[str, Any],
     quote_currency: str,
-    rate_rows: list[dict],
+    rate_rows: list[dict[str, Any]],
     *,
     today: date | None = None,
-) -> dict:
+) -> dict[str, Any]:
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError("El carrito de proveedor esta vacio")
     if len(raw_items) > MAX_CART_ROWS:

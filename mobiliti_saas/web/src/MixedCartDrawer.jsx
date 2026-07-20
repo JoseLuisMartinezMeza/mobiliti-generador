@@ -77,14 +77,11 @@ export default function MixedCartDrawer({
   const previousFocusRef = useRef(null);
   const onCloseRef = useRef(onClose);
   const busyRef = useRef(busy);
+  busyRef.current = busy;
 
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
-
-  useEffect(() => {
-    busyRef.current = busy;
-  }, [busy]);
 
   useEffect(() => {
     const visibleKeys = new Set(lines.map((line) => line.key));

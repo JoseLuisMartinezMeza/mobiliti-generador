@@ -388,6 +388,10 @@ def test_drawer_escape_handler_executes_only_when_not_busy():
     source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
     assert "const busyRef = useRef(busy)" in source
     assert "busyRef.current = busy" in source
+    assert not re.search(
+        r"useEffect\(\(\) => \{\s*busyRef\.current = busy;\s*\}, \[busy\]\);",
+        source,
+    )
     assert "handleMixedCartEscape(event, busyRef.current" in source
     assert re.search(r"window\.addEventListener\(\"keydown\"[\s\S]*?\n\s*}, \[open\]\);", source)
 
