@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import unicodedata
 import uuid
 
@@ -385,29 +386,102 @@ def _quote_body(internal_id: str) -> dict:
 
 class _MemoryWorkerClient:
     def __init__(self, job: dict, input_content: bytes):
-        self.job = job
+        assert job["status"] == "queued"
+        self.job = dict(job)
         self.input_content = input_content
         self.output_content = b""
         self.completed = None
+        self.uploaded_path = None
+        self.progress_updates = []
+        self.input_deleted = False
+        self.input_cleared = False
+        self.lock = threading.RLock()
+
+    def _update_current_row(self, data: dict) -> list[dict]:
+        self.job.update(data)
+        return [dict(self.job)]
 
     def rest(self, method, path, params=None, data=None):
-        if method == "PATCH" and "status=eq.queued" in path:
-            return [{**self.job, **(data or {})}]
-        if method == "PATCH" and data and data.get("status") == "completed":
-            self.completed = data
-            return [{"id": self.job["id"], **data}]
-        return []
+        assert params is None
+        assert method == "PATCH"
+        assert isinstance(data, dict)
+        with self.lock:
+            job_id = self.job["id"]
+            claim_path = f"/saas_quote_jobs?id=eq.{job_id}&status=eq.queued"
+            if path == claim_path:
+                assert self.job["status"] == "queued"
+                assert set(data) == {
+                    "status", "attempt_token", "lease_expires_at", "updated_at",
+                }
+                assert data["status"] == "processing"
+                assert data["attempt_token"]
+                assert data["lease_expires_at"]
+                return self._update_current_row(data)
+
+            attempt_token = self.job.get("attempt_token")
+            processing_path = (
+                f"/saas_quote_jobs?id=eq.{job_id}&status=eq.processing"
+                f"&attempt_token=eq.{attempt_token}"
+            )
+            if path == processing_path:
+                assert self.job["status"] == "processing"
+                if data.get("status") == "completed":
+                    assert set(data) == {
+                        "status", "output_path", "metadata", "error_message",
+                        "lease_expires_at", "updated_at", "completed_at",
+                    }
+                    assert self.uploaded_path == data["output_path"]
+                    assert data["metadata"]["progress_percent"] == 100
+                    row = self._update_current_row(data)[0]
+                    self.completed = dict(row)
+                    return [row]
+
+                assert set(data) in (
+                    {"metadata", "lease_expires_at", "updated_at"},
+                    {"lease_expires_at", "updated_at"},
+                )
+                if "metadata" in data:
+                    progress = data["metadata"]["progress_percent"]
+                    assert progress in {45, 55, 90}
+                    self.progress_updates.append(progress)
+                return self._update_current_row(data)
+
+            completed_path = (
+                f"/saas_quote_jobs?id=eq.{job_id}&status=eq.completed"
+                f"&attempt_token=eq.{attempt_token}"
+            )
+            if path == completed_path:
+                assert self.job["status"] == "completed"
+                assert self.completed is not None
+                assert self.input_deleted is True
+                assert set(data) == {"input_path", "updated_at"}
+                assert data["input_path"] is None
+                self.input_cleared = True
+                return self._update_current_row(data)
+
+        raise AssertionError(f"Ruta REST inesperada: {method} {path}")
 
     def storage_download(self, object_path, destination):
+        assert self.job["status"] == "processing"
         assert object_path == self.job["input_path"]
         Path(destination).write_bytes(self.input_content)
 
     def storage_upload(self, object_path, source):
-        assert object_path.endswith("/output.xlsx")
+        expected_path = (
+            f"users/{self.job['usuario_id']}/jobs/{self.job['id']}/attempts/"
+            f"{self.job['attempt_token']}/output.xlsx"
+        )
+        assert self.job["status"] == "processing"
+        assert object_path == expected_path
+        self.uploaded_path = object_path
         self.output_content = Path(source).read_bytes()
 
     def storage_delete(self, object_path):
+        assert self.completed is not None
+        assert self.job["status"] == "completed"
+        assert self.job["output_path"] == self.uploaded_path
         assert object_path == self.job["input_path"]
+        self.input_deleted = True
 
 
 def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_discount(
@@ -468,7 +542,7 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         return local_image
 
     monkeypatch.setattr(catalog_cart, "_download_catalog_image", local_catalog_image)
-    created_job = state["created"][0]
+    created_job = {**state["created"][0], **state["queued"][0]}
     worker_client = _MemoryWorkerClient(created_job, state["uploaded"][0]["content"])
     quote_worker.process_job(worker_client, created_job)
 
@@ -476,6 +550,13 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
     assert worker_client.completed["status"] == "completed"
     assert worker_client.completed["metadata"]["catalog_supplier"] == "lumbro"
     assert worker_client.completed["metadata"]["descuento"] == 0
+    assert worker_client.progress_updates == [45, 55, 90]
+    assert worker_client.input_deleted is True
+    assert worker_client.input_cleared is True
+    assert worker_client.uploaded_path == (
+        f"users/{created_job['usuario_id']}/jobs/{created_job['id']}/attempts/"
+        f"{worker_client.completed['attempt_token']}/output.xlsx"
+    )
     assert worker_client.output_content.startswith(b"PK")
 
     workbook = load_workbook(BytesIO(worker_client.output_content), data_only=False)
