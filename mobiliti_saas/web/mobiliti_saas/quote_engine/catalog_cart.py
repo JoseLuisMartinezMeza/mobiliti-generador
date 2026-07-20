@@ -40,6 +40,7 @@ OFFICIAL_IMAGE_HOSTS = {
         {
             "offiho.com",
             "www.offiho.com",
+            "offiho.com.mx",
             "offihoblack.com",
             "www.offihoblack.com",
             "web-lemon-one-45.vercel.app",

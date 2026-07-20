@@ -458,6 +458,17 @@ def test_offiho_catalog_item_rejects_non_official_https_url(field, url):
         OffihoCatalogItem.from_dict(raw)
 
 
+def test_offiho_catalog_item_accepts_official_mexico_image_host():
+    from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+
+    raw = _runtime_catalog_raw()["items"][0]
+    raw["image_url"] = "https://offiho.com.mx/e2e-offiho.png"
+
+    item = OffihoCatalogItem.from_dict(raw)
+
+    assert item.image_url == "https://offiho.com.mx/e2e-offiho.png"
+
+
 def test_offiho_catalog_accepts_only_production_pdf_asset_prefix():
     from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
 
