@@ -234,6 +234,71 @@ def test_mobiliti_preserves_template_spacing_when_section_fits_base_capacity():
         wb.close()
 
 
+def test_mobiliti_unused_product_rows_keep_blank_safe_formulas_without_stale_inputs():
+    wb = load_workbook(TEMPLATE, data_only=False, keep_links=False)
+    ws = wb["Mobiliti"]
+    try:
+        _write_mobiliti(
+            ws,
+            _many_products(1),
+            {"m3": "H", "cantidad": "G", "unit_price": "J"},
+            metadata={"descuento": 40},
+        )
+
+        unused_row = 15
+        input_columns = (4, 5, 6, 8, 10, 11, 16)
+        formula_columns = (
+            7,
+            9,
+            12,
+            13,
+            14,
+            15,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+        )
+        guard = (
+            f'=IF(COUNTA($D{unused_row},$E{unused_row},$F{unused_row},'
+            f'$H{unused_row},$J{unused_row},$K{unused_row})=0,"",'
+        )
+
+        assert all(ws.cell(unused_row, col).value is None for col in input_columns)
+        for col in formula_columns:
+            formula = ws.cell(unused_row, col).value
+            assert isinstance(formula, str)
+            assert formula.startswith(guard)
+            assert "#REF!" not in formula
+        min_price_formula = ws.cell(unused_row, MOBILITI_MIN_UNIT_PRICE_COL).value
+        assert "$W$14:$W$" in min_price_formula
+        assert f",D{unused_row})" in min_price_formula
+        assert ws.cell(unused_row, MOBILITI_STATUS_COL).value == (
+            f'{guard}IF(AH{unused_row}<30%,"ERROR","OK"))'
+        )
+
+        separator_row = 46
+        for col in range(4, MOBILITI_STATUS_COL + 1):
+            assert ws.cell(separator_row, col).value is None
+    finally:
+        wb.close()
+
+
 def test_mobiliti_appended_sections_keep_template_visual_skeleton():
     wb = load_workbook(TEMPLATE, data_only=False, keep_links=False)
     ws = wb["Mobiliti"]

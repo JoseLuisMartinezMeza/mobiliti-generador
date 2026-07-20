@@ -597,15 +597,41 @@ def _mobiliti_provider_discount_formula(row: int, discount_start: int | None) ->
     return f'=IFERROR(VLOOKUP(F{row},$AJ${discount_start}:$AK${discount_end},2,FALSE),0.5)'
 
 
-def _write_mobiliti_row_formulas(ws, row: int, total_row: int, discount_start: int | None) -> None:
+def _mobiliti_blank_product_guard(row: int) -> str:
+    return f"COUNTA($D{row},$E{row},$F{row},$H{row},$J{row},$K{row})=0"
+
+
+def _blank_safe_mobiliti_formula(row: int, formula: str) -> str:
+    return f'=IF({_mobiliti_blank_product_guard(row)},"",{formula[1:]})'
+
+
+def _write_mobiliti_row_formulas(
+    ws,
+    row: int,
+    total_row: int,
+    discount_start: int | None,
+    *,
+    line_discount_literal: str | None = None,
+    blank_safe: bool = False,
+) -> None:
     product_end = max(14, total_row - 3)
     formulas = {
+        7: f'=IFERROR(VLOOKUP(F{row},Tabla_Proveedores_1,2,0)," ")',
+        9: f'=IFERROR(VLOOKUP(G{row},Proveedores!B:C,2,0)," ")',
         12: f"=K{row}*H{row}",
         13: _mobiliti_landed_cost_formula(row, total_row, discount_start),
         14: f"=M{row}*H{row}",
         15: f'=IFERROR(VLOOKUP(G{row},Proveedores!B:D,3,0)," ")',
         17: f"=IFERROR(IF(H{row}=0,0,VLOOKUP(E{row},Tabla_Fletes,3,FALSE)/H{row}),0)",
+        18: (
+            f'=IF(P{row}="Centro",Q{row},IF(P{row}="Norte",Q{row}*1.6,'
+            f'IF(P{row}="Occidente",Q{row}*1.2,IF(P{row}="Sur",Q{row}*2))))'
+        ),
         19: f"=IFERROR(IF(H{row}=0,0,VLOOKUP(E{row},Tabla_Instalacion,2,FALSE)/H{row}),0)",
+        20: (
+            f'=IF(P{row}="Centro",S{row},IF(P{row}="Norte",S{row}*1.1,'
+            f'IF(P{row}="Occidente",S{row}*1.1,IF(P{row}="Sur",S{row}*1.1))))'
+        ),
         21: f'=IF(F{row}="Offiho",0,R{row}+T{row})',
         22: (
             f"=IFERROR(IF(OR(K{row}=0,L{row}=0),U{row}/$H${total_row},"
@@ -629,10 +655,12 @@ def _write_mobiliti_row_formulas(ws, row: int, total_row: int, discount_start: i
         MOBILITI_GP_COL: f"=(AD{row}-N{row})/AD{row}",
         MOBILITI_STATUS_COL: f'=IF(AH{row}<30%,"ERROR","OK")',
     }
+    if line_discount_literal is not None:
+        formulas[MOBILITI_COVER_DISCOUNT_COL] = f"=MIN({line_discount_literal},Z{row})"
     for col, formula in formulas.items():
         cell = ws.cell(row, col)
         if not isinstance(cell, MergedCell):
-            cell.value = formula
+            cell.value = _blank_safe_mobiliti_formula(row, formula) if blank_safe else formula
     for col in (MOBILITI_MAX_DISCOUNT_COL, MOBILITI_COVER_DISCOUNT_COL):
         ws.cell(row, col).number_format = PERCENT_FORMAT
 
@@ -2081,7 +2109,7 @@ def _write_mobiliti(
             lumbro_rows.append(accessory_row)
         if lumbro_rows:
             lumbro_row_map[item.row] = lumbro_rows
-    _clear_unused_mobiliti_product_rows(ws, written_rows)
+    _prepare_unused_mobiliti_product_rows(ws, written_rows, metadata)
     if _uses_mixed_catalog_prices(metadata):
         money_format = _money_format(metadata)
         format_rows = written_rows | {layout.subtotal_row for layout in section_layouts}
@@ -2094,12 +2122,29 @@ def _write_mobiliti(
     return row_map, lumbro_row_map
 
 
-def _clear_unused_mobiliti_product_rows(ws, written_rows: set[int]) -> None:
+def _prepare_unused_mobiliti_product_rows(
+    ws,
+    written_rows: set[int],
+    metadata: dict[str, Any],
+) -> None:
+    total_row = _find_mobiliti_total_row(ws)
+    if total_row is None:
+        return
+    discount_start = _find_provider_discount_start(ws)
+    line_discount_literal = _excel_decimal(_discount_rate(metadata))
     for start_row, capacity in _mobiliti_product_ranges(ws):
         for row in range(start_row, start_row + capacity):
             if row in written_rows:
                 continue
             _clear_mobiliti_row_values(ws, row)
+            _write_mobiliti_row_formulas(
+                ws,
+                row,
+                total_row,
+                discount_start,
+                line_discount_literal=line_discount_literal,
+                blank_safe=True,
+            )
 
 
 def _apply_mobiliti_provider_validation(ws) -> None:

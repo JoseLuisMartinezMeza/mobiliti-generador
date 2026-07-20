@@ -835,6 +835,21 @@ def _assert_final_workbook(
         mobiliti.cell(row, 4).value: row for row in automatic_rows
     }
     assert list(automatic_by_code) == ["LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"]
+    first_unused_row = max(row_maps[0][1], *automatic_rows) + 1
+    assert first_unused_row == 18
+    guard = (
+        f'=IF(COUNTA($D{first_unused_row},$E{first_unused_row},$F{first_unused_row},'
+        f'$H{first_unused_row},$J{first_unused_row},$K{first_unused_row})=0,"",'
+    )
+    assert all(
+        mobiliti.cell(first_unused_row, column).value is None
+        for column in (4, 5, 6, 8, 10, 11, 16)
+    )
+    assert str(mobiliti.cell(first_unused_row, 23).value).startswith(guard)
+    assert str(mobiliti.cell(first_unused_row, 24).value).startswith(guard)
+    assert mobiliti.cell(first_unused_row, 35).value == (
+        f'{guard}IF(AH{first_unused_row}<30%,"ERROR","OK"))'
+    )
     expected_template_rows = {
         "LIDO.OP-INT": 380,
         "JUMP-1.5M": 396,

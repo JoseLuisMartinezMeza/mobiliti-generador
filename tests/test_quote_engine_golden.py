@@ -559,6 +559,20 @@ def test_legacy_workbook_keeps_existing_provider_header_and_formulas(tmp_path):
     assert cot.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
     assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
     assert cot.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
+    unused_row = mobiliti_row + 1
+    guard = (
+        f'=IF(COUNTA($D{unused_row},$E{unused_row},$F{unused_row},'
+        f'$H{unused_row},$J{unused_row},$K{unused_row})=0,"",'
+    )
+    assert all(
+        mobiliti.cell(unused_row, column).value is None
+        for column in (4, 5, 6, 8, 10, 11, 16)
+    )
+    assert str(mobiliti.cell(unused_row, 23).value).startswith(guard)
+    assert str(mobiliti.cell(unused_row, 24).value).startswith(guard)
+    assert mobiliti.cell(unused_row, 35).value == (
+        f'{guard}IF(AH{unused_row}<30%,"ERROR","OK"))'
+    )
     wb.close()
 
 
