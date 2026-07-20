@@ -198,6 +198,43 @@ CONFIRMATION = (
     "con precio por confirmar. ¿Deseas continuar?"
 )
 
+KNOWN_API_REQUESTS = frozenset({
+    ("GET", "/cotizaciones"),
+    ("GET", "/tarkett/catalog"),
+    ("GET", "/offiho/catalog"),
+    ("GET", "/catalogs"),
+    ("GET", "/catalogs/sonara"),
+    ("GET", "/catalogs/alma"),
+    ("POST", "/catalogs/mixed-quote"),
+})
+
+
+def is_exact_origin(request_url, controlled_origin):
+    request = urlparse(request_url)
+    controlled = urlparse(controlled_origin)
+    return (
+        request.scheme.lower(), request.hostname, request.port
+    ) == (
+        controlled.scheme.lower(), controlled.hostname, controlled.port
+    )
+
+
+def is_known_api_request(method, path, preflight_method=""):
+    effective_method = preflight_method if method == "OPTIONS" else method
+    return (effective_method.upper(), path) in KNOWN_API_REQUESTS
+
+
+def test_network_guard_contract_rejects_other_local_origins_and_unknown_preflights():
+    vite_origin = "http://127.0.0.1:5173"
+
+    assert is_exact_origin("http://127.0.0.1:5173/src/main.jsx", vite_origin)
+    assert not is_exact_origin("http://127.0.0.1:5174/src/main.jsx", vite_origin)
+    assert not is_exact_origin("http://localhost:5173/src/main.jsx", vite_origin)
+    assert not is_exact_origin("http://127.0.0.1:8000/catalogs", vite_origin)
+    assert is_known_api_request("OPTIONS", "/catalogs/mixed-quote", "POST")
+    assert not is_known_api_request("OPTIONS", "/catalogs/not-stubbed", "POST")
+    assert not is_known_api_request("OPTIONS", "/catalogs/mixed-quote", "DELETE")
+
 
 class ApiStub:
     def __init__(self, mixed_responses):
@@ -205,10 +242,10 @@ class ApiStub:
         self.mixed_post_bodies = []
         self.unexpected_requests = []
 
-    def install(self, page):
+    def install(self, page, vite_origin):
         def block_external_network(route):
             parsed = urlparse(route.request.url)
-            if parsed.hostname == "127.0.0.1":
+            if is_exact_origin(route.request.url, vite_origin):
                 route.continue_()
                 return
             self.unexpected_requests.append(
@@ -237,7 +274,18 @@ class ApiStub:
             parsed = urlparse(request.url)
             path = parsed.path
             if request.method == "OPTIONS":
-                fulfill_json(route, {}, status=204)
+                requested_method = request.headers.get("access-control-request-method", "")
+                if is_known_api_request(request.method, path, requested_method):
+                    fulfill_json(route, {}, status=204)
+                else:
+                    self.unexpected_requests.append(
+                        f"OPTIONS {path} ({requested_method or 'metodo ausente'})"
+                    )
+                    fulfill_json(route, {"detail": "stub faltante"}, status=500)
+                return
+            if not is_known_api_request(request.method, path):
+                self.unexpected_requests.append(f"{request.method} {path}")
+                fulfill_json(route, {"detail": "stub faltante"}, status=500)
                 return
             if request.method == "GET" and path == "/cotizaciones":
                 fulfill_json(route, {"cotizaciones": []})
@@ -266,8 +314,7 @@ class ApiStub:
                 status, body = self.mixed_responses.pop(0)
                 fulfill_json(route, body, status=status)
                 return
-            self.unexpected_requests.append(f"{request.method} {path}")
-            fulfill_json(route, {"detail": "stub faltante"}, status=500)
+            raise AssertionError(f"Known API route lacks a deterministic stub: {request.method} {path}")
 
         page.route("**/*", block_external_network)
         page.route("http://127.0.0.1:8000/**", dispatch)
@@ -325,7 +372,7 @@ def browser():
             instance.close()
 
 
-def new_page(browser, viewport, api_stub):
+def new_page(browser, viewport, api_stub, vite_url):
     context = browser.new_context(viewport=viewport)
     page = context.new_page()
     page.set_default_timeout(12_000)
@@ -333,8 +380,30 @@ def new_page(browser, viewport, api_stub):
         "localStorage.setItem('mobiliti_session', JSON.stringify(%s))"
         % json.dumps(SESSION)
     )
-    api_stub.install(page)
+    api_stub.install(page, vite_url)
     return context, page
+
+
+def capture_console_errors(page):
+    errors = []
+
+    def capture(message):
+        if message.type != "error":
+            return
+        errors.append({
+            "text": message.text,
+            "url": message.location.get("url", ""),
+        })
+
+    page.on("console", capture)
+    return errors
+
+
+def is_intentional_mixed_422_console_error(message):
+    return (
+        "422" in message["text"]
+        and urlparse(message["url"]).path == "/catalogs/mixed-quote"
+    )
 
 
 def assert_no_browser_failures(page, console_errors, page_errors):
@@ -342,7 +411,7 @@ def assert_no_browser_failures(page, console_errors, page_errors):
         "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
     )
     assert page_errors == []
-    assert [message for message in console_errors if "favicon" not in message.lower()] == []
+    assert console_errors == []
 
 
 def close_auto_opened_drawer(page, expected_count):
@@ -372,10 +441,9 @@ def test_four_catalog_checkout_retains_422_state_then_retries_once(vite_url, bro
         (422, {"detail": "sonara:sonara:review-panel requiere revision"}),
         (200, SUCCESS_JOB),
     ])
-    context, page = new_page(browser, {"width": 1440, "height": 1000}, stub)
-    console_errors = []
+    context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
+    console_errors = capture_console_errors(page)
     page_errors = []
-    page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
@@ -451,10 +519,19 @@ def test_four_catalog_checkout_retains_422_state_then_retries_once(vite_url, bro
 
         # Chrome reports the deliberately stubbed 422 as a network console error.
         # Account for that single expected diagnostic, then require a clean retry.
-        assert len(console_errors) == 1
-        assert "422" in console_errors[0]
-        assert "Failed to load resource" in console_errors[0]
-        console_errors.clear()
+        intentional_422_errors = [
+            message for message in console_errors
+            if is_intentional_mixed_422_console_error(message)
+        ]
+        assert intentional_422_errors
+        assert [
+            message for message in console_errors
+            if message not in intentional_422_errors
+        ] == []
+        console_errors[:] = [
+            message for message in console_errors
+            if message not in intentional_422_errors
+        ]
 
         accept_confirmation(page, confirmations)
         dialog.get_by_role("button", name="Cotizar todos los catalogos", exact=True).click()
@@ -474,10 +551,9 @@ def test_four_catalog_checkout_retains_422_state_then_retries_once(vite_url, bro
 
 def test_synchronous_double_submit_creates_one_mixed_job(vite_url, browser):
     stub = ApiStub([(200, SUCCESS_JOB)])
-    context, page = new_page(browser, {"width": 1440, "height": 1000}, stub)
-    console_errors = []
+    context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
+    console_errors = capture_console_errors(page)
     page_errors = []
-    page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
@@ -507,10 +583,9 @@ def test_synchronous_double_submit_creates_one_mixed_job(vite_url, browser):
 
 def test_mobile_drawer_traps_focus_closes_on_escape_and_never_overflows(vite_url, browser):
     stub = ApiStub([])
-    context, page = new_page(browser, {"width": 390, "height": 844}, stub)
-    console_errors = []
+    context, page = new_page(browser, {"width": 390, "height": 844}, stub, vite_url)
+    console_errors = capture_console_errors(page)
     page_errors = []
-    page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
