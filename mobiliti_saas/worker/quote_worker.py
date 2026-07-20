@@ -358,10 +358,20 @@ class PostgresClient(SupabaseClient):
         data = data or {}
         if method == "GET" and path == "/saas_quote_jobs":
             limit = int(params.get("limit", "1") or 1)
-            status = str(params.get("status", "eq.queued")).split(".", 1)[1]
+            where = []
+            values = []
+            status_filter = params.get("status")
+            if status_filter:
+                where.append("status = %s")
+                values.append(str(status_filter).split(".", 1)[1])
+            id_filter = params.get("id")
+            if id_filter:
+                where.append("id = %s")
+                values.append(str(id_filter).split(".", 1)[1])
+            where_sql = " WHERE " + " AND ".join(where) if where else ""
             return self._rows(
-                "SELECT * FROM saas_quote_jobs WHERE status = %s ORDER BY created_at ASC LIMIT %s",
-                (status, limit),
+                f"SELECT * FROM saas_quote_jobs{where_sql} ORDER BY created_at ASC LIMIT %s",
+                tuple(values) + (limit,),
             )
 
         if method == "PATCH" and path == "/saas_quote_jobs":
@@ -466,6 +476,9 @@ def _parse_rest_filters(path: str) -> list[tuple[str, str, str | None]]:
     return filters
 
 
+_LOCAL_DEV_STORE_LOCK = threading.RLock()
+
+
 class LocalDevClient:
     def __init__(self) -> None:
         self.db_path = DEV_STORE_DIR / "db.json"
@@ -481,6 +494,10 @@ class LocalDevClient:
         self.db_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def rest(self, method: str, path: str, params: dict | None = None, data: dict | None = None):
+        with _LOCAL_DEV_STORE_LOCK:
+            return self._rest_locked(method, path, params=params, data=data)
+
+    def _rest_locked(self, method: str, path: str, params: dict | None = None, data: dict | None = None):
         store = self._load()
         if path == "/saas_quote_jobs" and method == "GET":
             rows = list(store.get("quote_jobs", []))
@@ -488,6 +505,10 @@ class LocalDevClient:
             if isinstance(status_filter, str) and status_filter.startswith("eq."):
                 wanted = status_filter.split(".", 1)[1]
                 rows = [row for row in rows if row.get("status") == wanted]
+            id_filter = (params or {}).get("id")
+            if isinstance(id_filter, str) and id_filter.startswith("eq."):
+                wanted_id = id_filter.split(".", 1)[1]
+                rows = [row for row in rows if str(row.get("id")) == wanted_id]
             rows.sort(key=lambda row: row.get("created_at", ""))
             limit = int((params or {}).get("limit", len(rows)) or len(rows))
             return rows[:limit]
@@ -922,12 +943,58 @@ def _patch_current_attempt(client: SupabaseClient, job: dict, data: dict, action
 
 
 def _heartbeat_attempt(client: SupabaseClient, job: dict) -> None:
-    _patch_current_attempt(
-        client,
-        job,
-        {"lease_expires_at": _lease_deadline(), "updated_at": _utc_now()},
+    row = _single_attempt_row(
+        client.rest(
+            "PATCH",
+            _attempt_patch_path(job),
+            data={"lease_expires_at": _lease_deadline(), "updated_at": _utc_now()},
+        ),
         "heartbeat",
     )
+    if (
+        row.get("status") != "processing"
+        or str(row.get("attempt_token") or "") != str(job.get("attempt_token") or "")
+    ):
+        raise WorkerLeaseLost("Heartbeat no confirmo la propiedad del intento")
+
+
+def _is_exact_attempt_output(job: dict, output_path: str) -> bool:
+    expected = (
+        f"users/{job.get('usuario_id')}/jobs/{job.get('id')}/attempts/"
+        f"{job.get('attempt_token')}/output.xlsx"
+    )
+    return bool(job.get("attempt_token")) and output_path == expected
+
+
+def _cleanup_unpersisted_attempt_output(
+    client: SupabaseClient,
+    job: dict,
+    output_path: str,
+) -> bool:
+    if not _is_exact_attempt_output(job, output_path):
+        print(f"WARN: ruta de output de intento invalida; se conserva {output_path}")
+        return False
+    try:
+        rows = client.rest(
+            "GET",
+            "/saas_quote_jobs",
+            params={"id": f"eq.{job['id']}", "select": "id,output_path", "limit": "2"},
+        )
+    except Exception as exc:
+        print(f"WARN: no se verifico output persistido de {job['id']}: {exc}")
+        return False
+    if not isinstance(rows, list) or len(rows) > 1:
+        print(f"WARN: consulta ambigua de output persistido; se conserva {output_path}")
+        return False
+    current = rows[0] if rows else None
+    if isinstance(current, dict) and str(current.get("output_path") or "") == output_path:
+        return False
+    try:
+        client.storage_delete(output_path)
+    except Exception as exc:
+        print(f"WARN: no se pudo limpiar output huerfano de {job['id']}: {exc}")
+        return False
+    return True
 
 
 class _LeaseHeartbeat:
@@ -1074,6 +1141,8 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
     job_id = job["id"]
     attempt_token = job["attempt_token"]
     output_path = f"users/{job['usuario_id']}/jobs/{job_id}/attempts/{attempt_token}/output.xlsx"
+    output_may_exist = False
+    completed_durable = False
 
     with tempfile.TemporaryDirectory(prefix="mobiliti-quote-") as tmp:
         tmp_dir = Path(tmp)
@@ -1092,6 +1161,7 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
                 generation_seconds = round(time.perf_counter() - started_at, 1)
                 update_progress(client, job, 90)
                 _validate_output_size(local_output)
+                output_may_exist = True
                 client.storage_upload(output_path, local_output)
                 heartbeat.ensure_owned()
             metadata = {
@@ -1114,6 +1184,7 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
                     },
                     "finalizacion",
                 )
+                completed_durable = True
             except WorkerLeaseLost as completion_error:
                 try:
                     _patch_current_attempt(
@@ -1178,6 +1249,9 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
             except WorkerLeaseLost:
                 raise WorkerLeaseLost("Lease perdido antes de registrar el fallo") from exc
             raise
+        finally:
+            if output_may_exist and not completed_durable:
+                _cleanup_unpersisted_attempt_output(client, job, output_path)
 
 
 def _fallback_tarkett_catalog_payload() -> dict:

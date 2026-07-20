@@ -1327,14 +1327,23 @@ class FencedWorkerClient:
     def rest(self, method, path, params=None, data=None):
         with self.lock:
             if method == "GET" and path == "/saas_quote_jobs":
-                wanted = str((params or {}).get("status", "eq.queued")).split(".", 1)[1]
-                return [dict(self.job)] if self.job["status"] == wanted else []
+                status_filter = (params or {}).get("status")
+                id_filter = (params or {}).get("id")
+                if status_filter and self.job["status"] != str(status_filter).split(".", 1)[1]:
+                    return []
+                if id_filter and self.job["id"] != str(id_filter).split(".", 1)[1]:
+                    return []
+                return [dict(self.job)]
             assert method == "PATCH"
             assert path.startswith("/saas_quote_jobs?")
             if not self._matches(self._filters(path)):
                 return []
             if (data or {}).get("status") == "completed":
                 self.completion_attempts += 1
+                if self.completion_mode == "exception_after_commit":
+                    self.completion_mode = "ok"
+                    self.job.update(data or {})
+                    raise RuntimeError("completion response lost")
                 if self.completion_mode == "exception":
                     self.completion_mode = "ok"
                     raise RuntimeError("completion unavailable")
@@ -1373,9 +1382,10 @@ def test_completion_cas_failure_retains_input_and_allows_retry(monkeypatch, comp
 
     assert client.job["status"] == "failed"
     assert client.job["input_path"] in client.objects
-    assert client.deletes == []
     first_output = client.uploads[0]
     assert "/attempts/" in first_output and first_output.endswith("/output.xlsx")
+    assert client.deletes == [first_output]
+    assert first_output not in client.objects
 
     client.job.update(
         status="queued", attempt_token=None, lease_expires_at=None,
@@ -1385,9 +1395,60 @@ def test_completion_cas_failure_retains_input_and_allows_retry(monkeypatch, comp
 
     assert completed and completed[0]["status"] == "completed"
     assert client.job["input_path"] is None
-    assert client.deletes == ["users/7/jobs/job-fenced/input.xlsx"]
+    assert client.deletes == [first_output, "users/7/jobs/job-fenced/input.xlsx"]
     assert len(client.uploads) == 2
     assert client.uploads[0] != client.uploads[1]
+
+
+def test_ambiguous_completion_retains_persisted_winning_output(monkeypatch):
+    client = FencedWorkerClient(completion_mode="exception_after_commit")
+    monkeypatch.setattr(
+        quote_worker,
+        "_run_generator",
+        lambda _job, _input, output: output.write_bytes(b"winner"),
+    )
+    monkeypatch.setattr(quote_worker, "WORKER_HEARTBEAT_SECONDS", 3600)
+
+    with pytest.raises(quote_worker.WorkerLeaseLost):
+        quote_worker.process_job(client, dict(client.job))
+
+    output_path = client.uploads[0]
+    assert client.job["status"] == "completed"
+    assert client.job["output_path"] == output_path
+    assert output_path in client.objects
+    assert output_path not in client.deletes
+    assert client.job["input_path"] in client.objects
+
+
+def test_lost_attempt_after_upload_deletes_only_its_orphan(monkeypatch):
+    client = FencedWorkerClient()
+    original_upload = client.storage_upload
+
+    def lose_after_upload(object_path, source):
+        original_upload(object_path, source)
+        client.job.update(
+            status="queued", attempt_token=None, lease_expires_at=None,
+            output_path=None, metadata={"winner": "not-started"},
+        )
+
+    monkeypatch.setattr(client, "storage_upload", lose_after_upload)
+    monkeypatch.setattr(
+        quote_worker,
+        "_run_generator",
+        lambda _job, _input, output: output.write_bytes(b"orphan"),
+    )
+    monkeypatch.setattr(quote_worker, "WORKER_HEARTBEAT_SECONDS", 3600)
+
+    with pytest.raises(quote_worker.WorkerLeaseLost):
+        quote_worker.process_job(client, dict(client.job))
+
+    orphan_path = client.uploads[0]
+    assert client.job["status"] == "queued"
+    assert client.job["output_path"] is None
+    assert client.job["metadata"] == {"winner": "not-started"}
+    assert client.deletes == [orphan_path]
+    assert orphan_path not in client.objects
+    assert "users/7/jobs/job-fenced/input.xlsx" in client.objects
 
 
 def test_stale_worker_loses_lease_without_clobbering_recovery_attempt(monkeypatch):
@@ -1452,6 +1513,62 @@ def test_long_generator_heartbeats_current_attempt(monkeypatch):
     assert result and result[0][0]["status"] == "completed"
 
 
+def test_real_mixed_conversion_and_generator_preserve_pricing_metadata_across_heartbeat(
+    monkeypatch,
+):
+    client = FencedWorkerClient()
+    payload = _valid_mixed_worker_payload()
+    client.job.update(
+        input_path="users/7/jobs/job-fenced/input.json",
+        metadata={
+            "source_type": "mixed_catalog_cart",
+            "input_extension": ".json",
+            "catalog_source_hashes": {"tarkett": "a" * 64},
+            "cotizacion": "COT-HEARTBEAT",
+            "proyecto": "Heartbeat mixto",
+            "cliente": "Cliente",
+            "correo": "cliente@example.com",
+            "telefono": "555",
+            "direccion": "Direccion",
+            "razon_social": "Empresa SA",
+            "image_provider": "pillow",
+        },
+    )
+    client.objects = {client.job["input_path"]: json.dumps(payload).encode("utf-8")}
+    real_run_generator = quote_worker._run_generator
+    worker_template = (
+        Path("mobiliti_saas/worker/templates/Formato Cotizacion 2026 GDL.xlsx").resolve()
+    )
+    seen = {}
+
+    def slow_real_generator(job, input_path, output_path):
+        heartbeat_before = client.heartbeat_count
+        deadline = time.time() + 5
+        while client.heartbeat_count <= heartbeat_before and time.time() < deadline:
+            time.sleep(0.01)
+        assert client.heartbeat_count > heartbeat_before
+        seen.update(input_name=input_path.name, metadata=json.loads(json.dumps(job["metadata"])))
+        return real_run_generator(job, input_path, output_path)
+
+    monkeypatch.setattr(quote_worker, "_run_generator", slow_real_generator)
+    monkeypatch.setattr(quote_worker, "_template_path", lambda: str(worker_template))
+    monkeypatch.setattr(quote_worker, "WORKER_HEARTBEAT_SECONDS", 0.01)
+    monkeypatch.setattr(quote_worker, "QUOTE_ENGINE", "python")
+
+    completed = quote_worker.process_job(client, dict(client.job))
+
+    metadata = completed[0]["metadata"]
+    assert seen["input_name"] == "quotation_from_mixed_catalog.xlsx"
+    for current in (seen["metadata"], metadata):
+        assert current["mixed_catalog_converted"] is True
+        assert current["catalog_price_mode"] == "mixed_catalog_converted"
+        assert current["rate_summary"] == payload["rate_summary"]
+        assert current["auto_electrification_rate"] == payload["auto_electrification_rate"]
+        assert current["catalog_source_hashes"] == {"tarkett": "a" * 64}
+        assert current["quote_currency"] == "EUR"
+        assert current["descuento"] == 0
+
+
 def test_postgres_client_threads_attempt_and_lease_filters_into_update(monkeypatch):
     client = quote_worker.PostgresClient.__new__(quote_worker.PostgresClient)
     seen = {}
@@ -1501,3 +1618,68 @@ def test_local_dev_client_rejects_patch_from_lost_attempt(monkeypatch, tmp_path)
 
     assert lost == []
     assert current[0]["status"] == "completed"
+
+
+def test_local_dev_client_serializes_heartbeat_and_progress_read_modify_write(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(quote_worker, "DEV_STORE_DIR", tmp_path)
+    client = quote_worker.LocalDevClient()
+    client.db_path.parent.mkdir(parents=True, exist_ok=True)
+    client.db_path.write_text(json.dumps({"quote_jobs": [{
+        "id": "job-1", "status": "processing", "attempt_token": "attempt-1",
+        "metadata": {"source_type": "mixed_catalog_cart"},
+        "lease_expires_at": "2026-07-19T01:00:00Z", "updated_at": "2026-07-19T00:00:00Z",
+    }]}), encoding="utf-8")
+    original_load = client._load
+    original_save = client._save
+    first_save_entered = threading.Event()
+    allow_first_save = threading.Event()
+    second_load_entered = threading.Event()
+    load_count = 0
+    save_count = 0
+
+    def controlled_load():
+        nonlocal load_count
+        load_count += 1
+        if load_count == 2:
+            second_load_entered.set()
+        return original_load()
+
+    def controlled_save(data):
+        nonlocal save_count
+        save_count += 1
+        if save_count == 1:
+            first_save_entered.set()
+            assert allow_first_save.wait(5)
+        return original_save(data)
+
+    monkeypatch.setattr(client, "_load", controlled_load)
+    monkeypatch.setattr(client, "_save", controlled_save)
+    path = (
+        "/saas_quote_jobs?id=eq.job-1&status=eq.processing&attempt_token=eq.attempt-1"
+    )
+    progress = threading.Thread(
+        target=lambda: client.rest("PATCH", path, data={"metadata": {
+            "source_type": "mixed_catalog_cart", "progress_percent": 55,
+        }}),
+        daemon=True,
+    )
+    heartbeat = threading.Thread(
+        target=lambda: client.rest("PATCH", path, data={
+            "lease_expires_at": "2026-07-19T02:00:00Z",
+        }),
+        daemon=True,
+    )
+    progress.start()
+    assert first_save_entered.wait(5)
+    heartbeat.start()
+    assert not second_load_entered.wait(0.2)
+    allow_first_save.set()
+    progress.join(5)
+    heartbeat.join(5)
+
+    assert not progress.is_alive() and not heartbeat.is_alive()
+    stored = original_load()["quote_jobs"][0]
+    assert stored["metadata"]["progress_percent"] == 55
+    assert stored["lease_expires_at"] == "2026-07-19T02:00:00Z"
