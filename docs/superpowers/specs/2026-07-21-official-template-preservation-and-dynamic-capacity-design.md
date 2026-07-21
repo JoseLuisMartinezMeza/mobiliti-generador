@@ -236,11 +236,12 @@ Fuera de una allowlist explícita, las partes del archivo oficial deben mantener
 - partes nuevas de esas hojas y sus dibujos;
 - `Mobiliti`;
 - `Cotizacion` y sus dibujos;
+- las referencias coordinativas exactas de `Fletes` y `Estrategia Comercial ` que apuntan a subtotales o totales desplazados;
 - las partes mínimas de estilos o tipos de contenido que sean necesarias para elementos nuevos.
 
 Las siguientes partes están protegidas:
 
-- hojas ocultas oficiales;
+- hojas ocultas oficiales, excepto las referencias coordinativas exactas de `Fletes` declaradas en la allowlist;
 - vínculos externos;
 - nombres definidos oficiales, salvo referencias que deban desplazarse por expansión;
 - dibujos no pertenecientes a `Cotizacion` o `Quotation`;
@@ -300,6 +301,7 @@ Las siguientes partes están protegidas:
 - subtotales y total global incluyen todas las filas.
 - cero referencias `#REF!` nuevas.
 - referencias dinámicas de `Fletes`, `Estrategia Comercial ` y `Cotizacion` correctas.
+- fuera de las celdas coordinativas permitidas, `Fletes` y `Estrategia Comercial ` conservan fórmulas, valores y estilos.
 
 ### Verificación final
 
