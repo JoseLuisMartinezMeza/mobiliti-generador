@@ -28,6 +28,11 @@ MAX_DESCRIPTION_LENGTH = 10_000
 MAX_FILENAME_LENGTH = 255
 MAX_MONEY = Decimal("1000000000")
 MAX_QUANTITY = Decimal("1000000")
+MAX_XLSX_INPUT_BYTES = 25 * 1024 * 1024
+MAX_ZIP_ENTRIES = 5_000
+MAX_ZIP_MEMBER_UNCOMPRESSED = 100 * 1024 * 1024
+MAX_ZIP_TOTAL_UNCOMPRESSED = 200 * 1024 * 1024
+MAX_ZIP_COMPRESSION_RATIO = 200
 SIX_PLACES = Decimal("0.000001")
 TWO_PLACES = Decimal("0.01")
 Q_HEADER_ROW = 7
@@ -123,10 +128,19 @@ def normalize_imported_items(
         _raw_item(raw, checked["import_id"])
         original = originals[row]
         overrides = _import_overrides(raw["overrides"])
-        currency = _currency(
-            raw.get("source_currency") or original.get("source_currency") or fallback_currency,
-            "Moneda de origen requerida",
+        explicit_currency = original.get("source_currency")
+        payload_currency = _currency(
+            raw["source_currency"], "Moneda de origen requerida", allow_none=True
         )
+        if explicit_currency:
+            if payload_currency is not None and payload_currency != explicit_currency:
+                raise ValueError("Moneda de origen explicita no coincide con la fila importada")
+            currency = explicit_currency
+        else:
+            currency = _currency(
+                payload_currency or fallback_currency,
+                "Moneda de origen requerida",
+            )
         quantity = _quantity(raw["quantity"])
         original_price = _decimal(
             overrides["unit_price"],
@@ -476,7 +490,7 @@ def _conversion_rate(base_currency: str, quote_currency: str, rate_rows: object)
 
 def _provider_from_workbook_bytes(source_bytes: bytes) -> str:
     try:
-        workbook = load_workbook(BytesIO(source_bytes), data_only=True, read_only=True)
+        workbook = load_workbook(BytesIO(_source_bytes(source_bytes)), data_only=True, read_only=True)
         try:
             if "Quotation" not in workbook.sheetnames:
                 raise ValueError("El archivo no contiene hoja Quotation")
@@ -581,7 +595,49 @@ def _resolve_zip_part(base_part: str, target: str) -> str:
 def _source_bytes(value: object) -> bytes:
     if not isinstance(value, bytes) or not value:
         raise ValueError("Archivo de quotation invalido")
+    if len(value) > MAX_XLSX_INPUT_BYTES:
+        raise ValueError("El archivo .xlsx inseguro excede el limite de carga")
+    _preflight_xlsx_zip(value)
     return value
+
+
+def _preflight_xlsx_zip(source: bytes) -> None:
+    """Valida el directorio central del XLSX sin descomprimir ninguno de sus miembros."""
+    try:
+        with zipfile.ZipFile(BytesIO(source), "r") as archive:
+            members = archive.infolist()
+    except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+        raise ValueError("El archivo .xlsx inseguro no es un ZIP valido") from exc
+
+    if not members or len(members) > MAX_ZIP_ENTRIES:
+        raise ValueError("El archivo .xlsx inseguro contiene demasiados miembros")
+
+    names: set[str] = set()
+    total_uncompressed = 0
+    for member in members:
+        name = member.filename
+        if not _safe_zip_member_name(name) or name in names:
+            raise ValueError("El archivo .xlsx inseguro contiene nombres de miembros anómalos")
+        names.add(name)
+        if member.file_size > MAX_ZIP_MEMBER_UNCOMPRESSED:
+            raise ValueError("El archivo .xlsx inseguro excede el limite por miembro")
+        total_uncompressed += member.file_size
+        if total_uncompressed > MAX_ZIP_TOTAL_UNCOMPRESSED:
+            raise ValueError("El archivo .xlsx inseguro excede el limite descomprimido")
+        if member.file_size and (
+            not member.compress_size
+            or member.file_size > member.compress_size * MAX_ZIP_COMPRESSION_RATIO
+        ):
+            raise ValueError("El archivo .xlsx inseguro excede el ratio de compresion")
+
+
+def _safe_zip_member_name(name: object) -> bool:
+    if not isinstance(name, str) or not name or len(name) > 1_024 or "\x00" in name or "\\" in name:
+        return False
+    if name.startswith("/") or re.match(r"^[A-Za-z]:", name):
+        return False
+    parts = name.split("/")
+    return all(part not in {"", ".", ".."} for part in parts)
 
 
 def _columns(value: object) -> dict[str, str]:

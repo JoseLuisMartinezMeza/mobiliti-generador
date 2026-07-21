@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from io import BytesIO
 from pathlib import Path
+import struct
 
 import pytest
 
+import mobiliti_saas.quote_engine.quotation_import as quotation_import
 from mobiliti_saas.quote_engine.quotation_import import (
     build_import_manifest,
+    extract_images_from_bytes,
     normalize_imported_items,
+    read_items_from_bytes,
     validate_import_manifest,
 )
 from quotation_import_fixtures import write_import_fixture
@@ -97,6 +102,109 @@ def test_normalize_imported_items_uses_selected_currency_and_allowed_overrides(i
     assert rows[0]["unit_price"] == "1517.00"
     assert rows[0]["frozen_exchange_rate"] == "18.500000"
     assert rows[0]["source_reference"].endswith("#Quotation!11")
+
+
+def test_normalize_imported_items_rejects_payload_currency_that_replaces_explicit_row_currency(tmp_path):
+    source = write_import_fixture(tmp_path / "source.xlsx", currency="USD")
+    manifest, _ = build_import_manifest(
+        source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+    )
+    item = {
+        "kind": "imported",
+        "import_id": manifest["import_id"],
+        "source_row": 11,
+        "source_currency": "MXN",
+        "quantity": "1",
+        "overrides": {
+            "name": "Alien Task Chair",
+            "description": "Silla operativa",
+            "dimension": "630 x 565 x 1000 mm",
+            "unit_price": "82.00",
+            "provider": "Sunon",
+        },
+    }
+
+    with pytest.raises(ValueError, match="Moneda de origen explicita"):
+        normalize_imported_items(
+            [item],
+            manifest,
+            source_currency="MXN",
+            quote_currency="MXN",
+            rate_rows=[{"currency": "USD", "mxn_per_unit": "18.50", "effective_date": "2026-07-21"}],
+            discount_percent="0",
+        )
+
+
+def test_normalize_imported_items_allows_payload_currency_when_original_row_has_none(import_manifest):
+    item = {
+        "kind": "imported",
+        "import_id": import_manifest["import_id"],
+        "source_row": 11,
+        "source_currency": "USD",
+        "quantity": "1",
+        "overrides": {
+            "name": "Alien Task Chair",
+            "description": "Silla operativa",
+            "dimension": "630 x 565 x 1000 mm",
+            "unit_price": "82.00",
+            "provider": "Sunon",
+        },
+    }
+
+    rows = normalize_imported_items(
+        [item],
+        import_manifest,
+        source_currency="MXN",
+        quote_currency="MXN",
+        rate_rows=[{"currency": "USD", "mxn_per_unit": "18.50", "effective_date": "2026-07-21"}],
+        discount_percent="0",
+    )
+
+    assert rows[0]["original_currency"] == "USD"
+    assert rows[0]["frozen_exchange_rate"] == "18.500000"
+
+
+def _zip_with_declared_expansion(
+    uncompressed_size: int, *, name: bytes = b"xl/worksheets/sheet1.xml"
+) -> bytes:
+    """Crea un ZIP minimo cuyo directorio central declara una expansion excesiva."""
+    compressed = b"x"
+    local = struct.pack(
+        "<IHHHHHIIIHH",
+        0x04034B50, 20, 0, 0, 0, 0, 0, len(compressed), uncompressed_size, len(name), 0,
+    ) + name + compressed
+    central = struct.pack(
+        "<IHHHHHHIIIHHHHHII",
+        0x02014B50, 20, 20, 0, 0, 0, 0, 0, len(compressed), uncompressed_size,
+        len(name), 0, 0, 0, 0, 0, 0,
+    ) + name
+    end = struct.pack("<IHHHHIIH", 0x06054B50, 0, 0, 1, 1, len(central), len(local), 0)
+    return local + central + end
+
+
+def test_xlsx_preflight_rejects_declared_expansion_before_openpyxl_or_image_reads(monkeypatch):
+    source = _zip_with_declared_expansion(quotation_import.MAX_ZIP_MEMBER_UNCOMPRESSED + 1)
+    load_workbook_calls = []
+
+    def unexpected_load_workbook(*args, **kwargs):
+        load_workbook_calls.append((args, kwargs))
+        raise AssertionError("load_workbook no debe ejecutarse despues de un preflight rechazado")
+
+    monkeypatch.setattr(quotation_import, "load_workbook", unexpected_load_workbook)
+
+    with pytest.raises(ValueError, match="archivo .xlsx inseguro"):
+        read_items_from_bytes(source)
+    with pytest.raises(ValueError, match="archivo .xlsx inseguro"):
+        extract_images_from_bytes(source)
+
+    assert load_workbook_calls == []
+
+
+def test_xlsx_preflight_rejects_anomalous_member_names():
+    source = _zip_with_declared_expansion(1, name=b"xl/../escape.xml")
+
+    with pytest.raises(ValueError, match="nombres de miembros"):
+        extract_images_from_bytes(source)
 
 
 @pytest.mark.parametrize(
