@@ -822,14 +822,14 @@ git commit -m "feat: preserve original quotation package parts"
 ### Task 7: Enforce One-Time Cost Conversion and Preserve Official Pricing Formulas
 
 **Files:**
-- Modify: `mobiliti_saas/quote_engine/engine.py:1810-2050,2106-2267,2347-2373`
-- Modify: `tests/test_mixed_quote_engine.py`
-- Modify: `tests/test_quote_engine_lumbro.py`
-- Modify: `tests/test_mobiliti_sharepoint_contract.py`
+- Create: `mobiliti_saas/quote_engine/mobiliti_pricing.py`
+- Create: `tests/test_official_mobiliti_pricing.py`
+- Modify: `mobiliti_saas/quote_engine/ooxml_worksheet.py`
+- Modify: `tests/test_mobiliti_ooxml_expansion.py`
 
 **Interfaces:**
-- Consumes: converted costs from validated mixed/import payloads and official formula rows from Task 4.
-- Produces: numeric `Mobiliti!J` inputs; `write_official_currency_selector(editor, quote_currency, delivery_place)` that never writes `K6`.
+- Consumes: converted costs from validated mixed/import payloads, canonical `QuotationDataRow` records and official formula rows from Task 4.
+- Produces: numeric `Mobiliti!J` inputs; `lumbro_frozen_cost()` and `write_official_currency_selector(editor, quote_currency, delivery_place)` that never write `K6`, `W`, `X` or any formula column. Task 8 connects this pure component to the active official composer.
 
 - [ ] **Step 1: Write failing conversion invariants**
 
@@ -858,7 +858,7 @@ def test_lumbro_accessory_cost_is_numeric_and_not_divided_by_k6():
 
 - [ ] **Step 2: Run the tests and verify current W/X and K6 behavior fails**
 
-Run: `python -m pytest tests/test_mixed_quote_engine.py tests/test_quote_engine_lumbro.py tests/test_mobiliti_sharepoint_contract.py -k "frozen_cost or lumbro_accessory or official" -v`
+Run: `python -m pytest tests/test_official_mobiliti_pricing.py tests/test_mobiliti_ooxml_expansion.py -k "frozen_cost or lumbro_accessory or official" -v`
 
 Expected: FAIL because mixed mode writes `W:X=ROUND(J,2)`, accessories write formulas and `_write_mobiliti_settings` overwrites `K6`.
 
@@ -887,14 +887,14 @@ def _lumbro_frozen_cost(price_ref: LumbroPriceRef | None, frozen_rate: Decimal) 
     return float((original * frozen_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 ```
 
-Run: `python -m pytest tests/test_mixed_quote_engine.py tests/test_quote_engine_lumbro.py tests/test_mobiliti_sharepoint_contract.py -v`
+Run: `python -m pytest tests/test_official_mobiliti_pricing.py tests/test_mobiliti_ooxml_expansion.py -v`
 
 Expected: PASS and no formula under test performs a second currency conversion.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add mobiliti_saas/quote_engine/engine.py tests/test_mixed_quote_engine.py tests/test_quote_engine_lumbro.py tests/test_mobiliti_sharepoint_contract.py
+git add mobiliti_saas/quote_engine/mobiliti_pricing.py mobiliti_saas/quote_engine/ooxml_worksheet.py tests/test_official_mobiliti_pricing.py tests/test_mobiliti_ooxml_expansion.py
 git commit -m "fix: preserve official pricing formulas"
 ```
 
@@ -986,6 +986,8 @@ def compose_official_quote(request: ComposeRequest) -> PackageAudit:
 `CotizacionSheetEditor` clones the official product and total blocks directly in worksheet XML, clears only header/product data regions and translates the official formulas. `merge_cotizacion_product_images()` starts from the official drawing XML, preserves every static/header anchor and its WMF/media bytes, removes only anchors inside the contract's contaminated product region, then appends the new product anchors and media. `build_allowlisted_mutation()` takes those XML mutations; adds `Quotation`/`Quotation_Data`; patches workbook relationships/content types; translates `Fletes!D19`, the exact `Estrategia Comercial ` ranges, defined names whose rows moved and `calcChain.xml`. It rejects any attempted change to an undeclared cell, drawing region or part.
 
 As part of this composition seam, replace the engine's active `Mobiliti` mutation with `build_mobiliti_sheet()` and assert that `_ensure_mobiliti_formula_layout`, `_write_mobiliti_row_formulas`, `_normalize_mobiliti_row_formulas` and `_set_mobiliti_subtotal_formulas` have no active caller. The functions remain physically present until Task 12 so this task does not combine routing changes with dead-code deletion.
+
+Feed `Mobiliti!J` and the selector cells only through the Task 7 pricing component. Composer tests must prove that every origin, including Lumbro accessories, writes a numeric frozen cost exactly once; `K6`, `W`, `X` and all other official formula columns remain translated from the official template and are never assigned by pricing code.
 
 - [ ] **Step 5: Run focused and golden tests, then commit**
 
