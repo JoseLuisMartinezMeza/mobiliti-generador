@@ -33,6 +33,7 @@ INPUT_COLUMNS = frozenset((4, 5, 6, 8, 10, 11, 16))
 CANONICAL_SUBTOTAL_ROWS = tuple(range(47, 573, 35))
 XLSX_MAX_ROW = 1_048_576
 XLSX_MAX_COLUMN = 16_384
+MAX_EXCEL_CELL_TEXT_LENGTH = 32_767
 _CELL_REFERENCE = re.compile(r"(?P<column>\$?[A-Z]{1,3})(?P<row_abs>\$?)(?P<row>[1-9][0-9]*)$")
 _RANGE_REFERENCE = re.compile(
     r"(?:(?P<sheet>'(?:[^']|'')+'|[^'!]+)!)?"
@@ -235,6 +236,31 @@ class WorksheetEditor:
         children = list(self.sheet_data)
         children.sort(key=lambda row: int(row.attrib["r"]))
         self.sheet_data[:] = children
+
+    def set_boolean(self, coordinate: str, value: bool) -> None:
+        """Escribe un booleano en una fila existente con coordenada A1 estricta."""
+
+        row, normalized = self._typed_write_target(coordinate)
+        _set_cell_value(row, normalized, "boolean", value)
+
+    def set_inline_string(self, coordinate: str, value: str) -> None:
+        """Escribe un ``inlineStr`` XML 1.0 acotado en una fila existente."""
+
+        row, normalized = self._typed_write_target(coordinate)
+        _set_cell_value(row, normalized, "text", value)
+
+    def _typed_write_target(self, coordinate: str) -> tuple[ET.Element, str]:
+        if not isinstance(coordinate, str) or re.fullmatch(
+            r"[A-Z]{1,3}[1-9][0-9]*", coordinate
+        ) is None:
+            raise ValueError(f"Coordenada Mobiliti invÃ¡lida: {coordinate!r}")
+        match = _CELL_REFERENCE.fullmatch(coordinate)
+        assert match is not None
+        column = column_index_from_string(match.group("column"))
+        row_number = int(match.group("row"))
+        if column > XLSX_MAX_COLUMN or row_number > XLSX_MAX_ROW:
+            raise ValueError(f"Coordenada Mobiliti fuera de XLSX: {coordinate}")
+        return self.require_row(row_number), coordinate
 
 
 def capture_official_mobiliti_block(
@@ -1068,6 +1094,8 @@ def _validate_write_value(
     if kind == "text":
         if not isinstance(value, str):
             raise TypeError("Una escritura text requiere str")
+        if len(value) > MAX_EXCEL_CELL_TEXT_LENGTH:
+            raise ValueError("Una escritura text excede 32767 caracteres")
         if any(not _is_xml_10_character(ord(character)) for character in value):
             raise ValueError("El texto Mobiliti contiene caracteres inválidos para XML 1.0")
     elif kind == "boolean":

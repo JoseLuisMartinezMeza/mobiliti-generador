@@ -678,6 +678,48 @@ def test_cell_write_preserves_significant_whitespace_and_escapes_xml():
     assert b"&lt;SKU &amp; modelo&gt;" in payload
 
 
+def test_typed_editor_setters_are_strict_and_idempotent():
+    editor, _row_map = _official_editor_and_row_map()
+
+    editor.set_boolean("K4", True)
+    editor.set_inline_string("K8", " Guadalajara & Norte ")
+    once = editor.to_xml()
+    editor.set_boolean("K4", True)
+    editor.set_inline_string("K8", " Guadalajara & Norte ")
+
+    assert editor.to_xml() == once
+    output = ET.fromstring(once)
+    assert output.find(f".//{{{MAIN}}}c[@r='K4']/{{{MAIN}}}v").text == "1"
+    text = output.find(f".//{{{MAIN}}}c[@r='K8']/{{{MAIN}}}is/{{{MAIN}}}t")
+    assert text.text == " Guadalajara & Norte "
+    assert text.attrib["{http://www.w3.org/XML/1998/namespace}space"] == "preserve"
+
+
+@pytest.mark.parametrize(
+    ("method", "coordinate", "value", "message"),
+    [
+        ("set_boolean", "K0", True, "Coordenada"),
+        ("set_boolean", "K4", 1, "bool"),
+        ("set_inline_string", "K999999", "texto", "fila"),
+        ("set_inline_string", "K8", "control\x01", "XML 1.0"),
+        pytest.param(
+            "set_inline_string",
+            "K8",
+            "x" * 32_768,
+            "32767",
+            id="oversized-inline-string",
+        ),
+    ],
+)
+def test_typed_editor_setters_reject_invalid_coordinates_and_values(
+    method, coordinate, value, message
+):
+    editor, _row_map = _official_editor_and_row_map()
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        getattr(editor, method)(coordinate, value)
+
+
 def test_multirange_sqref_translates_mixed_fixed_dynamic_and_x14_tokens():
     root = _official_root()
     data_validations = root.find(f"{{{MAIN}}}dataValidations")
