@@ -2,7 +2,7 @@
 
 Fecha: 2026-07-21
 
-Estado: diseño aprobado; pendiente de revisión final del documento antes del plan TDD
+Estado: aprobado para planificación TDD e implementación local
 
 Proyecto: Mobiliti SaaS Cotizador
 
@@ -237,6 +237,7 @@ Fuera de una allowlist explícita, las partes del archivo oficial deben mantener
 - `Mobiliti`;
 - `Cotizacion` y sus dibujos;
 - las referencias coordinativas exactas de `Fletes` y `Estrategia Comercial ` que apuntan a subtotales o totales desplazados;
+- `calcChain.xml`, limitado a traducir o agregar coordenadas de celdas cuyas fórmulas se movieron o clonaron;
 - las partes mínimas de estilos o tipos de contenido que sean necesarias para elementos nuevos.
 
 Las siguientes partes están protegidas:
@@ -247,7 +248,7 @@ Las siguientes partes están protegidas:
 - dibujos no pertenecientes a `Cotizacion` o `Quotation`;
 - valores y fórmulas de hojas SPEC;
 - estados de visibilidad;
-- configuración de cálculo.
+- configuración de cálculo; la cadena de cálculo sólo puede cambiar en las coordenadas permitidas por la allowlist.
 
 `Fletes` permanece oculta y `sheep` no aparece porque no pertenece al formato oficial.
 
@@ -307,6 +308,7 @@ Las siguientes partes están protegidas:
 
 - reapertura como ZIP y como workbook;
 - auditoría OOXML de hashes y relaciones;
+- auditoría de `calcChain.xml` sin referencias a coordenadas reemplazadas;
 - inspección de fórmulas dirigida;
 - render visual de `Mobiliti`, `Cotizacion` y `Quotation`;
 - prueba end-to-end desde carrito y desde importación;
