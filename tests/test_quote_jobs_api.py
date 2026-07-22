@@ -3292,10 +3292,11 @@ def test_generic_internal_catalog_put_route_is_absent_and_tarkett_remains():
     assert all("{" not in path for path in put_paths)
 
 
-def test_primary_and_web_api_copies_have_identical_sha256():
+def test_deployable_api_copies_have_identical_sha256():
     paths = [
         Path("mobiliti_saas/web/api/index.py"),
         Path("mobiliti_saas/api/index.py"),
+        Path("vercel_deploy/api/index.py"),
     ]
     hashes = {hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 

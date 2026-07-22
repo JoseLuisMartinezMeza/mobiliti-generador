@@ -210,7 +210,7 @@ BEGIN
     END IF;
 
     IF p_groups IS NULL OR jsonb_typeof(p_groups) <> 'array'
-       OR jsonb_array_length(p_groups) NOT BETWEEN 1 AND 7 THEN
+       OR jsonb_array_length(p_groups) NOT BETWEEN 0 AND 7 THEN
         RAISE EXCEPTION 'mixed groups must be a bounded array';
     END IF;
 

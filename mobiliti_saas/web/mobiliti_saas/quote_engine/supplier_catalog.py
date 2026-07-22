@@ -240,7 +240,7 @@ def build_supplier_cart_payload(
         _cart_line(item, quantity, base_option, add_ons, rate.exchange_rate)
         for item, quantity, base_option, add_ons in prepared
     ]
-    return {
+    payload = {
         "source_type": "supplier_cart",
         "supplier": loaded["supplier"],
         "catalog_source_hash": loaded["source_hash"],
@@ -252,6 +252,13 @@ def build_supplier_cart_payload(
         "rate_retrieved_at": rate.rate_retrieved_at,
         "items": lines,
     }
+    validate_quote_size(
+        section_counts=[len(lines)],
+        encoded_bytes=len(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ),
+    )
+    return payload
 
 
 def resolve_conversion_rate(

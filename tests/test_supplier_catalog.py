@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, localcontext
 import hashlib
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -1377,6 +1378,44 @@ def test_supplier_cart_accepts_700_unique_lines_above_old_limit():
     assert len(cart["items"]) == 700
     assert cart["items"][0]["internal_id"] == "alma:large:1"
     assert cart["items"][-1]["internal_id"] == "alma:large:700"
+
+
+def test_supplier_cart_rejects_enriched_payload_over_25_mib_limit():
+    base_item = catalog_payload()["items"][0]
+    base_item.update(
+        description="x" * supplier_module.MAX_DESCRIPTION_LENGTH,
+        base_price_options=[],
+        add_on_options=[],
+    )
+    items = []
+    raw_items = []
+    for position in range(2_700):
+        item = deepcopy(base_item)
+        internal_id = f"alma:enriched:{position + 1}"
+        item.update(
+            internal_id=internal_id,
+            product_key=f"enriched-{position + 1}",
+            sku=f"ENRICHED-{position + 1}",
+        )
+        items.append(item)
+        raw_items.append(
+            {
+                "internal_id": internal_id,
+                "quantity": "1",
+                "add_on_option_ids": [],
+            }
+        )
+
+    assert len(json.dumps(raw_items, separators=(",", ":")).encode("utf-8")) < (
+        25 * 1024 * 1024
+    )
+    with pytest.raises(ValueError, match=r"bytes.*26214400"):
+        build_supplier_cart_payload(
+            raw_items,
+            catalog_payload(items=items),
+            "USD",
+            [],
+        )
 
 
 def test_options_warnings_and_compatibility_limits_are_enforced():

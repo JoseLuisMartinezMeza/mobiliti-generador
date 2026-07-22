@@ -62,6 +62,14 @@ def test_quote_physical_limits_migration_replaces_both_reservation_rpcs_safely()
         assert "pg_advisory_xact_lock" in migrated
 
     catalog = _function_definition(migration, "saas_reserve_catalog_items")
+    historical_catalog = _function_definition(
+        CATALOG_MIGRATION.read_text(encoding="utf-8"),
+        "saas_reserve_catalog_items",
+    )
+    assert catalog == historical_catalog.replace(
+        "jsonb_array_length(p_lines) > 500",
+        f"jsonb_array_length(p_lines) > {PHYSICAL_QUOTE_LINE_LIMIT}",
+    )
     assert "jsonb_array_length(p_lines) = 0" in catalog
     assert "jsonb_array_length(p_lines) > 500" not in catalog
     assert "ORDER BY line ->> 'internal_id'" in catalog
@@ -69,8 +77,17 @@ def test_quote_physical_limits_migration_replaces_both_reservation_rpcs_safely()
     assert "RETURN NEXT" in catalog
 
     mixed = _function_definition(migration, "saas_reserve_mixed_cart")
-    assert "jsonb_array_length(p_groups) NOT BETWEEN 1 AND 7" in mixed
+    historical_mixed = _function_definition(
+        MIXED_MIGRATION.read_text(encoding="utf-8"),
+        "saas_reserve_mixed_cart",
+    )
+    assert mixed == historical_mixed.replace(
+        "v_total_lines > 500",
+        f"v_total_lines > {PHYSICAL_QUOTE_LINE_LIMIT}",
+    )
+    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 7" in mixed
     assert "jsonb_array_length(v_group -> 'items') = 0" in mixed
+    assert "IF v_total_lines = 0 THEN RETURN '[]'::JSONB; END IF;" in mixed
     assert "v_total_lines > 500" not in mixed
     assert "ORDER BY catalog, identity" in mixed
     assert "INSERT INTO saas_tarkett_reservations" in mixed

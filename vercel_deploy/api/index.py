@@ -62,10 +62,12 @@ from mobiliti_saas.quote_engine.supplier_catalog import (  # noqa: E402
 from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
     MAX_MIXED_CATALOG_LINES,
     MAX_MIXED_REQUEST_BYTES,
+    MAX_QUOTE_REQUEST_BYTES,
     MIXED_CATALOG_ORDER,
     build_mixed_catalog_cart_payload,
     build_mixed_reservation_groups,
     preflight_mixed_catalog_items,
+    validate_quote_size,
     validate_mixed_catalog_payload,
 )
 
@@ -1055,12 +1057,15 @@ def _normalize_mixed_reservation_groups(groups):
                 ),
             })
             total += 1
-            if total > 500:
-                raise RuntimeError("Reserva mixta invalida")
         normalized.append({
             "catalog": catalog,
             "items": sorted(clean_items, key=lambda row: row["identity"]),
         })
+    if total:
+        try:
+            validate_quote_size(section_counts=[total], encoded_bytes=0)
+        except ValueError as exc:
+            raise RuntimeError(f"Reserva mixta invalida: {exc}") from exc
     return sorted(
         normalized, key=lambda group: _MIXED_RESERVATION_CATALOGS.index(group["catalog"])
     )
@@ -1683,8 +1688,12 @@ def db_reserve_catalog_items(
         clean_job_id = str(uuid.UUID(str(quote_job_id)))
     except (TypeError, ValueError, AttributeError):
         raise RuntimeError("Reserva de catalogo invalida") from None
-    if clean_user_id <= 0 or not isinstance(lines, list) or not 1 <= len(lines) <= 500:
+    if clean_user_id <= 0 or not isinstance(lines, list) or not lines:
         raise RuntimeError("Reserva de catalogo invalida")
+    try:
+        validate_quote_size(section_counts=[len(lines)], encoded_bytes=0)
+    except ValueError as exc:
+        raise RuntimeError(f"Reserva de catalogo invalida: {exc}") from exc
 
     normalized = []
     internal_ids = set()
@@ -4134,14 +4143,26 @@ async def _read_mixed_quote_body(request: Request) -> object:
             declared = int(raw_length)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Content-Length invalido") from exc
-        if declared < 0 or declared > MAX_MIXED_REQUEST_BYTES:
-            raise HTTPException(status_code=413, detail="Solicitud mixta demasiado grande")
+        if declared < 0 or declared > MAX_QUOTE_REQUEST_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Solicitud mixta de {declared} bytes excede el limite de "
+                    f"{MAX_QUOTE_REQUEST_BYTES} bytes"
+                ),
+            )
     chunks: list[bytes] = []
     size = 0
     async for chunk in request.stream():
         size += len(chunk)
-        if size > MAX_MIXED_REQUEST_BYTES:
-            raise HTTPException(status_code=413, detail="Solicitud mixta demasiado grande")
+        if size > MAX_QUOTE_REQUEST_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Solicitud mixta de {size} bytes excede el limite de "
+                    f"{MAX_QUOTE_REQUEST_BYTES} bytes"
+                ),
+            )
         chunks.append(chunk)
     try:
         return json.loads(
@@ -4150,6 +4171,45 @@ async def _read_mixed_quote_body(request: Request) -> object:
         )
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Solicitud mixta invalida") from exc
+
+
+async def _read_supplier_quote_body(request: Request) -> object:
+    raw_length = request.headers.get("content-length")
+    if raw_length:
+        try:
+            declared = int(raw_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Content-Length invalido") from exc
+        if declared < 0 or declared > MAX_QUOTE_REQUEST_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Solicitud de proveedor de {declared} bytes excede el limite de "
+                    f"{MAX_QUOTE_REQUEST_BYTES} bytes"
+                ),
+            )
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_QUOTE_REQUEST_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Solicitud de proveedor de {size} bytes excede el limite de "
+                    f"{MAX_QUOTE_REQUEST_BYTES} bytes"
+                ),
+            )
+        chunks.append(chunk)
+    try:
+        return json.loads(
+            b"".join(chunks), object_pairs_hook=_mixed_json_object,
+            parse_constant=_reject_mixed_json_constant,
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Solicitud de proveedor invalida"
+        ) from exc
 
 
 @app.post("/catalogs/mixed-quote")
@@ -4170,9 +4230,8 @@ async def mixed_catalog_quote(
     raw_items = body.get("items")
     if not isinstance(raw_items, list):
         raise HTTPException(status_code=400, detail="Items mixtos debe ser una lista")
-    if not 1 <= len(raw_items) <= MAX_MIXED_CATALOG_LINES:
-        raise HTTPException(status_code=400, detail="El carrito mixto debe contener entre 1 y 500 filas")
     try:
+        validate_quote_size(section_counts=[len(raw_items)], encoded_bytes=0)
         preflight_items = preflight_mixed_catalog_items(raw_items)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4269,10 +4328,22 @@ async def mixed_catalog_quote(
 
 
 @app.post("/catalogs/{supplier}/quote")
-def supplier_quote(supplier: str, body: dict, current_user: dict = Depends(get_current_user)):
+async def supplier_quote(
+    supplier: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     supplier = _require_enabled_catalog_supplier(supplier)
     try:
         _require_active_subscription(current_user["id"])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Error preparando catalogo de proveedor") from exc
+
+    body = await _read_supplier_quote_body(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Solicitud de proveedor invalida")
+
+    try:
         catalog = load_supplier_catalog_data(
             _load_supplier_catalog_cached(supplier),
             expected_supplier=supplier,
@@ -4347,6 +4418,10 @@ def supplier_quote(supplier: str, body: dict, current_user: dict = Depends(get_c
             )
             _apply_catalog_reservation_snapshot(cart_payload, reservation_snapshot)
         content = json.dumps(cart_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        validate_quote_size(
+            section_counts=[len(cart_payload["items"])],
+            encoded_bytes=len(content),
+        )
         _storage_upload_bytes(input_path, content, "application/json")
         updated = _require_queued_quote_job(
             db_update_quote_job(
