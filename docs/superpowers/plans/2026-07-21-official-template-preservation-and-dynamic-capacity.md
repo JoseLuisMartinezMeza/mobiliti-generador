@@ -581,7 +581,7 @@ def build_mobiliti_sheet(
     return MobilitiSheetMutation(xml=editor.to_xml(), row_map=row_map)
 ```
 
-Delete the call path to `_ensure_mobiliti_formula_layout`, `_write_mobiliti_row_formulas`, `_normalize_mobiliti_row_formulas` and `_set_mobiliti_subtotal_formulas`. Keep those functions temporarily unreachable until Task 12 removes dead code after the full regression gate.
+Task 4 delivers the pure OOXML `Mobiliti` component and its package-level tests. Do not force it into the active OpenPyXL path before `Quotation_Data`, `Cotizacion` composition and canonical worker inputs exist. Tasks 8 and 9 must route the active generator through this component and make `_ensure_mobiliti_formula_layout`, `_write_mobiliti_row_formulas`, `_normalize_mobiliti_row_formulas` and `_set_mobiliti_subtotal_formulas` unreachable; Task 12 removes those dead definitions after the full regression gate.
 
 `WorksheetEditor` works on `ElementTree` nodes from the original worksheet part; it never calls `Workbook.save()`. `capture_official_mobiliti_block()` snapshots rows 13/14/47/48/49/82/573 plus merges, dimensions, validation `sqref`, conditional formatting, `extLst` and auxiliary rows 574:610. `relocate_official_auxiliary_rows()` moves that auxiliary XML after the new total. Every clone calls `translate_formula()` using the canonical source coordinate and row-map overrides; it copies style IDs and row properties without synthesizing formulas. Subtotal formulas replace only the canonical 33-row operand range with the section's actual `product_start:last_used_row`; total formulas replace the canonical 16 subtotal operands with `row_map.subtotal_rows`.
 
@@ -985,6 +985,8 @@ def compose_official_quote(request: ComposeRequest) -> PackageAudit:
 
 `CotizacionSheetEditor` clones the official product and total blocks directly in worksheet XML, clears only header/product data regions and translates the official formulas. `merge_cotizacion_product_images()` starts from the official drawing XML, preserves every static/header anchor and its WMF/media bytes, removes only anchors inside the contract's contaminated product region, then appends the new product anchors and media. `build_allowlisted_mutation()` takes those XML mutations; adds `Quotation`/`Quotation_Data`; patches workbook relationships/content types; translates `Fletes!D19`, the exact `Estrategia Comercial ` ranges, defined names whose rows moved and `calcChain.xml`. It rejects any attempted change to an undeclared cell, drawing region or part.
 
+As part of this composition seam, replace the engine's active `Mobiliti` mutation with `build_mobiliti_sheet()` and assert that `_ensure_mobiliti_formula_layout`, `_write_mobiliti_row_formulas`, `_normalize_mobiliti_row_formulas` and `_set_mobiliti_subtotal_formulas` have no active caller. The functions remain physically present until Task 12 so this task does not combine routing changes with dead-code deletion.
+
 - [ ] **Step 5: Run focused and golden tests, then commit**
 
 Run:
@@ -1011,6 +1013,7 @@ git commit -m "feat: compose quotes from official package"
 **Interfaces:**
 - Produces: `PreparedGeneratorInput(parser_source, original_quotation, quotation_data)` and passes explicit sources to `generate_quote()`.
 - Consumes: `quotation_data_rows()` and `transplant_quotation()`.
+- Finalizes the worker switch to `compose_official_quote()` and includes a regression assertion that no worker/generator path reaches the four legacy `Mobiliti` writers.
 
 - [ ] **Step 1: Write a failing worker handoff test**
 
