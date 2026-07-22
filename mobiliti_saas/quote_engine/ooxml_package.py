@@ -9,6 +9,7 @@ import ntpath
 from pathlib import Path
 import posixpath
 import re
+import threading
 from typing import AbstractSet, Mapping
 from xml.etree import ElementTree
 import zipfile
@@ -23,7 +24,6 @@ STRICT_OFFICE_DOCUMENT_RELATIONSHIPS = (
 )
 OFFICE_DOCUMENT_RELATIONSHIP_BASES = (
     OFFICE_DOCUMENT_RELATIONSHIPS,
-    STRICT_OFFICE_DOCUMENT_RELATIONSHIPS,
 )
 SPREADSHEETML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 DRAWINGML = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -31,6 +31,8 @@ CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
 _SAFE_ALLOCATION_PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _SAFE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,10}\Z")
 _PROTECTED_ALLOCATION_PREFIXES = ("xl/externalLinks/", "xl/richData/")
+_STRICT_OOXML_MARKER = b"http://purl.oclc.org/ooxml/"
+XML_SERIALIZATION_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,17 @@ class XlsxPackage:
             raise ValueError(f"Partes ZIP duplicadas: {sorted(duplicate_names)}")
         for name in names:
             _validate_part_name(name)
+
+        strict_parts = [
+            name
+            for name in names
+            if (name.endswith((".xml", ".rels")) or name == "[Content_Types].xml")
+            and _STRICT_OOXML_MARKER in self.parts[name]
+        ]
+        if strict_parts:
+            raise ValueError(
+                "Paquetes OOXML Strict no soportados: " + strict_parts[0]
+            )
 
         for rels_name in (name for name in names if name.endswith(".rels")):
             owner = _relationship_owner(rels_name)
@@ -312,7 +325,10 @@ class XlsxPackage:
             child.tag != f"{{{SPREADSHEETML}}}si" for child in root
         ):
             raise ValueError("Shared strings OOXML inválidos")
-        return tuple(ElementTree.tostring(child, encoding="utf-8") for child in root)
+        with XML_SERIALIZATION_LOCK:
+            return tuple(
+                ElementTree.tostring(child, encoding="utf-8") for child in root
+            )
 
     def relationship_closure(self, start_part: str) -> Mapping[str, bytes]:
         """Calcula la clausura OPC transitiva y rechaza ciclos."""
@@ -545,7 +561,7 @@ def relationship_part_name(owner: str) -> str:
 
 
 def relationship_type_uris(name: str) -> frozenset[str]:
-    """URIs exactas permitidas para una relación Office transitional/strict."""
+    """URI transitional exacta permitida para una relación Office."""
 
     if not isinstance(name, str) or re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name) is None:
         raise ValueError("Nombre de relación Office inválido")
@@ -612,9 +628,10 @@ def rewrite_relationship_targets(
             element.attrib["Target"] = relative + (
                 separator + fragment if separator else ""
             )
-        rewritten[target_name] = ElementTree.tostring(
-            root, encoding="utf-8", xml_declaration=True
-        )
+        with XML_SERIALIZATION_LOCK:
+            rewritten[target_name] = ElementTree.tostring(
+                root, encoding="utf-8", xml_declaration=True
+            )
     if len(rewritten) != len(closure):
         raise ValueError("Asignación OOXML colisionada")
     return rewritten

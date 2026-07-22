@@ -12,15 +12,20 @@ import posixpath
 from types import MappingProxyType
 import re
 import struct
+import unicodedata
 from typing import Mapping, Sequence
 from urllib.parse import unquote
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
+from openpyxl.formula import Tokenizer
+from openpyxl.formula.tokenizer import Token, TokenizerError
+
 from .ooxml_package import (
     OFFICE_DOCUMENT_RELATIONSHIPS,
     PACKAGE_RELATIONSHIPS,
+    XML_SERIALIZATION_LOCK as _XML_SERIALIZATION_LOCK,
     XlsxPackage,
     relationship_owner,
     relationship_type_uris,
@@ -226,7 +231,8 @@ class LocalDefinedName:
         }
         element = ET.Element(f"{{{MAIN}}}definedName", attributes)
         element.text = self.text
-        return ET.tostring(element, encoding="utf-8")
+        with _XML_SERIALIZATION_LOCK:
+            return ET.tostring(element, encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -1685,60 +1691,93 @@ def _rewrite_structured_references(
 ) -> str:
     if not renamed or not formula:
         return formula
-    segments: list[tuple[bool, str]] = []
-    start = 0
-    index = 0
-    in_literal = False
-    while index < len(formula):
-        if formula[index] != '"':
-            index += 1
-            continue
-        if in_literal and index + 1 < len(formula) and formula[index + 1] == '"':
-            index += 2
-            continue
-        segments.append((in_literal, formula[start:index]))
-        segments.append((False, '"'))
-        in_literal = not in_literal
-        index += 1
-        start = index
-    if in_literal:
-        raise ValueError(f"Literal de fórmula sin cerrar: {context}")
-    segments.append((False, formula[start:]))
+    if len(formula) > 8192:
+        raise ValueError(f"Fórmula demasiado larga: {context}")
+    normalized: dict[str, tuple[str, str]] = {}
+    for old, new in renamed.items():
+        key = old.casefold()
+        previous = normalized.get(key)
+        if previous is not None and previous[1] != new:
+            raise ValueError(f"Identificador de tabla ambiguo: {context}")
+        normalized[key] = (old, new)
 
-    patterns = [
-        (
-            re.compile(
-                rf"(?<![A-Za-z0-9_.])(?P<quoted>'?){re.escape(old)}(?P=quoted)(?=\s*\[)",
-                re.IGNORECASE,
-            ),
-            new,
-        )
-        for old, new in sorted(renamed.items(), key=lambda item: -len(item[0]))
-    ]
+    had_equals = formula.startswith("=")
+    body = formula[1:] if had_equals else formula
+    try:
+        items = Tokenizer("=" + body).items
+    except (TokenizerError, IndexError, TypeError, ValueError) as error:
+        raise ValueError(f"Fórmula no tokenizable: {context}") from error
+    if "".join(item.value for item in items) != body:
+        raise ValueError(f"Fórmula ambigua al tokenizar: {context}")
+
     output: list[str] = []
-    literal_state = False
-    for _is_literal, segment in segments:
-        if segment == '"':
-            literal_state = not literal_state
-            output.append(segment)
-            continue
-        current = segment
-        for pattern, replacement in patterns:
-            if literal_state and pattern.search(current):
+    for item in items:
+        value = item.value
+        if item.type == Token.OPERAND and item.subtype == Token.TEXT:
+            if _contains_structured_table_reference(value, normalized):
                 raise ValueError(
                     f"Referencia estructurada dentro de literal no soportada: {context}"
                 )
-            if not literal_state:
-                current = pattern.sub(
-                    lambda match: (
-                        f"'{replacement}'"
-                        if match.group("quoted")
-                        else replacement
-                    ),
-                    current,
-                )
-        output.append(current)
-    return "".join(output)
+        elif item.type == Token.OPERAND and item.subtype == Token.RANGE:
+            rewritten = _rewrite_table_range_operand(value, normalized)
+            if rewritten is None and _mentions_table_identifier(value, normalized):
+                raise ValueError(f"Referencia de tabla ambigua: {context}")
+            if rewritten is not None:
+                value = rewritten
+        output.append(value)
+    return ("=" if had_equals else "") + "".join(output)
+
+
+def _rewrite_table_range_operand(
+    value: str,
+    renamed: Mapping[str, tuple[str, str]],
+) -> str | None:
+    quoted = value.startswith("'")
+    if quoted:
+        closing = value.find("'", 1)
+        if closing < 0:
+            return None
+        identifier = value[1:closing]
+        suffix = value[closing + 1 :]
+    else:
+        bracket = value.find("[")
+        identifier = value if bracket < 0 else value[:bracket]
+        suffix = "" if bracket < 0 else value[bracket:]
+    replacement = renamed.get(identifier.casefold())
+    if replacement is None or (suffix and not suffix.startswith("[")):
+        return None
+    new = replacement[1]
+    return (f"'{new}'" if quoted else new) + suffix
+
+
+def _mentions_table_identifier(
+    value: str,
+    renamed: Mapping[str, tuple[str, str]],
+) -> bool:
+    return any(
+        re.search(
+            rf"(?<![A-Za-z0-9_.\\])'?{re.escape(old)}'?(?=$|\[)",
+            value,
+            re.IGNORECASE,
+        )
+        is not None
+        for old, _new in renamed.values()
+    )
+
+
+def _contains_structured_table_reference(
+    value: str,
+    renamed: Mapping[str, tuple[str, str]],
+) -> bool:
+    return any(
+        re.search(
+            rf"(?<![A-Za-z0-9_.\\])'?{re.escape(old)}'?\s*\[",
+            value,
+            re.IGNORECASE,
+        )
+        is not None
+        for old, _new in renamed.values()
+    )
 
 
 def _quotation_local_defined_names(
@@ -1863,9 +1902,28 @@ def _validate_passive_closure(
 
 
 def _validate_external_hyperlink(target: str) -> None:
-    if not target or any(ord(character) < 32 for character in target):
+    if not target or len(target) > 8192:
         raise ValueError("Hyperlink externo inválido")
-    parsed = urlsplit(unquote(target))
+    decoded = target
+    for _round in range(5):
+        try:
+            next_value = unquote(decoded, errors="strict")
+        except UnicodeDecodeError as error:
+            raise ValueError("Codificación de hyperlink externo inválida") from error
+        if len(next_value) > 8192:
+            raise ValueError("Hyperlink externo demasiado largo")
+        if next_value == decoded:
+            break
+        decoded = next_value
+    else:
+        raise ValueError("Codificación de hyperlink externo inestable")
+    if any(
+        character in _INVISIBLE
+        or unicodedata.category(character) in {"Cc", "Cf"}
+        for character in decoded
+    ):
+        raise ValueError("Hyperlink externo contiene controles o invisibles")
+    parsed = urlsplit(decoded)
     scheme = parsed.scheme.casefold()
     if scheme not in {"http", "https", "mailto"}:
         raise ValueError(f"Esquema de hyperlink externo no permitido: {scheme}")
@@ -2098,46 +2156,84 @@ def _parse_xml_document(
 ) -> tuple[ET.Element, dict[str, str]]:
     if not isinstance(content, bytes):
         raise TypeError(message)
-    namespace_prefixes: dict[str, str] = {}
+    namespace_prefixes: dict[str, str] = {"xml": XML_NS}
     try:
-        for event, payload in ET.iterparse(
-            BytesIO(content), events=("start-ns", "start")
-        ):
-            if event == "start-ns":
+        with _XML_SERIALIZATION_LOCK:
+            for _event, payload in ET.iterparse(
+                BytesIO(content), events=("start-ns",)
+            ):
                 prefix, uri = payload
                 normalized = prefix or ""
                 previous = namespace_prefixes.get(normalized)
                 if previous is not None and previous != uri:
-                    raise ValueError(f"{message}: prefijo XML ambiguo")
+                    if normalized:
+                        raise ValueError(f"{message}: prefijo XML ambiguo")
+                    # El namespace por defecto no es un prefijo XML y puede
+                    # desactivarse legítimamente en un descendiente.
+                    continue
                 namespace_prefixes[normalized] = uri
-                continue
-            break
-        root = ET.fromstring(content)
+            root = ET.fromstring(content)
     except ET.ParseError as error:
         raise ValueError(message) from error
-    _validate_mc_ignorable(root, namespace_prefixes, message)
+    _validate_mc_markup(root, namespace_prefixes, message)
     return root, namespace_prefixes
 
 
-def _validate_mc_ignorable(
+def _validate_mc_markup(
     root: ET.Element,
     namespace_prefixes: Mapping[str, str],
     message: str,
-) -> None:
-    value = root.get(f"{{{MC}}}Ignorable")
-    if value is None:
-        return
-    tokens = value.split()
-    if not tokens or any(
-        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", token) is None
-        for token in tokens
-    ):
-        raise ValueError(f"{message}: mc:Ignorable inválido")
-    missing = [token for token in tokens if token not in namespace_prefixes]
+) -> frozenset[str]:
+    required: set[str] = set()
+    prefix_attributes = (
+        f"{{{MC}}}Ignorable",
+        f"{{{MC}}}MustUnderstand",
+    )
+    qname_attributes = (
+        f"{{{MC}}}ProcessContent",
+        f"{{{MC}}}PreserveAttributes",
+        f"{{{MC}}}PreserveElements",
+    )
+    ncname = r"[A-Za-z_][A-Za-z0-9_.-]*"
+    for element in root.iter():
+        for attribute in prefix_attributes:
+            value = element.get(attribute)
+            if value is None:
+                continue
+            tokens = value.split()
+            if not tokens or any(
+                re.fullmatch(ncname, token) is None for token in tokens
+            ):
+                raise ValueError(f"{message}: atributo MC de prefijos inválido")
+            required.update(tokens)
+        if element.tag == f"{{{MC}}}Choice":
+            value = element.get("Requires")
+            tokens = value.split() if value is not None else []
+            if not tokens or any(
+                re.fullmatch(ncname, token) is None for token in tokens
+            ):
+                raise ValueError(f"{message}: mc:Choice@Requires inválido")
+            required.update(tokens)
+        for attribute in qname_attributes:
+            value = element.get(attribute)
+            if value is None:
+                continue
+            tokens = value.split()
+            if not tokens:
+                raise ValueError(f"{message}: atributo MC de QNames inválido")
+            for token in tokens:
+                match = re.fullmatch(
+                    rf"(?:(?P<prefix>{ncname}):)?(?:{ncname}|\*)", token
+                )
+                if match is None:
+                    raise ValueError(f"{message}: QName MC inválido")
+                prefix = match.group("prefix")
+                if prefix:
+                    required.add(prefix)
+    missing = sorted(prefix for prefix in required if prefix not in namespace_prefixes)
     if missing:
-        raise ValueError(
-            f"{message}: prefijo mc:Ignorable no declarado: {missing[0]}"
-        )
+        raise ValueError(f"{message}: prefijo MC no declarado: {missing[0]}")
+    return frozenset(required)
 
 
 def _xml_bytes(
@@ -2145,42 +2241,43 @@ def _xml_bytes(
     namespace_prefixes: Mapping[str, str] | None = None,
 ) -> bytes:
     prefixes = dict(namespace_prefixes or {})
-    ignorable = root.get(f"{{{MC}}}Ignorable", "").split()
-    for prefix in ignorable:
-        if prefix not in prefixes:
-            raise ValueError(f"Prefijo mc:Ignorable no declarado: {prefix}")
-    for prefix, uri in prefixes.items():
-        if prefix in {"xml", "xmlns"}:
-            continue
-        try:
-            ET.register_namespace(prefix, uri)
-        except ValueError as error:
-            if prefix in ignorable:
-                raise ValueError(
-                    f"Prefijo mc:Ignorable no serializable: {prefix}"
-                ) from error
-    content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-    declaration_end = content.find(b"?>")
-    root_start = content.find(b"<", declaration_end + 2)
-    root_end = content.find(b">", root_start)
-    if root_start < 0 or root_end < 0:
-        raise ValueError("Serialización XML inválida")
-    start_tag = content[root_start:root_end]
-    declarations = bytearray()
-    for prefix in ignorable:
-        marker = f"xmlns:{prefix}=".encode()
-        if marker in start_tag:
-            continue
-        uri = prefixes[prefix]
-        escaped_uri = escape(uri, {'"': "&quot;"})
-        declarations.extend(f' xmlns:{prefix}="{escaped_uri}"'.encode())
-    if declarations:
-        content = content[:root_end] + bytes(declarations) + content[root_end:]
-    serialized_root, serialized_prefixes = _parse_xml_document(
-        content, "XML serializado inválido"
-    )
-    _validate_mc_ignorable(serialized_root, serialized_prefixes, "XML serializado inválido")
-    return content
+    prefixes.setdefault("xml", XML_NS)
+    required = _validate_mc_markup(root, prefixes, "XML inválido")
+    with _XML_SERIALIZATION_LOCK:
+        for prefix, uri in prefixes.items():
+            if prefix in {"xml", "xmlns"}:
+                continue
+            try:
+                ET.register_namespace(prefix, uri)
+            except ValueError as error:
+                if prefix in required:
+                    raise ValueError(f"Prefijo MC no serializable: {prefix}") from error
+        content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        declaration_end = content.find(b"?>")
+        root_start = content.find(b"<", declaration_end + 2)
+        root_end = content.find(b">", root_start)
+        if root_start < 0 or root_end < 0:
+            raise ValueError("Serialización XML inválida")
+        start_tag = content[root_start:root_end]
+        declarations = bytearray()
+        for prefix in sorted(required):
+            marker = f"xmlns:{prefix}=".encode()
+            if marker in start_tag:
+                continue
+            uri = prefixes[prefix]
+            escaped_uri = escape(uri, {'"': "&quot;"})
+            declarations.extend(f' xmlns:{prefix}="{escaped_uri}"'.encode())
+        if declarations:
+            content = content[:root_end] + bytes(declarations) + content[root_end:]
+        serialized_root, serialized_prefixes = _parse_xml_document(
+            content, "XML serializado inválido"
+        )
+        serialized_required = _validate_mc_markup(
+            serialized_root, serialized_prefixes, "XML serializado inválido"
+        )
+        if serialized_required != required:
+            raise ValueError("Serialización MC inconsistente")
+        return content
 
 
 def _preflight_payload(payload: object) -> "_Payload":

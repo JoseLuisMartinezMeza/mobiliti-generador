@@ -10,6 +10,7 @@ from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
+import mobiliti_saas.quote_engine.quotation_sheets as quotation_sheets_module
 
 from mobiliti_saas.quote_engine.ooxml_package import PackageMutation, XlsxPackage
 from mobiliti_saas.quote_engine.quotation_sheets import (
@@ -533,6 +534,33 @@ def test_table_identity_collisions_remap_id_name_and_all_structured_references(t
     assert allocated_name in quote_local.text
 
 
+def test_table_formula_tokenizer_rewrites_bare_range_operands_but_never_text(tmp_path):
+    source = _source_with_table_identity(
+        tmp_path,
+        table_id=1,
+        name="Table1",
+        display_name="Table1",
+        formula='CONCAT("Table1",SUM(Table1))',
+        filename="bare-table-reference.xlsx",
+    )
+
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    table_part = next(name for name in addition.parts if name.startswith("xl/tables/"))
+    table = ET.fromstring(addition.parts[table_part])
+    formulas = (
+        ET.fromstring(addition.xml).findtext(".//m:c[@r='N12']/m:f", namespaces=NS),
+        table.findtext(".//m:calculatedColumnFormula", namespaces=NS),
+        next(name.text for name in addition.defined_names if name.name == "QuoteLocal"),
+    )
+
+    assert formulas == (
+        'CONCAT("Table1",SUM(Table1_Quotation_1))',
+        'CONCAT("Table1",SUM(Table1_Quotation_1))',
+        'CONCAT("Table1",SUM(Table1_Quotation_1))',
+    )
+
+
 def test_table_identity_preflight_rejects_ambiguous_names_duplicate_destination_and_literal_refs(tmp_path):
     destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
     ambiguous = _source_with_table_identity(
@@ -699,6 +727,16 @@ def test_relationship_profiles_validate_external_schemes_target_mode_and_printer
             {"xl/printerSettings/printerSettings7.bin": b"PRINTER\x00SETTINGS\xff"},
             "(?i)printer|firma|DEVMODE",
         ),
+        (
+            "encoded-controls-link.xlsx",
+            {
+                sheet_rels_name: sheet_rels.replace(
+                    b"https://example.com/spec?q=1",
+                    b"https://example.com/%250D%250AInjected",
+                )
+            },
+            "(?i)control|hyperlink|invisible",
+        ),
     )
 
     for filename, replacements, message in cases:
@@ -707,7 +745,7 @@ def test_relationship_profiles_validate_external_schemes_target_mode_and_printer
             transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
 
 
-def test_exact_transitional_and_strict_relationship_uris_are_enforced(tmp_path):
+def test_exact_transitional_relationship_uris_are_enforced_and_strict_types_rejected(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     workbook_rels_name = "xl/_rels/workbook.xml.rels"
     spoofed_workbook = _rewrite_package(
@@ -731,7 +769,7 @@ def test_exact_transitional_and_strict_relationship_uris_are_enforced(tmp_path):
             )
         },
     )
-    strict = _rewrite_package(
+    strict_relationship_types = _rewrite_package(
         source,
         tmp_path / "strict-rel-types.xlsx",
         {
@@ -745,7 +783,27 @@ def test_exact_transitional_and_strict_relationship_uris_are_enforced(tmp_path):
         transplant_quotation(spoofed_workbook, XlsxPackage.read(OFFICIAL_TEMPLATE))
     with pytest.raises(ValueError, match="(?i)officeDocument|ra.z"):
         XlsxPackage.read(spoofed_root)
-    assert transplant_quotation(strict, XlsxPackage.read(OFFICIAL_TEMPLATE)) is not None
+    with pytest.raises(ValueError, match="(?i)Strict.*no soportado|no soporta.*Strict"):
+        transplant_quotation(
+            strict_relationship_types, XlsxPackage.read(OFFICIAL_TEMPLATE)
+        )
+
+
+def test_real_strict_spreadsheet_namespace_fails_closed_early(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    strict_main = "http://purl.oclc.org/ooxml/spreadsheetml/main"
+    strict = _rewrite_package(
+        source,
+        tmp_path / "strict-package.xlsx",
+        {
+            "xl/workbook.xml": _part_bytes(source, "xl/workbook.xml").replace(
+                MAIN.encode(), strict_main.encode()
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="(?i)Strict.*no soportado|no soporta.*Strict"):
+        transplant_quotation(strict, XlsxPackage.read(OFFICIAL_TEMPLATE))
 
 
 @pytest.mark.parametrize(
@@ -856,6 +914,61 @@ def test_mc_ignorable_rejects_undeclared_prefix(tmp_path):
 
     with pytest.raises(ValueError, match="(?i)Ignorable|prefijo"):
         inline_source_shared_strings(sheet, ("valor",))
+
+
+def test_mc_descendant_namespaces_and_qname_lists_are_promoted_and_preserved():
+    x14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+    sheet = f'''<worksheet xmlns="{MAIN}" xmlns:mc="{MC}">
+      <sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>
+      <mc:AlternateContent>
+        <mc:Choice xmlns:x14="{x14}" Requires="x14" mc:ProcessContent="x14:future" mc:PreserveAttributes="x14:flag" mc:PreserveElements="x14:future">
+          <x14:future x14:flag="1"/>
+        </mc:Choice>
+        <mc:Fallback/>
+      </mc:AlternateContent>
+    </worksheet>'''.encode()
+
+    output = inline_source_shared_strings(sheet, ("valor",))
+    root = ET.fromstring(output)
+    choice = root.find(f".//{{{MC}}}Choice")
+    root_start = output[output.find(b"<", output.find(b"?>") + 2) : output.find(b">", output.find(b"?>") + 2)]
+
+    assert choice.attrib["Requires"] == "x14"
+    assert choice.attrib[f"{{{MC}}}ProcessContent"] == "x14:future"
+    assert b'xmlns:x14="' + x14.encode() + b'"' in root_start
+    assert b"<x14:future" in output
+
+
+def test_mc_namespace_rebinding_to_a_different_uri_fails_closed():
+    sheet = f'''<worksheet xmlns="{MAIN}" xmlns:mc="{MC}" xmlns:x14="urn:first">
+      <sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>
+      <mc:AlternateContent><mc:Choice xmlns:x14="urn:second" Requires="x14"><x14:future/></mc:Choice></mc:AlternateContent>
+    </worksheet>'''.encode()
+
+    with pytest.raises(ValueError, match="(?i)prefijo.*ambiguo|rebind"):
+        inline_source_shared_strings(sheet, ("valor",))
+
+
+def test_xml_serialization_registers_namespaces_while_holding_module_lock(monkeypatch):
+    lock = quotation_sheets_module._XML_SERIALIZATION_LOCK
+    original = quotation_sheets_module.ET.register_namespace
+    observed = []
+
+    def checked_register(prefix, uri):
+        observed.append(lock._is_owned())
+        return original(prefix, uri)
+
+    monkeypatch.setattr(
+        quotation_sheets_module.ET,
+        "register_namespace",
+        checked_register,
+    )
+    root = ET.fromstring('<root xmlns:p="urn:lock"><p:item/></root>')
+
+    output = quotation_sheets_module._xml_bytes(root, {"p": "urn:lock"})
+
+    assert observed and all(observed)
+    assert b"<p:item" in output
 
 
 @pytest.mark.parametrize(
