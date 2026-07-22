@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
@@ -22,13 +23,19 @@ from .supplier_catalog import resolve_conversion_rate
 
 
 ALLOWED_IMPORT_CURRENCIES = frozenset({"MXN", "USD", "EUR"})
-MAX_IMPORTED_LINES = 500
+XLSX_MAX_ROWS = 1_048_576
+MOBILITI_FIRST_SECTION_ROW = 13
+MOBILITI_BASE_SECTIONS = 16
+MOBILITI_BASE_PRODUCTS = 33
+MOBILITI_RESERVED_ROWS_AFTER_TOTAL = 64
+MAX_QUOTE_REQUEST_BYTES = 25 * 1024 * 1024
+MAX_IMPORTED_LINES = XLSX_MAX_ROWS - MOBILITI_RESERVED_ROWS_AFTER_TOTAL
 MAX_TEXT_LENGTH = 1_000
 MAX_DESCRIPTION_LENGTH = 10_000
 MAX_FILENAME_LENGTH = 255
 MAX_MONEY = Decimal("1000000000")
 MAX_QUANTITY = Decimal("1000000")
-MAX_XLSX_INPUT_BYTES = 25 * 1024 * 1024
+MAX_XLSX_INPUT_BYTES = MAX_QUOTE_REQUEST_BYTES
 MAX_ZIP_ENTRIES = 5_000
 MAX_ZIP_MEMBER_UNCOMPRESSED = 100 * 1024 * 1024
 MAX_ZIP_TOTAL_UNCOMPRESSED = 200 * 1024 * 1024
@@ -62,6 +69,38 @@ _NS = {
 }
 
 
+def required_mobiliti_rows(section_counts: Sequence[int]) -> int:
+    counts = list(section_counts)
+    if any(type(count) is not int or count < 0 for count in counts):
+        raise ValueError("Cantidad de productos por seccion invalida")
+    visible = counts + [0] * max(0, MOBILITI_BASE_SECTIONS - len(counts))
+    return MOBILITI_FIRST_SECTION_ROW + sum(
+        max(MOBILITI_BASE_PRODUCTS, count) + 2 for count in visible
+    )
+
+
+def validate_quote_size(*, section_counts: Sequence[int], encoded_bytes: int) -> None:
+    counts = list(section_counts)
+    if not counts:
+        raise ValueError("La cotizacion debe contener al menos una linea")
+    required_rows = required_mobiliti_rows(counts)
+    if sum(counts) < 1:
+        raise ValueError("La cotizacion debe contener al menos una linea")
+    if type(encoded_bytes) is not int or encoded_bytes < 0:
+        raise ValueError("Tamano codificado de cotizacion invalido")
+    final_row = required_rows + MOBILITI_RESERVED_ROWS_AFTER_TOTAL
+    if final_row > XLSX_MAX_ROWS:
+        raise ValueError(
+            f"La cotizacion requiere la fila {final_row}; "
+            f"XLSX permite hasta {XLSX_MAX_ROWS} filas"
+        )
+    if encoded_bytes > MAX_QUOTE_REQUEST_BYTES:
+        raise ValueError(
+            f"La cotizacion tiene {encoded_bytes} bytes y excede el limite "
+            f"de {MAX_QUOTE_REQUEST_BYTES} bytes"
+        )
+
+
 def build_import_manifest(
     source_bytes: bytes,
     import_id: str,
@@ -73,8 +112,13 @@ def build_import_manifest(
     source_hash = hashlib.sha256(source).hexdigest()
     items, columns = read_items_from_bytes(source)
     products = [item for item in items if item["tipo"] == "producto"]
-    if not 1 <= len(products) <= MAX_IMPORTED_LINES:
-        raise ValueError("La quotation debe contener entre 1 y 500 productos")
+    if not products:
+        raise ValueError("La quotation debe contener al menos un producto")
+    sections = _manifest_sections(items, canonical_import_id)
+    validate_quote_size(
+        section_counts=[len(section["item_keys"]) for section in sections],
+        encoded_bytes=len(source),
+    )
 
     rows = [
         _manifest_item(item, canonical_import_id, filename)
@@ -89,7 +133,7 @@ def build_import_manifest(
         "source_currency": _uniform_currency(rows),
         "currency_status": "detected" if all(item["source_currency"] for item in rows) else "required",
         "columns": columns,
-        "sections": _manifest_sections(items, canonical_import_id),
+        "sections": sections,
         "items": rows,
     }
     checked = validate_import_manifest(manifest)
@@ -113,8 +157,7 @@ def normalize_imported_items(
     checked = validate_import_manifest(manifest)
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError("Items importados invalidos")
-    if len(raw_items) > MAX_IMPORTED_LINES:
-        raise ValueError("Se excede el limite de 500 lineas importadas")
+    validate_quote_size(section_counts=[len(raw_items)], encoded_bytes=0)
 
     fallback_currency = _currency(source_currency, "Moneda de origen requerida", allow_none=True)
     destination = _currency(quote_currency, "Moneda de cotizacion invalida")
@@ -203,8 +246,10 @@ def validate_import_manifest(manifest: dict) -> dict:
         raise ValueError("Estado de moneda invalido")
     columns = _columns(manifest["columns"])
     rows = manifest["items"]
-    if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_IMPORTED_LINES:
-        raise ValueError("La quotation debe contener entre 1 y 500 productos")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("La quotation debe contener al menos un producto")
+    if len(rows) > MAX_IMPORTED_LINES:
+        validate_quote_size(section_counts=[len(rows)], encoded_bytes=0)
 
     checked_rows = [_validate_manifest_item(item, import_id, filename) for item in rows]
     row_numbers = [item["source_row"] for item in checked_rows]
@@ -217,6 +262,10 @@ def validate_import_manifest(manifest: dict) -> dict:
         raise ValueError("Estado de moneda inconsistente")
 
     sections = _validate_manifest_sections(manifest["sections"], import_id, checked_rows)
+    validate_quote_size(
+        section_counts=[len(section["item_keys"]) for section in sections],
+        encoded_bytes=0,
+    )
     return {
         "schema_version": 1,
         "import_id": import_id,
@@ -620,7 +669,10 @@ def _source_bytes(value: object) -> bytes:
     if not isinstance(value, bytes) or not value:
         raise ValueError("Archivo de quotation invalido")
     if len(value) > MAX_XLSX_INPUT_BYTES:
-        raise ValueError("El archivo .xlsx inseguro excede el limite de carga")
+        raise ValueError(
+            f"El archivo .xlsx tiene {len(value)} bytes y excede el limite "
+            f"de {MAX_XLSX_INPUT_BYTES} bytes"
+        )
     _preflight_xlsx_zip(value)
     return value
 

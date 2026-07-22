@@ -25,7 +25,15 @@ from .catalog_cart import (
     write_catalog_quotation_item,
 )
 from .offiho_catalog import build_offiho_cart_payload
-from .quotation_import import build_import_manifest, normalize_imported_items
+from .quotation_import import (
+    MAX_QUOTE_REQUEST_BYTES,
+    MOBILITI_BASE_PRODUCTS,
+    MOBILITI_RESERVED_ROWS_AFTER_TOTAL,
+    XLSX_MAX_ROWS,
+    build_import_manifest,
+    normalize_imported_items,
+    validate_quote_size,
+)
 from .supplier_catalog import (
     MAX_ATTRIBUTES_DEPTH,
     MAX_ATTRIBUTES_JSON_BYTES,
@@ -57,15 +65,18 @@ MIXED_EXPECTED_BASE_CURRENCY = {
     "sunon": "USD", "alma": "USD", "lumbro": "MXN",
 }
 MIXED_QUOTE_CURRENCIES = frozenset({"MXN", "USD", "EUR"})
-MAX_MIXED_CATALOG_LINES = 500
-MAX_MIXED_REQUEST_BYTES = 1_000_000
-MAX_MIXED_PAYLOAD_BYTES = 5_000_000
+MAX_MIXED_CATALOG_LINES = XLSX_MAX_ROWS - MOBILITI_RESERVED_ROWS_AFTER_TOTAL
+MAX_MIXED_REQUEST_BYTES = MAX_QUOTE_REQUEST_BYTES
+MAX_MIXED_PAYLOAD_BYTES = MAX_QUOTE_REQUEST_BYTES
 MAX_MIXED_TEXT = 2_000
 MAX_MIXED_URL = 2_048
 MAX_MIXED_WARNINGS = 50
 MAX_MIXED_IDENTITY = 1_000
 MAX_MIXED_OPTIONS_PER_LINE = 200
-MAX_MIXED_SECTIONS = 32
+MAX_MIXED_SECTIONS = (
+    (XLSX_MAX_ROWS - MOBILITI_RESERVED_ROWS_AFTER_TOTAL)
+    // (MOBILITI_BASE_PRODUCTS + 2)
+)
 MAX_MIXED_SECTION_TITLE = 120
 MIXED_ALLOWED_FIELDS = {
     "tarkett": frozenset({"catalog", "code", "quantity"}),
@@ -172,15 +183,16 @@ def _validate_browser_row(raw: object) -> dict[str, Any]:
 
 
 def preflight_mixed_catalog_items(raw_items: object) -> list[dict[str, Any]]:
-    if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= MAX_MIXED_CATALOG_LINES:
-        raise ValueError("El carrito mixto debe contener entre 1 y 500 filas")
+    if not isinstance(raw_items, list):
+        raise ValueError("Items mixtos debe ser una lista")
+    if not raw_items:
+        raise ValueError("La cotizacion debe contener al menos una linea")
     normalized = [_validate_browser_row(candidate) for candidate in raw_items]
     try:
         encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError("Carrito mixto invalido") from exc
-    if len(encoded) > MAX_MIXED_REQUEST_BYTES:
-        raise ValueError("Carrito mixto excede el limite de bytes")
+    validate_quote_size(section_counts=[len(normalized)], encoded_bytes=len(encoded))
     return normalized
 
 
@@ -226,7 +238,7 @@ def _normalize_presentation_sections(
         }]
     if (
         not isinstance(raw_sections, list)
-        or not 1 <= len(raw_sections) <= MAX_MIXED_SECTIONS
+        or not raw_sections
     ):
         raise ValueError("Secciones mixtas invalidas")
 
@@ -437,7 +449,7 @@ def build_mixed_catalog_cart_payload(
     discount = _commercial_discount_percent(commercial_discount_percent)
     effective_today = today or date.today()
     if not isinstance(raw_items, list):
-        raise ValueError("El carrito mixto debe contener entre 1 y 500 filas")
+        raise ValueError("Items mixtos debe ser una lista")
     ordered_rows = _ordered_browser_rows(raw_items) if raw_items else []
     normalized_import = _normalize_imported_source(
         imported_source,
@@ -446,15 +458,17 @@ def build_mixed_catalog_cart_payload(
         discount=discount,
     )
     if not ordered_rows and normalized_import is None:
-        raise ValueError("El carrito mixto debe contener entre 1 y 500 filas")
+        raise ValueError("La cotizacion debe contener al menos una linea")
     imported_items = [] if normalized_import is None else normalized_import["items"]
-    if len(ordered_rows) + len(imported_items) > MAX_MIXED_CATALOG_LINES:
-        raise ValueError("El carrito mixto debe contener entre 1 y 500 filas")
     rows_by_catalog = _group_browser_rows(ordered_rows)
     normalized_sections = _normalize_presentation_sections(
         presentation_sections,
         [mixed_cart_key(row) for row in ordered_rows]
         + [item["canonical_key"] for item in imported_items],
+    )
+    validate_quote_size(
+        section_counts=[len(section["item_keys"]) for section in normalized_sections],
+        encoded_bytes=0,
     )
     normalized_groups: list[dict[str, Any]] = []
     for catalog in MIXED_CATALOG_ORDER:
@@ -773,7 +787,12 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     except (TypeError, ValueError) as exc:
         raise ValueError("Grupos mixtos invalidos") from exc
-    if len(encoded) > MAX_MIXED_PAYLOAD_BYTES or payload["source_type"] != MIXED_CATALOG_CART_SOURCE_TYPE or not isinstance(payload["quote_currency"], str) or payload["quote_currency"] not in MIXED_QUOTE_CURRENCIES:
+    if len(encoded) > MAX_MIXED_PAYLOAD_BYTES:
+        raise ValueError(
+            f"La cotizacion tiene {len(encoded)} bytes y excede el limite "
+            f"de {MAX_MIXED_PAYLOAD_BYTES} bytes"
+        )
+    if payload["source_type"] != MIXED_CATALOG_CART_SOURCE_TYPE or not isinstance(payload["quote_currency"], str) or payload["quote_currency"] not in MIXED_QUOTE_CURRENCIES:
         raise ValueError("Grupos mixtos invalidos")
     _iso_timestamp(payload["created_at"], "created_at")
     imported_source, seen_keys = _validate_imported_payload_source(
@@ -816,7 +835,7 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             raise ValueError("Grupos mixtos invalidos")
         total += len(items)
         if total > MAX_MIXED_CATALOG_LINES:
-            raise ValueError("Grupos mixtos invalidos")
+            raise ValueError("La cotizacion excede la capacidad fisica de XLSX")
         for line in items:
             if not isinstance(line, dict) or set(line) not in {MIXED_LINE_FIELDS, MIXED_LINE_FIELDS | MIXED_RESERVATION_RESULT_FIELDS}:
                 raise ValueError("Grupos mixtos invalidos")
@@ -894,7 +913,7 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
     if type(payload["item_count"]) is not int or payload["item_count"] != total:
         raise ValueError("Conteo mixto inconsistente")
     sections = payload["sections"]
-    if not isinstance(sections, list) or not 1 <= len(sections) <= MAX_MIXED_SECTIONS:
+    if not isinstance(sections, list) or not sections:
         raise ValueError("Secciones mixtas invalidas")
     section_ids: set[str] = set()
     flattened_keys: list[str] = []
@@ -919,6 +938,10 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
         )
     if len(flattened_keys) != total or set(flattened_keys) != seen_keys:
         raise ValueError("Secciones mixtas invalidas")
+    validate_quote_size(
+        section_counts=[len(section["item_keys"]) for section in sections],
+        encoded_bytes=len(encoded),
+    )
     expected_summary = [{key: group[key] for key in ("catalog", *AUTO_ELECTRIFICATION_RATE_FIELDS)} for group in groups]
     if payload["rate_summary"] != expected_summary:
         raise ValueError("Resumen de tasas mixtas inconsistente")

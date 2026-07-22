@@ -71,6 +71,51 @@ def browser_rows_for_all_catalogs():
     ]
 
 
+def test_mixed_payload_accepts_700_lines_across_35_sections(rate_rows):
+    supplier_names = MIXED_CATALOG_ORDER[2:]
+    catalogs = {
+        catalog: {
+            "supplier": catalog,
+            "source_hash": f"{position:x}" * 64,
+            "generated_at": "2026-07-19T00:00:00+00:00",
+            "items": [],
+        }
+        for position, catalog in enumerate(supplier_names, start=2)
+    }
+    rows = []
+    for index in range(700):
+        catalog = supplier_names[index % len(supplier_names)]
+        internal_id = f"{catalog}:large-{index + 1}"
+        catalogs[catalog]["items"].append(
+            _supplier_item(catalog, internal_id=internal_id)
+        )
+        rows.append(
+            {"catalog": catalog, "internal_id": internal_id, "quantity": "1"}
+        )
+    keys = [mixed_cart_key(row) for row in rows]
+    sections = [
+        {
+            "id": f"section-{position + 1}",
+            "title": f"Area {position + 1}",
+            "item_keys": keys[offset:offset + 20],
+        }
+        for position, offset in enumerate(range(0, len(keys), 20))
+    ]
+
+    payload = build_mixed_catalog_cart_payload(
+        rows,
+        catalogs=catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=sections,
+        today=date(2026, 7, 19),
+    )
+
+    assert payload["item_count"] == 700
+    assert len(payload["sections"]) == 35
+
+
 def test_mixed_cart_groups_seven_catalogs_in_canonical_order(mixed_catalogs, rate_rows):
     payload = build_mixed_catalog_cart_payload(browser_rows_for_all_catalogs(), catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
     assert payload["source_type"] == "mixed_catalog_cart"

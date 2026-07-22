@@ -6,6 +6,7 @@ from pathlib import Path
 import struct
 
 import pytest
+from openpyxl import Workbook
 
 import mobiliti_saas.quote_engine.quotation_import as quotation_import
 from mobiliti_saas.quote_engine.quotation_import import (
@@ -272,9 +273,62 @@ def test_normalize_imported_items_rejects_duplicate_rows(import_manifest):
         )
 
 
-def test_validate_import_manifest_rejects_more_than_500_lines(import_manifest):
-    invalid = deepcopy(import_manifest)
-    invalid["items"] = invalid["items"] * 72
+def test_imported_line_limit_is_derived_from_physical_xlsx_capacity():
+    assert quotation_import.MAX_IMPORTED_LINES > 500
+    assert quotation_import.MAX_IMPORTED_LINES == (
+        quotation_import.XLSX_MAX_ROWS
+        - quotation_import.MOBILITI_RESERVED_ROWS_AFTER_TOTAL
+    )
 
-    with pytest.raises(ValueError, match="500"):
-        validate_import_manifest(invalid)
+
+def test_build_import_manifest_accepts_1000_rows_above_old_limit(tmp_path):
+    source = tmp_path / "large.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Quotation"
+    sheet["A1"] = "Proveedor grande"
+    for column, title in {
+        1: "No.",
+        2: "Item Name",
+        4: "Description",
+        5: "Dimension",
+        7: "Q'ty",
+        10: "Unit Price",
+        14: "Original Currency",
+    }.items():
+        sheet.cell(7, column, title)
+    for index in range(1_000):
+        row = index + 8
+        sheet.cell(row, 1, index + 1)
+        sheet.cell(row, 2, f"Producto {index + 1}")
+        sheet.cell(row, 4, "Descripcion compacta")
+        sheet.cell(row, 5, "600 x 600 mm")
+        sheet.cell(row, 7, 1)
+        sheet.cell(row, 10, 100)
+        sheet.cell(row, 14, "MXN")
+    workbook.save(source)
+    workbook.close()
+
+    manifest, image_map = build_import_manifest(
+        source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+    )
+
+    assert len(manifest["items"]) == 1_000
+    assert manifest["sections"][0]["title"] == "Sin categoria"
+    assert image_map == {}
+
+
+def test_validate_quote_size_reports_required_physical_row():
+    with pytest.raises(ValueError, match=r"fila .*1048576"):
+        quotation_import.validate_quote_size(
+            section_counts=[quotation_import.XLSX_MAX_ROWS],
+            encoded_bytes=0,
+        )
+
+
+def test_validate_quote_size_rejects_non_integer_section_counts():
+    with pytest.raises(ValueError, match="seccion"):
+        quotation_import.validate_quote_size(
+            section_counts=["1"],
+            encoded_bytes=0,
+        )

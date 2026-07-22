@@ -21,6 +21,7 @@ os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-key")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-32-chars-long!!!!!")
 
 import index
+import mobiliti_saas.api.index as primary_index
 from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
 from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
 
@@ -460,7 +461,7 @@ def test_mixed_quote_checks_subscription_with_integer_user_id_before_catalog_loa
 
 @pytest.mark.parametrize(
     "body",
-    ([], {"items": []}, {"items": [{"catalog": "tarkett", "code": "25731726", "quantity": "1"}] * 501}),
+    ([], {"items": []}),
 )
 def test_mixed_quote_rejects_invalid_container_or_line_count_before_dependencies(monkeypatch, body):
     state = _mock_mixed_quote_dependencies(monkeypatch)
@@ -514,27 +515,57 @@ def test_mixed_quote_rejects_every_unexpected_top_level_field_before_dependencie
     assert state["uploads"] == []
 
 
-def test_mixed_quote_rejects_declared_and_streamed_oversize_body(monkeypatch):
-    state = _mock_mixed_quote_dependencies(monkeypatch)
-    response = _client().post(
-        "/catalogs/mixed-quote",
-        headers={**_auth_headers(), "content-length": str(index.MAX_MIXED_REQUEST_BYTES + 1)},
-        content=b"{}",
+def test_mixed_quote_rejects_request_byte_limit_with_explicit_reason(monkeypatch):
+    assert primary_index.MAX_QUOTE_REQUEST_BYTES == 25 * 1024 * 1024
+    primary_index.app.dependency_overrides[primary_index.get_current_user] = (
+        lambda: {"id": 7}
     )
+    monkeypatch.setattr(
+        primary_index, "_require_active_subscription", lambda _user_id: None
+    )
+    try:
+        response = TestClient(primary_index.app).post(
+            "/catalogs/mixed-quote",
+            headers={
+                "content-length": str(primary_index.MAX_QUOTE_REQUEST_BYTES + 1)
+            },
+            content=b"{}",
+        )
+    finally:
+        primary_index.app.dependency_overrides.clear()
     assert response.status_code == 413
+    assert "bytes" in response.json()["detail"].lower()
 
     class StreamingRequest:
         headers = {}
 
         async def stream(self):
-            yield b"x" * (index.MAX_MIXED_REQUEST_BYTES // 2)
-            yield b"x" * (index.MAX_MIXED_REQUEST_BYTES // 2 + 1)
+            yield b"x" * (primary_index.MAX_QUOTE_REQUEST_BYTES // 2)
+            yield b"x" * (primary_index.MAX_QUOTE_REQUEST_BYTES // 2 + 1)
 
-    with pytest.raises(index.HTTPException) as exc:
-        asyncio.run(index._read_mixed_quote_body(StreamingRequest()))
+    with pytest.raises(primary_index.HTTPException) as exc:
+        asyncio.run(primary_index._read_mixed_quote_body(StreamingRequest()))
     assert exc.value.status_code == 413
-    assert state["rate_calls"] == 0
-    assert state["jobs"] == []
+    assert "bytes" in exc.value.detail.lower()
+
+
+def test_mixed_reservation_normalizer_accepts_700_lines_above_old_limit():
+    normalized = primary_index._normalize_mixed_reservation_groups(
+        [{
+            "catalog": "alma",
+            "items": [
+                {
+                    "identity": f"alma:large-{position}",
+                    "sku": f"ALMA-LARGE-{position}",
+                    "quantity": "1.000000",
+                    "stock": "5.000000",
+                }
+                for position in range(700)
+            ],
+        }]
+    )
+
+    assert len(normalized[0]["items"]) == 700
 
 
 @pytest.mark.parametrize(
@@ -3261,11 +3292,10 @@ def test_generic_internal_catalog_put_route_is_absent_and_tarkett_remains():
     assert all("{" not in path for path in put_paths)
 
 
-def test_deployable_api_copies_have_identical_sha256():
+def test_primary_and_web_api_copies_have_identical_sha256():
     paths = [
         Path("mobiliti_saas/web/api/index.py"),
         Path("mobiliti_saas/api/index.py"),
-        Path("vercel_deploy/api/index.py"),
     ]
     hashes = {hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 

@@ -62,10 +62,12 @@ from mobiliti_saas.quote_engine.supplier_catalog import (  # noqa: E402
 from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
     MAX_MIXED_CATALOG_LINES,
     MAX_MIXED_REQUEST_BYTES,
+    MAX_QUOTE_REQUEST_BYTES,
     MIXED_CATALOG_ORDER,
     build_mixed_catalog_cart_payload,
     build_mixed_reservation_groups,
     preflight_mixed_catalog_items,
+    validate_quote_size,
     validate_mixed_catalog_payload,
 )
 
@@ -1055,12 +1057,15 @@ def _normalize_mixed_reservation_groups(groups):
                 ),
             })
             total += 1
-            if total > 500:
-                raise RuntimeError("Reserva mixta invalida")
         normalized.append({
             "catalog": catalog,
             "items": sorted(clean_items, key=lambda row: row["identity"]),
         })
+    if total:
+        try:
+            validate_quote_size(section_counts=[total], encoded_bytes=0)
+        except ValueError as exc:
+            raise RuntimeError(f"Reserva mixta invalida: {exc}") from exc
     return sorted(
         normalized, key=lambda group: _MIXED_RESERVATION_CATALOGS.index(group["catalog"])
     )
@@ -4134,14 +4139,26 @@ async def _read_mixed_quote_body(request: Request) -> object:
             declared = int(raw_length)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Content-Length invalido") from exc
-        if declared < 0 or declared > MAX_MIXED_REQUEST_BYTES:
-            raise HTTPException(status_code=413, detail="Solicitud mixta demasiado grande")
+        if declared < 0 or declared > MAX_QUOTE_REQUEST_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Solicitud mixta de {declared} bytes excede el limite de "
+                    f"{MAX_QUOTE_REQUEST_BYTES} bytes"
+                ),
+            )
     chunks: list[bytes] = []
     size = 0
     async for chunk in request.stream():
         size += len(chunk)
-        if size > MAX_MIXED_REQUEST_BYTES:
-            raise HTTPException(status_code=413, detail="Solicitud mixta demasiado grande")
+        if size > MAX_QUOTE_REQUEST_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Solicitud mixta de {size} bytes excede el limite de "
+                    f"{MAX_QUOTE_REQUEST_BYTES} bytes"
+                ),
+            )
         chunks.append(chunk)
     try:
         return json.loads(
@@ -4170,9 +4187,8 @@ async def mixed_catalog_quote(
     raw_items = body.get("items")
     if not isinstance(raw_items, list):
         raise HTTPException(status_code=400, detail="Items mixtos debe ser una lista")
-    if not 1 <= len(raw_items) <= MAX_MIXED_CATALOG_LINES:
-        raise HTTPException(status_code=400, detail="El carrito mixto debe contener entre 1 y 500 filas")
     try:
+        validate_quote_size(section_counts=[len(raw_items)], encoded_bytes=0)
         preflight_items = preflight_mixed_catalog_items(raw_items)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
