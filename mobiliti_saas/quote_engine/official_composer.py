@@ -1321,16 +1321,13 @@ def _validate_imported_formula_surfaces(
     sheet_additions: Sequence[SheetAddition],
 ) -> None:
     for addition in sheet_additions:
-        payloads = dict(addition.parts)
-        if addition.sheet_part is None:
-            payloads[f"<hoja:{addition.name}>"] = addition.xml
-        for part, payload in payloads.items():
+        for part, payload in _imported_worksheet_payloads(addition):
             try:
                 root = ET.fromstring(payload)
             except ET.ParseError as error:
                 raise ValueError(f"XML importado inválido: {part}") from error
             if root.tag != f"{{{MAIN}}}worksheet":
-                continue
+                raise ValueError(f"Raíz de worksheet importado inválida: {part}")
             for index, formula in enumerate(root.findall(f".//{{{MAIN}}}f"), start=1):
                 if not (formula.text or ""):
                     if formula.attrib.get("t") == "shared" and formula.attrib.get("si", "").isdigit():
@@ -1345,6 +1342,41 @@ def _validate_imported_formula_surfaces(
                 defined_name.text,
                 f"{addition.name}:definedName:{defined_name.name}",
             )
+
+
+def _imported_worksheet_payloads(
+    addition: SheetAddition,
+) -> tuple[tuple[str, bytes], ...]:
+    """Selecciona worksheets por contrato OPC, nunca por nombre o extensión."""
+
+    if addition.relationship_type not in relationship_type_uris("worksheet"):
+        raise ValueError(f"Relación de worksheet importado inválida: {addition.name}")
+    if addition.sheet_part is None:
+        selected: list[tuple[str, bytes]] = [
+            (f"<hoja:{addition.name}>", addition.xml)
+        ]
+    else:
+        main_content_type = addition.content_types.get(addition.sheet_part)
+        if main_content_type != WORKSHEET_CONTENT_TYPE:
+            raise ValueError(
+                f"Content type de worksheet importado inválido: {addition.sheet_part}"
+            )
+        selected = []
+
+    # `SheetAddition` exige cobertura exacta de ContentType. En Quotation esa
+    # cobertura proviene de la clausura de relaciones ya validada durante el
+    # transplante. Una parte worksheet se reconoce por ese perfil canónico,
+    # incluso si su nombre o extensión intentan disfrazarla.
+    for payloads, content_types in (
+        (addition.parts, addition.content_types),
+        (addition.replacements, addition.replacement_content_types),
+    ):
+        selected.extend(
+            (part, payload)
+            for part, payload in payloads.items()
+            if content_types[part] == WORKSHEET_CONTENT_TYPE
+        )
+    return tuple(selected)
 
 
 def _validate_imported_formula(formula: str, context: str) -> None:

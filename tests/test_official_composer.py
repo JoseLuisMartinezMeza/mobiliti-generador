@@ -1669,6 +1669,76 @@ def test_composer_keeps_safe_internal_imported_formula(tmp_path: Path) -> None:
     assert mutation.additions[addition.sheet_part] == addition.xml
 
 
+def test_imported_formula_validation_rejects_malformed_declared_worksheet(
+    tmp_path: Path,
+) -> None:
+    request = _minimal_request(tmp_path / "malformed-imported-worksheet.xlsx")
+    addition = _imported_formula_addition("SUM(A2:A3)")
+    assert addition.sheet_part is not None
+    malformed = b"<worksheet"
+    addition = replace(
+        addition,
+        xml=malformed,
+        parts={addition.sheet_part: malformed},
+    )
+
+    with pytest.raises(ValueError, match="XML importado inv.lido"):
+        build_allowlisted_mutation(
+            XlsxPackage.read(OFFICIAL_TEMPLATE),
+            replace(request, quotation=addition),
+        )
+
+
+def test_imported_formula_validation_uses_content_type_not_part_extension(
+    tmp_path: Path,
+) -> None:
+    request = _minimal_request(tmp_path / "misnamed-dangerous-worksheet.xlsx")
+    addition = _imported_formula_addition(
+        'WEBSERVICE("https://example.test/data")'
+    )
+    disguised_part = "xl/media/quotation_security_test.bin"
+    addition = replace(
+        addition,
+        parts={disguised_part: addition.xml},
+        content_types={
+            disguised_part: official_composer_module.WORKSHEET_CONTENT_TYPE
+        },
+        sheet_part=disguised_part,
+    )
+
+    with pytest.raises(ValueError, match="F.rmula importada no permitida"):
+        build_allowlisted_mutation(
+            XlsxPackage.read(OFFICIAL_TEMPLATE),
+            replace(request, quotation=addition),
+        )
+
+
+def test_imported_formula_validation_skips_bounded_non_xml_media(tmp_path: Path) -> None:
+    request = _minimal_request(tmp_path / "safe-formula-with-media.xlsx")
+    addition = _imported_formula_addition("SUM(A2:A3)")
+    media_parts = {
+        "xl/media/quotation_security_test.png": _png_payload(),
+        "xl/media/quotation_security_test.wmf": b"\xd7\xcd\xc6\x9aWMF-binary-payload",
+    }
+    addition = replace(
+        addition,
+        parts={**addition.parts, **media_parts},
+        content_types={
+            **addition.content_types,
+            "xl/media/quotation_security_test.png": "image/png",
+            "xl/media/quotation_security_test.wmf": "image/x-wmf",
+        },
+    )
+
+    mutation = build_allowlisted_mutation(
+        XlsxPackage.read(OFFICIAL_TEMPLATE),
+        replace(request, quotation=addition),
+    )
+
+    for media_part, expected in media_parts.items():
+        assert mutation.additions[media_part] == expected
+
+
 def test_output_contract_rejects_unexpected_defined_name(tmp_path: Path) -> None:
     request = _minimal_request(tmp_path / "unused.xlsx")
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
