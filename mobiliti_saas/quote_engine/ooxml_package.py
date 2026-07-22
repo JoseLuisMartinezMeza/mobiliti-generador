@@ -99,11 +99,11 @@ class XlsxPackage:
                 )
 
             for relationship in relationships:
-                if relationship.get("TargetMode", "").casefold() == "external":
-                    continue
                 target = relationship.get("Target")
                 if not target:
                     raise ValueError(f"Relacion OOXML sin destino: {rels_name}")
+                if relationship.get("TargetMode", "").casefold() == "external":
+                    continue
                 resolved = _resolve_internal_target(owner, target)
                 if resolved not in self.parts:
                     raise ValueError(
@@ -188,9 +188,14 @@ def _relationship_owner(rels_name: str) -> str | None:
     if rels_name == "_rels/.rels":
         return None
     directory, filename = posixpath.split(rels_name)
-    if not directory.endswith("/_rels") or not filename.endswith(".rels"):
+    if not filename.endswith(".rels"):
         raise ValueError(f"Ruta de relaciones OOXML invalida: {rels_name}")
-    owner_directory = directory[: -len("/_rels")]
+    if directory == "_rels":
+        owner_directory = ""
+    elif directory.endswith("/_rels"):
+        owner_directory = directory[: -len("/_rels")]
+    else:
+        raise ValueError(f"Ruta de relaciones OOXML invalida: {rels_name}")
     owner_filename = filename[: -len(".rels")]
     if not owner_filename:
         raise ValueError(f"Ruta de relaciones OOXML invalida: {rels_name}")
@@ -202,10 +207,13 @@ def _parse_relationships(rels_name: str, content: bytes) -> list[dict[str, str]]
         root = ElementTree.fromstring(content)
     except ElementTree.ParseError as error:
         raise ValueError(f"Relaciones OOXML invalidas: {rels_name}") from error
-    return [
-        dict(element.attrib)
-        for element in root.findall(f"{{{PACKAGE_RELATIONSHIPS}}}Relationship")
-    ]
+    relationships_tag = f"{{{PACKAGE_RELATIONSHIPS}}}Relationships"
+    relationship_tag = f"{{{PACKAGE_RELATIONSHIPS}}}Relationship"
+    if root.tag != relationships_tag or any(
+        element.tag != relationship_tag for element in root
+    ):
+        raise ValueError(f"Relaciones OOXML invalidas: {rels_name}")
+    return [dict(element.attrib) for element in root]
 
 
 def _resolve_internal_target(owner: str | None, target: str) -> str:

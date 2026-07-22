@@ -25,6 +25,7 @@ OFFICIAL_TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 Oficial.xlsx"
 )
+RELATIONSHIPS_NAMESPACE = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
 def part_bytes(path: Path, name: str) -> bytes:
@@ -81,6 +82,59 @@ def test_audit_accepts_internal_target_normalized_within_package(tmp_path):
         )
 
     XlsxPackage.read(source).audit()
+
+
+def test_audit_accepts_root_owner_relationship_part(tmp_path):
+    source = make_minimal_xlsx_package(tmp_path / "root-owner.xlsx")
+    with ZipFile(source, "a", ZIP_DEFLATED) as archive:
+        archive.writestr("foo.xml", b"<foo/>")
+        archive.writestr(
+            "_rels/foo.xml.rels",
+            _relationships(("rId1", "xl/styles.xml", None)),
+        )
+
+    XlsxPackage.read(source).audit()
+
+
+def test_audit_rejects_external_relationship_without_target(tmp_path):
+    source = make_minimal_xlsx_package(tmp_path / "external-without-target.xlsx")
+    with ZipFile(source, "a", ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            (
+                f'<Relationships xmlns="{RELATIONSHIPS_NAMESPACE}">'
+                '<Relationship Id="rId1" Type="test" TargetMode="External"/>'
+                "</Relationships>"
+            ).encode("utf-8"),
+        )
+
+    with pytest.raises(ValueError, match="Relacion OOXML sin destino"):
+        XlsxPackage.read(source).audit()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"<NotRelationships/>",
+        (
+            f'<Relationships xmlns="{RELATIONSHIPS_NAMESPACE}">'
+            "<Unexpected/>"
+            "</Relationships>"
+        ).encode("utf-8"),
+        (
+            f'<Relationships xmlns="{RELATIONSHIPS_NAMESPACE}">'
+            '<Relationship xmlns="" Id="rId1" Type="test" Target="../../styles.xml"/>'
+            "</Relationships>"
+        ).encode("utf-8"),
+    ],
+)
+def test_audit_rejects_invalid_relationship_document(tmp_path, content):
+    source = make_minimal_xlsx_package(tmp_path / "invalid-rels.xlsx")
+    with ZipFile(source, "a", ZIP_DEFLATED) as archive:
+        archive.writestr("xl/worksheets/_rels/sheet1.xml.rels", content)
+
+    with pytest.raises(ValueError, match="Relaciones OOXML invalidas"):
+        XlsxPackage.read(source).audit()
 
 
 def test_audit_accepts_promoted_official_template():
