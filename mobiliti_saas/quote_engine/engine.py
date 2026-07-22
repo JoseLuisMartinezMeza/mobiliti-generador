@@ -56,6 +56,7 @@ from .mobiliti_pricing import (
     write_official_currency_selector,
 )
 from .ooxml_package import (
+    PackageMutation,
     XlsxPackage,
     relationship_part_name,
     relationship_type_uris,
@@ -73,6 +74,7 @@ from .official_composer import (
     CotizacionProduct,
     CotizacionSection,
     CotizacionSheetEditor,
+    _validate_compose_paths,
     compose_official_quote,
 )
 from .official_template import load_template_contract
@@ -3530,82 +3532,78 @@ def _build_official_cotizacion(
 def _normalized_quotation_source(path: Path) -> Path | bytes:
     """Normaliza targets OPC package-rooted sin mutar el XLSX recibido."""
 
-    changed = False
-    output = BytesIO()
-    with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(
-        output,
-        "w",
-        compression=zipfile.ZIP_DEFLATED,
-        compresslevel=6,
-    ) as target:
-        names = set(source.namelist())
-        for info in source.infolist():
-            payload = source.read(info.filename)
-            entry_changed = False
-            if info.filename.endswith(".rels"):
-                root = ET.fromstring(payload)
-                owner = _engine_relationship_owner(info.filename)
-                owner_directory = posixpath.dirname(owner) if owner else ""
-                for relationship in root.findall(
-                    f"{{{_PKG_REL_NS}}}Relationship"
-                ):
-                    if relationship.attrib.get("TargetMode", "").casefold() == "external":
-                        continue
-                    relationship_target = relationship.attrib.get("Target", "")
-                    if not relationship_target.startswith("/"):
-                        continue
-                    package_part = relationship_target[1:]
-                    if (
-                        not package_part
-                        or package_part.startswith("/")
-                        or "\\" in package_part
-                        or posixpath.normpath(package_part) != package_part
-                        or package_part not in names
-                    ):
-                        raise ValueError("Target OOXML package-rooted invalido")
-                    relationship.attrib["Target"] = posixpath.relpath(
-                        package_part,
-                        owner_directory,
-                    )
-                    changed = True
-                    entry_changed = True
-                if entry_changed:
-                    payload = ET.tostring(
-                        root,
-                        encoding="utf-8",
-                        xml_declaration=True,
-                    )
-            elif info.filename.startswith("xl/worksheets/") and info.filename.endswith(
-                ".xml"
+    package = XlsxPackage.read(Path(path), audit=False)
+    names = set(package.parts)
+    replacements: dict[str, bytes] = {}
+    for name, bounded_payload in package.parts.items():
+        payload = bounded_payload
+        entry_changed = False
+        if name.endswith(".rels"):
+            root = ET.fromstring(payload)
+            owner = _engine_relationship_owner(name)
+            owner_directory = posixpath.dirname(owner) if owner else ""
+            for relationship in root.findall(
+                f"{{{_PKG_REL_NS}}}Relationship"
             ):
-                root = ET.fromstring(payload)
-                for cell in root.findall(
-                    ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"
-                    "[@t='inlineStr']"
+                if relationship.attrib.get("TargetMode", "").casefold() == "external":
+                    continue
+                relationship_target = relationship.attrib.get("Target", "")
+                if not relationship_target.startswith("/"):
+                    continue
+                package_part = relationship_target[1:]
+                if (
+                    not package_part
+                    or package_part.startswith("/")
+                    or "\\" in package_part
+                    or posixpath.normpath(package_part) != package_part
+                    or package_part not in names
                 ):
-                    inline_strings = cell.findall(
-                        "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is"
-                    )
-                    if inline_strings:
-                        if len(inline_strings) != 1:
-                            raise ValueError("Celda inlineStr ambigua")
-                        continue
-                    if list(cell):
-                        raise ValueError("Celda inlineStr invalida")
-                    ET.SubElement(
-                        cell,
-                        "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is",
-                    )
-                    changed = True
-                    entry_changed = True
-                if entry_changed:
-                    payload = ET.tostring(
-                        root,
-                        encoding="utf-8",
-                        xml_declaration=True,
-                    )
-            target.writestr(info, payload)
-    return output.getvalue() if changed else path
+                    raise ValueError("Target OOXML package-rooted invalido")
+                relationship.attrib["Target"] = posixpath.relpath(
+                    package_part,
+                    owner_directory,
+                )
+                entry_changed = True
+            if entry_changed:
+                payload = ET.tostring(
+                    root,
+                    encoding="utf-8",
+                    xml_declaration=True,
+                )
+        elif name.startswith("xl/worksheets/") and name.endswith(".xml"):
+            root = ET.fromstring(payload)
+            for cell in root.findall(
+                ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"
+                "[@t='inlineStr']"
+            ):
+                inline_strings = cell.findall(
+                    "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is"
+                )
+                if inline_strings:
+                    if len(inline_strings) != 1:
+                        raise ValueError("Celda inlineStr ambigua")
+                    continue
+                if list(cell):
+                    raise ValueError("Celda inlineStr invalida")
+                ET.SubElement(
+                    cell,
+                    "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is",
+                )
+                entry_changed = True
+            if entry_changed:
+                payload = ET.tostring(
+                    root,
+                    encoding="utf-8",
+                    xml_declaration=True,
+                )
+        if entry_changed:
+            replacements[name] = payload
+    if not replacements:
+        package.audit()
+        return Path(path)
+    normalized = package.to_bytes(PackageMutation(replacements=replacements))
+    XlsxPackage.from_bytes(normalized)
+    return normalized
 
 
 def _engine_relationship_owner(rels_name: str) -> str | None:
@@ -3630,11 +3628,17 @@ def generate_quote(
     metadata = dict(metadata or {})
     source_path = Path(source_path).resolve(strict=True)
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    resolved_output = output_path.resolve(strict=False)
+    lexical_output = output_path if output_path.is_absolute() else Path.cwd() / output_path
     official_template = Path(template_path or OFFICIAL_TEMPLATE_PATH).resolve(strict=True)
+    _verified_template, resolved_output = _validate_compose_paths(
+        official_template,
+        lexical_output,
+    )
 
-    items, _column_map = read_items(source_path)
+    normalized_source = _normalized_quotation_source(source_path)
+    items, _column_map = read_items(
+        BytesIO(normalized_source) if isinstance(normalized_source, bytes) else normalized_source
+    )
     handed_off_rows = _canonical_handoff_rows(quotation_data_rows)
     if handed_off_rows is None:
         _validate_mixed_catalog_metadata(items, metadata)

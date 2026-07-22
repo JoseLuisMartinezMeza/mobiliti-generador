@@ -87,13 +87,16 @@ class XlsxPackage:
     archive_names: tuple[str, ...] = ()
 
     @classmethod
-    def read(cls, path: Path) -> "XlsxPackage":
-        """Lee un paquete y falla cerrada si su estructura OOXML es insegura."""
+    def read(cls, path: Path, *, audit: bool = True) -> "XlsxPackage":
+        """Lee con preflight acotado y, por omisiÃ³n, audita toda la estructura."""
 
+        if type(audit) is not bool:
+            raise TypeError("La opciÃ³n audit debe ser booleana")
         path = Path(path)
         with zipfile.ZipFile(path, "r") as archive:
             package = cls._from_archive(archive, path)
-        package.audit()
+        if audit:
+            package.audit()
         return package
 
     @classmethod

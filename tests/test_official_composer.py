@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import sys
 from xml.etree import ElementTree as ET
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -22,7 +23,9 @@ from mobiliti_saas.quote_engine.mobiliti_layout import (  # noqa: E402
     plan_mobiliti_layout,
 )
 from mobiliti_saas.quote_engine import generate_quote  # noqa: E402
+import mobiliti_saas.quote_engine.engine as engine_module  # noqa: E402
 import mobiliti_saas.quote_engine.official_composer as official_composer_module  # noqa: E402
+import mobiliti_saas.quote_engine.ooxml_package as ooxml_package_module  # noqa: E402
 from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage  # noqa: E402
 from mobiliti_saas.quote_engine.ooxml_package import (  # noqa: E402
     relationship_part_name,
@@ -1468,3 +1471,106 @@ def test_composed_zip_bytes_ignore_output_name_image_name_and_image_mtime(
     compose_official_quote(replace(second_request, cotizacion=second_cotizacion))
 
     assert first_output.read_bytes() == second_output.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit", "expected"),
+    (
+        ("MAX_ZIP_ENTRIES", 1, "límite de entradas"),
+        ("MAX_ZIP_PART_BYTES", 8, "límite por parte"),
+    ),
+)
+def test_generate_quote_preflights_source_before_openpyxl_or_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    limit: int,
+    expected: str,
+) -> None:
+    source = tmp_path / f"preflight-{limit_name}.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla segura", "qty": 1, "price": 100},),
+    )
+    output = tmp_path / f"out-{limit_name}.xlsx"
+    cache = tmp_path / "forbidden-image-cache"
+    monkeypatch.setattr(ooxml_package_module, limit_name, limit)
+    monkeypatch.setattr(engine_module, "_IMAGE_CACHE_ROOT", cache, raising=False)
+    monkeypatch.setattr(
+        engine_module,
+        "read_items",
+        lambda _source: (_ for _ in ()).throw(
+            AssertionError("OpenPyXL fue invocado antes del preflight")
+        ),
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        generate_quote(source, output, {}, OFFICIAL_TEMPLATE)
+
+    assert not output.exists()
+    assert not cache.exists()
+
+
+def test_generate_quote_rejects_compression_bomb_before_output_or_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "compression-bomb.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla segura", "qty": 1, "price": 100},),
+    )
+    with ZipFile(source, "a", ZIP_DEFLATED) as archive:
+        archive.writestr("custom/compression-bomb.bin", b"0" * (2 * 1024 * 1024))
+    output = tmp_path / "compression-bomb-output.xlsx"
+    cache = tmp_path / "forbidden-image-cache"
+    monkeypatch.setattr(engine_module, "_IMAGE_CACHE_ROOT", cache, raising=False)
+    monkeypatch.setattr(
+        engine_module,
+        "read_items",
+        lambda _source: (_ for _ in ()).throw(
+            AssertionError("OpenPyXL fue invocado antes del preflight")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="ratio de compresión"):
+        generate_quote(source, output, {}, OFFICIAL_TEMPLATE)
+
+    assert not output.exists()
+    assert not cache.exists()
+
+
+def test_generate_quote_missing_output_parent_has_zero_filesystem_effects(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla segura", "qty": 1, "price": 100},),
+    )
+    missing_parent = tmp_path / "missing" / "nested"
+    output = missing_parent / "quote.xlsx"
+
+    with pytest.raises(FileNotFoundError, match="Directorio de salida inexistente"):
+        generate_quote(source, output, {}, OFFICIAL_TEMPLATE)
+
+    assert not missing_parent.parent.exists()
+    assert not output.exists()
+
+
+def test_generate_quote_rejects_lexical_parent_before_any_effect(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla segura", "qty": 1, "price": 100},),
+    )
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    output = existing / ".." / "lexical-output.xlsx"
+
+    with pytest.raises(ValueError, match="segmentos léxicos"):
+        generate_quote(source, output, {}, OFFICIAL_TEMPLATE)
+
+    assert not (tmp_path / "lexical-output.xlsx").exists()
