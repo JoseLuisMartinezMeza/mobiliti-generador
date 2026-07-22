@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import colorsys
 from dataclasses import replace
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 import hashlib
 from pathlib import Path
 import posixpath
@@ -400,6 +401,21 @@ def test_theme_references_are_materialized_against_source_theme(theme_source, tm
     assert font.find("m:scheme", NS) is None
 
 
+@pytest.mark.parametrize(
+    ("rgb", "tint", "expected"),
+    (
+        ("123456", "0.25", "2467AA"),
+        ("336699", "0.5", "8CB2D9"),
+        ("ABCDEF", "-0.4", "277BCF"),
+        ("C0504D", "0.6", "E6B9B8"),
+    ),
+)
+def test_spreadsheet_tint_uses_hls_luminance_with_independent_vectors(
+    rgb, tint, expected
+):
+    assert quotation_sheets_module._apply_tint(rgb, Decimal(tint)) == expected
+
+
 def test_semantic_signature_resolves_source_theme_in_default_style(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     worksheet_name = "xl/worksheets/original-quotation.xml"
@@ -489,6 +505,30 @@ def test_drawing_theme_tokens_are_materialized_with_supported_transforms(tmp_pat
     assert b'val="123456"' in output_drawing
     assert b'typeface="Fixture Minor"' in output_drawing
     assert b'<a:tint val="50000"' in output_drawing
+
+
+@pytest.mark.parametrize("reference_tag", ("fontRef", "fillRef", "lnRef", "effectRef"))
+def test_drawing_theme_style_references_fail_before_transplant_when_themes_differ(
+    reference_tag, tmp_path
+):
+    source = build_rich_quotation_fixture(tmp_path / f"{reference_tag}.xlsx")
+    drawing_name = "xl/drawings/drawing7.xml"
+    drawing = _part_bytes(source, drawing_name).replace(
+        b"<xdr:spPr>",
+        (
+            b"<xdr:spPr>"
+            + f'<a:{reference_tag} idx="1"><a:schemeClr val="accent1"/></a:{reference_tag}>'.encode()
+        ),
+        1,
+    )
+    themed = _rewrite_package(
+        source,
+        tmp_path / f"{reference_tag}-theme-reference.xlsx",
+        {drawing_name: drawing},
+    )
+
+    with pytest.raises(ValueError, match="(?i)tema|theme|formatScheme|referencia"):
+        transplant_quotation(themed, XlsxPackage.read(OFFICIAL_TEMPLATE))
 
 
 def test_transplant_never_replaces_official_theme(tmp_path):
@@ -834,6 +874,32 @@ def test_workbook_relationship_profiles_validate_exact_content_types(
     )
 
     with pytest.raises(ValueError, match="(?i)content type"):
+        transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        b'<Default Extension="rels" ContentType="application/xml"/>',
+        b"",
+    ),
+)
+def test_every_included_relationship_part_requires_exact_package_content_type(
+    replacement, tmp_path
+):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    content_types = _part_bytes(source, "[Content_Types].xml")
+    declaration = (
+        b'<Default Extension="rels" '
+        b'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    )
+    malformed = _rewrite_package(
+        source,
+        tmp_path / ("wrong-rels-type.xlsx" if replacement else "missing-rels-type.xlsx"),
+        {"[Content_Types].xml": content_types.replace(declaration, replacement, 1)},
+    )
+
+    with pytest.raises(ValueError, match="(?i)content type.*rels|rels.*content type|ausente"):
         transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
 
 
@@ -1534,15 +1600,17 @@ def _theme_font_semantics(
     )
     slot = root.find(f"a:themeElements/a:clrScheme/a:{order[theme_index]}", ns)
     value = list(slot)[0].attrib.get("lastClr") or list(slot)[0].attrib["val"]
-    tint_value = Decimal(tint)
-    channels = []
-    for offset in (0, 2, 4):
-        channel = Decimal(int(value[offset : offset + 2], 16))
-        if tint_value < 0:
-            adjusted = channel * (Decimal(1) + tint_value)
-        else:
-            adjusted = channel * (Decimal(1) - tint_value) + Decimal(255) * tint_value
-        channels.append(int(adjusted.quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
+    red, green, blue = (int(value[offset : offset + 2], 16) / 255 for offset in (0, 2, 4))
+    hue, luminance, saturation = colorsys.rgb_to_hls(red, green, blue)
+    tint_value = float(Decimal(tint))
+    if tint_value < 0:
+        luminance *= 1 + tint_value
+    else:
+        luminance = luminance * (1 - tint_value) + tint_value
+    channels = tuple(
+        int(channel * 255 + 0.5)
+        for channel in colorsys.hls_to_rgb(hue, luminance, saturation)
+    )
     font = root.find(f"a:themeElements/a:fontScheme/a:{scheme}Font/a:latin", ns)
     return "FF" + "".join(f"{value:02X}" for value in channels), font.attrib["typeface"]
 

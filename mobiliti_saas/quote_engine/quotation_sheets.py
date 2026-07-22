@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import colorsys
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -178,6 +179,13 @@ _DRAWING_COLOR_TRANSFORMS = {
     "hueMod", "hueOff", "inv", "invGamma", "lum", "lumMod", "lumOff",
     "red", "redMod", "redOff", "sat", "satMod", "satOff", "shade", "tint",
 }
+_DRAWING_STYLE_REFERENCE_TAGS = frozenset(
+    f"{{{_DRAWING_MAIN}}}{name}"
+    for name in ("fontRef", "fillRef", "lnRef", "effectRef")
+)
+_RELATIONSHIPS_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-package.relationships+xml"
+)
 
 
 @dataclass(frozen=True)
@@ -848,6 +856,23 @@ def transplant_quotation(
     source_state = source_package.sheet_state("Quotation")
     closure = source_package.relationship_closure(source_sheet)
     _validate_passive_closure(source_package, closure, source_sheet)
+    source_theme_part = source_package.workbook_related_part("theme")
+    source_theme = (
+        source_package.parts[source_theme_part]
+        if source_theme_part is not None
+        else None
+    )
+    destination_theme_part = destination_package.workbook_related_part("theme")
+    destination_theme = (
+        destination_package.parts[destination_theme_part]
+        if destination_theme_part is not None
+        else None
+    )
+    _preflight_drawing_theme_dependencies(
+        closure,
+        source_theme=source_theme,
+        destination_theme=destination_theme,
+    )
     allocation = destination_package.allocate_closure(
         closure, prefix="quotation_original"
     )
@@ -861,12 +886,6 @@ def transplant_quotation(
     destination_styles_part = destination_package.workbook_related_part("styles")
     if source_styles_part is None or destination_styles_part is None:
         raise ValueError("Styles OOXML ausentes")
-    source_theme_part = source_package.workbook_related_part("theme")
-    source_theme = (
-        source_package.parts[source_theme_part]
-        if source_theme_part is not None
-        else None
-    )
     sheet_xml, styles_xml, rewritten, table_name_map = _remap_source_styles_with_parts(
         sheet_xml,
         source_package.parts[source_styles_part],
@@ -1461,17 +1480,51 @@ def _materialize_spreadsheet_theme_refs(
 
 
 def _apply_tint(rgb: str, tint: Decimal) -> str:
-    result: list[int] = []
-    for offset in (0, 2, 4):
-        channel = Decimal(int(rgb[offset : offset + 2], 16))
-        if tint < 0:
-            adjusted = channel * (Decimal(1) + tint)
-        else:
-            adjusted = channel * (Decimal(1) - tint) + Decimal(255) * tint
-        result.append(
-            int(adjusted.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-        )
+    if re.fullmatch(r"[0-9A-Fa-f]{6}", rgb) is None:
+        raise ValueError("RGB de tema inválido")
+    red, green, blue = (
+        int(rgb[offset : offset + 2], 16) / 255 for offset in (0, 2, 4)
+    )
+    hue, luminance, saturation = colorsys.rgb_to_hls(red, green, blue)
+    tint_value = float(tint)
+    if tint_value < 0:
+        luminance *= 1 + tint_value
+    else:
+        luminance = luminance * (1 - tint_value) + tint_value
+    result = tuple(
+        min(255, max(0, int(channel * 255 + 0.5)))
+        for channel in colorsys.hls_to_rgb(hue, luminance, saturation)
+    )
     return "".join(f"{channel:02X}" for channel in result)
+
+
+def _preflight_drawing_theme_dependencies(
+    closure: Mapping[str, bytes],
+    *,
+    source_theme: bytes | None,
+    destination_theme: bytes | None,
+) -> None:
+    if source_theme == destination_theme:
+        return
+    for name, content in closure.items():
+        if name.endswith(".rels") or not name.casefold().endswith(".xml"):
+            continue
+        root, _prefixes = _parse_xml_document(
+            content, f"Parte XML relacionada inválida: {name}"
+        )
+        reference = next(
+            (
+                element
+                for element in root.iter()
+                if element.tag in _DRAWING_STYLE_REFERENCE_TAGS
+            ),
+            None,
+        )
+        if reference is not None:
+            kind = reference.tag.rsplit("}", 1)[-1]
+            raise ValueError(
+                f"Referencia DrawingML {kind} dependiente del tema no soportada"
+            )
 
 
 def _materialize_related_theme_refs(
@@ -1849,6 +1902,9 @@ def _validate_passive_closure(
     for name, content in closure.items():
         if not name.endswith(".rels"):
             continue
+        content_type = package.content_types_for({name})[name]
+        if content_type != _RELATIONSHIPS_CONTENT_TYPE:
+            raise ValueError(f"Content type de .rels OOXML inválido: {name}")
         try:
             root = ET.fromstring(content)
         except ET.ParseError as error:
