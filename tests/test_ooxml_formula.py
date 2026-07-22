@@ -171,6 +171,29 @@ def test_calc_chain_deduplicates_against_final_unmapped_entries_not_moved_source
     ]
 
 
+def test_calc_chain_materializes_inherited_sheet_after_explicit_entry_is_elided():
+    payload = b'''<calcChain xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <c r="D7" i="1" keep="first-other"/>
+  <c r="W14" i="2" keep="elided-target"/>
+  <c r="W15" keep="inherits-target"/>
+  <c r="E8" i="1" keep="second-other"/>
+  <c r="E9" keep="inherits-other"/>
+</calcChain>'''
+
+    result = translate_calc_chain(
+        payload,
+        sheet_id=2,
+        coordinate_map={"W14": ["W15"]},
+    )
+
+    assert calc_chain_effective_entries(result) == [
+        ("D7", "1", {"r": "D7", "i": "1", "keep": "first-other"}),
+        ("W15", "2", {"r": "W15", "i": "2", "keep": "inherits-target"}),
+        ("E8", "1", {"r": "E8", "i": "1", "keep": "second-other"}),
+        ("E9", "1", {"r": "E9", "keep": "inherits-other"}),
+    ]
+
+
 @pytest.mark.parametrize(
     "payload",
     [

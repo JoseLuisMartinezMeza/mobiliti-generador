@@ -152,11 +152,23 @@ def translate_calc_chain(
         if effective_id == target_sheet_id and cell.attrib["r"] not in coordinate_map
     }
     emitted_target_coordinates: set[str] = set()
+    last_emitted_sheet_id: str | None = None
+
+    def append_cell(cell: ET.Element, effective_id: str | None) -> None:
+        nonlocal last_emitted_sheet_id
+        if (
+            effective_id is not None
+            and "i" not in cell.attrib
+            and effective_id != last_emitted_sheet_id
+        ):
+            cell.set("i", effective_id)
+        output.append(cell)
+        last_emitted_sheet_id = effective_id
 
     for cell, effective_id in cell_sheets:
         source = cell.attrib["r"]
         if effective_id != target_sheet_id or source not in coordinate_map:
-            output.append(cell)
+            append_cell(cell, effective_id)
             if effective_id == target_sheet_id:
                 emitted_target_coordinates.add(source)
             continue
@@ -169,7 +181,7 @@ def translate_calc_chain(
                 continue
             clone = deepcopy(cell)
             clone.set("r", destination)
-            output.append(clone)
+            append_cell(clone, effective_id)
             emitted_target_coordinates.add(destination)
 
     root[:] = output
