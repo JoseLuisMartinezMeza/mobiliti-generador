@@ -794,6 +794,59 @@ def test_table_formula_tokenizer_fails_closed_on_unbalanced_mapped_range(tmp_pat
         transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
 
 
+def test_table_formula_tokenizer_protects_complete_sheet_and_external_qualifiers(
+    tmp_path,
+):
+    formula = (
+        'CONCAT("Table1:Table2!A1",'
+        "Table1:Table2!A1,'Table1:Table2'!A1,"
+        "[Book.xlsx]Table1:Table2!A1,Sheet!Table1[Columna 1])"
+    )
+    source = _source_with_two_table_identities(
+        tmp_path,
+        formula=formula,
+        filename="qualified-table-ranges.xlsx",
+    )
+
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    table = next(
+        ET.fromstring(content)
+        for name, content in addition.parts.items()
+        if name.startswith("xl/tables/")
+        and ET.fromstring(content).attrib["name"].startswith("Table1_Quotation_")
+    )
+    expected = (
+        'CONCAT("Table1:Table2!A1",'
+        "Table1:Table2!A1,'Table1:Table2'!A1,"
+        "[Book.xlsx]Table1:Table2!A1,Sheet!Table1_Quotation_1[Columna 1])"
+    )
+    formulas = (
+        ET.fromstring(addition.xml).findtext(
+            ".//m:c[@r='N12']/m:f", namespaces=NS
+        ),
+        table.findtext(".//m:calculatedColumnFormula", namespaces=NS),
+        next(
+            name.text for name in addition.defined_names if name.name == "QuoteLocal"
+        ),
+    )
+
+    assert formulas == (expected, expected, expected)
+
+
+def test_table_formula_tokenizer_fails_closed_on_multiple_unquoted_qualifiers(
+    tmp_path,
+):
+    source = _source_with_two_table_identities(
+        tmp_path,
+        formula="SUM(Table1!Table2!A1)",
+        filename="ambiguous-qualified-table-range.xlsx",
+    )
+
+    with pytest.raises(ValueError, match="(?i)tabla|referencia|ambigua|calificador"):
+        transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
 def test_table_identity_preflight_rejects_ambiguous_names_duplicate_destination_and_literal_refs(tmp_path):
     destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
     ambiguous = _source_with_table_identity(
@@ -1334,6 +1387,7 @@ def test_shared_string_ct_rst_rejects_invalid_cardinality_order_and_bounds(share
 @pytest.mark.parametrize(
     "shared_string",
     (
+        f'<si xmlns="{MAIN}" unexpected="1"><t>A</t></si>',
         f'<si xmlns="{MAIN}">intruso<t>A</t></si>',
         f'<si xmlns="{MAIN}"><r unexpected="1"><t>A</t></r></si>',
         f'<si xmlns="{MAIN}"><r>intruso<t>A</t></r></si>',
@@ -1376,6 +1430,43 @@ def test_shared_string_wrappers_allow_only_formatting_whitespace_between_nodes()
     output = inline_source_shared_strings(sheet, (shared_string,))
 
     assert ET.fromstring(output).find(".//m:phoneticPr", NS) is not None
+
+
+@pytest.mark.parametrize(
+    "inline_string",
+    (
+        '<is unexpected="1"><r><t>A</t></r></is>',
+        '<is>intruso<r><t>A</t></r></is>',
+        '<is><r unexpected="1"><t>A</t></r></is>',
+        '<is><r><t>A</t></r>intruso</is>',
+    ),
+)
+def test_existing_inline_strings_validate_root_and_rich_mixed_content(inline_string):
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1">'
+        f'<c r="A1" t="inlineStr">{inline_string}</c>'
+        "</row></sheetData></worksheet>"
+    ).encode()
+
+    with pytest.raises(ValueError, match="(?i)inline|CT_Rst|rich|string|atributo"):
+        inline_source_shared_strings(sheet, ())
+
+
+def test_existing_inline_string_accepts_formatting_whitespace_and_rich_text():
+    sheet = f'''<worksheet xmlns="{MAIN}"><sheetData><row r="1">
+      <c r="A1" t="inlineStr"><is>
+        <r>
+          <rPr><b/></rPr>
+          <t>A</t>
+        </r>
+      </is></c>
+    </row></sheetData></worksheet>'''.encode()
+
+    output = inline_source_shared_strings(sheet, ())
+
+    root = ET.fromstring(output)
+    assert root.find(".//m:c[@t='inlineStr']/m:is/m:r/m:rPr/m:b", NS) is not None
+    assert root.findtext(".//m:c[@t='inlineStr']/m:is/m:r/m:t", namespaces=NS) == "A"
 
 
 @pytest.mark.parametrize(

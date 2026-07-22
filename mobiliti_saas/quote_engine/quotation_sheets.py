@@ -405,6 +405,11 @@ def inline_source_shared_strings(
         shared_strings, Sequence
     ):
         raise TypeError("Shared strings inválidos")
+    for cell in root.findall(f".//{{{MAIN}}}c[@t='inlineStr']"):
+        inline_strings = cell.findall(f"{{{MAIN}}}is")
+        if len(inline_strings) != 1:
+            raise ValueError("Celda inlineStr sin CT_Rst único")
+        _validate_ct_rst(inline_strings[0])
     parsed = tuple(_shared_string_children(item) for item in shared_strings)
     for cell in root.findall(f".//{{{MAIN}}}c[@t='s']"):
         values = cell.findall(f"{{{MAIN}}}v")
@@ -1222,6 +1227,13 @@ def _shared_string_children(value: object) -> tuple[ET.Element, ...]:
 
 
 def _validate_ct_rst(element: ET.Element) -> None:
+    if (
+        element.tag not in {f"{{{MAIN}}}si", f"{{{MAIN}}}is"}
+        or element.attrib
+        or (element.text and element.text.strip())
+        or (element.tail and element.tail.strip())
+    ):
+        raise ValueError("Raíz CT_Rst de shared string inválida")
     direct_text = f"{{{MAIN}}}t"
     rich_run = f"{{{MAIN}}}r"
     phonetic_run = f"{{{MAIN}}}rPh"
@@ -1991,6 +2003,9 @@ def _rewrite_table_range_operand(
     value: str,
     renamed: Mapping[str, tuple[str, str]],
 ) -> str | None:
+    qualifier_end = _range_qualifier_end(value)
+    qualifier = value[:qualifier_end]
+    value = value[qualifier_end:]
     output: list[str] = []
     index = 0
     bracket_depth = 0
@@ -2068,7 +2083,45 @@ def _rewrite_table_range_operand(
 
     if changed and (bracket_depth or malformed_brackets):
         raise ValueError("Referencia estructurada de tabla ambigua")
-    return "".join(output) if changed else None
+    return qualifier + "".join(output) if changed else None
+
+
+def _range_qualifier_end(value: str) -> int:
+    index = 0
+    bracket_depth = 0
+    quoted = False
+    qualifier_end = 0
+    while index < len(value):
+        character = value[index]
+        if quoted:
+            if character == "'":
+                if index + 1 < len(value) and value[index + 1] == "'":
+                    index += 2
+                    continue
+                quoted = False
+            index += 1
+            continue
+        if bracket_depth:
+            if character == "[":
+                bracket_depth += 1
+            elif character == "]":
+                bracket_depth -= 1
+            index += 1
+            continue
+        if character == "'":
+            quoted = True
+        elif character == "[":
+            bracket_depth = 1
+        elif character == "]":
+            raise ValueError("Corchetes de referencia de tabla ambiguos")
+        elif character == "!":
+            if qualifier_end:
+                raise ValueError("Calificador de referencia de tabla ambiguo")
+            qualifier_end = index + 1
+        index += 1
+    if quoted or bracket_depth:
+        raise ValueError("Calificador de referencia de tabla ambiguo")
+    return qualifier_end
 
 
 def _is_table_identifier_character(character: str) -> bool:
