@@ -399,6 +399,32 @@ def test_theme_references_are_materialized_against_source_theme(theme_source, tm
     assert font.find("m:scheme", NS) is None
 
 
+def test_semantic_signature_resolves_source_theme_in_default_style(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    worksheet_name = "xl/worksheets/original-quotation.xml"
+    worksheet = ET.fromstring(_part_bytes(source, worksheet_name))
+    row = worksheet.find("m:sheetData/m:row[@r='12']", NS)
+    cell = ET.SubElement(row, f"{{{MAIN}}}c", {"r": "M12", "t": "inlineStr"})
+    inline = ET.SubElement(cell, f"{{{MAIN}}}is")
+    text = ET.SubElement(inline, f"{{{MAIN}}}t")
+    text.text = "Tema fuente"
+    themed_source = _rewrite_package(
+        source,
+        tmp_path / "theme-signature.xlsx",
+        {worksheet_name: _xml_bytes(worksheet)},
+    )
+    addition = transplant_quotation(
+        themed_source, XlsxPackage.read(OFFICIAL_TEMPLATE)
+    )
+    output = _compose_additions(
+        OFFICIAL_TEMPLATE,
+        tmp_path / "theme-output.xlsx",
+        (addition,),
+    )
+
+    assert _quotation_signature(output) == _quotation_signature(themed_source)
+
+
 def test_theme_references_fail_closed_when_missing_or_unsupported(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     source_styles = _part_bytes(source, "xl/styles.xml").replace(
@@ -472,6 +498,79 @@ def test_transplant_never_replaces_official_theme(tmp_path):
     assert "xl/theme/theme1.xml" not in addition.replacements
 
 
+def test_table_identity_collisions_remap_id_name_and_all_structured_references(tmp_path):
+    source = _source_with_table_identity(
+        tmp_path,
+        table_id=1,
+        name="Table1",
+        display_name="Table1",
+        formula="SUM(Table1[Columna 1])",
+    )
+    destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
+
+    first = transplant_quotation(source, destination)
+    second = transplant_quotation(source, destination)
+    assert first is not None and second is not None
+    first_table_name = next(
+        name for name in first.parts if name.startswith("xl/tables/")
+    )
+    second_table_name = next(
+        name for name in second.parts if name.startswith("xl/tables/")
+    )
+    first_table = ET.fromstring(first.parts[first_table_name])
+    second_table = ET.fromstring(second.parts[second_table_name])
+    allocated_name = first_table.attrib["name"]
+    destination_ids, destination_names = _destination_table_registry(destination)
+
+    assert int(first_table.attrib["id"]) not in destination_ids
+    assert allocated_name == first_table.attrib["displayName"]
+    assert allocated_name.casefold() not in destination_names
+    assert second_table.attrib == first_table.attrib
+    assert allocated_name == "Table1_Quotation_1"
+    assert allocated_name in ET.fromstring(first.xml).findtext(".//m:c[@r='N12']/m:f", namespaces=NS)
+    assert allocated_name in first_table.findtext(".//m:calculatedColumnFormula", namespaces=NS)
+    quote_local = next(name for name in first.defined_names if name.name == "QuoteLocal")
+    assert allocated_name in quote_local.text
+
+
+def test_table_identity_preflight_rejects_ambiguous_names_duplicate_destination_and_literal_refs(tmp_path):
+    destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    ambiguous = _source_with_table_identity(
+        tmp_path,
+        table_id=1,
+        name="Table1",
+        display_name="DifferentName",
+        formula="SUM(Table1[Columna 1])",
+        filename="ambiguous.xlsx",
+    )
+    literal = _source_with_table_identity(
+        tmp_path,
+        table_id=1,
+        name="Table1",
+        display_name="Table1",
+        formula='INDIRECT("Table1[Columna 1]")',
+        filename="literal.xlsx",
+    )
+    table_parts = sorted(
+        name for name in destination.parts if name.startswith("xl/tables/") and name.endswith(".xml")
+    )
+    duplicate_table = destination.parts[table_parts[1]].replace(
+        b'id="2"', b'id="1"', 1
+    )
+    duplicate_destination = replace(
+        destination,
+        parts={**destination.parts, table_parts[1]: duplicate_table},
+    )
+    normal_source = build_rich_quotation_fixture(tmp_path / "normal.xlsx")
+
+    with pytest.raises(ValueError, match="(?i)name.*displayName|identidad.*tabla"):
+        transplant_quotation(ambiguous, destination)
+    with pytest.raises(ValueError, match="(?i)literal|estructurada"):
+        transplant_quotation(literal, destination)
+    with pytest.raises(ValueError, match="(?i)id.*tabla.*duplicado|tabla.*id.*duplicado"):
+        transplant_quotation(normal_source, duplicate_destination)
+
+
 def test_closure_allocation_is_deterministic_collision_free_and_rewrites_relative_targets(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
@@ -480,9 +579,19 @@ def test_closure_allocation_is_deterministic_collision_free_and_rewrites_relativ
     second = transplant_quotation(source, destination)
     assert first is not None and second is not None
     assert tuple(first.parts) == tuple(second.parts)
+    reserved_content_types = ET.fromstring(destination.parts["[Content_Types].xml"])
+    for part_name, content_type in first.content_types.items():
+        ET.SubElement(
+            reserved_content_types,
+            f"{{{CONTENT_TYPES}}}Override",
+            {"PartName": "/" + part_name, "ContentType": content_type},
+        )
     occupied_destination = replace(
         destination,
-        parts={**destination.parts, **first.parts},
+        parts={
+            **destination.parts,
+            "[Content_Types].xml": _xml_bytes(reserved_content_types),
+        },
     )
     collided = transplant_quotation(source, occupied_destination)
     assert collided is not None
@@ -637,6 +746,64 @@ def test_exact_transitional_and_strict_relationship_uris_are_enforced(tmp_path):
     with pytest.raises(ValueError, match="(?i)officeDocument|ra.z"):
         XlsxPackage.read(spoofed_root)
     assert transplant_quotation(strict, XlsxPackage.read(OFFICIAL_TEMPLATE)) is not None
+
+
+@pytest.mark.parametrize(
+    ("part_name", "bad_content_type"),
+    (
+        ("xl/workbook.xml", "application/xml"),
+        ("xl/styles.xml", "application/xml"),
+        ("xl/theme/theme7.xml", "application/xml"),
+    ),
+)
+def test_workbook_relationship_profiles_validate_exact_content_types(
+    part_name,
+    bad_content_type,
+    tmp_path,
+):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    content_types = ET.fromstring(_part_bytes(source, "[Content_Types].xml"))
+    override = next(
+        item
+        for item in content_types.findall("ct:Override", NS)
+        if item.attrib["PartName"] == "/" + part_name
+    )
+    override.attrib["ContentType"] = bad_content_type
+    malformed = _rewrite_package(
+        source,
+        tmp_path / (part_name.replace("/", "-") + ".xlsx"),
+        {"[Content_Types].xml": _xml_bytes(content_types)},
+    )
+
+    with pytest.raises(ValueError, match="(?i)content type"):
+        transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
+def test_workbook_relationship_profiles_reject_theme_outside_allowed_path(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    rels_name = "xl/_rels/workbook.xml.rels"
+    rels = _part_bytes(source, rels_name).replace(
+        b'theme/theme7.xml', b'custom/theme7.xml'
+    )
+    content_types = ET.fromstring(_part_bytes(source, "[Content_Types].xml"))
+    theme_override = next(
+        item
+        for item in content_types.findall("ct:Override", NS)
+        if item.attrib["PartName"] == "/xl/theme/theme7.xml"
+    )
+    theme_override.attrib["PartName"] = "/xl/custom/theme7.xml"
+    malformed = _rewrite_package(
+        source,
+        tmp_path / "theme-path.xlsx",
+        {
+            rels_name: rels,
+            "xl/custom/theme7.xml": _part_bytes(source, "xl/theme/theme7.xml"),
+            "[Content_Types].xml": _xml_bytes(content_types),
+        },
+    )
+
+    with pytest.raises(ValueError, match="(?i)ruta.*theme|theme.*ruta|tema.*ruta"):
+        transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
 
 
 def test_mc_ignorable_prefixes_survive_mutated_sheet_and_styles(tmp_path):
@@ -1037,26 +1204,27 @@ def _quotation_signature(path: Path) -> tuple:
     root = ET.fromstring(parts[sheet_part])
     shared = _shared_strings(parts)
     styles = parts["xl/styles.xml"]
+    theme = _workbook_theme(parts)
 
     cells = []
     for cell in root.findall(".//m:c", NS):
         style_id = int(cell.attrib.get("s", "0"))
         formula = cell.findtext("m:f", default=None, namespaces=NS)
-        value = _cell_semantic_value(cell, shared, styles)
-        cells.append((cell.attrib["r"], formula, value, _style_signature(styles, style_id)))
+        value = _cell_semantic_value(cell, shared, styles, theme)
+        cells.append((cell.attrib["r"], formula, value, _style_signature(styles, style_id, theme)))
     rows = tuple(
         (
             row.attrib.get("r"),
             row.attrib.get("hidden", "0"),
             row.attrib.get("ht"),
-            _style_signature(styles, int(row.attrib["s"])) if "s" in row.attrib else None,
+            _style_signature(styles, int(row.attrib["s"]), theme) if "s" in row.attrib else None,
         )
         for row in root.findall("m:sheetData/m:row", NS)
     )
     columns = tuple(
         (
             tuple(sorted((key, value) for key, value in column.attrib.items() if key != "style")),
-            _style_signature(styles, int(column.attrib["style"])) if "style" in column.attrib else None,
+            _style_signature(styles, int(column.attrib["style"]), theme) if "style" in column.attrib else None,
         )
         for column in root.findall("m:cols/m:col", NS)
     )
@@ -1111,6 +1279,8 @@ def _quotation_signature(path: Path) -> tuple:
 
 
 def _relationship_graph_signature(parts: dict[str, bytes], start: str) -> tuple:
+    content_type_map = _content_type_map(parts)
+
     def visit(owner: str, stack: tuple[str, ...]) -> tuple:
         if owner in stack:
             raise AssertionError("ciclo en firma")
@@ -1125,6 +1295,7 @@ def _relationship_graph_signature(parts: dict[str, bytes], start: str) -> tuple:
                 continue
             target = posixpath.normpath(posixpath.join(posixpath.dirname(owner), attrs["Target"]))
             payload = parts[target]
+            content_type = content_type_map.get(target)
             if target.endswith((".png", ".bin")):
                 content = payload
             else:
@@ -1138,6 +1309,7 @@ def _relationship_graph_signature(parts: dict[str, bytes], start: str) -> tuple:
                     attrs["Id"],
                     attrs["Type"],
                     "Internal",
+                    content_type,
                     content,
                     visit(target, (*stack, owner)),
                 )
@@ -1147,15 +1319,23 @@ def _relationship_graph_signature(parts: dict[str, bytes], start: str) -> tuple:
     return visit(start, ())
 
 
-def _style_signature(styles_xml: bytes, style_id: int) -> tuple:
+def _style_signature(
+    styles_xml: bytes,
+    style_id: int,
+    theme_xml: bytes | None = None,
+) -> tuple:
     root = ET.fromstring(styles_xml)
     cell_xfs = root.findall("m:cellXfs/m:xf", NS)
     if style_id >= len(cell_xfs):
         raise AssertionError("style fuera de rango")
-    return _xf_signature(root, cell_xfs[style_id])
+    return _xf_signature(root, cell_xfs[style_id], theme_xml)
 
 
-def _xf_signature(root: ET.Element, xf: ET.Element) -> tuple:
+def _xf_signature(
+    root: ET.Element,
+    xf: ET.Element,
+    theme_xml: bytes | None = None,
+) -> tuple:
     attributes = dict(xf.attrib)
     result = []
     for attribute, section, child in (
@@ -1165,13 +1345,15 @@ def _xf_signature(root: ET.Element, xf: ET.Element) -> tuple:
     ):
         index = int(attributes.pop(attribute, "0"))
         values = root.findall(f"m:{section}/m:{child}", NS)
-        result.append((attribute, _canonical(values[index])))
+        result.append(
+            (attribute, _resolved_style_component(values[index], theme_xml))
+        )
     num_fmt_id = int(attributes.pop("numFmtId", "0"))
     result.append(("numFmt", _num_fmt_code(root, num_fmt_id)))
     xf_id = attributes.pop("xfId", None)
     if xf_id is not None:
         bases = root.findall("m:cellStyleXfs/m:xf", NS)
-        result.append(("xf", _xf_signature(root, bases[int(xf_id)])))
+        result.append(("xf", _xf_signature(root, bases[int(xf_id)], theme_xml)))
     result.append(("attributes", tuple(sorted(attributes.items()))))
     result.append(("children", tuple(_canonical(child) for child in xf)))
     return tuple(result)
@@ -1243,10 +1425,92 @@ def _theme_font_semantics(
     channels = []
     for offset in (0, 2, 4):
         channel = Decimal(int(value[offset : offset + 2], 16))
-        adjusted = channel * (Decimal(1) - tint_value) + Decimal(255) * tint_value
+        if tint_value < 0:
+            adjusted = channel * (Decimal(1) + tint_value)
+        else:
+            adjusted = channel * (Decimal(1) - tint_value) + Decimal(255) * tint_value
         channels.append(int(adjusted.quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
     font = root.find(f"a:themeElements/a:fontScheme/a:{scheme}Font/a:latin", ns)
     return "FF" + "".join(f"{value:02X}" for value in channels), font.attrib["typeface"]
+
+
+def _resolved_style_component(
+    element: ET.Element,
+    theme_xml: bytes | None,
+) -> tuple:
+    clone = ET.fromstring(ET.tostring(element))
+    for color in clone.iter():
+        if "theme" not in color.attrib:
+            continue
+        assert theme_xml is not None
+        rgb, _typeface = _theme_font_semantics(
+            theme_xml,
+            int(color.attrib["theme"]),
+            color.attrib.get("tint", "0"),
+            "minor",
+        )
+        color.attrib.pop("theme", None)
+        color.attrib.pop("tint", None)
+        color.attrib["rgb"] = rgb
+    if clone.tag == f"{{{MAIN}}}font":
+        scheme = clone.find("m:scheme", NS)
+        if scheme is not None:
+            assert theme_xml is not None
+            _rgb, typeface = _theme_font_semantics(
+                theme_xml,
+                0,
+                "0",
+                scheme.attrib["val"],
+            )
+            name = clone.find("m:name", NS)
+            if name is None:
+                name = ET.Element(f"{{{MAIN}}}name")
+                clone.insert(0, name)
+            name.attrib["val"] = typeface
+            clone.remove(scheme)
+    return _canonical(clone)
+
+
+def _workbook_theme(parts: dict[str, bytes]) -> bytes | None:
+    rels = parts.get("xl/_rels/workbook.xml.rels")
+    if rels is None:
+        return None
+    matches = [
+        item
+        for item in ET.fromstring(rels)
+        if item.attrib.get("Type", "").rsplit("/", 1)[-1] == "theme"
+        and item.attrib.get("TargetMode", "").casefold() != "external"
+    ]
+    if not matches:
+        return None
+    assert len(matches) == 1
+    target = posixpath.normpath(
+        posixpath.join("xl", matches[0].attrib["Target"])
+    )
+    return parts[target]
+
+
+def _content_type_map(parts: dict[str, bytes]) -> dict[str, str]:
+    content = parts.get("[Content_Types].xml")
+    if content is None:
+        return {}
+    root = ET.fromstring(content)
+    defaults = {
+        item.attrib["Extension"].casefold(): item.attrib["ContentType"]
+        for item in root.findall("ct:Default", NS)
+    }
+    overrides = {
+        item.attrib["PartName"].removeprefix("/"): item.attrib["ContentType"]
+        for item in root.findall("ct:Override", NS)
+    }
+    return {
+        name: overrides.get(
+            name,
+            defaults.get(posixpath.splitext(name)[1].removeprefix(".").casefold()),
+        )
+        for name in parts
+        if name != "[Content_Types].xml"
+    }
 
 
 def _num_fmt_code(root: ET.Element, num_fmt_id: int) -> str:
@@ -1309,34 +1573,41 @@ def _cell_semantic_value(
     cell: ET.Element,
     shared: tuple[ET.Element, ...],
     styles: bytes,
+    theme: bytes | None,
 ) -> tuple:
     if cell.attrib.get("t") == "s":
         index = int(cell.findtext("m:v", namespaces=NS))
         return "text", tuple(
-            _rich_text_node_signature(child, styles) for child in shared[index]
+            _rich_text_node_signature(child, styles, theme) for child in shared[index]
         )
     if cell.attrib.get("t") == "inlineStr":
         inline = cell.find("m:is", NS)
         assert inline is not None
         return "text", tuple(
-            _rich_text_node_signature(child, styles) for child in inline
+            _rich_text_node_signature(child, styles, theme) for child in inline
         )
     return cell.attrib.get("t", "n"), cell.findtext("m:v", default="", namespaces=NS)
 
 
-def _rich_text_node_signature(element: ET.Element, styles: bytes) -> tuple:
+def _rich_text_node_signature(
+    element: ET.Element,
+    styles: bytes,
+    theme: bytes | None,
+) -> tuple:
     attributes: list[tuple[str, object]] = []
     for name, value in element.attrib.items():
         if element.tag == f"{{{MAIN}}}phoneticPr" and name == "fontId":
             fonts = ET.fromstring(styles).findall("m:fonts/m:font", NS)
-            attributes.append(("font", _canonical(fonts[int(value)])))
+            attributes.append(
+                ("font", _resolved_style_component(fonts[int(value)], theme))
+            )
         else:
             attributes.append((name, value))
     return (
         element.tag,
         tuple(sorted(attributes, key=lambda item: item[0])),
         element.text or "",
-        tuple(_rich_text_node_signature(child, styles) for child in element),
+        tuple(_rich_text_node_signature(child, styles, theme) for child in element),
     )
 
 
@@ -1344,6 +1615,8 @@ def _table_part_signature(table_xml: bytes, styles_xml: bytes) -> tuple:
     def visit(element: ET.Element) -> tuple:
         attributes: list[tuple[str, object]] = []
         for name, value in element.attrib.items():
+            if element.tag == f"{{{MAIN}}}table" and name == "id":
+                continue
             if name.rsplit("}", 1)[-1].casefold().endswith("dxfid"):
                 attributes.append((name, _dxf_signature(styles_xml, int(value))))
             elif element.tag == f"{{{MAIN}}}tableStyleInfo" and name == "name":
@@ -1456,6 +1729,68 @@ def _catalog_only_source(tmp_path: Path) -> Path:
         tmp_path / "catalog-only-source.xlsx",
         {"xl/workbook.xml": _xml_bytes(workbook)},
     )
+
+
+def _source_with_table_identity(
+    tmp_path: Path,
+    *,
+    table_id: int,
+    name: str,
+    display_name: str,
+    formula: str,
+    filename: str = "table-collision.xlsx",
+) -> Path:
+    source = build_rich_quotation_fixture(tmp_path / ("base-" + filename))
+    table_name = "xl/tables/table7.xml"
+    table = ET.fromstring(_part_bytes(source, table_name))
+    table.attrib.update(
+        {"id": str(table_id), "name": name, "displayName": display_name}
+    )
+    first_column = table.find("m:tableColumns/m:tableColumn", NS)
+    calculated = ET.Element(f"{{{MAIN}}}calculatedColumnFormula")
+    calculated.text = formula
+    first_column.insert(0, calculated)
+
+    worksheet_name = "xl/worksheets/original-quotation.xml"
+    worksheet = ET.fromstring(_part_bytes(source, worksheet_name))
+    row = worksheet.find("m:sheetData/m:row[@r='12']", NS)
+    cell = ET.SubElement(row, f"{{{MAIN}}}c", {"r": "N12"})
+    formula_element = ET.SubElement(cell, f"{{{MAIN}}}f")
+    formula_element.text = formula
+
+    workbook = ET.fromstring(_part_bytes(source, "xl/workbook.xml"))
+    quote_local = next(
+        item
+        for item in workbook.findall("m:definedNames/m:definedName", NS)
+        if item.attrib.get("name") == "QuoteLocal"
+    )
+    quote_local.text = formula
+    return _rewrite_package(
+        source,
+        tmp_path / filename,
+        {
+            table_name: _xml_bytes(table),
+            worksheet_name: _xml_bytes(worksheet),
+            "xl/workbook.xml": _xml_bytes(workbook),
+        },
+    )
+
+
+def _destination_table_registry(package: XlsxPackage) -> tuple[set[int], set[str]]:
+    identifiers: set[int] = set()
+    names: set[str] = set()
+    for part_name, content in package.parts.items():
+        if not part_name.startswith("xl/tables/") or not part_name.endswith(".xml"):
+            continue
+        table = ET.fromstring(content)
+        identifiers.add(int(table.attrib["id"]))
+        names.update(
+            {
+                table.attrib["name"].casefold(),
+                table.attrib["displayName"].casefold(),
+            }
+        )
+    return identifiers, names
 
 
 def _append_relationship(content: bytes, relationship: tuple[str, str, str, str | None]) -> bytes:

@@ -183,6 +183,14 @@ class _ResolvedTheme:
 
 
 @dataclass(frozen=True)
+class _TableIdentity:
+    part_name: str
+    table_id: int
+    name: str
+    display_name: str
+
+
+@dataclass(frozen=True)
 class LocalDefinedName:
     """Nombre definido local, desacoplado de su índice de hoja de origen."""
 
@@ -801,7 +809,7 @@ def remap_source_styles(
 ) -> tuple[bytes, bytes]:
     """Fusiona y remapea refs de celdas, filas, columnas y CF estándar."""
 
-    remapped_sheet, merged_styles, _parts = _remap_source_styles_with_parts(
+    remapped_sheet, merged_styles, _parts, _table_names = _remap_source_styles_with_parts(
         sheet_xml,
         source_styles,
         target_styles,
@@ -853,12 +861,13 @@ def transplant_quotation(
         if source_theme_part is not None
         else None
     )
-    sheet_xml, styles_xml, rewritten = _remap_source_styles_with_parts(
+    sheet_xml, styles_xml, rewritten, table_name_map = _remap_source_styles_with_parts(
         sheet_xml,
         source_package.parts[source_styles_part],
         destination_package.parts[destination_styles_part],
         rewritten,
         source_theme=source_theme,
+        destination_package=destination_package,
     )
     rewritten[target_sheet] = sheet_xml
 
@@ -867,7 +876,9 @@ def transplant_quotation(
         allocation[source_name]: content_type
         for source_name, content_type in source_content_types.items()
     }
-    defined_names = _quotation_local_defined_names(source_package)
+    defined_names = _quotation_local_defined_names(
+        source_package, table_name_map=table_name_map
+    )
     return SheetAddition(
         name="Quotation",
         state=source_state,
@@ -891,7 +902,8 @@ def _remap_source_styles_with_parts(
     related_parts: Mapping[str, bytes],
     *,
     source_theme: bytes | None = None,
-) -> tuple[bytes, bytes, dict[str, bytes]]:
+    destination_package: XlsxPackage | None = None,
+) -> tuple[bytes, bytes, dict[str, bytes], dict[str, str]]:
     root, worksheet_namespaces = _parse_worksheet_document(sheet_xml)
     resolved_theme = _resolved_theme_or_none(source_theme)
     _materialize_spreadsheet_theme_refs(root, resolved_theme)
@@ -955,6 +967,12 @@ def _remap_source_styles_with_parts(
                     dxf_ids.add(dxf_id)
         tables[name] = (table, table_namespaces)
 
+    table_name_map = _remap_workbook_global_tables(
+        root,
+        tables,
+        destination_package,
+    )
+
     merger = StyleTableMerger.from_xml(target_styles)
     style_map = merger.merge_referenced_styles(
         source_styles,
@@ -1017,7 +1035,12 @@ def _remap_source_styles_with_parts(
                     )
                 element.attrib[attribute] = str(merger.dxf_map[old_id])
         rewritten_parts[name] = _xml_bytes(table, table_namespaces)
-    return _xml_bytes(root, worksheet_namespaces), merger.to_xml(), rewritten_parts
+    return (
+        _xml_bytes(root, worksheet_namespaces),
+        merger.to_xml(),
+        rewritten_parts,
+        table_name_map,
+    )
 
 
 def _parse_worksheet(content: bytes) -> ET.Element:
@@ -1504,8 +1527,224 @@ def _materialize_drawing_theme_refs(
     return changed
 
 
+def _remap_workbook_global_tables(
+    worksheet: ET.Element,
+    source_tables: Mapping[str, tuple[ET.Element, dict[str, str]]],
+    destination_package: XlsxPackage | None,
+) -> dict[str, str]:
+    if not source_tables:
+        return {}
+    used_ids: set[int] = set()
+    used_names: dict[str, str] = {}
+    if destination_package is not None:
+        for identity in _destination_table_identities(destination_package):
+            if identity.table_id in used_ids:
+                raise ValueError(f"ID de tabla destino duplicado: {identity.table_id}")
+            used_ids.add(identity.table_id)
+            for value in {identity.name.casefold(), identity.display_name.casefold()}:
+                previous = used_names.get(value)
+                if previous is not None and previous != identity.part_name:
+                    raise ValueError(f"Nombre de tabla destino duplicado: {value}")
+                used_names[value] = identity.part_name
+
+    source_identities: list[_TableIdentity] = []
+    source_ids: set[int] = set()
+    source_names: dict[str, str] = {}
+    for part_name in sorted(source_tables):
+        table, _prefixes = source_tables[part_name]
+        identity = _table_identity(part_name, table)
+        if identity.table_id in source_ids:
+            raise ValueError(f"ID de tabla fuente duplicado: {identity.table_id}")
+        source_ids.add(identity.table_id)
+        for value in {identity.name.casefold(), identity.display_name.casefold()}:
+            previous = source_names.get(value)
+            if previous is not None and previous != identity.part_name:
+                raise ValueError(f"Nombre de tabla fuente duplicado: {value}")
+            source_names[value] = identity.part_name
+        source_identities.append(identity)
+
+    renamed: dict[str, str] = {}
+    for identity in source_identities:
+        table = source_tables[identity.part_name][0]
+        target_id = identity.table_id
+        if target_id in used_ids:
+            target_id = 1
+            while target_id in used_ids:
+                target_id += 1
+        table.attrib["id"] = str(target_id)
+        used_ids.add(target_id)
+
+        original_tokens = {
+            identity.name.casefold(), identity.display_name.casefold()
+        }
+        collision = bool(original_tokens & set(used_names))
+        target_name = identity.name
+        target_display_name = identity.display_name
+        if collision:
+            if identity.name.casefold() != identity.display_name.casefold():
+                raise ValueError(
+                    "Identidad de tabla ambigua: name/displayName no se pueden reasignar"
+                )
+            suffix = 1
+            while True:
+                suffix_text = f"_Quotation_{suffix}"
+                available = 255 - len(suffix_text)
+                candidate = identity.name[:available] + suffix_text
+                _validate_table_name(candidate, "name")
+                if candidate.casefold() not in used_names:
+                    break
+                suffix += 1
+            target_name = candidate
+            target_display_name = candidate
+            renamed[identity.name] = candidate
+            if identity.display_name != identity.name:
+                renamed[identity.display_name] = candidate
+        table.attrib["name"] = target_name
+        table.attrib["displayName"] = target_display_name
+        for value in {target_name.casefold(), target_display_name.casefold()}:
+            used_names[value] = identity.part_name
+
+    if renamed:
+        worksheet_formula_names = {"f", "formula", "formula1", "formula2"}
+        for formula in worksheet.iter():
+            if (
+                formula.tag.rsplit("}", 1)[-1] not in worksheet_formula_names
+                or formula.text is None
+            ):
+                continue
+            formula.text = _rewrite_structured_references(
+                formula.text, renamed, "fórmula de worksheet"
+            )
+        formula_tags = {
+            f"{{{MAIN}}}calculatedColumnFormula",
+            f"{{{MAIN}}}totalsRowFormula",
+        }
+        for part_name, (table, _prefixes) in source_tables.items():
+            for formula in table.iter():
+                if formula.tag not in formula_tags or formula.text is None:
+                    continue
+                formula.text = _rewrite_structured_references(
+                    formula.text, renamed, f"fórmula de tabla {part_name}"
+                )
+    return renamed
+
+
+def _destination_table_identities(
+    package: XlsxPackage,
+) -> tuple[_TableIdentity, ...]:
+    identities: list[_TableIdentity] = []
+    for part_name in sorted(package.parts):
+        if not part_name.startswith("xl/tables/") or not part_name.endswith(".xml"):
+            continue
+        content_type = package.content_types_for({part_name})[part_name]
+        if content_type != "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml":
+            raise ValueError(f"Content type de tabla destino inválido: {part_name}")
+        try:
+            table = ET.fromstring(package.parts[part_name])
+        except ET.ParseError as error:
+            raise ValueError(f"Tabla destino OOXML inválida: {part_name}") from error
+        if table.tag != f"{{{MAIN}}}table":
+            raise ValueError(f"Raíz de tabla destino inválida: {part_name}")
+        identities.append(_table_identity(part_name, table))
+    return tuple(identities)
+
+
+def _table_identity(part_name: str, table: ET.Element) -> _TableIdentity:
+    table_id = _integer_attribute(table, "id", default=None)
+    if table_id is None or table_id < 1:
+        raise ValueError(f"ID de tabla inválido: {part_name}")
+    name = table.get("name", "")
+    display_name = table.get("displayName", "")
+    _validate_table_name(name, "name")
+    _validate_table_name(display_name, "displayName")
+    return _TableIdentity(
+        part_name=part_name,
+        table_id=table_id,
+        name=name,
+        display_name=display_name,
+    )
+
+
+def _validate_table_name(value: str, attribute: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) < 1
+        or len(value) > 255
+        or re.fullmatch(r"[A-Za-z_\\][A-Za-z0-9_.\\]*", value) is None
+        or re.fullmatch(r"[A-Za-z]{1,3}[1-9][0-9]{0,6}", value) is not None
+        or re.fullmatch(r"R[1-9][0-9]*C[1-9][0-9]*", value, re.IGNORECASE)
+        is not None
+    ):
+        raise ValueError(f"{attribute} de tabla inválido: {value!r}")
+
+
+def _rewrite_structured_references(
+    formula: str,
+    renamed: Mapping[str, str],
+    context: str,
+) -> str:
+    if not renamed or not formula:
+        return formula
+    segments: list[tuple[bool, str]] = []
+    start = 0
+    index = 0
+    in_literal = False
+    while index < len(formula):
+        if formula[index] != '"':
+            index += 1
+            continue
+        if in_literal and index + 1 < len(formula) and formula[index + 1] == '"':
+            index += 2
+            continue
+        segments.append((in_literal, formula[start:index]))
+        segments.append((False, '"'))
+        in_literal = not in_literal
+        index += 1
+        start = index
+    if in_literal:
+        raise ValueError(f"Literal de fórmula sin cerrar: {context}")
+    segments.append((False, formula[start:]))
+
+    patterns = [
+        (
+            re.compile(
+                rf"(?<![A-Za-z0-9_.])(?P<quoted>'?){re.escape(old)}(?P=quoted)(?=\s*\[)",
+                re.IGNORECASE,
+            ),
+            new,
+        )
+        for old, new in sorted(renamed.items(), key=lambda item: -len(item[0]))
+    ]
+    output: list[str] = []
+    literal_state = False
+    for _is_literal, segment in segments:
+        if segment == '"':
+            literal_state = not literal_state
+            output.append(segment)
+            continue
+        current = segment
+        for pattern, replacement in patterns:
+            if literal_state and pattern.search(current):
+                raise ValueError(
+                    f"Referencia estructurada dentro de literal no soportada: {context}"
+                )
+            if not literal_state:
+                current = pattern.sub(
+                    lambda match: (
+                        f"'{replacement}'"
+                        if match.group("quoted")
+                        else replacement
+                    ),
+                    current,
+                )
+        output.append(current)
+    return "".join(output)
+
+
 def _quotation_local_defined_names(
     package: XlsxPackage,
+    *,
+    table_name_map: Mapping[str, str] | None = None,
 ) -> tuple[LocalDefinedName, ...]:
     source_index = package.sheet_index("Quotation")
     try:
@@ -1545,7 +1784,11 @@ def _quotation_local_defined_names(
         result.append(
             LocalDefinedName(
                 name=name,
-                text=element.text or "",
+                text=_rewrite_structured_references(
+                    element.text or "",
+                    table_name_map or {},
+                    f"nombre definido {name}",
+                ),
                 attributes=attributes,
             )
         )

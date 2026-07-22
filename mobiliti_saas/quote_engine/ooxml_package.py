@@ -26,6 +26,7 @@ OFFICE_DOCUMENT_RELATIONSHIP_BASES = (
     STRICT_OFFICE_DOCUMENT_RELATIONSHIPS,
 )
 SPREADSHEETML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+DRAWINGML = "http://schemas.openxmlformats.org/drawingml/2006/main"
 CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
 _SAFE_ALLOCATION_PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _SAFE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,10}\Z")
@@ -201,7 +202,11 @@ class XlsxPackage:
             raise ValueError(f"Relación workbook duplicada: {relationship_name}")
         if matches[0].get("TargetMode", "").casefold() == "external":
             raise ValueError(f"Relacion workbook externa invalida: {relationship_name}")
-        return _resolve_internal_target("xl/workbook.xml", matches[0]["Target"])
+        part_name = _resolve_internal_target(
+            "xl/workbook.xml", matches[0]["Target"]
+        )
+        self._validate_office_part_profile(relationship_name, part_name)
+        return part_name
 
     def declared_part_names(self) -> frozenset[str]:
         """Incluye los Override OPC aunque la parte declarada sea huérfana."""
@@ -240,6 +245,56 @@ class XlsxPackage:
         workbook_part = _resolve_internal_target(None, relationship["Target"])
         if workbook_part != "xl/workbook.xml":
             raise ValueError("Destino officeDocument raíz inválido")
+        self._validate_office_part_profile("officeDocument", workbook_part)
+
+    def _validate_office_part_profile(self, kind: str, part_name: str) -> None:
+        profiles = {
+            "officeDocument": (
+                lambda name: name == "xl/workbook.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+                f"{{{SPREADSHEETML}}}workbook",
+            ),
+            "worksheet": (
+                lambda name: name.startswith("xl/worksheets/") and name.endswith(".xml"),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+                f"{{{SPREADSHEETML}}}worksheet",
+            ),
+            "styles": (
+                lambda name: name == "xl/styles.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml",
+                f"{{{SPREADSHEETML}}}styleSheet",
+            ),
+            "sharedStrings": (
+                lambda name: name == "xl/sharedStrings.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml",
+                f"{{{SPREADSHEETML}}}sst",
+            ),
+            "theme": (
+                lambda name: re.fullmatch(
+                    r"xl/theme/theme[1-9][0-9]*\.xml", name
+                )
+                is not None,
+                "application/vnd.openxmlformats-officedocument.theme+xml",
+                f"{{{DRAWINGML}}}theme",
+            ),
+        }
+        profile = profiles.get(kind)
+        if profile is None:
+            raise ValueError(f"Perfil Office desconocido: {kind}")
+        path_check, expected_content_type, expected_root = profile
+        if not path_check(part_name):
+            raise ValueError(f"Ruta de {kind} OOXML inválida: {part_name}")
+        if part_name not in self.parts:
+            raise ValueError(f"Parte de {kind} OOXML ausente: {part_name}")
+        actual_content_type = self.content_types_for({part_name})[part_name]
+        if actual_content_type != expected_content_type:
+            raise ValueError(f"Content type de {kind} OOXML inválido")
+        try:
+            root = ElementTree.fromstring(self.parts[part_name])
+        except ElementTree.ParseError as error:
+            raise ValueError(f"XML de {kind} OOXML inválido") from error
+        if root.tag != expected_root:
+            raise ValueError(f"Raíz XML de {kind} OOXML inválida")
 
     def shared_strings(self) -> tuple[bytes, ...]:
         """Devuelve cada CT_Rst completo para no aplanar rich text."""
@@ -421,6 +476,7 @@ class XlsxPackage:
             target = _resolve_internal_target(
                 "xl/workbook.xml", relationship["Target"]
             )
+            self._validate_office_part_profile("worksheet", target)
             result.append((name, state, index, target))
         duplicates = _duplicates(tuple(row[0].casefold() for row in result))
         if duplicates:
