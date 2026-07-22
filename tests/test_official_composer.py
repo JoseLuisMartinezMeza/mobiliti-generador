@@ -28,6 +28,7 @@ import mobiliti_saas.quote_engine.official_composer as official_composer_module 
 import mobiliti_saas.quote_engine.ooxml_package as ooxml_package_module  # noqa: E402
 from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage  # noqa: E402
 from mobiliti_saas.quote_engine.ooxml_package import (  # noqa: E402
+    PackageMutation,
     relationship_part_name,
     resolve_internal_target,
 )
@@ -51,13 +52,17 @@ from mobiliti_saas.quote_engine.official_composer import (  # noqa: E402
     CotizacionSection,
     CotizacionSheetEditor,
     _translate_estrategia,
+    build_allowlisted_mutation,
     compose_official_quote,
+    verify_output_contract,
 )
 from mobiliti_saas.quote_engine.official_template import (  # noqa: E402
     load_template_contract,
 )
 from mobiliti_saas.quote_engine.quotation_sheets import (  # noqa: E402
+    LocalDefinedName,
     QuotationDataRow,
+    SheetAddition,
     _with_canonical_hash,
     build_quotation_data_sheet,
 )
@@ -1574,3 +1579,171 @@ def test_generate_quote_rejects_lexical_parent_before_any_effect(
         generate_quote(source, output, {}, OFFICIAL_TEMPLATE)
 
     assert not (tmp_path / "lexical-output.xlsx").exists()
+
+
+def _imported_formula_addition(
+    formula: str,
+    *,
+    defined_names: tuple[LocalDefinedName, ...] = (),
+) -> SheetAddition:
+    worksheet = ET.Element(f"{{{MAIN}}}worksheet")
+    sheet_data = ET.SubElement(worksheet, f"{{{MAIN}}}sheetData")
+    row = ET.SubElement(sheet_data, f"{{{MAIN}}}row", {"r": "1"})
+    cell = ET.SubElement(row, f"{{{MAIN}}}c", {"r": "A1"})
+    ET.SubElement(cell, f"{{{MAIN}}}f").text = formula
+    ET.SubElement(cell, f"{{{MAIN}}}v").text = "0"
+    payload = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+    part = "xl/worksheets/quotation_security_test.xml"
+    return SheetAddition(
+        name="Quotation",
+        state="visible",
+        xml=payload,
+        parts={part: payload},
+        content_types={
+            part: "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+        },
+        sheet_part=part,
+        defined_names=defined_names,
+    )
+
+
+@pytest.mark.parametrize(
+    "formula",
+    (
+        "WEBSERVICE(\"https://example.test/data\")",
+        "HYPERLINK(\"https://example.test/attack\",\"abrir\")",
+        "[evil.xlsx]Sheet1!A1",
+        "cmd|'/C calc'!A0",
+    ),
+)
+def test_composer_rejects_active_or_external_imported_formulas(
+    tmp_path: Path,
+    formula: str,
+) -> None:
+    request = _minimal_request(tmp_path / "forbidden-formula.xlsx")
+    request = replace(request, quotation=_imported_formula_addition(formula))
+
+    with pytest.raises(ValueError, match="Fórmula importada no permitida"):
+        build_allowlisted_mutation(XlsxPackage.read(OFFICIAL_TEMPLATE), request)
+
+
+def test_composer_rejects_active_imported_defined_name_formula(tmp_path: Path) -> None:
+    request = _minimal_request(tmp_path / "forbidden-defined-name.xlsx")
+    addition = _imported_formula_addition(
+        "SUM(A1:A2)",
+        defined_names=(
+            LocalDefinedName(
+                name="DangerousName",
+                text='WEBSERVICE("https://example.test/data")',
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Fórmula importada no permitida"):
+        build_allowlisted_mutation(
+            XlsxPackage.read(OFFICIAL_TEMPLATE),
+            replace(request, quotation=addition),
+        )
+
+
+def test_composer_keeps_safe_internal_imported_formula(tmp_path: Path) -> None:
+    request = _minimal_request(tmp_path / "safe-formula.xlsx")
+    addition = _imported_formula_addition('IF(A2="",0,SUM(A2:A3))')
+
+    mutation = build_allowlisted_mutation(
+        XlsxPackage.read(OFFICIAL_TEMPLATE),
+        replace(request, quotation=addition),
+    )
+
+    assert mutation.additions[addition.sheet_part] == addition.xml
+
+
+def test_output_contract_rejects_unexpected_defined_name(tmp_path: Path) -> None:
+    request = _minimal_request(tmp_path / "unused.xlsx")
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    mutation = build_allowlisted_mutation(base, request)
+    normal = XlsxPackage.from_bytes(base.to_bytes(mutation))
+    workbook = ET.fromstring(normal.parts["xl/workbook.xml"])
+    expected = tuple(
+        (
+            tuple(sorted(item.attrib.items())),
+            item.text or "",
+        )
+        for item in workbook.findall(
+            f"{{{MAIN}}}definedNames/{{{MAIN}}}definedName"
+        )
+    )
+    container = workbook.find(f"{{{MAIN}}}definedNames")
+    assert container is not None
+    ET.SubElement(container, f"{{{MAIN}}}definedName", {"name": "Injected"}).text = "1"
+    tampered = XlsxPackage.from_bytes(
+        normal.to_bytes(
+            PackageMutation(
+                replacements={
+                    "xl/workbook.xml": ET.tostring(
+                        workbook,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+                }
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="conjunto exacto de nombres definidos"):
+        verify_output_contract(
+            tampered,
+            request.contract,
+            request.mobiliti.row_map,
+            cotizacion_total_row=request.cotizacion.total_row,
+            expected_defined_names=expected,
+        )
+
+
+def test_cotizacion_declares_audited_formula_contract_for_contaminated_f_i() -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
+    assert _cell(source, "F17").findtext(f"{{{MAIN}}}f") == "#REF!"
+    assert _cell(source, "I17").find(f"{{{MAIN}}}f") is None
+
+    contract = official_composer_module.CotizacionFormulaContract()
+    formulas = contract.product_formulas(mobiliti_row=14, target_row=17)
+
+    assert formulas == {
+        "F": "=Mobiliti!X14",
+        "I": "=F17-H17",
+    }
+    assert all("#REF!" not in formula for formula in formulas.values())
+
+
+def test_cotizacion_translation_preserves_reference_like_formula_literals() -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
+    _cell(source, "H17").find(f"{{{MAIN}}}f").text = (
+        'IF("F17*G17"="literal",F17*G17,0)'
+    )
+    _cell(source, "J17").find(f"{{{MAIN}}}f").text = (
+        'IF("E17*I17"="literal",E17*I17,0)'
+    )
+    section = CotizacionSection(
+        title="Sillas",
+        products=(
+            CotizacionProduct(
+                item_key="safe-item",
+                name="Silla",
+                description="Descripción",
+                dimensions="60 x 60 cm",
+                quantity=Decimal("1"),
+                mobiliti_row=14,
+            ),
+        ),
+    )
+
+    result = CotizacionSheetEditor(source).compose(
+        metadata=CotizacionMetadata(),
+        sections=(section,),
+    )
+    worksheet = ET.fromstring(result.xml)
+
+    assert '"F17*G17"' in _cell(worksheet, "H17").findtext(f"{{{MAIN}}}f")
+    assert '"E17*I17"' in _cell(worksheet, "J17").findtext(f"{{{MAIN}}}f")

@@ -13,7 +13,6 @@ import re
 import threading
 from types import MappingProxyType
 from typing import AbstractSet, Mapping
-import unicodedata
 from xml.etree import ElementTree
 import zipfile
 
@@ -34,6 +33,7 @@ CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
 _SAFE_ALLOCATION_PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _SAFE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,10}\Z")
 _PROTECTED_ALLOCATION_PREFIXES = ("xl/externalLinks/", "xl/richData/")
+_ASCII_INSENSITIVE_RESERVED_PREFIXES = ("xl/", "_rels/", "docProps/")
 _STRICT_OOXML_MARKER = b"http://purl.oclc.org/ooxml/"
 XML_SERIALIZATION_LOCK = threading.RLock()
 MAX_ZIP_ENTRIES = 10_000
@@ -438,7 +438,10 @@ class XlsxPackage:
             extension = posixpath.splitext(filename)[1]
             if _SAFE_EXTENSION.fullmatch(extension) is None:
                 raise ValueError(f"Extensión OOXML inválida: {source_name}")
-            if source_name.startswith(_PROTECTED_ALLOCATION_PREFIXES):
+            if part_name_has_ascii_prefix(
+                source_name,
+                _PROTECTED_ALLOCATION_PREFIXES,
+            ):
                 raise ValueError(f"Prefijo OOXML protegido: {source_name}")
             source_rels = relationship_part_name(source_name)
             while True:
@@ -552,7 +555,10 @@ class XlsxPackage:
             compresslevel=6,
         ) as target:
             for name, info in self.infos.items():
-                target.writestr(info, mutation.replacements.get(name, self.parts[name]))
+                target.writestr(
+                    _safe_existing_zip_info(info),
+                    mutation.replacements.get(name, self.parts[name]),
+                )
             for name in sorted(mutation.additions, key=canonical_part_identity):
                 target.writestr(
                     _canonical_zip_info(name),
@@ -588,13 +594,11 @@ def _validate_package_mutation(package: XlsxPackage, mutation: PackageMutation) 
     unknown = set(mutation.replacements) - set(package.parts)
     if unknown:
         raise ValueError(f"Reemplazos inexistentes: {sorted(unknown)}")
-    base_identities = {
-        canonical_part_identity(name): name for name in package.parts
-    }
+    base_identities = {_part_collision_identity(name): name for name in package.parts}
     collisions = {
-        name: base_identities[canonical_part_identity(name)]
+        name: base_identities[_part_collision_identity(name)]
         for name in mutation.additions
-        if canonical_part_identity(name) in base_identities
+        if _part_collision_identity(name) in base_identities
     }
     if collisions:
         raise ValueError(f"identidad OOXML colisionada: {sorted(collisions)}")
@@ -603,6 +607,22 @@ def _validate_package_mutation(package: XlsxPackage, mutation: PackageMutation) 
 def _canonical_zip_info(name: str) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(name, date_time=_CANONICAL_ZIP_TIMESTAMP)
     info.compress_type = zipfile.ZIP_DEFLATED
+    info.create_system = 3
+    info.create_version = 20
+    info.extract_version = 20
+    info.external_attr = 0o600 << 16
+    return info
+
+
+def _safe_existing_zip_info(source: zipfile.ZipInfo) -> zipfile.ZipInfo:
+    """Conserva metadatos estables y canoniza flags/plataforma volátiles."""
+
+    info = zipfile.ZipInfo(source.filename, date_time=source.date_time)
+    info.compress_type = source.compress_type
+    info.comment = bytes(source.comment)
+    info.internal_attr = source.internal_attr
+    info.extra = b""
+    info.flag_bits = 0
     info.create_system = 3
     info.create_version = 20
     info.extract_version = 20
@@ -673,10 +693,24 @@ def validate_part_name(name: str) -> None:
 
 
 def canonical_part_identity(name: str) -> str:
-    """Identidad canónica usada para detectar aliases de una parte OPC."""
+    """Identidad Unicode exacta de una parte OPC, sin expansión casefold."""
 
     _validate_part_name(name)
-    return unicodedata.normalize("NFC", name).casefold()
+    return name
+
+
+def part_name_has_ascii_prefix(name: str, prefixes: tuple[str, ...]) -> bool:
+    """Compara prefijos reservados ignorando sólo mayúsculas ASCII."""
+
+    _validate_part_name(name)
+    if not isinstance(prefixes, tuple) or not prefixes or not all(
+        isinstance(prefix, str) and prefix for prefix in prefixes
+    ):
+        raise ValueError("Prefijos OOXML inválidos")
+    identity = _ascii_insensitive_identity(name)
+    return identity.startswith(
+        tuple(_ascii_insensitive_identity(prefix) for prefix in prefixes)
+    )
 
 
 def relationship_owner(rels_name: str) -> str | None:
@@ -768,13 +802,33 @@ def _validate_unique_part_identities(names: tuple[str, ...], label: str) -> None
     owners: dict[str, str] = {}
     collisions: set[str] = set()
     for name in names:
-        identity = canonical_part_identity(name)
+        identity = _part_collision_identity(name)
         previous = owners.get(identity)
         if previous is not None and previous != name:
             collisions.update((previous, name))
         owners[identity] = name
     if collisions:
         raise ValueError(f"{label} con identidad duplicada: {sorted(collisions)}")
+
+
+def _ascii_insensitive_identity(value: str) -> str:
+    return "".join(
+        chr(ord(character) + 32) if "A" <= character <= "Z" else character
+        for character in value
+    )
+
+
+def _part_collision_identity(name: str) -> str:
+    _validate_part_name(name)
+    folded = _ascii_insensitive_identity(name)
+    reserved_prefixes = tuple(
+        _ascii_insensitive_identity(prefix)
+        for prefix in _ASCII_INSENSITIVE_RESERVED_PREFIXES
+    )
+    reserved = folded.startswith(reserved_prefixes) or folded == _ascii_insensitive_identity(
+        "[Content_Types].xml"
+    )
+    return f"reserved:{folded}" if reserved else f"exact:{name}"
 
 
 def _preflight_archive(entries: list[zipfile.ZipInfo]) -> None:

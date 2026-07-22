@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
@@ -350,3 +351,74 @@ def test_package_serialization_is_byte_deterministic_with_additions(tmp_path: Pa
 
     assert first == second
     assert XlsxPackage.from_bytes(first).parts["custom/a.xml"] == b"<a/>"
+
+
+@pytest.mark.parametrize(
+    "protected_name",
+    (
+        "XL/EXTERNALLINKS/externalLink1.xml",
+        "XL/RICHDATA/richValue1.xml",
+        "xl/ExternalLinks/externalLink1.xml",
+    ),
+)
+def test_allocation_rejects_ascii_case_variants_of_protected_prefixes(
+    protected_name: str,
+) -> None:
+    package = XlsxPackage.read(OFFICIAL_TEMPLATE)
+
+    with pytest.raises(ValueError, match="Prefijo OOXML protegido"):
+        package.allocate_closure({protected_name: b"<part/>"}, prefix="safe")
+
+
+def test_unicode_part_identity_does_not_collapse_sharp_s_to_ascii_ss(
+) -> None:
+    package = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    payload = package.to_bytes(
+        PackageMutation(
+            additions={
+                "custom/straße.xml": b"<sharp-s/>",
+                "custom/strasse.xml": b"<ascii-ss/>",
+            }
+        )
+    )
+
+    with ZipFile(BytesIO(payload)) as archive:
+        assert archive.read("custom/straße.xml") == b"<sharp-s/>"
+        assert archive.read("custom/strasse.xml") == b"<ascii-ss/>"
+
+
+def test_existing_zip_entries_follow_declared_safe_metadata_profile() -> None:
+    info = ZipInfo("custom/data.bin", date_time=(2024, 2, 3, 4, 5, 6))
+    info.compress_type = ZIP_STORED
+    info.flag_bits = 0x08
+    info.create_system = 0
+    info.create_version = 63
+    info.extract_version = 10
+    info.external_attr = 0x20
+    info.internal_attr = 1
+    info.comment = b"stable-entry-comment"
+    info.extra = b"\x55\x54\x05\x00\x01\x01\x02\x03\x04"
+    package = XlsxPackage(
+        path=None,
+        infos={info.filename: info},
+        parts={info.filename: b"exact-part-bytes"},
+        archive_names=(info.filename,),
+    )
+
+    payload = package.to_bytes(
+        PackageMutation(replacements={info.filename: b"exact-part-bytes"})
+    )
+
+    with ZipFile(BytesIO(payload)) as archive:
+        result = archive.getinfo(info.filename)
+        assert archive.read(info.filename) == b"exact-part-bytes"
+        assert result.date_time == info.date_time
+        assert result.compress_type == ZIP_STORED
+        assert result.comment == info.comment
+        assert result.internal_attr == info.internal_attr
+        assert result.flag_bits & 0x08 == 0
+        assert result.extra == b""
+        assert result.create_system == 3
+        assert result.create_version == 20
+        assert result.extract_version == 20
+        assert result.external_attr == 0o600 << 16

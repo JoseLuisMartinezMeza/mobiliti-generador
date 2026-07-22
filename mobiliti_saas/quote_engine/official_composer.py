@@ -25,7 +25,7 @@ from typing import Mapping, Sequence
 import uuid
 from xml.etree import ElementTree as ET
 
-from openpyxl.formula.tokenizer import Tokenizer
+from openpyxl.formula.tokenizer import Token, Tokenizer, TokenizerError
 from openpyxl.utils.cell import column_index_from_string, get_column_letter
 
 from .mobiliti_layout import MobilitiRowMap, SectionNeed
@@ -39,6 +39,7 @@ from .ooxml_package import (
     assert_packages_preserved,
     relationship_part_name,
     relationship_type_uris,
+    part_name_has_ascii_prefix,
     resolve_internal_target,
     validate_part_name,
 )
@@ -83,6 +84,19 @@ CANONICAL_MOBILITI_FIRST_SECTION_ROW = 13
 CANONICAL_MOBILITI_PRODUCT_CAPACITY = 33
 _CELL = re.compile(r"(?P<column>[A-Z]{1,3})(?P<row>[1-9][0-9]*)\Z")
 _SAFE_IMAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,180}\Z")
+_DANGEROUS_IMPORTED_FUNCTIONS = frozenset(
+    {
+        "CALL",
+        "DDE",
+        "ENCODEURL",
+        "EXEC",
+        "FILTERXML",
+        "HYPERLINK",
+        "REGISTER.ID",
+        "RTD",
+        "WEBSERVICE",
+    }
+)
 
 for prefix, namespace in (
     ("", MAIN),
@@ -116,6 +130,34 @@ class CotizacionMetadata:
             self.business_name,
         ):
             _validate_text(value, allow_empty=True)
+
+
+@dataclass(frozen=True)
+class CotizacionFormulaContract:
+    """Excepción tipada para F/I ante la firma contaminada del oficial."""
+
+    def product_formulas(self, *, mobiliti_row: int, target_row: int) -> dict[str, str]:
+        if type(mobiliti_row) is not int or not 1 <= mobiliti_row <= XLSX_MAX_ROWS:
+            raise ValueError("Fila Mobiliti del contrato F/I inválida")
+        if type(target_row) is not int or not 1 <= target_row <= XLSX_MAX_ROWS:
+            raise ValueError("Fila Cotizacion del contrato F/I inválida")
+        formulas = {
+            "F": f"=Mobiliti!X{mobiliti_row}",
+            "I": f"=F{target_row}-H{target_row}",
+        }
+        _validate_formula_token_contract(
+            formulas["F"],
+            ((Token.OPERAND, Token.RANGE, f"Mobiliti!X{mobiliti_row}"),),
+        )
+        _validate_formula_token_contract(
+            formulas["I"],
+            (
+                (Token.OPERAND, Token.RANGE, f"F{target_row}"),
+                (Token.OP_IN, "", "-"),
+                (Token.OPERAND, Token.RANGE, f"H{target_row}"),
+            ),
+        )
+        return formulas
 
 
 @dataclass(frozen=True)
@@ -311,6 +353,14 @@ class CotizacionSheetEditor:
         subtotal_formula = _formula_text(total_templates[0], "H19")
         if None in {product_h_formula, product_j_formula, subtotal_formula}:
             raise ValueError("Fórmulas oficiales de Cotizacion incompletas")
+        official_i = _require_cell(product_template, "I17")
+        if (
+            _formula_text(product_template, "F17") != "=#REF!"
+            or _formula_text(product_template, "I17") is not None
+            or official_i.findtext(f"{{{MAIN}}}v") != "383624.67"
+        ):
+            raise ValueError("Firma contaminada F/I del oficial inesperada")
+        formula_contract = CotizacionFormulaContract()
 
         self._write_metadata(metadata)
         preserved_headers = [row for number, row in sorted(rows.items()) if number < 16]
@@ -339,7 +389,11 @@ class CotizacionSheetEditor:
                 _set_inline_string(row, f"C{target_row}", product.description)
                 _set_inline_string(row, f"D{target_row}", product.dimensions)
                 _set_number(row, f"E{target_row}", product.quantity)
-                _set_formula(row, f"F{target_row}", f"=Mobiliti!X{product.mobiliti_row}")
+                contract_formulas = formula_contract.product_formulas(
+                    mobiliti_row=product.mobiliti_row,
+                    target_row=target_row,
+                )
+                _set_formula(row, f"F{target_row}", contract_formulas["F"])
                 if target_row == first_discount_row:
                     _set_number(row, f"G{target_row}", product.discount)
                 else:
@@ -358,7 +412,7 @@ class CotizacionSheetEditor:
                         sheet="Cotizacion",
                     ),
                 )
-                _set_formula(row, f"I{target_row}", f"=F{target_row}-H{target_row}")
+                _set_formula(row, f"I{target_row}", contract_formulas["I"])
                 _set_formula(
                     row,
                     f"J{target_row}",
@@ -494,11 +548,15 @@ def compose_official_quote(request: ComposeRequest) -> PackageAudit:
     payload = base.to_bytes(mutation)
     candidate_package = XlsxPackage.from_bytes(payload)
     audit = assert_packages_preserved(base, candidate_package, mutation.allowed_parts)
+    expected_defined_names = _defined_name_signatures(
+        mutation.replacements["xl/workbook.xml"]
+    )
     verify_output_contract(
         candidate_package,
         request.contract,
         request.mobiliti.row_map,
         cotizacion_total_row=request.cotizacion.total_row,
+        expected_defined_names=expected_defined_names,
     )
     candidate = _write_candidate(output, payload)
     try:
@@ -547,6 +605,7 @@ def build_allowlisted_mutation(
         for item in (request.quotation, request.quotation_data)
         if item is not None
     )
+    _validate_imported_formula_surfaces(sheet_additions)
     workbook_xml, workbook_rels, content_types, added_parts, extra_replacements = (
         _add_workbook_sheets(
             base,
@@ -574,7 +633,7 @@ def build_allowlisted_mutation(
     illegal = {
         name
         for name in (*replacements, *additions)
-        if name.startswith(protected)
+        if part_name_has_ascii_prefix(name, protected)
     }
     if illegal:
         raise ValueError(f"Mutación de parte protegida: {sorted(illegal)}")
@@ -587,6 +646,9 @@ def verify_output_contract(
     row_map: MobilitiRowMap,
     *,
     cotizacion_total_row: int,
+    expected_defined_names: Sequence[
+        tuple[tuple[tuple[str, str], ...], str]
+    ],
 ) -> None:
     """Verifica invariantes oficiales antes de publicar el candidato."""
 
@@ -604,7 +666,10 @@ def verify_output_contract(
     if states.get("Quotation_Data") != "veryHidden":
         raise ValueError("Quotation_Data no quedó veryHidden")
 
-    external_parts = sum(name.startswith("xl/externalLinks/") for name in package.parts)
+    external_parts = sum(
+        part_name_has_ascii_prefix(name, ("xl/externalLinks/",))
+        for name in package.parts
+    )
     if external_parts != contract.external_link_parts:
         raise ValueError("Cantidad de externalLinks alterada")
     spec_formulas = 0
@@ -618,8 +683,14 @@ def verify_output_contract(
 
     workbook = ET.fromstring(package.parts["xl/workbook.xml"])
     defined_names = workbook.findall(f"{{{MAIN}}}definedNames/{{{MAIN}}}definedName")
-    if len(defined_names) < contract.defined_name_count:
-        raise ValueError("Nombres definidos oficiales ausentes")
+    actual_defined_names = _defined_name_signatures(package.parts["xl/workbook.xml"])
+    normalized_expected_names = tuple(sorted(tuple(expected_defined_names)))
+    if (
+        len(normalized_expected_names) < contract.defined_name_count
+        or actual_defined_names != normalized_expected_names
+        or len(defined_names) != len(normalized_expected_names)
+    ):
+        raise ValueError("La salida alteró el conjunto exacto de nombres definidos")
     if _formula_at(package, "Fletes", "D19") != f"Mobiliti!H{row_map.total_row}":
         raise ValueError("Referencia Fletes!D19 desactualizada")
     if _formula_at(package, "Estrategia Comercial ", "D59") != (
@@ -1173,6 +1244,108 @@ def _formula_range_tokens(formula: str) -> list[str]:
         for token in tokens
         if token.type == "OPERAND" and token.subtype == "RANGE"
     ]
+
+
+def _validate_formula_token_contract(
+    formula: str,
+    expected: tuple[tuple[str, str, str], ...],
+) -> None:
+    """Valida el contrato F/I por tokens exactos, nunca por sustitución textual."""
+
+    if not isinstance(formula, str) or not formula.startswith("="):
+        raise ValueError("Fórmula del contrato F/I inválida")
+    try:
+        items = tuple(Tokenizer(formula).items)
+    except (TokenizerError, IndexError, TypeError, ValueError) as error:
+        raise ValueError("Fórmula del contrato F/I no tokenizable") from error
+    actual = tuple((item.type, item.subtype, item.value) for item in items)
+    if "".join(item.value for item in items) != formula[1:] or actual != expected:
+        raise ValueError("Fórmula del contrato F/I fuera de contrato")
+
+
+def _validate_imported_formula_surfaces(
+    sheet_additions: Sequence[SheetAddition],
+) -> None:
+    for addition in sheet_additions:
+        payloads = dict(addition.parts)
+        if addition.sheet_part is None:
+            payloads[f"<hoja:{addition.name}>"] = addition.xml
+        for part, payload in payloads.items():
+            try:
+                root = ET.fromstring(payload)
+            except ET.ParseError as error:
+                raise ValueError(f"XML importado inválido: {part}") from error
+            if root.tag != f"{{{MAIN}}}worksheet":
+                continue
+            for index, formula in enumerate(root.findall(f".//{{{MAIN}}}f"), start=1):
+                if not (formula.text or ""):
+                    if formula.attrib.get("t") == "shared" and formula.attrib.get("si", "").isdigit():
+                        continue
+                    raise ValueError("Fórmula importada no permitida: fórmula vacía")
+                _validate_imported_formula(
+                    formula.text or "",
+                    f"{addition.name}:{part}:f{index}",
+                )
+        for defined_name in addition.defined_names:
+            _validate_imported_formula(
+                defined_name.text,
+                f"{addition.name}:definedName:{defined_name.name}",
+            )
+
+
+def _validate_imported_formula(formula: str, context: str) -> None:
+    if not isinstance(formula, str) or not formula or len(formula) > 8192:
+        raise ValueError(f"Fórmula importada no permitida: {context}")
+    body = formula[1:] if formula.startswith("=") else formula
+    try:
+        items = tuple(Tokenizer("=" + body).items)
+    except (TokenizerError, IndexError, TypeError, ValueError) as error:
+        raise ValueError(f"Fórmula importada no permitida: {context}") from error
+    if "".join(item.value for item in items) != body:
+        raise ValueError(f"Fórmula importada no permitida: {context}")
+    for item in items:
+        if item.type == Token.FUNC and item.subtype == Token.OPEN:
+            function_name = item.value[:-1].strip().upper()
+            for prefix in ("_XLFN.", "_XLWS."):
+                if function_name.startswith(prefix):
+                    function_name = function_name[len(prefix) :]
+            if function_name in _DANGEROUS_IMPORTED_FUNCTIONS:
+                raise ValueError(f"Fórmula importada no permitida: {context}")
+        if item.type == Token.OPERAND and item.subtype == Token.RANGE:
+            value = item.value
+            bang = value.find("!")
+            qualifier = value[:bang] if bang >= 0 else ""
+            folded = value.casefold()
+            if (
+                "|" in value
+                or ("[" in qualifier and "]" in qualifier)
+                or folded.startswith(("http:", "https:", "ftp:", "file:", "\\\\"))
+            ):
+                raise ValueError(f"Fórmula importada no permitida: {context}")
+        if item.type == Token.OPERAND and item.subtype == Token.TEXT:
+            folded = item.value.casefold()
+            if any(
+                marker in folded
+                for marker in ("http://", "https://", "ftp://", "file://", "\\\\")
+            ):
+                raise ValueError(f"Fórmula importada no permitida: {context}")
+
+
+def _defined_name_signatures(
+    workbook_payload: bytes,
+) -> tuple[tuple[tuple[tuple[str, str], ...], str], ...]:
+    try:
+        workbook = ET.fromstring(workbook_payload)
+    except (ET.ParseError, TypeError) as error:
+        raise ValueError("Workbook inválido al verificar nombres definidos") from error
+    signatures = (
+        (
+            tuple(sorted(item.attrib.items())),
+            item.text or "",
+        )
+        for item in workbook.findall(f"{{{MAIN}}}definedNames/{{{MAIN}}}definedName")
+    )
+    return tuple(sorted(signatures))
 
 
 def _translate_formula_with_overrides(
