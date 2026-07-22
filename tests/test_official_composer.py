@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from io import BytesIO
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -1130,6 +1132,7 @@ def test_active_engine_explicit_original_transplants_that_workbook(
 
 def test_active_engine_embedded_source_image_reaches_cotizacion_anchor(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image = tmp_path / "source-product.png"
     Image.new("RGBA", (32, 24), (20, 80, 160, 255)).save(image)
@@ -1140,6 +1143,13 @@ def test_active_engine_embedded_source_image_reaches_cotizacion_anchor(
         image_path=image,
     )
     output = tmp_path / "output-with-product-image.xlsx"
+    forbidden_cache = tmp_path / "forbidden-image-cache"
+    monkeypatch.setattr(
+        engine_module,
+        "_IMAGE_CACHE_ROOT",
+        forbidden_cache,
+        raising=False,
+    )
 
     generate_quote(
         source,
@@ -1170,6 +1180,7 @@ def test_active_engine_embedded_source_image_reaches_cotizacion_anchor(
         and anchor.findtext(f"{{{XDR}}}from/{{{XDR}}}col") == "1"
     ]
     assert len(product_anchors) == 1
+    assert not forbidden_cache.exists()
     assert any(
         name.startswith("xl/media/quote_product_")
         and package.parts[name].startswith(b"\x89PNG\r\n\x1a\n")
@@ -1747,3 +1758,196 @@ def test_cotizacion_translation_preserves_reference_like_formula_literals() -> N
 
     assert '"F17*G17"' in _cell(worksheet, "H17").findtext(f"{{{MAIN}}}f")
     assert '"E17*I17"' in _cell(worksheet, "J17").findtext(f"{{{MAIN}}}f")
+
+
+def _png_payload(color: tuple[int, int, int] = (10, 20, 30)) -> bytes:
+    stream = BytesIO()
+    Image.new("RGB", (16, 12), color).save(stream, format="PNG")
+    return stream.getvalue()
+
+
+def test_cotizacion_accepts_in_memory_image_bytes_without_path(tmp_path: Path) -> None:
+    output = tmp_path / "in-memory-image.xlsx"
+    request = _minimal_request(output)
+    payload = _png_payload()
+    cotizacion = replace(
+        request.cotizacion,
+        images=(
+            CotizacionProductImage(
+                path=None,
+                target_row=request.cotizacion.product_rows[0],
+                content=payload,
+                content_type="image/png",
+            ),
+        ),
+    )
+
+    compose_official_quote(replace(request, cotizacion=cotizacion))
+
+    package = XlsxPackage.read(output)
+    assert payload in package.parts.values()
+
+
+def test_product_image_path_rejects_reparse_points_before_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = (tmp_path / "reparse.png").resolve()
+    image.write_bytes(_png_payload())
+    monkeypatch.setattr(
+        official_composer_module,
+        "_path_is_reparse_point",
+        lambda path: Path(path) == image,
+    )
+
+    with pytest.raises(ValueError, match="reparse point"):
+        official_composer_module._read_product_image(image)
+
+
+def test_product_image_path_is_read_once_and_pil_uses_same_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = (tmp_path / "single-read.png").resolve()
+    payload = _png_payload((30, 40, 50))
+    image.write_bytes(payload)
+    real_open = Image.open
+
+    def bytes_only_open(source, *args, **kwargs):
+        if isinstance(source, (str, os.PathLike)):
+            raise AssertionError("PIL reabrió la ruta después de leer sus bytes")
+        return real_open(source, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", bytes_only_open)
+
+    content, _extension, _content_type, width, height = (
+        official_composer_module._read_product_image(image)
+    )
+
+    assert content == payload
+    assert (width, height) == (16, 12)
+
+
+def test_in_memory_product_image_enforces_byte_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _png_payload()
+    monkeypatch.setattr(official_composer_module, "MAX_IMAGE_BYTES", len(payload) - 1)
+    descriptor = CotizacionProductImage(
+        path=None,
+        target_row=17,
+        content=payload,
+        content_type="image/png",
+    )
+
+    with pytest.raises(ValueError, match="Tamaño de imagen"):
+        official_composer_module._read_product_image(descriptor)
+
+
+def test_image_relationship_serialization_is_hashseed_deterministic(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "seed-image.png"
+    image.write_bytes(_png_payload())
+    script = r'''
+from dataclasses import replace
+from decimal import Decimal
+from pathlib import Path
+import sys
+from xml.etree import ElementTree as ET
+
+import mobiliti_saas.quote_engine.official_composer as composer
+from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage
+
+template = Path(sys.argv[1])
+image = Path(sys.argv[2])
+base = XlsxPackage.read(template)
+section = composer.CotizacionSection(
+    title="Sillas",
+    products=(composer.CotizacionProduct(
+        item_key="seed-item",
+        name="Silla",
+        description="Descripción",
+        dimensions="60 x 60 cm",
+        quantity=Decimal("1"),
+        mobiliti_row=14,
+    ),),
+)
+mutation = composer.CotizacionSheetEditor.from_xml(
+    base.parts[base.sheet_part("Cotizacion")]
+).compose(metadata=composer.CotizacionMetadata(), sections=(section,))
+mutation = replace(
+    mutation,
+    images=(composer.CotizacionProductImage(image.resolve(), 17),),
+)
+real_relationship_types = composer.relationship_type_uris
+def seeded_relationship_types(name):
+    if name == "image":
+        return frozenset(("http://example.test/a-image", "http://example.test/b-image"))
+    return real_relationship_types(name)
+composer.relationship_type_uris = seeded_relationship_types
+merged = composer.merge_cotizacion_product_images(base, mutation)
+rels_payload = next(
+    payload for name, payload in merged.related_parts.items() if name.endswith(".rels")
+)
+root = ET.fromstring(rels_payload)
+relationship = next(
+    item for item in root if "quote_product_" in item.attrib.get("Target", "")
+)
+print(relationship.attrib["Type"])
+'''
+    values = []
+    for seed in ("1", "5"):
+        environment = dict(os.environ, PYTHONHASHSEED=seed)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(OFFICIAL_TEMPLATE),
+                str(image),
+            ],
+            cwd=ROOT,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        values.append(completed.stdout.strip())
+
+    assert values[0] == values[1]
+
+
+@pytest.mark.parametrize("trash_mode", ("no_op", "missing"))
+def test_candidate_recovery_confirms_trash_or_returns_quarantine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trash_mode: str,
+) -> None:
+    output = tmp_path / "quote.xlsx"
+    output.write_bytes(b"archivo del usuario")
+    candidate = tmp_path / ".quote.xlsx.compose-1.tmp"
+    candidate.write_bytes(b"candidato recuperable")
+    profile = tmp_path / "profile"
+    monkeypatch.setenv("USERPROFILE", str(profile))
+    if trash_mode == "no_op":
+        script = profile / ".codex" / "bin" / "Send-ToRecycleBin.ps1"
+        script.parent.mkdir(parents=True)
+        script.write_text("# herramienta simulada", encoding="utf-8")
+        monkeypatch.setattr(
+            official_composer_module.subprocess,
+            "run",
+            lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0),
+        )
+    else:
+        monkeypatch.setattr(official_composer_module.shutil, "which", lambda _name: None)
+
+    quarantine = official_composer_module._recycle_candidate(candidate)
+
+    assert quarantine is not None
+    assert quarantine.exists()
+    assert quarantine.read_bytes() == b"candidato recuperable"
+    assert not candidate.exists()
+    assert not tuple(tmp_path.glob(".*.compose-*.tmp"))
+    assert output.read_bytes() == b"archivo del usuario"

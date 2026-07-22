@@ -14,7 +14,6 @@ import posixpath
 from pathlib import Path
 import re
 import shutil
-import tempfile
 import time
 from typing import Any, Mapping, Sequence
 from urllib.request import Request, urlopen
@@ -223,9 +222,6 @@ OFFICIAL_TEMPLATE_CONTRACT_PATH = (
 _ARGUMENT_OMITTED = object()
 _XDR_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 _DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
-_IMAGE_CACHE_ROOT = Path(tempfile.gettempdir()) / "mobiliti_quote_image_cache"
-
-
 @dataclass(frozen=True)
 class MobilitiSectionLayout:
     section_row: int
@@ -261,7 +257,8 @@ class _OfficialPresentationLine:
     source_row: int | None
     upstream_row_hash: str
     parent_item_key: str | None = None
-    image_path: Path | None = None
+    image_content: bytes | None = None
+    image_content_type: str | None = None
 
 
 def _sheet_name(name: str) -> str:
@@ -3066,38 +3063,22 @@ def _source_product_image_payloads(
         media_part = media_by_id[relationship_id]
         payload = package.parts[media_part]
         if payload.startswith(b"\x89PNG\r\n\x1a\n"):
-            extension = ".png"
+            content_type = "image/png"
         elif payload.startswith(b"\xff\xd8\xff"):
-            extension = ".jpeg"
+            content_type = "image/jpeg"
         else:
             raise ValueError("Formato de imagen Quotation no permitido")
-        images[row] = (payload, extension)
+        images[row] = (payload, content_type)
     return images
 
 
-def _cache_source_product_images(path: Path) -> dict[int, Path]:
-    normalized = _normalized_quotation_source(path)
+def _source_product_images(source: Path | bytes) -> dict[int, tuple[bytes, str]]:
     package = (
-        XlsxPackage.from_bytes(normalized)
-        if isinstance(normalized, bytes)
-        else XlsxPackage.read(normalized)
+        XlsxPackage.from_bytes(source)
+        if isinstance(source, bytes)
+        else XlsxPackage.read(source)
     )
-    payloads = _source_product_image_payloads(package)
-    if not payloads:
-        return {}
-    _IMAGE_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
-    result: dict[int, Path] = {}
-    for row, (payload, extension) in payloads.items():
-        digest = hashlib.sha256(payload).hexdigest()
-        target = _IMAGE_CACHE_ROOT / f"{digest}-row-{row}{extension}"
-        try:
-            with target.open("xb") as stream:
-                stream.write(payload)
-        except FileExistsError:
-            if target.read_bytes() != payload:
-                raise ValueError("Colisión en cache de imagen Quotation")
-        result[row] = target.resolve(strict=True)
-    return result
+    return _source_product_image_payloads(package)
 
 
 def _official_presentation_lines(
@@ -3105,7 +3086,7 @@ def _official_presentation_lines(
     metadata: dict[str, Any],
     source_path: Path,
     lumbro_prices: Mapping[str, LumbroPriceRef],
-    image_paths: Mapping[int, Path],
+    image_payloads: Mapping[int, tuple[bytes, str]],
 ) -> tuple[tuple[_OfficialPresentationLine, ...], tuple[SectionNeed, ...]]:
     product_items = [item for item in items if item.tipo == "producto"]
     category_dictionary = load_category_dictionary(
@@ -3145,6 +3126,7 @@ def _official_presentation_lines(
                 if imported
                 else ""
             )
+            image_payload = image_payloads.get(item.row)
             line = _OfficialPresentationLine(
                 item_key=f"quotation:{item.row}",
                 section_id=section_id,
@@ -3168,7 +3150,8 @@ def _official_presentation_lines(
                 origin="imported" if imported else "quotation",
                 source_row=item.row if imported else None,
                 upstream_row_hash=upstream_hash,
-                image_path=image_paths.get(item.row),
+                image_content=image_payload[0] if image_payload is not None else None,
+                image_content_type=image_payload[1] if image_payload is not None else None,
             )
             lines.append(line)
 
@@ -3506,7 +3489,8 @@ def _build_official_cotizacion(
                 quantity=line.quantity,
                 mobiliti_row=target_by_key[line.item_key],
                 discount=discount,
-                image_path=line.image_path,
+                image_content=line.image_content,
+                image_content_type=line.image_content_type,
             )
         )
     sections = tuple(
@@ -3649,19 +3633,26 @@ def generate_quote(
     lumbro_prices = _load_lumbro_prices(official_template)
     if original_quotation_path is _ARGUMENT_OMITTED:
         original_source: Path | None = source_path
+        normalized_original: Path | bytes | None = normalized_source
     elif original_quotation_path is None:
         original_source = None
+        normalized_original = None
     elif isinstance(original_quotation_path, (str, Path)):
         original_source = Path(original_quotation_path).resolve(strict=True)
+        normalized_original = (
+            normalized_source
+            if original_source == source_path
+            else _normalized_quotation_source(original_source)
+        )
     else:
         raise TypeError("original_quotation_path debe ser Path, str o None")
-    image_paths = _cache_source_product_images(original_source or source_path)
+    image_payloads = _source_product_images(normalized_original or normalized_source)
     lines, needs = _official_presentation_lines(
         items,
         metadata,
         source_path,
         lumbro_prices,
-        image_paths,
+        image_payloads,
     )
     if handed_off_rows is None:
         canonical_rows = _official_canonical_rows(lines, source_path)
@@ -3677,8 +3668,8 @@ def generate_quote(
     )
     cotizacion = _build_official_cotizacion(base, lines, mobiliti, metadata)
     quotation = (
-        transplant_quotation(_normalized_quotation_source(original_source), base)
-        if original_source is not None
+        transplant_quotation(normalized_original, base)
+        if normalized_original is not None
         else None
     )
     compose_official_quote(

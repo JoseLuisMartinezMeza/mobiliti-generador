@@ -12,6 +12,7 @@ import ctypes
 from dataclasses import dataclass, field
 from decimal import Decimal
 import errno
+from io import BytesIO
 import os
 from pathlib import Path
 import posixpath
@@ -172,6 +173,8 @@ class CotizacionProduct:
     mobiliti_row: int
     discount: Decimal = Decimal("0")
     image_path: Path | None = None
+    image_content: bytes | None = None
+    image_content_type: str | None = None
 
     def __post_init__(self) -> None:
         _validate_text(self.item_key)
@@ -190,6 +193,20 @@ class CotizacionProduct:
         object.__setattr__(self, "discount", discount)
         if self.image_path is not None:
             object.__setattr__(self, "image_path", Path(self.image_path))
+        if self.image_content is not None:
+            if not isinstance(self.image_content, bytes):
+                raise TypeError("Bytes de imagen Cotizacion inválidos")
+            object.__setattr__(self, "image_content", bytes(self.image_content))
+        if (self.image_path is None) == (self.image_content is None):
+            if self.image_path is not None:
+                raise ValueError("Producto Cotizacion contiene dos fuentes de imagen")
+            if self.image_content_type is not None:
+                raise ValueError("Content type sin imagen Cotizacion")
+        elif self.image_content is not None and self.image_content_type not in {
+            PNG_CONTENT_TYPE,
+            JPEG_CONTENT_TYPE,
+        }:
+            raise ValueError("Content type de imagen Cotizacion inválido")
 
 
 @dataclass(frozen=True)
@@ -209,8 +226,29 @@ class CotizacionSection:
 
 @dataclass(frozen=True)
 class CotizacionProductImage:
-    path: Path
+    path: Path | None
     target_row: int
+    content: bytes | None = None
+    content_type: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.target_row) is not int or not 1 <= self.target_row <= XLSX_MAX_ROWS:
+            raise ValueError("Fila de imagen Cotizacion inválida")
+        if self.path is not None:
+            object.__setattr__(self, "path", Path(self.path))
+        if self.content is not None:
+            if not isinstance(self.content, bytes):
+                raise TypeError("Bytes de imagen Cotizacion inválidos")
+            object.__setattr__(self, "content", bytes(self.content))
+        if (self.path is None) == (self.content is None):
+            raise ValueError("La imagen Cotizacion requiere una fuente única")
+        if self.content is not None and self.content_type not in {
+            PNG_CONTENT_TYPE,
+            JPEG_CONTENT_TYPE,
+        }:
+            raise ValueError("Content type de imagen Cotizacion inválido")
+        if self.path is not None and self.content_type is not None:
+            raise ValueError("La ruta de imagen no declara content type anticipado")
 
 
 @dataclass(frozen=True)
@@ -425,8 +463,15 @@ class CotizacionSheetEditor:
                 )
                 dynamic_rows.append(row)
                 product_rows.append(target_row)
-                if product.image_path is not None:
-                    images.append(CotizacionProductImage(product.image_path, target_row))
+                if product.image_path is not None or product.image_content is not None:
+                    images.append(
+                        CotizacionProductImage(
+                            product.image_path,
+                            target_row,
+                            content=product.image_content,
+                            content_type=product.image_content_type,
+                        )
+                    )
                 cursor += 1
 
         total_start = cursor
@@ -786,7 +831,7 @@ def merge_cotizacion_product_images(
         for item in drawing_rels.findall(f"{{{PKG_REL}}}Relationship")
     }
     for sequence, image in enumerate(mutation.images, start=1):
-        content, extension, content_type, width, height = _read_product_image(image.path)
+        content, extension, content_type, width, height = _read_product_image(image)
         media_part = _allocate_media_part(base, related_additions, sequence, extension)
         rel_id = _next_relationship_id(used_relationship_ids)
         used_relationship_ids.add(rel_id)
@@ -795,7 +840,7 @@ def merge_cotizacion_product_images(
             f"{{{PKG_REL}}}Relationship",
             {
                 "Id": rel_id,
-                "Type": next(iter(relationship_type_uris("image"))),
+                "Type": _stable_image_relationship_type(drawing_rels),
                 "Target": posixpath.relpath(media_part, posixpath.dirname(drawing_part)),
             },
         )
@@ -829,6 +874,15 @@ def merge_cotizacion_product_images(
         terms_row_delta=mutation.terms_row_delta,
         product_rows=mutation.product_rows,
     )
+
+
+def _stable_image_relationship_type(drawing_rels: ET.Element) -> str:
+    allowed = relationship_type_uris("image")
+    for relationship in drawing_rels.findall(f"{{{PKG_REL}}}Relationship"):
+        relationship_type = relationship.attrib.get("Type", "")
+        if relationship_type in allowed:
+            return relationship_type
+    return f"{OFFICE_DOCUMENT_RELATIONSHIPS}/image"
 
 
 def _translate_fletes(payload: bytes, row_map: MobilitiRowMap) -> bytes:
@@ -1696,12 +1750,12 @@ def _darwin_rename_no_replace(candidate: Path, output: Path) -> bool:
     raise OSError(error_number, os.strerror(error_number), str(output))
 
 
-def _recycle_candidate(candidate: Path) -> None:
+def _recycle_candidate(candidate: Path) -> Path | None:
     """Retira un candidato únicamente mediante Trash/Recycle Bin o cuarentena."""
 
     candidate = Path(candidate)
-    if not candidate.exists():
-        return
+    if _lstat_or_none(candidate) is None:
+        return None
     command: list[str] | None = None
     if os.name == "nt":
         profile = Path(os.environ.get("USERPROFILE", ""))
@@ -1735,9 +1789,14 @@ def _recycle_candidate(candidate: Path) -> None:
                 stderr=subprocess.PIPE,
                 timeout=30,
             )
-            return
+            if _lstat_or_none(candidate) is None:
+                return None
         except (OSError, subprocess.SubprocessError):
             pass
+    return _quarantine_candidate(candidate)
+
+
+def _quarantine_candidate(candidate: Path) -> Path:
     for _attempt in range(100):
         quarantine_directory = candidate.parent / (
             f".mobiliti-recovery-{uuid.uuid4().hex}"
@@ -1746,11 +1805,34 @@ def _recycle_candidate(candidate: Path) -> None:
             os.mkdir(quarantine_directory, mode=0o700)
         except FileExistsError:
             continue
-        os.rename(candidate, quarantine_directory / candidate.name)
-        return
+        destination = quarantine_directory / candidate.name
+        _move_candidate_no_replace(candidate, destination)
+        if _lstat_or_none(candidate) is not None or _lstat_or_none(destination) is None:
+            raise RuntimeError("La cuarentena no confirmó el movimiento del candidato")
+        return destination
     raise RuntimeError(
         f"No se pudo mover el candidato a una cuarentena recuperable: {candidate}"
     )
+
+
+def _move_candidate_no_replace(candidate: Path, destination: Path) -> None:
+    if os.name == "nt":
+        os.rename(candidate, destination)
+        return
+    if sys.platform.startswith("linux") and _linux_rename_no_replace(candidate, destination):
+        return
+    if sys.platform == "darwin" and _darwin_rename_no_replace(candidate, destination):
+        return
+    if _lstat_or_none(destination) is not None:
+        raise FileExistsError(f"La cuarentena ya existe: {destination}")
+    os.rename(candidate, destination)
+
+
+def _lstat_or_none(path: Path) -> os.stat_result | None:
+    try:
+        return os.lstat(path)
+    except FileNotFoundError:
+        return None
 
 
 def _worksheet_root(payload: bytes, name: str) -> ET.Element:
@@ -2043,30 +2125,33 @@ def _next_picture_id(root: ET.Element) -> int:
     return max(values, default=0) + 1
 
 
-def _read_product_image(path: Path) -> tuple[bytes, str, str, int, int]:
-    path = Path(path)
-    if not path.is_absolute():
-        raise ValueError("La imagen de producto debe usar ruta absoluta")
-    if any(parent.exists() and parent.is_symlink() for parent in (path, *path.parents)):
-        raise ValueError("La imagen de producto no puede atravesar symlinks")
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"Imagen de producto inexistente: {path}")
-    if not _SAFE_IMAGE_NAME.fullmatch(path.name):
-        raise ValueError("Nombre de imagen de producto inválido")
-    size = path.stat().st_size
-    if size <= 0 or size > MAX_IMAGE_BYTES:
+def _read_product_image(
+    source: CotizacionProductImage | Path,
+) -> tuple[bytes, str, str, int, int]:
+    if isinstance(source, CotizacionProductImage):
+        expected_content_type = source.content_type
+        content = (
+            _bounded_read_product_image_path(source.path)
+            if source.path is not None
+            else bytes(source.content or b"")
+        )
+    else:
+        expected_content_type = None
+        content = _bounded_read_product_image_path(Path(source))
+    if not content or len(content) > MAX_IMAGE_BYTES:
         raise ValueError("Tamaño de imagen de producto inválido")
-    content = path.read_bytes()
     if content.startswith(b"\x89PNG\r\n\x1a\n"):
         extension, content_type = ".png", PNG_CONTENT_TYPE
     elif content.startswith(b"\xff\xd8\xff"):
         extension, content_type = ".jpeg", JPEG_CONTENT_TYPE
     else:
         raise ValueError("Formato de imagen de producto no permitido")
+    if expected_content_type is not None and expected_content_type != content_type:
+        raise ValueError("Content type de imagen de producto inconsistente")
     try:
         from PIL import Image
 
-        with Image.open(path) as image:
+        with Image.open(BytesIO(content)) as image:
             width, height = image.size
             image.verify()
     except Exception as error:
@@ -2074,6 +2159,52 @@ def _read_product_image(path: Path) -> tuple[bytes, str, str, int, int]:
     if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
         raise ValueError("Dimensiones de imagen de producto inválidas")
     return content, extension, content_type, width, height
+
+
+def _bounded_read_product_image_path(path: Path | None) -> bytes:
+    if path is None:
+        raise ValueError("Ruta de imagen de producto ausente")
+    path = Path(path)
+    if not path.is_absolute():
+        raise ValueError("La imagen de producto debe usar ruta absoluta")
+    if not _SAFE_IMAGE_NAME.fullmatch(path.name):
+        raise ValueError("Nombre de imagen de producto inválido")
+    for component in (path, *path.parents):
+        if _path_is_reparse_point(component):
+            raise ValueError("La imagen de producto no puede atravesar un reparse point")
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError as error:
+        raise FileNotFoundError(f"Imagen de producto inexistente: {path}") from error
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError("La imagen de producto debe ser un archivo regular")
+    if before.st_size <= 0 or before.st_size > MAX_IMAGE_BYTES:
+        raise ValueError("Tamaño de imagen de producto inválido")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+            or opened.st_size != before.st_size
+        ):
+            raise ValueError("La ruta de imagen cambió durante la apertura")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, MAX_IMAGE_BYTES + 1 - total))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_IMAGE_BYTES:
+                raise ValueError("Tamaño de imagen de producto inválido")
+            chunks.append(chunk)
+        if total != opened.st_size:
+            raise ValueError("Tamaño de imagen cambió durante la lectura")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def _allocate_media_part(
