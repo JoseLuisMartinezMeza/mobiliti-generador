@@ -2902,11 +2902,14 @@ def _set_calc_mode(wb: Workbook) -> None:
         pass
 
 
-def _official_file_hash(path: Path) -> str:
+def _official_file_hash(source: Path | bytes) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
+    if isinstance(source, bytes):
+        digest.update(source)
+    else:
+        with source.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -3351,9 +3354,9 @@ def _bind_authoritative_canonical_rows(
 
 def _official_canonical_rows(
     lines: Sequence[_OfficialPresentationLine],
-    source_path: Path,
+    source: Path | bytes,
 ) -> tuple[QuotationDataRow, ...]:
-    source_hash = _official_file_hash(source_path)
+    source_hash = _official_file_hash(source)
     result: list[QuotationDataRow] = []
     for position, line in enumerate(lines, start=1):
         result.append(
@@ -3513,8 +3516,8 @@ def _build_official_cotizacion(
     )
 
 
-def _normalized_quotation_source(path: Path) -> Path | bytes:
-    """Normaliza targets OPC package-rooted sin mutar el XLSX recibido."""
+def _normalized_quotation_source(path: Path) -> bytes:
+    """Devuelve un snapshot OOXML auditado sin mutar el XLSX recibido."""
 
     package = XlsxPackage.read(Path(path), audit=False)
     names = set(package.parts)
@@ -3584,10 +3587,9 @@ def _normalized_quotation_source(path: Path) -> Path | bytes:
             replacements[name] = payload
     if not replacements:
         package.audit()
-        return Path(path)
-    normalized = package.to_bytes(PackageMutation(replacements=replacements))
-    XlsxPackage.from_bytes(normalized)
-    return normalized
+    snapshot = package.to_bytes(PackageMutation(replacements=replacements))
+    XlsxPackage.from_bytes(snapshot)
+    return snapshot
 
 
 def _engine_relationship_owner(rels_name: str) -> str | None:
@@ -3620,9 +3622,7 @@ def generate_quote(
     )
 
     normalized_source = _normalized_quotation_source(source_path)
-    items, _column_map = read_items(
-        BytesIO(normalized_source) if isinstance(normalized_source, bytes) else normalized_source
-    )
+    items, _column_map = read_items(BytesIO(normalized_source))
     handed_off_rows = _canonical_handoff_rows(quotation_data_rows)
     if handed_off_rows is None:
         _validate_mixed_catalog_metadata(items, metadata)
@@ -3633,7 +3633,7 @@ def generate_quote(
     lumbro_prices = _load_lumbro_prices(official_template)
     if original_quotation_path is _ARGUMENT_OMITTED:
         original_source: Path | None = source_path
-        normalized_original: Path | bytes | None = normalized_source
+        normalized_original: bytes | None = normalized_source
     elif original_quotation_path is None:
         original_source = None
         normalized_original = None
@@ -3655,7 +3655,7 @@ def generate_quote(
         image_payloads,
     )
     if handed_off_rows is None:
-        canonical_rows = _official_canonical_rows(lines, source_path)
+        canonical_rows = _official_canonical_rows(lines, normalized_source)
     else:
         lines, needs = _bind_authoritative_canonical_rows(lines, handed_off_rows)
         canonical_rows = handed_off_rows

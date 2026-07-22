@@ -72,6 +72,9 @@ TABLE_CONTENT_TYPE = (
 CHART_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
 )
+STYLES_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
+)
 RELATIONSHIPS_CONTENT_TYPE = (
     "application/vnd.openxmlformats-package.relationships+xml"
 )
@@ -160,6 +163,17 @@ _FORMULA_ELEMENT_PATHS = {
         ),
     ),
     "chart": (("range", f".//{{{CHART}}}f", False),),
+}
+_APPEND_ONLY_STYLE_SECTIONS = {
+    "numFmts": "numFmt",
+    "fonts": "font",
+    "fills": "fill",
+    "borders": "border",
+    "cellStyleXfs": "xf",
+    "cellXfs": "xf",
+    "cellStyles": "cellStyle",
+    "dxfs": "dxf",
+    "tableStyles": "tableStyle",
 }
 
 for prefix, namespace in (
@@ -713,6 +727,10 @@ def build_allowlisted_mutation(
         for item in (request.quotation, request.quotation_data)
         if item is not None
     )
+    validated_addition_replacements = _validate_sheet_addition_replacements(
+        base,
+        sheet_additions,
+    )
     _validate_imported_formula_surfaces(sheet_additions)
     workbook_xml, workbook_rels, content_types, added_parts, extra_replacements = (
         _add_workbook_sheets(
@@ -735,6 +753,25 @@ def build_allowlisted_mutation(
             base,
             request.mobiliti,
             request.cotizacion,
+        )
+
+    fixed_replacements = {
+        base.sheet_part("Mobiliti"),
+        base.sheet_part("Cotizacion"),
+        fletes_part,
+        estrategia_part,
+        "xl/workbook.xml",
+        "xl/_rels/workbook.xml.rels",
+        "[Content_Types].xml",
+        *cotizacion.related_parts,
+        *validated_addition_replacements,
+    }
+    if calc_chain_part is not None:
+        fixed_replacements.add(calc_chain_part)
+    unexpected_replacements = set(replacements) - fixed_replacements
+    if unexpected_replacements:
+        raise ValueError(
+            f"Reemplazo fuera del contrato fijo: {sorted(unexpected_replacements)}"
         )
 
     protected = tuple(request.contract.protected_prefixes)
@@ -1519,8 +1556,15 @@ def _validate_imported_formula(formula: str, context: str) -> None:
                 function_name = items[previous].value
         if function_name is not None:
             normalized_name = function_name.strip().upper()
-            while normalized_name.startswith(("_XLFN.", "_XLWS.")):
-                normalized_name = normalized_name.split(".", 1)[1]
+            while True:
+                previous_name = normalized_name
+                normalized_name = normalized_name.lstrip("@")
+                for prefix in ("_XLFN.", "_XLWS."):
+                    if normalized_name.startswith(prefix):
+                        normalized_name = normalized_name[len(prefix) :]
+                        break
+                if normalized_name == previous_name:
+                    break
             if normalized_name in _DANGEROUS_IMPORTED_FUNCTIONS:
                 raise ValueError(f"Fórmula importada no permitida: {context}")
         if item.type == Token.OPERAND and item.subtype == Token.RANGE:
@@ -1541,6 +1585,131 @@ def _validate_imported_formula(formula: str, context: str) -> None:
                 for marker in ("http://", "https://", "ftp://", "file://", "\\\\")
             ):
                 raise ValueError(f"Fórmula importada no permitida: {context}")
+
+
+def _validate_sheet_addition_replacements(
+    base: XlsxPackage,
+    sheet_additions: Sequence[SheetAddition],
+) -> frozenset[str]:
+    """Valida reemplazos de hojas contra un contrato fijo por tipo."""
+
+    validated: set[str] = set()
+    styles_part = base.workbook_related_part("styles")
+    for addition in sheet_additions:
+        if addition.name == "Quotation_Data":
+            if addition.replacements:
+                raise ValueError("Quotation_Data no permite reemplazos")
+            continue
+        if addition.name != "Quotation":
+            raise ValueError("Hoja no permitida por el compositor")
+        allowed = {styles_part} if styles_part is not None else set()
+        unexpected = set(addition.replacements) - allowed
+        if unexpected:
+            raise ValueError(
+                f"Reemplazo de Quotation no permitido: {sorted(unexpected)}"
+            )
+        if not addition.replacements:
+            continue
+        if styles_part is None:
+            raise ValueError("Styles oficial ausente para Quotation")
+        expected_content_type = base.content_types_for({styles_part})[styles_part]
+        if (
+            expected_content_type != STYLES_CONTENT_TYPE
+            or addition.replacement_content_types.get(styles_part)
+            != expected_content_type
+        ):
+            raise ValueError("Content type de styles de Quotation invalido")
+        _validate_append_only_styles(
+            base.parts[styles_part],
+            addition.replacements[styles_part],
+        )
+        validated.add(styles_part)
+    return frozenset(validated)
+
+
+def _validate_append_only_styles(base_payload: bytes, candidate_payload: bytes) -> None:
+    """Exige que styles preserve el arbol oficial y solo agregue entradas."""
+
+    try:
+        base = ET.fromstring(base_payload)
+        candidate = ET.fromstring(candidate_payload)
+    except (ET.ParseError, TypeError) as error:
+        raise ValueError("Styles de Quotation no es append-only") from error
+    style_sheet_tag = f"{{{MAIN}}}styleSheet"
+    if (
+        base.tag != style_sheet_tag
+        or candidate.tag != style_sheet_tag
+        or tuple(sorted(base.attrib.items()))
+        != tuple(sorted(candidate.attrib.items()))
+    ):
+        raise ValueError("Styles de Quotation no preserva la raiz oficial")
+    base_sections = list(base)
+    candidate_sections = list(candidate)
+    if [item.tag for item in candidate_sections] != [
+        item.tag for item in base_sections
+    ]:
+        raise ValueError("Styles de Quotation no preserva las secciones oficiales")
+
+    for official_section, candidate_section in zip(
+        base_sections,
+        candidate_sections,
+    ):
+        section_name = official_section.tag.rsplit("}", 1)[-1]
+        child_name = _APPEND_ONLY_STYLE_SECTIONS.get(section_name)
+        if child_name is None:
+            if _semantic_xml_signature(candidate_section) != _semantic_xml_signature(
+                official_section
+            ):
+                raise ValueError(
+                    f"Styles de Quotation no preserva la seccion {section_name}"
+                )
+            continue
+        expected_child_tag = f"{{{MAIN}}}{child_name}"
+        if any(
+            child.tag != expected_child_tag
+            for child in (*official_section, *candidate_section)
+        ):
+            raise ValueError(
+                f"Styles de Quotation contiene una seccion invalida: {section_name}"
+            )
+        official_attributes = {
+            name: value
+            for name, value in official_section.attrib.items()
+            if name != "count"
+        }
+        candidate_attributes = {
+            name: value
+            for name, value in candidate_section.attrib.items()
+            if name != "count"
+        }
+        if (
+            official_attributes != candidate_attributes
+            or official_section.attrib.get("count") != str(len(official_section))
+            or candidate_section.attrib.get("count") != str(len(candidate_section))
+            or len(candidate_section) < len(official_section)
+        ):
+            raise ValueError(
+                f"Styles de Quotation no es append-only en {section_name}"
+            )
+        for index, official_child in enumerate(official_section):
+            if _semantic_xml_signature(
+                candidate_section[index]
+            ) != _semantic_xml_signature(official_child):
+                raise ValueError(
+                    f"Styles de Quotation no preserva {section_name}[{index}]"
+                )
+
+
+def _semantic_xml_signature(element: ET.Element) -> tuple:
+    text = element.text or ""
+    if not text.strip():
+        text = ""
+    return (
+        element.tag,
+        tuple(sorted(element.attrib.items())),
+        text,
+        tuple(_semantic_xml_signature(child) for child in element),
+    )
 
 
 def _defined_name_signatures(
@@ -1708,11 +1877,118 @@ def _translate_official_calc_chain(
     cotizacion_map = _cotizacion_calc_map(
         base.parts[base.sheet_part("Cotizacion")], cotizacion
     )
-    return translate_calc_chain(
+    cotizacion_sheet_id = _workbook_sheet_id(base, "Cotizacion")
+    content = translate_calc_chain(
         content,
-        sheet_id=_workbook_sheet_id(base, "Cotizacion"),
+        sheet_id=cotizacion_sheet_id,
         coordinate_map=cotizacion_map,
     )
+    if not isinstance(content, bytes):
+        raise TypeError("calcChain traducido debe ser bytes")
+    extra_coordinates: list[str] = []
+    first_product_row = cotizacion.product_rows[0]
+    for product_row in cotizacion.product_rows:
+        extra_coordinates.append(f"I{product_row}")
+        if product_row != first_product_row:
+            extra_coordinates.append(f"G{product_row}")
+    content = _append_calc_chain_coordinates(
+        content,
+        sheet_id=cotizacion_sheet_id,
+        coordinates=extra_coordinates,
+    )
+    _validate_cotizacion_product_calc_chain(
+        content,
+        sheet_id=cotizacion_sheet_id,
+        product_rows=cotizacion.product_rows,
+    )
+    return content
+
+
+def _append_calc_chain_coordinates(
+    payload: bytes,
+    *,
+    sheet_id: int,
+    coordinates: Sequence[str],
+) -> bytes:
+    try:
+        root = ET.fromstring(payload)
+    except (ET.ParseError, TypeError) as error:
+        raise ValueError("calcChain traducido invalido") from error
+    if root.tag != f"{{{MAIN}}}calcChain":
+        raise ValueError("Raiz calcChain traducida invalida")
+    target_sheet_id = str(sheet_id)
+    effective_sheet_id: str | None = None
+    existing: set[str] = set()
+    for cell in root:
+        if cell.tag != f"{{{MAIN}}}c":
+            raise ValueError("Hijo calcChain traducido invalido")
+        coordinate = cell.attrib.get("r", "")
+        if _CELL.fullmatch(coordinate) is None:
+            raise ValueError("Coordenada calcChain traducida invalida")
+        if "i" in cell.attrib:
+            effective_sheet_id = cell.attrib["i"]
+        if effective_sheet_id != target_sheet_id:
+            continue
+        if coordinate in existing:
+            raise ValueError(f"Coordenada calcChain duplicada: {coordinate}")
+        existing.add(coordinate)
+
+    requested: set[str] = set()
+    for coordinate in coordinates:
+        if _CELL.fullmatch(coordinate) is None:
+            raise ValueError("Coordenada calcChain adicional invalida")
+        if coordinate in requested:
+            raise ValueError(f"Coordenada calcChain adicional duplicada: {coordinate}")
+        requested.add(coordinate)
+        if coordinate in existing:
+            continue
+        ET.SubElement(
+            root,
+            f"{{{MAIN}}}c",
+            {"r": coordinate, "i": target_sheet_id},
+        )
+        existing.add(coordinate)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _validate_cotizacion_product_calc_chain(
+    payload: bytes,
+    *,
+    sheet_id: int,
+    product_rows: Sequence[int],
+) -> None:
+    try:
+        root = ET.fromstring(payload)
+    except (ET.ParseError, TypeError) as error:
+        raise ValueError("calcChain Cotizacion invalido") from error
+    target_sheet_id = str(sheet_id)
+    product_row_set = set(product_rows)
+    effective_sheet_id: str | None = None
+    seen: set[str] = set()
+    actual: list[str] = []
+    for cell in root:
+        if "i" in cell.attrib:
+            effective_sheet_id = cell.attrib["i"]
+        if effective_sheet_id != target_sheet_id:
+            continue
+        coordinate = cell.attrib.get("r", "")
+        match = _CELL.fullmatch(coordinate)
+        if match is None:
+            raise ValueError("Coordenada calcChain Cotizacion invalida")
+        if coordinate in seen:
+            raise ValueError(f"Coordenada calcChain Cotizacion duplicada: {coordinate}")
+        seen.add(coordinate)
+        if int(match.group("row")) in product_row_set:
+            actual.append(coordinate)
+
+    expected = {
+        f"{column}{row}"
+        for row in product_rows
+        for column in ("F", "H", "I", "J")
+    }
+    expected.update(f"G{row}" for row in product_rows[1:])
+    if len(actual) != len(expected) or set(actual) != expected:
+        raise ValueError("Cobertura calcChain de productos Cotizacion incompleta")
 
 
 def _mobiliti_calc_map(payload: bytes, row_map: MobilitiRowMap) -> dict[str, tuple[str, ...]]:

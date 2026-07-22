@@ -67,6 +67,7 @@ from mobiliti_saas.quote_engine.quotation_sheets import (  # noqa: E402
     SheetAddition,
     _with_canonical_hash,
     build_quotation_data_sheet,
+    transplant_quotation,
 )
 
 
@@ -262,6 +263,21 @@ def _cotizacion_drawing_parts(package: XlsxPackage) -> tuple[str, str]:
     return drawing_part, relationship_part_name(drawing_part)
 
 
+def _calc_chain_coordinates_for_sheet(
+    payload: bytes,
+    sheet_id: int,
+) -> list[str]:
+    root = ET.fromstring(payload)
+    effective_sheet_id: str | None = None
+    coordinates: list[str] = []
+    for cell in root.findall(f"{{{MAIN}}}c"):
+        if "i" in cell.attrib:
+            effective_sheet_id = cell.attrib["i"]
+        if effective_sheet_id == str(sheet_id):
+            coordinates.append(cell.attrib["r"])
+    return coordinates
+
+
 def _minimal_request(output: Path) -> ComposeRequest:
     return _request_for_sections(output, (1,))
 
@@ -343,6 +359,52 @@ def _request_for_sections(output: Path, section_sizes: tuple[int, ...]) -> Compo
         quotation_data=build_quotation_data_sheet(()),
         contract=contract,
     )
+
+
+@pytest.mark.parametrize("product_count", (1, 2, 9))
+def test_calc_chain_exactly_covers_every_cotizacion_product_formula(
+    tmp_path: Path,
+    product_count: int,
+) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _request_for_sections(
+        tmp_path / f"calc-chain-{product_count}.xlsx",
+        (product_count,),
+    )
+
+    mutation = build_allowlisted_mutation(base, request)
+
+    calc_part = official_composer_module._calc_chain_part(base)
+    assert calc_part is not None
+    sheet_id = official_composer_module._workbook_sheet_id(base, "Cotizacion")
+    coordinates = _calc_chain_coordinates_for_sheet(
+        mutation.replacements[calc_part],
+        sheet_id,
+    )
+    product_rows = set(request.cotizacion.product_rows)
+    actual_product_coordinates = [
+        coordinate
+        for coordinate in coordinates
+        if int("".join(character for character in coordinate if character.isdigit()))
+        in product_rows
+    ]
+    expected_product_coordinates = {
+        f"{column}{row}"
+        for row in request.cotizacion.product_rows
+        for column in ("F", "H", "I", "J")
+    }
+    expected_product_coordinates.update(
+        f"G{row}" for row in request.cotizacion.product_rows[1:]
+    )
+    assert set(actual_product_coordinates) == expected_product_coordinates
+    assert len(actual_product_coordinates) == len(set(actual_product_coordinates))
+
+    before_workbook = ET.fromstring(base.parts["xl/workbook.xml"])
+    after_workbook = ET.fromstring(mutation.replacements["xl/workbook.xml"])
+    before_calc = before_workbook.find(f"{{{MAIN}}}calcPr")
+    after_calc = after_workbook.find(f"{{{MAIN}}}calcPr")
+    assert before_calc is not None and after_calc is not None
+    assert ET.tostring(after_calc) == ET.tostring(before_calc)
 
 
 def test_composer_preserves_protected_official_package_and_updates_dependents(
@@ -1189,6 +1251,81 @@ def test_active_engine_embedded_source_image_reaches_cotizacion_anchor(
     )
 
 
+def test_active_engine_uses_one_audited_source_snapshot_after_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_image = tmp_path / "snapshot-original.png"
+    replacement_image = tmp_path / "snapshot-replacement.png"
+    Image.new("RGB", (32, 24), (15, 90, 170)).save(original_image)
+    Image.new("RGB", (32, 24), (210, 30, 45)).save(replacement_image)
+    source = tmp_path / "snapshot-source.xlsx"
+    replacement = tmp_path / "snapshot-race-replacement.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Producto snapshot original", "quantity": 1, "price": 100},),
+        image_path=original_image,
+    )
+    _write_engine_source(
+        replacement,
+        ({"name": "Producto carrera hostil", "quantity": 1, "price": 900},),
+        image_path=replacement_image,
+    )
+    for path in (source, replacement):
+        normalized = engine_module._normalized_quotation_source(path)
+        assert isinstance(normalized, bytes)
+        path.write_bytes(normalized)
+    original_package = XlsxPackage.read(source)
+    replacement_package = XlsxPackage.read(replacement)
+    original_media = next(
+        payload
+        for name, payload in original_package.parts.items()
+        if name.startswith("xl/media/")
+    )
+    replacement_media = next(
+        payload
+        for name, payload in replacement_package.parts.items()
+        if name.startswith("xl/media/")
+    )
+    assert original_media != replacement_media
+    real_read_items = engine_module.read_items
+    calls = 0
+
+    def race_after_preflight(audited_source):
+        nonlocal calls
+        calls += 1
+        source.write_bytes(replacement.read_bytes())
+        return real_read_items(audited_source)
+
+    monkeypatch.setattr(engine_module, "read_items", race_after_preflight)
+    output = tmp_path / "snapshot-output.xlsx"
+
+    generate_quote(source, output, {}, OFFICIAL_TEMPLATE)
+
+    assert calls == 1
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        assert workbook["Quotation"]["B9"].value == "Producto snapshot original"
+        assert any(
+            workbook["Cotizacion"].cell(row, 1).value == "Producto snapshot original"
+            for row in range(16, workbook["Cotizacion"].max_row + 1)
+        )
+        assert all(
+            workbook["Cotizacion"].cell(row, 1).value != "Producto carrera hostil"
+            for row in range(16, workbook["Cotizacion"].max_row + 1)
+        )
+    finally:
+        workbook.close()
+    result = XlsxPackage.read(output)
+    product_media = [
+        payload
+        for name, payload in result.parts.items()
+        if name.startswith("xl/media/quote_product_")
+    ]
+    assert product_media == [original_media]
+    assert replacement_media not in product_media
+
+
 @pytest.mark.parametrize(
     "surface",
     ("mobiliti_formula", "cotizacion_terms", "cotizacion_style", "row_height", "merge"),
@@ -1766,6 +1903,19 @@ def _related_formula_surface_addition(
     return replace(addition, parts=parts, content_types=content_types)
 
 
+def _addition_with_base_replacement(
+    addition: SheetAddition,
+    base: XlsxPackage,
+    part: str,
+    payload: bytes | None = None,
+) -> SheetAddition:
+    return replace(
+        addition,
+        replacements={part: base.parts[part] if payload is None else payload},
+        replacement_content_types=base.content_types_for({part}),
+    )
+
+
 @pytest.mark.parametrize(
     "formula",
     (
@@ -1817,6 +1967,75 @@ def test_imported_formula_keeps_safe_whitespace_and_grouping(formula: str) -> No
         formula,
         "safe-token-sequence-test",
     )
+
+
+@pytest.mark.parametrize(
+    "formula",
+    (
+        "@WEBSERVICE(A1)",
+        "@WEBSERVICE (A1)",
+        "@_xlfn.WEBSERVICE (A1)",
+        "_xlfn.@WEBSERVICE (A1)",
+        "@_xlfn.@_xlws.RTD (A1)",
+    ),
+)
+def test_imported_formula_rejects_implicit_intersection_function_prefixes(
+    formula: str,
+) -> None:
+    with pytest.raises(ValueError, match="F.rmula importada no permitida"):
+        official_composer_module._validate_imported_formula(
+            formula,
+            "implicit-intersection-test",
+        )
+
+
+@pytest.mark.parametrize("formula", ("@A1", "(@A1+A2)"))
+def test_imported_formula_keeps_safe_implicit_reference_and_grouping(
+    formula: str,
+) -> None:
+    official_composer_module._validate_imported_formula(
+        formula,
+        "safe-implicit-intersection-test",
+    )
+
+
+@pytest.mark.parametrize(
+    "addition",
+    (
+        _imported_formula_addition("@WEBSERVICE(A1)"),
+        _worksheet_formula_surface_addition(
+            "data_validation",
+            "@_xlfn.WEBSERVICE (A1)",
+        ),
+        _worksheet_formula_surface_addition(
+            "conditional_formatting",
+            "_xlfn.@EXEC (A1)",
+        ),
+        _related_formula_surface_addition(
+            "table",
+            "@_xlws.CALL (A1)",
+        ),
+        _related_formula_surface_addition(
+            "chart",
+            "_xlws.@RTD (A1)",
+        ),
+        _imported_formula_addition(
+            "SUM(A1:A2)",
+            defined_names=(
+                LocalDefinedName(
+                    name="ImplicitDanger",
+                    text="@_xlfn.WEBSERVICE (A1)",
+                ),
+            ),
+        ),
+    ),
+    ids=("worksheet", "data-validation", "conditional-formatting", "table", "chart", "defined-name"),
+)
+def test_imported_formula_surfaces_reject_implicit_dangerous_function(
+    addition: SheetAddition,
+) -> None:
+    with pytest.raises(ValueError, match="F.rmula importada no permitida"):
+        official_composer_module._validate_imported_formula_surfaces((addition,))
 
 
 @pytest.mark.parametrize(
@@ -1997,6 +2216,97 @@ def test_imported_formula_validation_skips_bounded_non_xml_media(tmp_path: Path)
 
     for media_part, expected in media_parts.items():
         assert mutation.additions[media_part] == expected
+
+
+def test_quotation_rejects_non_append_only_styles_replacement(tmp_path: Path) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _minimal_request(tmp_path / "malicious-styles-replacement.xlsx")
+    styles_part = base.workbook_related_part("styles")
+    assert styles_part is not None
+    arbitrary_styles = (
+        f'<styleSheet xmlns="{MAIN}"><fonts count="0"/></styleSheet>'
+    ).encode("utf-8")
+    addition = _addition_with_base_replacement(
+        _imported_formula_addition("SUM(A1:A2)"),
+        base,
+        styles_part,
+        arbitrary_styles,
+    )
+
+    with pytest.raises(ValueError, match="(?i)styles.*append|preserv"):
+        build_allowlisted_mutation(
+            base,
+            replace(request, quotation=addition),
+        )
+
+
+@pytest.mark.parametrize(
+    "part",
+    (
+        "xl/theme/theme1.xml",
+        "xl/workbook.xml",
+        "xl/richData/rdrichvalue.xml",
+        "xl/externalLinks/externalLink1.xml",
+        "[Content_Types].xml",
+    ),
+)
+def test_quotation_rejects_unrelated_base_replacement(
+    tmp_path: Path,
+    part: str,
+) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _minimal_request(tmp_path / "unrelated-replacement.xlsx")
+    addition = _addition_with_base_replacement(
+        _imported_formula_addition("SUM(A1:A2)"),
+        base,
+        part,
+    )
+
+    with pytest.raises(ValueError, match="Reemplazo de Quotation no permitido"):
+        build_allowlisted_mutation(
+            base,
+            replace(request, quotation=addition),
+        )
+
+
+def test_quotation_data_rejects_every_replacement(tmp_path: Path) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _minimal_request(tmp_path / "quotation-data-replacement.xlsx")
+    assert request.quotation_data is not None
+    data_addition = _addition_with_base_replacement(
+        request.quotation_data,
+        base,
+        "xl/styles.xml",
+    )
+
+    with pytest.raises(ValueError, match="Quotation_Data no permite reemplazos"):
+        build_allowlisted_mutation(
+            base,
+            replace(request, quotation_data=data_addition),
+        )
+
+
+def test_real_transplanted_quotation_keeps_valid_append_only_styles(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legitimate-transplant.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Producto legítimo", "quantity": 1, "price": 100},),
+    )
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    snapshot = engine_module._normalized_quotation_source(source)
+    addition = transplant_quotation(snapshot, base)
+    assert addition is not None
+    assert set(addition.replacements) == {"xl/styles.xml"}
+    request = replace(
+        _minimal_request(tmp_path / "legitimate-transplant-output.xlsx"),
+        quotation=addition,
+    )
+
+    mutation = build_allowlisted_mutation(base, request)
+
+    assert mutation.replacements["xl/styles.xml"] == addition.replacements["xl/styles.xml"]
 
 
 def test_output_contract_rejects_unexpected_defined_name(tmp_path: Path) -> None:
