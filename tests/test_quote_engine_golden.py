@@ -24,7 +24,13 @@ from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem  # noq
 DOWNLOADS = Path(r"C:\Users\pepem\Downloads")
 TEMPLATE_DIR = ROOT / "versiones historial" / "HISTORIAL DE VERSIONES" / "Mobiliti_Generador_Windows"
 TEMPLATE = next(TEMPLATE_DIR.glob("Formato*.xlsx"), TEMPLATE_DIR / "Formato Cotizacion 2026 GDL (1).xlsx")
-WORKER_TEMPLATE = ROOT / "mobiliti_saas" / "worker" / "templates" / "Formato Cotizacion 2026 GDL.xlsx"
+WORKER_TEMPLATE = (
+    ROOT
+    / "mobiliti_saas"
+    / "worker"
+    / "templates"
+    / "Formato Cotizacion 2026 Oficial.xlsx"
+)
 GOLDENS = [
     DOWNLOADS / "IZA REFORMA-Quotation Sheet - V1.xlsx",
     ROOT / "versiones historial" / "KIVO BRAVANTE-Quotation Sheet - V1.xlsx",
@@ -353,7 +359,7 @@ def test_supplier_intermediate_workbook_contains_configuration_and_stock_warning
     wb.close()
 
 
-def test_supplier_final_workbook_uses_frozen_currency_net_prices_and_separate_vat(tmp_path):
+def test_supplier_final_workbook_uses_official_template_and_frozen_price_contract(tmp_path):
     source = tmp_path / "supplier-source.xlsx"
     output = tmp_path / "supplier-final.xlsx"
     _write_minimal_quotation(source)
@@ -378,33 +384,42 @@ def test_supplier_final_workbook_uses_frozen_currency_net_prices_and_separate_va
     wb = load_workbook(output, data_only=False)
     cot = wb["Cotizacion"]
     mobiliti = wb["Mobiliti"]
-    legend = str(cot["B4"].value)
-    assert "MXN" in legend
-    assert "precios netos mas IVA" in legend
-    assert "Banco de Mexico" in legend
-    assert "DOF" in legend
-    assert "2026-07-15" in legend
-    assert "18.500000" in legend
-    mobiliti_row = next(row for row in range(1, mobiliti.max_row + 1) if mobiliti.cell(row, 4).value == "=Quotation!B9")
-    product_row = next(row for row in range(1, cot.max_row + 1) if cot.cell(row, 1).value == "=Quotation!B9")
+    # El paquete oficial, no el writer legacy, gobierna B4, K4/K6 y las
+    # fórmulas visibles; J contiene el único costo congelado por producto.
+    assert cot["B4"].value is None
+    mobiliti_row = next(
+        row
+        for row in range(1, mobiliti.max_row + 1)
+        if mobiliti.cell(row, 4).value == "Producto de prueba"
+    )
+    product_row = next(
+        row
+        for row in range(1, cot.max_row + 1)
+        if cot.cell(row, 1).value == "Producto de prueba"
+    )
     assert mobiliti.cell(mobiliti_row, 6).value == "ALMA"
-    assert mobiliti["J6"].value == "USD/MXN"
-    assert mobiliti["K6"].value == 18.5
+    assert mobiliti.cell(mobiliti_row, 10).value == pytest.approx(123.46)
+    assert mobiliti["K4"].value is False
+    assert getattr(mobiliti["K6"].value, "text", None) == '=_FV(J6,"High")'
     assert cot.cell(product_row, 7).value == 0.4
-    for column in (6, 8, 9, 10):
-        assert _formula_uses_round_2(cot.cell(product_row, column).value)
-    totals = [
+    assert cot.cell(product_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+    assert cot.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
+    assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
+    assert cot.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
+    total_row = next(
         row
         for row in range(product_row + 1, cot.max_row + 1)
-        if str(cot.cell(row, 4).value or "").strip() in {"SUBTOTAL:", "COSTO DE FLETE:", "IVA:", "TOTAL:"}
-    ][:5]
-    assert [cot.cell(row, 4).value for row in totals] == ["SUBTOTAL:", "COSTO DE FLETE:", "SUBTOTAL:", "IVA:", "TOTAL:"]
-    assert all(_formula_uses_round_2(cot.cell(row, 8).value) for row in totals)
-    assert "16%" in str(cot.cell(totals[3], 8).value)
+        if str(cot.cell(row, 4).value or "").strip() == "TOTAL:"
+    )
+    assert "16%" in str(cot.cell(total_row - 1, 8).value)
+    assert wb["Quotation_Data"].sheet_state == "veryHidden"
     wb.close()
 
 
-def test_mixed_final_workbook_has_one_rounded_product_and_totals_chain(tmp_path, monkeypatch):
+def test_mixed_final_workbook_uses_official_formulas_and_one_frozen_cost_per_item(
+    tmp_path,
+    monkeypatch,
+):
     monkeypatch.setattr(
         "mobiliti_saas.quote_engine.engine._exchange_rate",
         lambda _metadata: (_ for _ in ()).throw(
@@ -425,43 +440,32 @@ def test_mixed_final_workbook_has_one_rounded_product_and_totals_chain(tmp_path,
         assert wb.sheetnames.count("Quotation") == 1
         cot = wb["Cotizacion"]
         mobiliti = wb["Mobiliti"]
+        # Las identidades se materializan como texto y Cotizacion referencia X;
+        # ya no se prueban fórmulas ROUND ni enlaces directos a Quotation.
         product_row_map = []
         for source_row in (9, 10):
+            product_name = wb["Quotation"].cell(source_row, 2).value
             cot_row = next(
                 row for row in range(1, cot.max_row + 1)
-                if cot.cell(row, 1).value == f"=Quotation!B{source_row}"
+                if cot.cell(row, 1).value == product_name
             )
             mobiliti_row = next(
                 row for row in range(1, mobiliti.max_row + 1)
-                if mobiliti.cell(row, 4).value == f"=Quotation!B{source_row}"
+                if mobiliti.cell(row, 4).value == product_name
             )
             product_row_map.append((cot_row, mobiliti_row))
 
-        first_product, last_product = product_row_map[0][0], product_row_map[-1][0]
-        labels = [
-            cot.cell(row, 4).value
-            for row in range(1, cot.max_row + 1)
-            if cot.cell(row, 4).value
-            in {"SUBTOTAL:", "COSTO DE FLETE:", "IVA:", "TOTAL:"}
-        ]
-        assert labels == ["SUBTOTAL:", "COSTO DE FLETE:", "SUBTOTAL:", "IVA:", "TOTAL:"]
-        total_rows = [
-            row for row in range(last_product + 1, cot.max_row + 1)
-            if cot.cell(row, 4).value in {"SUBTOTAL:", "COSTO DE FLETE:", "IVA:", "TOTAL:"}
-        ][:5]
-        subtotal_row, freight_row, before_tax_row, iva_row, total_row = total_rows
-        assert "16%" in str(cot.cell(iva_row, 8).value)
-        assert all(_formula_uses_round_2(cot.cell(row, 8).value) for row in total_rows)
+        first_product = product_row_map[0][0]
         for cot_row, mobiliti_row in product_row_map:
-            assert cot.cell(cot_row, 6).value == f"=ROUND(Mobiliti!X{mobiliti_row},2)"
-            assert cot.cell(cot_row, 8).value == f"=ROUND(F{cot_row}*G{cot_row},2)"
-            assert cot.cell(cot_row, 9).value == f"=ROUND(F{cot_row}-H{cot_row},2)"
-            assert cot.cell(cot_row, 10).value == f"=ROUND(E{cot_row}*I{cot_row},2)"
-        assert cot.cell(subtotal_row, 8).value == f"=ROUND(SUM(J{first_product}:J{last_product}),2)"
-        assert cot.cell(freight_row, 8).value == f"=ROUND(H{subtotal_row}*12%,2)"
-        assert cot.cell(before_tax_row, 8).value == f"=ROUND(H{subtotal_row}+H{freight_row},2)"
-        assert cot.cell(iva_row, 8).value == f"=ROUND(H{before_tax_row}*16%,2)"
-        assert cot.cell(total_row, 8).value == f"=ROUND(H{before_tax_row}+H{iva_row},2)"
+            assert cot.cell(cot_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+            assert cot.cell(cot_row, 8).value == f"=F{cot_row}*G{cot_row}"
+            assert cot.cell(cot_row, 9).value == f"=F{cot_row}-H{cot_row}"
+            assert cot.cell(cot_row, 10).value == f"=E{cot_row}*I{cot_row}"
+        assert cot.cell(first_product, 7).value == 0.4
+        assert cot.cell(product_row_map[1][0], 7).value == f"=$G${first_product}"
+        assert mobiliti.cell(product_row_map[0][1], 10).value == pytest.approx(123.46)
+        assert mobiliti.cell(product_row_map[1][1], 10).value == pytest.approx(200.13)
+        assert wb["Quotation_Data"].sheet_state == "veryHidden"
         assert reference_totals(
             [
                 (Decimal("123.456"), Decimal("2"), Decimal("0.4")),
@@ -515,15 +519,16 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
             for row in range(8, quotation.max_row + 1)
             if quotation.cell(row, 12).value == "ALMA"
         )
+        alma_name = quotation.cell(alma_source_row, 2).value
         cot_row = next(
             row
             for row in range(1, cot.max_row + 1)
-            if cot.cell(row, 1).value == f"=Quotation!B{alma_source_row}"
+            if cot.cell(row, 1).value == alma_name
         )
         mobiliti_row = next(
             row
             for row in range(1, mobiliti.max_row + 1)
-            if mobiliti.cell(row, 4).value == f"=Quotation!B{alma_source_row}"
+            if mobiliti.cell(row, 4).value == alma_name
         )
         description = str(cot.cell(cot_row, 3).value)
         for expected in (
@@ -534,14 +539,20 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
             "Imagen de referencia",
         ):
             assert expected in description
-        assert mobiliti.cell(mobiliti_row, 23).value == f"=ROUND(J{mobiliti_row},2)"
-        assert mobiliti.cell(mobiliti_row, 24).value == f"=ROUND(J{mobiliti_row},2)"
-        assert cot.cell(cot_row, 6).value == f"=ROUND(Mobiliti!X{mobiliti_row},2)"
+        # El contrato Task 7 reemplaza W/X legacy por fórmula oficial y deja J
+        # como valor numérico congelado, incluso para un renglón importado.
+        assert mobiliti.cell(mobiliti_row, 10).value == pytest.approx(
+            float(quotation.cell(alma_source_row, 10).value)
+        )
+        assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
+        assert str(mobiliti.cell(mobiliti_row, 24).value).startswith("=_xlfn.MINIFS(")
+        assert cot.cell(cot_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+        assert wb["Quotation_Data"].sheet_state == "veryHidden"
     finally:
         wb.close()
 
 
-def test_legacy_workbook_keeps_existing_provider_header_and_formulas(tmp_path):
+def test_standard_workbook_keeps_official_provider_header_and_formulas(tmp_path):
     source = tmp_path / "legacy-source.xlsx"
     output = tmp_path / "legacy-final.xlsx"
     _write_minimal_quotation(source, unit_price=100)
@@ -551,8 +562,18 @@ def test_legacy_workbook_keeps_existing_provider_header_and_formulas(tmp_path):
     wb = load_workbook(output, data_only=False)
     cot = wb["Cotizacion"]
     mobiliti = wb["Mobiliti"]
-    mobiliti_row = next(row for row in range(1, mobiliti.max_row + 1) if mobiliti.cell(row, 4).value == "=Quotation!B9")
-    product_row = next(row for row in range(1, cot.max_row + 1) if cot.cell(row, 1).value == "=Quotation!B9")
+    mobiliti_row = next(
+        row
+        for row in range(1, mobiliti.max_row + 1)
+        if mobiliti.cell(row, 4).value == "Producto de prueba"
+    )
+    product_row = next(
+        row
+        for row in range(1, cot.max_row + 1)
+        if cot.cell(row, 1).value == "Producto de prueba"
+    )
+    # Las filas vacías conservan las fórmulas nativas del template oficial; no
+    # se reinstalan los guards sintéticos producidos por el writer anterior.
     assert cot["B4"].value is None
     assert mobiliti.cell(mobiliti_row, 6).value == "Sunon Inc"
     assert cot.cell(product_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
@@ -560,19 +581,15 @@ def test_legacy_workbook_keeps_existing_provider_header_and_formulas(tmp_path):
     assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
     assert cot.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
     unused_row = mobiliti_row + 1
-    guard = (
-        f'=IF(COUNTA($D{unused_row},$E{unused_row},$F{unused_row},'
-        f'$H{unused_row},$J{unused_row},$K{unused_row})=0,"",'
-    )
     assert all(
         mobiliti.cell(unused_row, column).value is None
         for column in (4, 5, 6, 8, 10, 11, 16)
     )
-    assert str(mobiliti.cell(unused_row, 23).value).startswith(guard)
-    assert str(mobiliti.cell(unused_row, 24).value).startswith(guard)
-    assert mobiliti.cell(unused_row, 35).value == (
-        f'{guard}IF(AH{unused_row}<30%,"ERROR","OK"))'
-    )
+    assert str(mobiliti.cell(unused_row, 23).value).startswith("=IF(")
+    assert str(mobiliti.cell(unused_row, 24).value).startswith("=_xlfn.MINIFS(")
+    assert mobiliti["K4"].value is False
+    assert getattr(mobiliti["K6"].value, "text", None) == '=_FV(J6,"High")'
+    assert wb["Quotation_Data"].sheet_state == "veryHidden"
     wb.close()
 
 
@@ -857,49 +874,27 @@ def test_mobiliti_product_starts_are_not_merged_rows():
         wb.close()
 
 
-def test_python_engine_generates_cummins_large_quote(tmp_path):
+def test_python_engine_rejects_cummins_external_image_relationships_fail_closed(tmp_path):
     source = DOWNLOADS / "CUMMINS-Quotation Sheet - V1.xlsx"
-    template = ROOT / "mobiliti_saas" / "worker" / "templates" / "Formato Cotizacion 2026 GDL.xlsx"
+    template = WORKER_TEMPLATE
     if not source.exists() or not template.exists():
         pytest.skip("CUMMINS input/template not available on this machine")
 
     output = tmp_path / "cummins_python.xlsx"
-    generate_quote(
-        source,
-        output,
-        {
-            "cotizacion": "CUMMINS-TEST",
-            "proyecto": "Cummins",
-            "cliente": "Cummins",
-            "image_provider": "pillow",
-            "tipo_cambio": 20,
-        },
-        template,
-    )
+    # El quotation real contiene una relación de imagen externa. Task 6 exige
+    # rechazarla: no se degrada silenciosamente ni se produce un XLSX parcial.
+    with pytest.raises(ValueError, match="TargetMode externo no permitido para image"):
+        generate_quote(
+            source,
+            output,
+            {
+                "cotizacion": "CUMMINS-TEST",
+                "proyecto": "Cummins",
+                "cliente": "Cummins",
+                "image_provider": "pillow",
+                "tipo_cambio": 20,
+            },
+            template,
+        )
 
-    wb = load_workbook(output, data_only=False)
-    assert "Cotizacion" in wb.sheetnames
-    assert "Mobiliti" in wb.sheetnames
-    assert wb["Mobiliti"]["D399"].value
-    assert wb["Mobiliti"].column_dimensions["W"].hidden is True
-    assert wb["Mobiliti"]["W12"].value == "Precio Unitario Base (Aux)"
-    assert wb["Mobiliti"]["X12"].value == "Precio Unitario de Lista (Carátula)"
-    assert wb["Mobiliti"]["Y14"].value == "=X14*H14"
-    cot = wb["Cotizacion"]
-    collapsed_lumbro_formulas = [
-        cot.cell(row, 6).value
-        for row in range(1, cot.max_row + 1)
-        if isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!Y" in cot.cell(row, 6).value
-    ]
-    assert collapsed_lumbro_formulas
-    assert all("/Mobiliti!H" in formula for formula in collapsed_lumbro_formulas)
-    assert not any(
-        isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!W" in cot.cell(row, 6).value
-        for row in range(1, cot.max_row + 1)
-    )
-    assert not any(
-        isinstance(cot.cell(row, 10).value, str) and "Mobiliti!AD" in cot.cell(row, 10).value
-        for row in range(1, cot.max_row + 1)
-    )
-    assert wb["Cotizacion"].print_area
-    wb.close()
+    assert not output.exists()

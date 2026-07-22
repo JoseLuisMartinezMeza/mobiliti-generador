@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 import shutil
 import time
-from typing import Any
+from typing import Any, Mapping, Sequence
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 import zipfile
@@ -47,7 +47,36 @@ from .ai_image_provider import (
 )
 from .image_processing import improve_image_map
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
+from .mobiliti_layout import SectionNeed, plan_mobiliti_layout
+from .mobiliti_pricing import (
+    PricingRowBinding,
+    build_mobiliti_pricing_writes,
+    lumbro_frozen_cost,
+    write_official_currency_selector,
+)
+from .ooxml_package import XlsxPackage
+from .ooxml_worksheet import (
+    MobilitiCellWrite,
+    MobilitiSheetMutation,
+    WorksheetEditor,
+    build_mobiliti_sheet,
+)
+from .official_composer import (
+    ComposeRequest,
+    CotizacionMetadata,
+    CotizacionProduct,
+    CotizacionSection,
+    CotizacionSheetEditor,
+    compose_official_quote,
+)
+from .official_template import load_template_contract
 from .parser import QuoteItem, col_index, read_items
+from .quotation_sheets import (
+    QuotationDataRow,
+    _with_canonical_hash,
+    build_quotation_data_sheet,
+    transplant_quotation,
+)
 from .supplier_catalog import safe_excel_text
 from .sunon_image_provider import (
     extract_product_code,
@@ -171,6 +200,18 @@ LUMBRO_CATEGORY = "Multicontactos"
 LUMBRO_PROVIDER = "Lumbro"
 LUMBRO_ACCESSORY_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_multicontacto_blanco.png"
 LUMBRO_WORKSTATION_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_workstation_multiusuario.png"
+OFFICIAL_TEMPLATE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "worker"
+    / "templates"
+    / "Formato Cotizacion 2026 Oficial.xlsx"
+)
+OFFICIAL_TEMPLATE_CONTRACT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "worker"
+    / "templates"
+    / "formato-cotizacion-2026-oficial.contract.json"
+)
 
 
 @dataclass(frozen=True)
@@ -185,6 +226,28 @@ class MobilitiSectionLayout:
 class LumbroPriceRef:
     row: int
     price_mxn: float
+
+
+@dataclass(frozen=True)
+class _OfficialPresentationLine:
+    item_key: str
+    section_id: str
+    section_title: str
+    item: QuoteItem | None
+    name: str
+    description: str
+    dimensions: str
+    quantity: Decimal
+    category: str
+    provider: str
+    region: str
+    original_currency: str
+    original_cost: Decimal
+    frozen_rate: Decimal
+    converted_cost: Decimal
+    origin: str
+    source_row: int | None
+    upstream_row_hash: str
 
 
 def _sheet_name(name: str) -> str:
@@ -2828,70 +2891,518 @@ def _set_calc_mode(wb: Workbook) -> None:
         pass
 
 
+def _official_file_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _official_decimal(value: Any, field_name: str, *, positive: bool = False) -> Decimal:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} invalido")
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"{field_name} invalido") from exc
+    if not number.is_finite() or number < 0 or (positive and number <= 0):
+        raise ValueError(f"{field_name} invalido")
+    return number
+
+
+def _official_quote_currency(metadata: dict[str, Any]) -> str:
+    currency = str(metadata.get("quote_currency") or "MXN").strip().upper()
+    if currency not in {"MXN", "USD", "EUR"}:
+        raise ValueError("Moneda de cotizacion invalida")
+    return currency
+
+
+def _official_item_cost(
+    item: QuoteItem,
+    metadata: dict[str, Any],
+) -> tuple[str, Decimal, Decimal, Decimal]:
+    if _uses_mixed_catalog_prices(metadata):
+        currency = str(item.moneda_original or "").strip().upper()
+        if currency not in {"MXN", "USD", "EUR"}:
+            raise ValueError("Moneda original mixta invalida")
+        original = _official_decimal(item.precio_original, "Precio original")
+        rate = _official_decimal(
+            item.tipo_cambio_congelado,
+            "Tipo de cambio congelado",
+            positive=True,
+        )
+        converted = _official_decimal(item.precio, "Precio convertido").quantize(
+            MIXED_MONEY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        )
+        expected = (original * rate).quantize(
+            MIXED_MONEY_QUANTUM,
+            rounding=ROUND_HALF_UP,
+        )
+        if converted != expected:
+            raise ValueError("Precio convertido mixto inconsistente")
+        return currency, original, rate, converted
+
+    converted = _official_decimal(item.precio or 0, "Precio").quantize(
+        MIXED_MONEY_QUANTUM,
+        rounding=ROUND_HALF_UP,
+    )
+    return _official_quote_currency(metadata), converted, Decimal("1"), converted
+
+
+def _official_source_groups(items: Sequence[QuoteItem]) -> list[tuple[str, list[QuoteItem]]]:
+    groups: list[tuple[str, list[QuoteItem]]] = []
+    title = "Mobiliario"
+    products: list[QuoteItem] = []
+    for item in items:
+        if item.tipo == "categoria":
+            if products:
+                groups.append((title, products))
+                products = []
+            title = str(item.nombre or "Mobiliario").strip() or "Mobiliario"
+        elif item.tipo == "producto":
+            products.append(item)
+    if products:
+        groups.append((title, products))
+    if not groups:
+        raise ValueError("No se encontraron productos en Quotation")
+    return groups
+
+
+def _official_presentation_lines(
+    items: Sequence[QuoteItem],
+    metadata: dict[str, Any],
+    source_path: Path,
+    lumbro_prices: Mapping[str, LumbroPriceRef],
+) -> tuple[tuple[_OfficialPresentationLine, ...], tuple[SectionNeed, ...]]:
+    product_items = [item for item in items if item.tipo == "producto"]
+    category_dictionary = load_category_dictionary(
+        [str(item.nombre or "") for item in product_items]
+    )
+    provider_default = (
+        str(metadata.get("catalog_supplier_label") or "Sunon Inc").strip()
+        or "Sunon Inc"
+    )
+    groups = _official_source_groups(items)
+    lines: list[_OfficialPresentationLine] = []
+    needs: list[SectionNeed] = []
+
+    for section_index, (raw_title, products) in enumerate(groups, start=1):
+        section_id = f"section-{section_index}"
+        section_title = safe_excel_text(raw_title)
+        section_start = len(lines)
+        for item in products:
+            category = classify_product_name(
+                str(item.nombre or ""), category_dictionary
+            )
+            provider = (
+                safe_excel_text(item.proveedor)
+                if _uses_mixed_catalog_prices(metadata)
+                else provider_default
+            )
+            provider = provider or provider_default
+            currency, original, rate, converted = _official_item_cost(item, metadata)
+            mode = str(item.modo_precio or "").strip().lower()
+            imported = mode == "imported"
+            upstream_hash = (
+                hashlib.sha256(
+                    str(item.referencia_fuente or f"Quotation:{item.row}").encode(
+                        "utf-8"
+                    )
+                ).hexdigest()
+                if imported
+                else ""
+            )
+            line = _OfficialPresentationLine(
+                item_key=f"quotation:{item.row}",
+                section_id=section_id,
+                section_title=section_title,
+                item=item,
+                name=safe_excel_text(item.nombre or f"Producto {item.row}"),
+                description=safe_excel_text(item.descripcion or ""),
+                dimensions=safe_excel_text(item.dimension or ""),
+                quantity=_official_decimal(
+                    item.cantidad or 1,
+                    "Cantidad",
+                    positive=True,
+                ),
+                category=safe_excel_text(category),
+                provider=safe_excel_text(provider),
+                region="imported" if imported else DEFAULT_MOBILITI_REGION,
+                original_currency=currency,
+                original_cost=original,
+                frozen_rate=rate,
+                converted_cost=converted,
+                origin="imported" if imported else "quotation",
+                source_row=item.row if imported else None,
+                upstream_row_hash=upstream_hash,
+            )
+            lines.append(line)
+
+            if not _item_auto_electrification(item, metadata):
+                continue
+            accessories = _lumbro_accessories_for_item(item, category)
+            if not accessories:
+                continue
+            lumbro_rate = (
+                _official_decimal(
+                    _mixed_auto_electrification_rate(metadata),
+                    "Tipo congelado Lumbro",
+                    positive=True,
+                )
+                if _uses_mixed_catalog_prices(metadata)
+                else Decimal("1")
+            )
+            for accessory_index, (code, quantity) in enumerate(accessories, start=1):
+                price_ref = lumbro_prices.get(code)
+                if price_ref is None:
+                    raise ValueError(f"Precio oficial Lumbro ausente: {code}")
+                original_lumbro = _official_decimal(
+                    price_ref.price_mxn,
+                    f"Precio oficial Lumbro {code}",
+                ).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+                lines.append(
+                    _OfficialPresentationLine(
+                        item_key=f"lumbro:{item.row}:{accessory_index}:{code}",
+                        section_id=section_id,
+                        section_title=section_title,
+                        item=None,
+                        name=code,
+                        description="Accesorio de electrificacion Lumbro",
+                        dimensions="",
+                        quantity=Decimal(quantity),
+                        category=LUMBRO_CATEGORY,
+                        provider=LUMBRO_PROVIDER,
+                        region=DEFAULT_MOBILITI_REGION,
+                        original_currency="MXN",
+                        original_cost=original_lumbro,
+                        frozen_rate=lumbro_rate,
+                        converted_cost=lumbro_frozen_cost(
+                            original_lumbro,
+                            lumbro_rate,
+                        ),
+                        origin="lumbro",
+                        source_row=None,
+                        upstream_row_hash="",
+                    )
+                )
+        needs.append(
+            SectionNeed(
+                section_id,
+                section_title,
+                len(lines) - section_start,
+            )
+        )
+
+    return tuple(lines), tuple(needs)
+
+
+def _official_canonical_rows(
+    lines: Sequence[_OfficialPresentationLine],
+    source_path: Path,
+) -> tuple[QuotationDataRow, ...]:
+    source_hash = _official_file_hash(source_path)
+    result: list[QuotationDataRow] = []
+    for position, line in enumerate(lines, start=1):
+        result.append(
+            _with_canonical_hash(
+                QuotationDataRow(
+                    item_key=line.item_key,
+                    section_id=line.section_id,
+                    section_title=line.section_title,
+                    position=position,
+                    origin=line.origin,
+                    source_row=line.source_row,
+                    original_currency=line.original_currency,
+                    original_cost=line.original_cost,
+                    frozen_rate=line.frozen_rate,
+                    converted_cost=line.converted_cost,
+                    quantity=line.quantity,
+                    provider=line.provider,
+                    region=line.region,
+                    source_hash=source_hash,
+                    upstream_row_hash=line.upstream_row_hash,
+                    row_hash="",
+                )
+            )
+        )
+    return tuple(result)
+
+
+def _official_dimension_write(coordinate: str, value: str) -> MobilitiCellWrite:
+    try:
+        number = Decimal(value)
+    except (InvalidOperation, ValueError):
+        return MobilitiCellWrite(coordinate, "text", value)
+    if not number.is_finite():
+        return MobilitiCellWrite(coordinate, "text", value)
+    return MobilitiCellWrite(coordinate, "number", number)
+
+
+def _build_official_mobiliti(
+    base: XlsxPackage,
+    lines: Sequence[_OfficialPresentationLine],
+    needs: Sequence[SectionNeed],
+    canonical_rows: Sequence[QuotationDataRow],
+    metadata: dict[str, Any],
+) -> MobilitiSheetMutation:
+    row_map = plan_mobiliti_layout(needs)
+    if len(lines) != len(row_map.item_rows):
+        raise ValueError("Presentacion Mobiliti inconsistente")
+    writes: list[MobilitiCellWrite] = []
+    bindings: list[PricingRowBinding] = []
+    for position, (line, target_row) in enumerate(
+        zip(lines, row_map.item_rows, strict=True),
+        start=1,
+    ):
+        writes.extend(
+            (
+                MobilitiCellWrite(f"D{target_row}", "text", line.name),
+                MobilitiCellWrite(f"E{target_row}", "text", line.category),
+                MobilitiCellWrite(f"F{target_row}", "text", line.provider),
+                MobilitiCellWrite(f"H{target_row}", "number", line.quantity),
+                _official_dimension_write(f"K{target_row}", line.dimensions),
+                MobilitiCellWrite(f"P{target_row}", "text", line.region),
+            )
+        )
+        bindings.append(
+            PricingRowBinding(
+                item_key=line.item_key,
+                section_id=line.section_id,
+                position=position,
+                target_row=target_row,
+            )
+        )
+    writes.extend(
+        build_mobiliti_pricing_writes(
+            canonical_rows,
+            row_map,
+            bindings=tuple(bindings),
+        )
+    )
+    mutation = build_mobiliti_sheet(
+        base.parts[base.sheet_part("Mobiliti")],
+        list(needs),
+        writes,
+    )
+    editor = WorksheetEditor.from_xml(mutation.xml)
+    write_official_currency_selector(
+        editor,
+        _official_quote_currency(metadata),
+        safe_excel_text(
+            metadata.get("lugar_entrega")
+            or metadata.get("delivery_place")
+            or DEFAULT_DELIVERY_PLACE
+        ),
+    )
+    return MobilitiSheetMutation(editor.to_xml(), mutation.row_map)
+
+
+def _build_official_cotizacion(
+    base: XlsxPackage,
+    lines: Sequence[_OfficialPresentationLine],
+    mobiliti: MobilitiSheetMutation,
+    metadata: dict[str, Any],
+):
+    target_by_key = {
+        line.item_key: target_row
+        for line, target_row in zip(lines, mobiliti.row_map.item_rows, strict=True)
+    }
+    language = normalize_description_language(
+        metadata.get("description_language", metadata.get("idioma_descripcion", "es"))
+    )
+    section_order: OrderedDict[str, tuple[str, list[CotizacionProduct]]] = OrderedDict()
+    discount = Decimal(str(_discount_rate(metadata)))
+    for line in lines:
+        if line.item is None:
+            continue
+        title, products = section_order.setdefault(
+            line.section_id,
+            (line.section_title, []),
+        )
+        products.append(
+            CotizacionProduct(
+                item_key=line.item_key,
+                name=line.name,
+                description=build_product_description(
+                    line.item.nombre,
+                    line.item.descripcion,
+                    line.category,
+                    language,
+                ),
+                dimensions=line.dimensions,
+                quantity=line.quantity,
+                mobiliti_row=target_by_key[line.item_key],
+                discount=discount,
+            )
+        )
+    sections = tuple(
+        CotizacionSection(title=title, products=tuple(products))
+        for title, products in section_order.values()
+    )
+    return CotizacionSheetEditor.from_xml(
+        base.parts[base.sheet_part("Cotizacion")]
+    ).compose(
+        metadata=CotizacionMetadata(
+            quotation_number=safe_excel_text(metadata.get("cotizacion", "")),
+            project=safe_excel_text(metadata.get("proyecto", "")),
+            client=safe_excel_text(metadata.get("cliente", "")),
+            email=safe_excel_text(metadata.get("correo", "")),
+            phone=safe_excel_text(metadata.get("telefono", "")),
+            address=safe_excel_text(metadata.get("direccion", "")),
+            business_name=safe_excel_text(metadata.get("razon_social", "")),
+        ),
+        sections=sections,
+    )
+
+
+def _normalized_quotation_source(path: Path) -> Path | bytes:
+    """Normaliza targets OPC package-rooted sin mutar el XLSX recibido."""
+
+    changed = False
+    output = BytesIO()
+    with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(
+        output,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+    ) as target:
+        names = set(source.namelist())
+        for info in source.infolist():
+            payload = source.read(info.filename)
+            entry_changed = False
+            if info.filename.endswith(".rels"):
+                root = ET.fromstring(payload)
+                owner = _engine_relationship_owner(info.filename)
+                owner_directory = posixpath.dirname(owner) if owner else ""
+                for relationship in root.findall(
+                    f"{{{_PKG_REL_NS}}}Relationship"
+                ):
+                    if relationship.attrib.get("TargetMode", "").casefold() == "external":
+                        continue
+                    relationship_target = relationship.attrib.get("Target", "")
+                    if not relationship_target.startswith("/"):
+                        continue
+                    package_part = relationship_target[1:]
+                    if (
+                        not package_part
+                        or package_part.startswith("/")
+                        or "\\" in package_part
+                        or posixpath.normpath(package_part) != package_part
+                        or package_part not in names
+                    ):
+                        raise ValueError("Target OOXML package-rooted invalido")
+                    relationship.attrib["Target"] = posixpath.relpath(
+                        package_part,
+                        owner_directory,
+                    )
+                    changed = True
+                    entry_changed = True
+                if entry_changed:
+                    payload = ET.tostring(
+                        root,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+            elif info.filename.startswith("xl/worksheets/") and info.filename.endswith(
+                ".xml"
+            ):
+                root = ET.fromstring(payload)
+                for cell in root.findall(
+                    ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"
+                    "[@t='inlineStr']"
+                ):
+                    inline_strings = cell.findall(
+                        "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is"
+                    )
+                    if inline_strings:
+                        if len(inline_strings) != 1:
+                            raise ValueError("Celda inlineStr ambigua")
+                        continue
+                    if list(cell):
+                        raise ValueError("Celda inlineStr invalida")
+                    ET.SubElement(
+                        cell,
+                        "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is",
+                    )
+                    changed = True
+                    entry_changed = True
+                if entry_changed:
+                    payload = ET.tostring(
+                        root,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+            target.writestr(info, payload)
+    return output.getvalue() if changed else path
+
+
+def _engine_relationship_owner(rels_name: str) -> str | None:
+    if rels_name == "_rels/.rels":
+        return None
+    marker = "/_rels/"
+    if marker not in rels_name or not rels_name.endswith(".rels"):
+        raise ValueError(f"Ruta de relaciones OOXML invalida: {rels_name}")
+    directory, filename = rels_name.split(marker, 1)
+    return posixpath.join(directory, filename.removesuffix(".rels"))
+
+
 def generate_quote(
     source_path: str | Path,
     output_path: str | Path,
     metadata: dict[str, Any] | None = None,
     template_path: str | Path | None = None,
+    *,
+    original_quotation_path: str | Path | None = None,
+    quotation_data_rows: Sequence[QuotationDataRow] | None = None,
 ) -> Path:
-    metadata = metadata or {}
+    metadata = dict(metadata or {})
+    source_path = Path(source_path).resolve(strict=True)
     output_path = Path(output_path)
-
-    items, column_map = read_items(source_path)
-    _validate_mixed_catalog_metadata(items, metadata)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    lumbro_prices = _load_lumbro_prices(template_path)
-    wb = _load_template(template_path)
-    if "Cotizacion" not in wb.sheetnames:
-        wb.create_sheet("Cotizacion", 0)
-    if "Mobiliti" not in wb.sheetnames:
-        wb.create_sheet("Mobiliti")
-    ws_cot = wb["Cotizacion"]
-    _set_cotizacion_image_column_px(ws_cot, 1100)
-    _set_cotizacion_image_column_px(ws_cot, 550, "A")
-    _normalize_cotizacion_header_logo(ws_cot)
-    ws_mob = wb["Mobiliti"]
+    resolved_output = output_path.resolve(strict=False)
+    official_template = Path(template_path or OFFICIAL_TEMPLATE_PATH).resolve(strict=True)
 
-    _copy_source_sheet(source_path, wb)
-    _write_header(ws_cot, metadata)
-    row_map, lumbro_row_map = _write_mobiliti(ws_mob, items, column_map, lumbro_prices, metadata)
-    _apply_mobiliti_provider_validation(ws_mob)
-    _apply_mobiliti_region_validation(ws_mob)
-    _write_mobiliti_settings(ws_mob, metadata)
-    if "Fletes" in wb.sheetnames:
-        _write_fletes(wb["Fletes"], _find_mobiliti_total_row(ws_mob))
-
-    image_map, temp_dir = extract_images(source_path)
-    image_stats: dict[str, Any] = {}
-    try:
-        image_map = _resolve_sunon_catalog_images(image_map, items, temp_dir, metadata, stats=image_stats)
-        image_map = _resolve_sunon_web_images(image_map, items, temp_dir, metadata, stats=image_stats)
-        image_map = improve_image_map(
-            image_map,
-            temp_dir,
-            background=metadata.get("image_background", metadata.get("fondo_imagen", "transparent")),
-            min_size=int(_num(metadata.get("image_min_size", metadata.get("imagen_min_size")), 900)),
-            cleanup_strength=metadata.get(
-                "image_cleanup_strength",
-                metadata.get("limpieza_imagen", "normal"),
-            ),
-            image_provider=metadata.get("image_provider", metadata.get("proveedor_imagen")),
-            image_prompt=metadata.get("image_prompt", metadata.get("prompt_imagen")),
-            stats=image_stats,
+    items, _column_map = read_items(source_path)
+    _validate_mixed_catalog_metadata(items, metadata)
+    contract = load_template_contract(OFFICIAL_TEMPLATE_CONTRACT_PATH)
+    base = XlsxPackage.read(official_template)
+    lumbro_prices = _load_lumbro_prices(official_template)
+    lines, needs = _official_presentation_lines(
+        items,
+        metadata,
+        source_path,
+        lumbro_prices,
+    )
+    canonical_rows = (
+        tuple(quotation_data_rows)
+        if quotation_data_rows is not None
+        else _official_canonical_rows(lines, source_path)
+    )
+    mobiliti = _build_official_mobiliti(
+        base,
+        lines,
+        needs,
+        canonical_rows,
+        metadata,
+    )
+    cotizacion = _build_official_cotizacion(base, lines, mobiliti, metadata)
+    original_source = (
+        Path(original_quotation_path).resolve(strict=True)
+        if original_quotation_path
+        else source_path
+    )
+    quotation = transplant_quotation(_normalized_quotation_source(original_source), base)
+    compose_official_quote(
+        ComposeRequest(
+            template=official_template,
+            output=resolved_output,
+            mobiliti=mobiliti,
+            cotizacion=cotizacion,
+            quotation=quotation,
+            quotation_data=build_quotation_data_sheet(canonical_rows),
+            contract=contract,
         )
-        image_map = _align_image_map_to_product_rows(image_map, items)
-        image_map = _generate_missing_dezgo_images(image_map, items, temp_dir, metadata, stats=image_stats)
-        metadata.update(image_stats)
-        metadata["product_count"] = len([item for item in items if item.tipo == "producto"])
-        metadata["estimated_duration_seconds"] = _estimate_generation_seconds(metadata, image_stats, len(items))
-        total_row = _write_cotizacion(ws_cot, items, row_map, lumbro_row_map, image_map, metadata)
-        if "Estrategia Comercial " in wb.sheetnames:
-            _write_estrategia_comercial(wb["Estrategia Comercial "], total_row)
-        _set_calc_mode(wb)
-        wb.save(output_path)
-        _patch_quotation_drawing_from_source(source_path, output_path)
-        _sanitize_output_xlsx_for_excel(output_path)
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        wb.close()
+    )
     return output_path
