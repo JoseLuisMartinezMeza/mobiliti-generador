@@ -22,7 +22,6 @@ MAX_NUMERIC_SCALE = 6
 MAX_NUMERIC_INTEGRAL_DIGITS = 12
 MAX_EXCEL_CELL_TEXT_LENGTH = 32_767
 QUOTE_CURRENCIES = frozenset(("MXN", "USD", "EUR"))
-UNSAFE_INVISIBLE_TEXT = frozenset("\ufeff\u200b\u200c\u200d\u2060")
 
 
 @dataclass(frozen=True)
@@ -227,8 +226,8 @@ def _safe_k8_text(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("K8 requiere texto")
     text = unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
-    if any(character in UNSAFE_INVISIBLE_TEXT for character in text):
-        raise ValueError("K8 contiene caracteres invisibles inseguros")
+    if any(unicodedata.category(character) == "Cf" for character in text):
+        raise ValueError("K8 contiene caracteres invisibles o de formato inseguros")
     if text.lstrip()[:1] in {"=", "+", "-", "@"}:
         text = "'" + text
     if any(not _is_xml_10_character(ord(character)) for character in text):

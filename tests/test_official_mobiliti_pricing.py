@@ -395,13 +395,21 @@ def test_currency_selector_rejects_unsafe_or_oversized_k8_text(delivery_place):
         pytest.param("\ufeff=WEBSERVICE()", id="bom"),
         pytest.param("\u200b+1", id="zero-width-space"),
         pytest.param("\u2060@SUM", id="word-joiner"),
+        pytest.param("\u2066=WEBSERVICE()", id="left-to-right-isolate"),
+        pytest.param("\u2061+1", id="function-application"),
+        pytest.param("\u200e@SUM", id="left-to-right-mark"),
+        pytest.param("\u202e-1", id="right-to-left-override"),
+        pytest.param("\u180e=1", id="mongolian-vowel-separator"),
     ],
 )
 def test_currency_selector_rejects_invisible_formula_prefixes(invisible):
     editor = WorksheetEditor.from_xml(_official_xml())
+    before = editor.to_xml()
 
     with pytest.raises(ValueError, match="K8.*invisible"):
         write_official_currency_selector(editor, "MXN", invisible)
+
+    assert editor.to_xml() == before
 
 
 def test_currency_selector_rechecks_k8_limit_after_formula_neutralization():
