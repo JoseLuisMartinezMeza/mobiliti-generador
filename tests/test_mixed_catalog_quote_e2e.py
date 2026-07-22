@@ -16,15 +16,27 @@ from openpyxl import load_workbook
 from PIL import Image
 import pytest
 
-from mobiliti_saas.quote_engine import catalog_cart
+from mobiliti_saas.quote_engine import catalog_cart, generate_quote
+from mobiliti_saas.quote_engine import engine as quote_engine
+from mobiliti_saas.quote_engine.mixed_catalog import (
+    build_mixed_catalog_cart_payload,
+    create_mixed_catalog_quotation_workbook,
+    mixed_cart_key,
+)
 from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+from mobiliti_saas.quote_engine.quotation_import import build_import_manifest
+from mobiliti_saas.quote_engine.quotation_sheets import (
+    QUOTATION_DATA_HEADERS,
+    quotation_data_rows,
+)
 from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
+from quotation_import_fixtures import write_import_fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_DIR = ROOT / "mobiliti_saas" / "worker"
 WORKER_TEMPLATE = (
-    WORKER_DIR / "templates" / "Formato Cotizacion 2026 GDL.xlsx"
+    WORKER_DIR / "templates" / "Formato Cotizacion 2026 Oficial.xlsx"
 )
 MONEY = Decimal("0.01")
 CATALOGS = (
@@ -49,6 +61,21 @@ SOURCE_HASHES = {
     catalog: hashlib.sha256(f"mixed-e2e:{catalog}".encode("utf-8")).hexdigest()
     for catalog in CATALOGS
 }
+
+LEGACY_MOBILITI_WRITERS = (
+    "_ensure_mobiliti_formula_layout",
+    "_write_mobiliti_row_formulas",
+    "_normalize_mobiliti_row_formulas",
+    "_set_mobiliti_subtotal_formulas",
+)
+
+
+def _forbid_legacy_mobiliti_writers(monkeypatch) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("el flujo oficial no debe alcanzar writers Mobiliti legacy")
+
+    for name in LEGACY_MOBILITI_WRITERS:
+        monkeypatch.setattr(quote_engine, name, forbidden)
 
 
 @pytest.fixture
@@ -320,7 +347,11 @@ def install_api_boundary(monkeypatch, api_index, catalogs: dict) -> dict:
             "fecha_fin": "2099-01-01T00:00:00+00:00",
         },
     )
-    monkeypatch.setattr(api_index, "_enforce_active_quote_limit", lambda _user: None)
+    monkeypatch.setattr(
+        api_index,
+        "_enforce_active_quote_limit",
+        lambda _user, **_kwargs: None,
+    )
     monkeypatch.setattr(api_index, "_next_quote_number_for_user", lambda _user: None)
     monkeypatch.setattr(api_index, "_storage_provider_name", lambda: "supabase")
     monkeypatch.setattr(
@@ -453,6 +484,11 @@ class EndToEndWorkerClient:
             f"&attempt_token=eq.{self.job.get('attempt_token')}"
         )
         if path == fenced_processing and set(data) == {
+            "lease_expires_at", "updated_at",
+        }:
+            self.job = {**self.job, **data}
+            return [deepcopy(self.job)]
+        if path == fenced_processing and set(data) == {
             "metadata", "lease_expires_at", "updated_at",
         }:
             metadata = data["metadata"]
@@ -541,7 +577,7 @@ def expected_mixed_totals(
     for group in payload["groups"]:
         for item in group["items"]:
             price = Decimal(item["unit_price"])
-            discount = Decimal(item["discount_percent"]) / Decimal("100")
+            discount = Decimal("0.40")
             quantity = Decimal(item["quantity"])
             accessory_total = sum(
                 (
@@ -570,6 +606,620 @@ def _row_for_formula(ws, column: int, formula: str) -> int:
     )
 
 
+def _rows_with_value(ws, column: int, value) -> list[int]:
+    return [
+        row
+        for row in range(1, ws.max_row + 1)
+        if ws.cell(row, column).value == value
+    ]
+
+
+def _ordered_rows_for_values(ws, column: int, values) -> list[int]:
+    rows = []
+    cursor = 0
+    for value in values:
+        cursor = next(
+            row
+            for row in range(cursor + 1, ws.max_row + 1)
+            if ws.cell(row, column).value == value
+        )
+        rows.append(cursor)
+    return rows
+
+
+def _assert_exact_quotation_data(audit, expected_rows) -> None:
+    assert audit.sheet_state == "veryHidden"
+    assert tuple(audit.cell(1, column).value for column in range(1, 17)) == (
+        QUOTATION_DATA_HEADERS
+    )
+    assert audit.max_row == len(expected_rows) + 1
+    decimal_fields = {
+        "original_cost",
+        "frozen_rate",
+        "converted_cost",
+        "quantity",
+    }
+    for row_number, expected in enumerate(expected_rows, start=2):
+        for column, field in enumerate(QUOTATION_DATA_HEADERS, start=1):
+            actual = audit.cell(row_number, column).value
+            wanted = getattr(expected, field)
+            if field in decimal_fields:
+                assert Decimal(str(actual)) == wanted
+            else:
+                assert actual == wanted
+
+
+def _mixed_import_metadata(payload: dict, quote_currency: str) -> dict:
+    return {
+        "catalog_price_mode": "mixed_catalog_converted",
+        "quote_currency": quote_currency,
+        "rate_summary": deepcopy(payload["rate_summary"]),
+        "auto_electrification_rate": deepcopy(
+            payload["auto_electrification_rate"]
+        ),
+        "descuento": 40,
+        "cotizacion": f"IMPORT-{quote_currency}",
+        "proyecto": "Importado y catalogo",
+        "cliente": "Cliente E2E",
+    }
+
+
+def _assert_blank_mobiliti_formulas(ws, row: int) -> None:
+    input_columns = (4, 5, 6, 8, 10, 11, 16)
+    guard = (
+        f'=IF(COUNTA($D{row},$E{row},$F{row},$H{row},$J{row},$K{row})=0,"",'
+    )
+    assert all(ws.cell(row, column).value is None for column in input_columns)
+    assert str(ws.cell(row, 23).value).startswith(guard)
+    assert str(ws.cell(row, 24).value).startswith(guard)
+    assert ws.cell(row, 35).value == f'{guard}IF(AH{row}<30%,"ERROR","OK"))'
+
+
+def _one_discount_totals(payload: dict) -> tuple[Decimal, ...]:
+    items = {
+        item["canonical_key"]: item
+        for item in [
+            *(item for group in payload["groups"] for item in group["items"]),
+            *payload["imported_source"]["items"],
+        ]
+    }
+    subtotal = Decimal("0")
+    for section in payload["sections"]:
+        for key in section["item_keys"]:
+            item = items[key]
+            price = Decimal(item["unit_price"])
+            quantity = Decimal(item["quantity"])
+            discount = (price * Decimal("0.40")).quantize(
+                MONEY, rounding=ROUND_HALF_UP
+            )
+            net_unit = (price - discount).quantize(MONEY, rounding=ROUND_HALF_UP)
+            subtotal += (quantity * net_unit).quantize(MONEY, rounding=ROUND_HALF_UP)
+    subtotal = subtotal.quantize(MONEY, rounding=ROUND_HALF_UP)
+    freight = (subtotal * Decimal("0.12")).quantize(MONEY, rounding=ROUND_HALF_UP)
+    before_tax = (subtotal + freight).quantize(MONEY, rounding=ROUND_HALF_UP)
+    tax = (before_tax * Decimal("0.16")).quantize(MONEY, rounding=ROUND_HALF_UP)
+    return subtotal, freight, before_tax, tax, (before_tax + tax).quantize(MONEY)
+
+
+@pytest.mark.parametrize(
+    ("mismatch", "message"),
+    (("count", "cantidad canónica"), ("value", "quantity")),
+)
+def test_authoritative_base_mismatch_fails_before_output(
+    mismatch,
+    message,
+    monkeypatch,
+    tmp_path,
+):
+    _forbid_legacy_mobiliti_writers(monkeypatch)
+    rows = [
+        {
+            "catalog": "offiho",
+            "inventory_key": "OFF-E2E NEGRO",
+            "quantity": "1",
+        },
+        {"catalog": "cr-global", "internal_id": "cr:e2e", "quantity": "1"},
+    ]
+    payload = build_mixed_catalog_cart_payload(
+        rows,
+        catalogs=authoritative_catalogs(),
+        rate_rows=rate_rows(),
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Validacion",
+            "item_keys": [mixed_cart_key(row) for row in rows],
+        }],
+        today=date.today(),
+    )
+    monkeypatch.setattr(
+        catalog_cart,
+        "_download_catalog_image",
+        lambda *_args, **_kwargs: None,
+    )
+    parser_source = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / f"mismatch-{mismatch}-source.xlsx",
+        image_dir=tmp_path / f"mismatch-{mismatch}-images",
+    )
+    canonical_rows = quotation_data_rows(payload)
+    if mismatch == "count":
+        handed_off = canonical_rows[:-1]
+    else:
+        changed = deepcopy(payload)
+        changed["groups"][0]["items"][0]["quantity"] = "2.000000"
+        handed_off = quotation_data_rows(changed)
+    output = tmp_path / f"mismatch-{mismatch}-must-not-exist.xlsx"
+
+    with pytest.raises(ValueError, match=message):
+        generate_quote(
+            parser_source,
+            output,
+            _mixed_import_metadata(payload, "MXN"),
+            WORKER_TEMPLATE,
+            original_quotation_path=None,
+            quotation_data_rows=handed_off,
+        )
+
+    assert not output.exists()
+
+
+def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_summary(
+    monkeypatch,
+    tmp_path,
+):
+    assert WORKER_TEMPLATE.is_file()
+    _forbid_legacy_mobiliti_writers(monkeypatch)
+    imported_source = write_import_fixture(tmp_path / "imported-only-source.xlsx")
+    source_hash_before = hashlib.sha256(imported_source.read_bytes()).hexdigest()
+    manifest, imported_images = build_import_manifest(
+        imported_source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=imported_source.name,
+    )
+    imported_key = f"import:{manifest['import_id']}:11"
+    payload = build_mixed_catalog_cart_payload(
+        [],
+        catalogs={},
+        rate_rows=[],
+        quote_currency="USD",
+        commercial_discount_percent="40",
+        presentation_sections=[
+            {
+                "id": "section-1",
+                "title": "Importados",
+                "item_keys": [imported_key],
+            }
+        ],
+        imported_source={
+            "manifest": manifest,
+            "items": [
+                {
+                    "kind": "imported",
+                    "import_id": manifest["import_id"],
+                    "source_row": 11,
+                    "source_currency": "USD",
+                    "quantity": "2",
+                    "overrides": {
+                        "name": "Alien Task Chair imported-only",
+                        "description": "Silla operativa importada",
+                        "dimension": "630 x 565 x 1000 mm",
+                        "unit_price": "82.00",
+                        "provider": "Sunon importado",
+                    },
+                }
+            ],
+            "source_currency": "USD",
+        },
+        today=date.today(),
+    )
+    assert payload["groups"] == []
+    assert payload["rate_summary"] == []
+    assert payload["item_count"] == 1
+    canonical_rows = quotation_data_rows(payload)
+
+    quotation_input = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "imported-only-quotation.xlsx",
+        image_dir=tmp_path / "imported-only-images",
+        imported_source_path=imported_source,
+    )
+    output = tmp_path / "imported-only-final.xlsx"
+
+    generate_quote(
+        quotation_input,
+        output,
+        _mixed_import_metadata(payload, "USD"),
+        WORKER_TEMPLATE,
+        original_quotation_path=imported_source,
+        quotation_data_rows=canonical_rows,
+    )
+
+    assert hashlib.sha256(imported_source.read_bytes()).hexdigest() == source_hash_before
+    wb = load_workbook(output, data_only=False)
+    try:
+        quotation = wb["Quotation"]
+        audit = wb["Quotation_Data"]
+        mobiliti = wb["Mobiliti"]
+        cotizacion = wb["Cotizacion"]
+        assert quotation["B11"].value == "CAI63SW Alien Task Chair"
+        assert quotation["B11"].value != "Alien Task Chair imported-only"
+        assert {
+            hashlib.sha256(image._data()).hexdigest()
+            for image in quotation._images
+        } == {
+            hashlib.sha256(image_bytes).hexdigest()
+            for image_bytes, _extension in imported_images.values()
+        }
+        _assert_exact_quotation_data(audit, canonical_rows)
+        assert audit["A2"].value == imported_key
+        assert audit["F2"].value == 11
+        assert audit["O2"].value == manifest["items"][1]["row_hash"]
+
+        mobiliti_row = _rows_with_value(
+            mobiliti, 4, "Alien Task Chair imported-only"
+        )[0]
+        cotizacion_row = _rows_with_value(
+            cotizacion, 1, "Alien Task Chair imported-only"
+        )[0]
+        assert mobiliti.cell(mobiliti_row, 10).value == 82
+        assert mobiliti.cell(mobiliti_row, 16).value == "imported"
+        assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+        assert cotizacion.cell(cotizacion_row, 7).value == 0.4
+        assert cotizacion.cell(cotizacion_row, 8).value == (
+            f"=F{cotizacion_row}*G{cotizacion_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 9).value == (
+            f"=F{cotizacion_row}-H{cotizacion_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 10).value == (
+            f"=E{cotizacion_row}*I{cotizacion_row}"
+        )
+    finally:
+        wb.close()
+
+
+def test_explicit_original_does_not_cross_wire_same_row_parser_image(
+    monkeypatch,
+    tmp_path,
+):
+    _forbid_legacy_mobiliti_writers(monkeypatch)
+    imported_source = write_import_fixture(tmp_path / "visible-original.xlsx")
+    _manifest, imported_images = build_import_manifest(
+        imported_source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=imported_source.name,
+    )
+    catalog_row = {
+        "catalog": "offiho",
+        "inventory_key": "OFF-E2E NEGRO",
+        "quantity": "1",
+    }
+    payload = build_mixed_catalog_cart_payload(
+        [catalog_row],
+        catalogs=authoritative_catalogs(),
+        rate_rows=rate_rows(),
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Catalogo",
+            "item_keys": [mixed_cart_key(catalog_row)],
+        }],
+        today=date.today(),
+    )
+    catalog_image = _make_png(tmp_path / "parser-offiho.png", (8, 180, 240))
+
+    monkeypatch.setattr(
+        catalog_cart,
+        "_download_catalog_image",
+        lambda *_args, **_kwargs: catalog_image,
+    )
+    parser_source = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "parser-source.xlsx",
+        image_dir=tmp_path / "parser-images",
+    )
+    output = tmp_path / "same-row-image-output.xlsx"
+
+    generate_quote(
+        parser_source,
+        output,
+        _mixed_import_metadata(payload, "MXN"),
+        WORKER_TEMPLATE,
+        original_quotation_path=imported_source,
+        quotation_data_rows=quotation_data_rows(payload),
+    )
+
+    workbook = load_workbook(output, data_only=False)
+    try:
+        original = load_workbook(imported_source, data_only=False)
+        try:
+            assert workbook["Quotation"]["B9"].value == original["Quotation"]["B9"].value
+        finally:
+            original.close()
+        cotizacion = workbook["Cotizacion"]
+        product_row = next(
+            row
+            for row in range(16, cotizacion.max_row + 1)
+            if cotizacion.cell(row, 1).value == "Silla Offiho"
+        )
+        product_images = [
+            image
+            for image in cotizacion._images
+            if image.anchor._from.row + 1 == product_row
+        ]
+        assert len(product_images) == 1
+        assert hashlib.sha256(product_images[0]._data()).hexdigest() == hashlib.sha256(
+            catalog_image.read_bytes()
+        ).hexdigest()
+        assert hashlib.sha256(catalog_image.read_bytes()).hexdigest() != hashlib.sha256(
+            imported_images[9][0]
+        ).hexdigest()
+    finally:
+        workbook.close()
+
+
+@pytest.mark.parametrize(
+    ("quote_currency", "expected_import_price", "expected_import_rate"),
+    (
+        ("MXN", Decimal("1517.00"), Decimal("18.500000")),
+        ("USD", Decimal("82.00"), Decimal("1.000000")),
+        ("EUR", Decimal("75.44"), Decimal("0.920000")),
+    ),
+)
+def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
+    quote_currency,
+    expected_import_price,
+    expected_import_rate,
+    monkeypatch,
+    tmp_path,
+):
+    assert WORKER_TEMPLATE.is_file()
+    _forbid_legacy_mobiliti_writers(monkeypatch)
+    imported_source = write_import_fixture(tmp_path / "imported-source.xlsx")
+    source_hash_before = hashlib.sha256(imported_source.read_bytes()).hexdigest()
+    manifest, imported_images = build_import_manifest(
+        imported_source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=imported_source.name,
+    )
+    catalog_rows = [
+        {
+            "catalog": "offiho",
+            "inventory_key": "OFF-E2E NEGRO",
+            "quantity": "1",
+        },
+        {"catalog": "cr-global", "internal_id": "cr:e2e", "quantity": "1"},
+        {
+            "catalog": "sonara",
+            "internal_id": "sonara:e2e-review",
+            "quantity": "1",
+        },
+    ]
+    imported_key = f"import:{manifest['import_id']}:11"
+    catalog_keys = [mixed_cart_key(row) for row in catalog_rows]
+    sections = [
+        {
+            "id": "section-1",
+            "title": "Recepcion",
+            "item_keys": [catalog_keys[0], imported_key, catalog_keys[1]],
+        },
+        {
+            "id": "section-2",
+            "title": "Privados",
+            "item_keys": [catalog_keys[2]],
+        },
+    ]
+    today = date.today()
+    rates = [
+        {
+            "currency": "USD",
+            "effective_date": today.isoformat(),
+            "mxn_per_unit": "18.500000",
+            "retrieved_at": f"{today.isoformat()}T12:00:00+00:00",
+        },
+        {
+            "currency": "EUR",
+            "effective_date": today.isoformat(),
+            "mxn_per_unit": "20.108696",
+            "retrieved_at": f"{today.isoformat()}T12:00:00+00:00",
+        },
+    ]
+    catalogs = authoritative_catalogs()
+    payload = build_mixed_catalog_cart_payload(
+        catalog_rows,
+        catalogs=catalogs,
+        rate_rows=rates,
+        quote_currency=quote_currency,
+        commercial_discount_percent="40",
+        presentation_sections=sections,
+        imported_source={
+            "manifest": manifest,
+            "items": [
+                {
+                    "kind": "imported",
+                    "import_id": manifest["import_id"],
+                    "source_row": 11,
+                    "source_currency": "USD",
+                    "quantity": "2",
+                    "overrides": {
+                        "name": "Alien Task Chair revisada",
+                        "description": "Silla operativa revisada",
+                        "dimension": "630 x 565 x 1000 mm",
+                        "unit_price": "82.00",
+                        "provider": "Sunon importado",
+                    },
+                }
+            ],
+            "source_currency": "USD",
+        },
+        today=today,
+    )
+    assert payload["sections"] == sections
+    assert payload["groups"][0]["items"][0]["name"] == (
+        catalogs["offiho"]["items"][0].name
+    )
+    imported_line = payload["imported_source"]["items"][0]
+    assert Decimal(imported_line["unit_price"]) == expected_import_price
+    assert Decimal(imported_line["frozen_exchange_rate"]) == expected_import_rate
+
+    catalog_image = _make_png(tmp_path / "catalog-offiho.png", (120, 70, 20))
+
+    def local_catalog_image(url, image_dir, code, source_type, destination_key=None):
+        assert source_type == "offiho_cart"
+        assert url == "https://offiho.com.mx/e2e-offiho.png"
+        return catalog_image
+
+    monkeypatch.setattr(catalog_cart, "_download_catalog_image", local_catalog_image)
+    quotation_input = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / f"mixed-import-{quote_currency}.xlsx",
+        image_dir=tmp_path / f"images-{quote_currency}",
+        imported_source_path=imported_source,
+    )
+    output = tmp_path / f"final-import-{quote_currency}.xlsx"
+    canonical_rows = quotation_data_rows(payload)
+    generate_quote(
+        quotation_input,
+        output,
+        _mixed_import_metadata(payload, quote_currency),
+        WORKER_TEMPLATE,
+        original_quotation_path=imported_source,
+        quotation_data_rows=canonical_rows,
+    )
+
+    assert hashlib.sha256(imported_source.read_bytes()).hexdigest() == source_hash_before
+    wb = load_workbook(output, data_only=False)
+    try:
+        quotation = wb["Quotation"]
+        audit = wb["Quotation_Data"]
+        mobiliti = wb["Mobiliti"]
+        cotizacion = wb["Cotizacion"]
+        assert quotation["B11"].value == "CAI63SW Alien Task Chair"
+        assert quotation["B11"].value != "Alien Task Chair revisada"
+        quotation_hashes = {
+            hashlib.sha256(image._data()).hexdigest()
+            for image in quotation._images
+        }
+        assert quotation_hashes == {
+            hashlib.sha256(image_bytes).hexdigest()
+            for image_bytes, _extension in imported_images.values()
+        }
+        assert hashlib.sha256(catalog_image.read_bytes()).hexdigest() not in (
+            quotation_hashes
+        )
+
+        _assert_exact_quotation_data(audit, canonical_rows)
+        imported_audit_row = canonical_rows.index(
+            next(row for row in canonical_rows if row.origin == "imported")
+        ) + 2
+        assert audit.cell(imported_audit_row, 1).value == imported_key
+        assert audit.cell(imported_audit_row, 6).value == 11
+        assert audit.cell(imported_audit_row, 15).value == imported_line["row_hash"]
+
+        items_by_key = {
+            item["canonical_key"]: item
+            for item in [
+                *(item for group in payload["groups"] for item in group["items"]),
+                *payload["imported_source"]["items"],
+            ]
+        }
+        ordered_items = [
+            items_by_key[key]
+            for section in payload["sections"]
+            for key in section["item_keys"]
+        ]
+        expected_names = [item["name"] for item in ordered_items]
+        mobiliti_rows = [
+            _rows_with_value(mobiliti, 4, name)[0]
+            for name in expected_names
+        ]
+        cotizacion_rows = [
+            _rows_with_value(cotizacion, 1, name)[0]
+            for name in expected_names
+        ]
+        assert mobiliti_rows == sorted(mobiliti_rows)
+        assert cotizacion_rows == sorted(cotizacion_rows)
+        first_product_row = cotizacion_rows[0]
+        assert [cotizacion.cell(row, 7).value for row in cotizacion_rows] == [
+            0.4,
+            *(f"=$G${first_product_row}" for _ in cotizacion_rows[1:]),
+        ]
+        for canonical, mobiliti_row, cotizacion_row in zip(
+            canonical_rows,
+            mobiliti_rows,
+            cotizacion_rows,
+            strict=True,
+        ):
+            assert Decimal(str(mobiliti.cell(mobiliti_row, 10).value)) == (
+                canonical.converted_cost
+            )
+            assert mobiliti.cell(mobiliti_row, 16).value == canonical.region
+            assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
+            assert str(mobiliti.cell(mobiliti_row, 24).value).startswith(
+                "=_xlfn.MINIFS("
+            )
+            assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+            assert cotizacion.cell(cotizacion_row, 8).value == (
+                f"=F{cotizacion_row}*G{cotizacion_row}"
+            )
+            assert cotizacion.cell(cotizacion_row, 9).value == (
+                f"=F{cotizacion_row}-H{cotizacion_row}"
+            )
+            assert cotizacion.cell(cotizacion_row, 10).value == (
+                f"=E{cotizacion_row}*I{cotizacion_row}"
+            )
+
+        assert _rows_with_value(cotizacion, 1, "Recepcion")
+        assert _rows_with_value(cotizacion, 1, "Privados")
+        mobiliti_values = {
+            cell.value
+            for row in mobiliti.iter_rows()
+            for cell in row
+            if cell.value is not None
+        }
+        assert {"Recepcion", "Privados"} <= mobiliti_values
+        assert not any(
+            str(cotizacion.cell(row, 1).value or "").startswith("=Quotation!")
+            for row in range(16, cotizacion.max_row + 1)
+        )
+
+        total_rows = [
+            row
+            for row in range(1, cotizacion.max_row + 1)
+            if cotizacion.cell(row, 4).value
+            in {"SUBTOTAL:", "IVA:", "TOTAL:"}
+        ]
+        assert len(total_rows) == 4
+        subtotal, before_tax, tax, total = total_rows
+        subtotal_formula = cotizacion.cell(subtotal, 8).value
+        assert getattr(subtotal_formula, "text", None) == (
+            f"=SUM(IFERROR(J{first_product_row}:J{cotizacion_rows[-1]},0))"
+        )
+        assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*6%"
+        assert cotizacion.cell(subtotal + 2, 8).value == 0
+        assert cotizacion.cell(before_tax, 8).value == (
+            f"=H{subtotal}+H{subtotal + 1}-H{subtotal + 2}"
+        )
+        assert cotizacion.cell(tax, 8).value == f"=H{before_tax}*16%"
+        assert cotizacion.cell(total, 8).value == f"=H{before_tax}+H{tax}"
+
+        cotizacion_hashes = {
+            hashlib.sha256(image._data()).hexdigest()
+            for image in cotizacion._images
+        }
+        assert hashlib.sha256(catalog_image.read_bytes()).hexdigest() in (
+            cotizacion_hashes
+        )
+        assert hashlib.sha256(imported_images[11][0]).hexdigest() in (
+            cotizacion_hashes
+        )
+    finally:
+        wb.close()
+
+
 @pytest.mark.parametrize(
     ("quote_currency", "automatic_rate"),
     (("MXN", "1.000000"), ("USD", "0.054054"), ("EUR", "0.048780")),
@@ -582,6 +1232,7 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
     tmp_path,
 ):
     assert WORKER_TEMPLATE.is_file()
+    _forbid_legacy_mobiliti_writers(monkeypatch)
     api_index, quote_worker = isolated_quote_runtime
     api_state = install_api_boundary(monkeypatch, api_index, authoritative_catalogs())
 
@@ -660,19 +1311,31 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
     )
     real_run_generator = quote_worker._run_generator
     generator_calls = []
+    expected_handoff_rows = quotation_data_rows(payload)
 
     def counted_run_generator(job, generator_input, local_output):
-        assert generator_input.name == "quotation_from_mixed_catalog.xlsx"
-        assert generator_input.is_file()
-        converted = load_workbook(generator_input, data_only=False, read_only=True)
+        assert isinstance(generator_input, quote_worker.PreparedGeneratorInput)
+        assert generator_input.parser_source.name == (
+            "quotation_from_mixed_catalog.xlsx"
+        )
+        assert generator_input.parser_source.is_file()
+        assert generator_input.original_quotation is None
+        assert generator_input.quotation_data == expected_handoff_rows
+        converted = load_workbook(
+            generator_input.parser_source,
+            data_only=False,
+            read_only=True,
+        )
         try:
             assert converted.sheetnames == ["Quotation"]
         finally:
             converted.close()
         worker_client.record_event("converter")
         worker_client.record_event("generator")
-        generator_calls.append(generator_input.name)
-        return real_run_generator(job, generator_input, local_output)
+        generator_calls.append(generator_input.parser_source.name)
+        result = real_run_generator(job, generator_input, local_output)
+        assert generator_input.quotation_data == expected_handoff_rows
+        return result
 
     monkeypatch.setattr(quote_worker, "_run_generator", counted_run_generator)
     monkeypatch.setattr(quote_worker, "_template_path", lambda: str(WORKER_TEMPLATE))
@@ -707,7 +1370,7 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
         "auto_electrification_rate"
     ]
     assert completed_metadata["catalog_source_hashes"] == SOURCE_HASHES
-    assert completed_metadata["descuento"] == 0
+    assert completed_metadata["descuento"] == 40
     assert completed_job["input_path"] is None
     assert completed_job["output_path"] == uploaded_path
     assert payload == frozen_payload
@@ -724,11 +1387,15 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
     assert output_xlsx.is_file()
     wb = load_workbook(output_xlsx, data_only=False)
     try:
-        _assert_final_workbook(
+        _assert_task9_final_workbook(
             wb,
             payload,
             quote_currency=quote_currency,
             automatic_rate=automatic_rate,
+            expected_image_hashes={
+                hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in local_images.values()
+            },
         )
     finally:
         wb.close()
@@ -737,6 +1404,220 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
 def _make_png(path: Path, color: tuple[int, int, int]) -> Path:
     Image.new("RGB", (96, 72), color).save(path, format="PNG")
     return path
+
+
+def _assert_task9_final_workbook(
+    wb,
+    payload: dict,
+    *,
+    quote_currency: str,
+    automatic_rate: str,
+    expected_image_hashes: set[str],
+) -> None:
+    assert wb.sheetnames.count("Cotizacion") == 1
+    assert wb.sheetnames.count("Mobiliti") == 1
+    assert wb.sheetnames.count("Quotation") == 0
+    assert wb.sheetnames.count("Quotation_Data") == 1
+    mobiliti = wb["Mobiliti"]
+    cotizacion = wb["Cotizacion"]
+    audit = wb["Quotation_Data"]
+    assert audit.sheet_state == "veryHidden"
+    assert tuple(audit.cell(1, column).value for column in range(1, 17)) == (
+        QUOTATION_DATA_HEADERS
+    )
+
+    base_rows = quotation_data_rows(payload)
+    base_keys = [row.item_key for row in base_rows]
+    assert base_keys == [
+        item_key
+        for section in payload["sections"]
+        for item_key in section["item_keys"]
+    ]
+    records = [
+        {
+            field: audit.cell(row_number, column).value
+            for column, field in enumerate(QUOTATION_DATA_HEADERS, start=1)
+        }
+        for row_number in range(2, audit.max_row + 1)
+    ]
+    assert [record["position"] for record in records] == list(
+        range(1, len(records) + 1)
+    )
+    assert len(records) == len(base_rows) + 3
+    assert [
+        record["item_key"]
+        for record in records
+        if record["item_key"] in set(base_keys)
+    ] == base_keys
+
+    records_by_key = {record["item_key"]: record for record in records}
+    assert len(records_by_key) == len(records)
+    decimal_fields = (
+        "original_cost",
+        "frozen_rate",
+        "converted_cost",
+        "quantity",
+    )
+    preserved_fields = (
+        "item_key",
+        "section_id",
+        "section_title",
+        "origin",
+        "source_row",
+        "original_currency",
+        "provider",
+        "region",
+        "source_hash",
+        "upstream_row_hash",
+    )
+    for expected in base_rows:
+        actual = records_by_key[expected.item_key]
+        assert all(actual[field] == getattr(expected, field) for field in preserved_fields)
+        assert all(
+            Decimal(str(actual[field])) == getattr(expected, field)
+            for field in decimal_fields
+        )
+        assert len(actual["row_hash"]) == 64
+
+    parent_key = base_keys[0]
+    parent_record = records_by_key[parent_key]
+    derived = [record for record in records if record["item_key"] not in set(base_keys)]
+    assert [record["position"] for record in derived] == [2, 3, 4]
+    assert [record["item_key"].rsplit(":", 1)[-1] for record in derived] == [
+        "LIDO.OP-INT",
+        "JUMP-1.5M",
+        "CAJA-FUS",
+    ]
+    assert all(
+        record["item_key"].startswith(f"{parent_key}:lumbro:")
+        and record["origin"] == "lumbro"
+        and record["source_row"] is None
+        and record["section_id"] == parent_record["section_id"]
+        and record["section_title"] == parent_record["section_title"]
+        and record["upstream_row_hash"] == ""
+        and len(record["source_hash"]) == 64
+        and len(record["row_hash"]) == 64
+        for record in derived
+    )
+    assert len({record["source_hash"] for record in derived}) == 1
+    assert [Decimal(str(record["frozen_rate"])) for record in derived] == [
+        Decimal(automatic_rate),
+    ] * 3
+
+    template_values = load_workbook(WORKER_TEMPLATE, data_only=True, read_only=True)
+    try:
+        guide = template_values["SPEC-GUIDE-LUMBRO"]
+        expected_original_costs = [
+            Decimal(str(guide[f"E{row}"].value)).quantize(
+                Decimal("0.000001"),
+                rounding=ROUND_HALF_UP,
+            )
+            for row in (380, 396, 406)
+        ]
+    finally:
+        template_values.close()
+    assert [Decimal(str(record["original_cost"])) for record in derived] == (
+        expected_original_costs
+    )
+    assert [Decimal(str(record["converted_cost"])) for record in derived] == [
+        (cost * Decimal(automatic_rate)).quantize(
+            MONEY,
+            rounding=ROUND_HALF_UP,
+        )
+        for cost in expected_original_costs
+    ]
+    assert [Decimal(str(record["quantity"])) for record in derived] == [
+        Decimal("8"),
+        Decimal("8"),
+        Decimal("2"),
+    ]
+
+    payload_items = {
+        item["canonical_key"]: item
+        for group in payload["groups"]
+        for item in group["items"]
+    }
+    base_names = [payload_items[key]["name"] for key in base_keys]
+    derived_names = ["LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"]
+    final_names = [base_names[0], *derived_names, *base_names[1:]]
+    mobiliti_rows = _ordered_rows_for_values(mobiliti, 4, final_names)
+    cotizacion_rows = _ordered_rows_for_values(cotizacion, 1, final_names)
+    assert mobiliti_rows == list(range(14, 25))
+    assert cotizacion_rows == list(range(17, 28))
+
+    for record, mobiliti_row, cotizacion_row in zip(
+        records,
+        mobiliti_rows,
+        cotizacion_rows,
+        strict=True,
+    ):
+        assert Decimal(str(mobiliti.cell(mobiliti_row, 10).value)) == Decimal(
+            str(record["converted_cost"])
+        )
+        assert mobiliti.cell(mobiliti_row, 16).value == record["region"]
+        assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
+        assert str(mobiliti.cell(mobiliti_row, 24).value).startswith(
+            "=_xlfn.MINIFS("
+        )
+        assert cotizacion.cell(cotizacion_row, 6).value == (
+            f"=Mobiliti!X{mobiliti_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 8).value == (
+            f"=F{cotizacion_row}*G{cotizacion_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 9).value == (
+            f"=F{cotizacion_row}-H{cotizacion_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 10).value == (
+            f"=E{cotizacion_row}*I{cotizacion_row}"
+        )
+    first_product = cotizacion_rows[0]
+    assert [cotizacion.cell(row, 7).value for row in cotizacion_rows] == [
+        0.4,
+        *(f"=$G${first_product}" for _ in cotizacion_rows[1:]),
+    ]
+    assert not any(
+        str(cotizacion.cell(row, 1).value or "").startswith("=Quotation!")
+        for row in range(16, cotizacion.max_row + 1)
+    )
+
+    sonara_row = cotizacion_rows[final_names.index("Panel Sonara por verificar")]
+    assert "Revision documental local" in str(cotizacion.cell(sonara_row, 3).value)
+    alma_rows = [
+        cotizacion_rows[index]
+        for index, name in enumerate(final_names)
+        if name == "Mesa ALMA"
+    ]
+    assert "electrificacion a" in str(
+        cotizacion.cell(alma_rows[0], 3).value
+    ).casefold()
+    assert "pasacables b" in str(
+        cotizacion.cell(alma_rows[1], 3).value
+    ).casefold()
+
+    subtotal_rows = _rows_with_value(cotizacion, 4, "SUBTOTAL:")
+    tax_row = _rows_with_value(cotizacion, 4, "IVA:")[0]
+    total_row = _rows_with_value(cotizacion, 4, "TOTAL:")[0]
+    assert len(subtotal_rows) == 2
+    subtotal, before_tax = subtotal_rows
+    subtotal_formula = cotizacion.cell(subtotal, 8).value
+    assert getattr(subtotal_formula, "text", None) == (
+        f"=SUM(IFERROR(J{first_product}:J{cotizacion_rows[-1]},0))"
+    )
+    assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*6%"
+    assert cotizacion.cell(subtotal + 2, 8).value == 0
+    assert cotizacion.cell(before_tax, 8).value == (
+        f"=H{subtotal}+H{subtotal + 1}-H{subtotal + 2}"
+    )
+    assert cotizacion.cell(tax_row, 8).value == f"=H{before_tax}*16%"
+    assert cotizacion.cell(total_row, 8).value == f"=H{before_tax}+H{tax_row}"
+    assert mobiliti["K4"].value is (quote_currency != "MXN")
+
+    cotizacion_hashes = {
+        hashlib.sha256(image._data()).hexdigest()
+        for image in cotizacion._images
+    }
+    assert expected_image_hashes <= cotizacion_hashes
 
 
 def _assert_final_workbook(
@@ -752,14 +1633,14 @@ def _assert_final_workbook(
     quotation = wb["Quotation"]
     mobiliti = wb["Mobiliti"]
     cot = wb["Cotizacion"]
+    # Las solicitudes heredadas sin `sections` conservan el orden del carrito en
+    # una sola sección de presentación. El proveedor sigue auditado por línea,
+    # pero ya no controla las bandas visuales del Excel.
     assert [
         quotation.cell(row, 1).value
         for row in range(8, quotation.max_row + 1)
         if isinstance(quotation.cell(row, 1).value, str)
-    ] == [
-        "- Tarkett", "- Offiho", "- CR Global", "- Sonara", "- Sunon",
-        "- ALMA", "- Lumbro",
-    ]
+    ] == ["- Recepción"]
     source_rows = [
         row
         for row in range(8, quotation.max_row + 1)
@@ -803,10 +1684,12 @@ def _assert_final_workbook(
     ]
     assert [mobiliti.cell(row, 6).value for _source, row, _cot in row_maps] == [
         "Tarkett", "Offiho", "CR Global", "Sonara", "Sunon", "ALMA",
-        "ALMA", "Lumbro",
+        "ALMA", "Lumbro CH",
     ]
+    first_discount_row = row_maps[0][2]
     assert [cot.cell(row, 7).value for _source, _mob, row in row_maps] == [
-        0.4, 0.4, 0, 0, 0, 0, 0, 0,
+        0.4,
+        *(f"=G${first_discount_row}" for _ in row_maps[1:]),
     ]
     assert mobiliti["J6"].value == f"{quote_currency}/{quote_currency}"
     assert mobiliti["K6"].value == 1
@@ -817,6 +1700,7 @@ def _assert_final_workbook(
         float(Decimal(item["unit_price"])) for item in frozen_lines
     ]
     for index, (_source_row, mobiliti_row, cot_row) in enumerate(row_maps):
+        assert mobiliti.cell(mobiliti_row, 10).value == f"=Quotation!J{_source_row}"
         assert "$K$6" not in str(mobiliti.cell(mobiliti_row, 10).value)
         assert "$K$6" not in str(cot.cell(cot_row, 6).value)
         if index:
@@ -835,8 +1719,11 @@ def _assert_final_workbook(
         mobiliti.cell(row, 4).value: row for row in automatic_rows
     }
     assert list(automatic_by_code) == ["LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"]
-    first_unused_row = max(row_maps[0][1], *automatic_rows) + 1
-    assert first_unused_row == 18
+    first_unused_row = max(
+        *(mobiliti_row for _source, mobiliti_row, _cot in row_maps),
+        *automatic_rows,
+    ) + 1
+    assert first_unused_row == 25
     guard = (
         f'=IF(COUNTA($D{first_unused_row},$E{first_unused_row},$F{first_unused_row},'
         f'$H{first_unused_row},$J{first_unused_row},$K{first_unused_row})=0,"",'
@@ -931,16 +1818,16 @@ def _assert_final_workbook(
     totals = expected_mixed_totals(payload, accessories)
     assert totals == {
         "MXN": (
-            Decimal("20062.12"), Decimal("2407.45"), Decimal("22469.57"),
-            Decimal("3595.13"), Decimal("26064.70"),
+            Decimal("17610.12"), Decimal("2113.21"), Decimal("19723.33"),
+            Decimal("3155.73"), Decimal("22879.06"),
         ),
         "USD": (
-            Decimal("1084.44"), Decimal("130.13"), Decimal("1214.57"),
-            Decimal("194.33"), Decimal("1408.90"),
+            Decimal("951.90"), Decimal("114.23"), Decimal("1066.13"),
+            Decimal("170.58"), Decimal("1236.71"),
         ),
         "EUR": (
-            Decimal("978.61"), Decimal("117.43"), Decimal("1096.04"),
-            Decimal("175.37"), Decimal("1271.41"),
+            Decimal("859.00"), Decimal("103.08"), Decimal("962.08"),
+            Decimal("153.93"), Decimal("1116.01"),
         ),
     }[quote_currency]
     assert totals[2] == totals[0] + totals[1]

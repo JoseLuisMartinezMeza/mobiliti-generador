@@ -7,12 +7,17 @@ Default/final: QUOTE_ENGINE=python, sin Microsoft Excel.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from datetime import timedelta
+from io import BytesIO
 import argparse
+import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import threading
@@ -21,6 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 
 
 BUCKET = os.environ.get("QUOTE_STORAGE_BUCKET", "quote-files")
@@ -39,6 +45,7 @@ WORKER_HEARTBEAT_SECONDS = max(
     float(os.environ.get("WORKER_HEARTBEAT_SECONDS", str(min(60, WORKER_LEASE_SECONDS / 3)))),
 )
 MAX_QUOTE_OUTPUT_MB = int(os.environ.get("MAX_QUOTE_OUTPUT_MB", "100"))
+MAX_IMPORTED_SOURCE_BYTES = 25 * 1024 * 1024
 QUOTE_ENGINE = os.environ.get("QUOTE_ENGINE", "python").strip().lower()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY")
@@ -76,6 +83,31 @@ TARKETT_CATALOG_FALLBACK_PATH = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" 
 _TARKETT_LAST_SYNC_ATTEMPT = 0.0
 
 from mobiliti_saas.quote_engine.tarkettnet_catalog import sync_catalog_from_tarkettnet  # noqa: E402
+from mobiliti_saas.quote_engine.quotation_sheets import (  # noqa: E402
+    QuotationDataRow,
+    quotation_data_rows,
+)
+
+
+@dataclass(frozen=True)
+class PreparedGeneratorInput:
+    """Fuentes validadas que el worker entrega al compositor oficial."""
+
+    parser_source: Path
+    original_quotation: Path | None
+    quotation_data: tuple[QuotationDataRow, ...]
+
+    @property
+    def name(self) -> str:
+        """Compatibilidad de lectura para callers antiguos que recibían un Path."""
+
+        return self.parser_source.name
+
+    def is_file(self) -> bool:
+        return self.parser_source.is_file()
+
+    def __fspath__(self) -> str:
+        return os.fspath(self.parser_source)
 
 
 def _required_env(name: str) -> str:
@@ -682,10 +714,213 @@ def _convert_mixed_catalog_cart_to_quotation(
     source_json: Path,
     output_xlsx: Path,
     payload: dict,
+    *,
+    imported_source_path: Path | None = None,
 ) -> None:
     from mobiliti_saas.quote_engine.mixed_catalog import create_mixed_catalog_quotation_workbook
 
-    create_mixed_catalog_quotation_workbook(payload, output_xlsx)
+    create_mixed_catalog_quotation_workbook(
+        payload,
+        output_xlsx,
+        imported_source_path=imported_source_path,
+    )
+
+
+def _path_is_symlink_or_reparse(path: Path) -> bool:
+    try:
+        metadata = os.lstat(path)
+    except OSError:
+        return False
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _safe_tmp_target(tmp_dir: Path, filename: str) -> Path:
+    root = Path(tmp_dir)
+    if Path(filename).name != filename or not filename:
+        raise RuntimeError("Nombre temporal invalido")
+    try:
+        root_metadata = os.lstat(root)
+    except OSError as exc:
+        raise RuntimeError("Directorio temporal no disponible") from exc
+    if not stat.S_ISDIR(root_metadata.st_mode) or _path_is_symlink_or_reparse(root):
+        raise RuntimeError("Directorio temporal inseguro")
+    try:
+        resolved_root = root.resolve(strict=True)
+        if resolved_root != root.absolute():
+            raise RuntimeError("Directorio temporal inseguro")
+    except OSError as exc:
+        raise RuntimeError("Directorio temporal inseguro") from exc
+    target = root / filename
+    if target.parent.resolve(strict=True) != resolved_root:
+        raise RuntimeError("Ruta temporal fuera del directorio permitido")
+    try:
+        os.lstat(target)
+    except FileNotFoundError:
+        return target
+    except OSError as exc:
+        raise RuntimeError("No se pudo validar la ruta temporal") from exc
+    raise RuntimeError("La ruta temporal de salida ya existe")
+
+
+def _read_regular_file_once(path: Path, *, max_bytes: int) -> bytes:
+    try:
+        before = os.lstat(path)
+    except OSError as exc:
+        raise RuntimeError("No se pudo leer la fuente importada descargada") from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or _path_is_symlink_or_reparse(path)
+        or before.st_size <= 0
+        or before.st_size > max_bytes
+    ):
+        raise RuntimeError("La fuente importada excede el limite permitido o es insegura")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError("No se pudo abrir la fuente importada descargada") from exc
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise RuntimeError("La fuente importada cambio durante su validacion")
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise RuntimeError("La fuente importada excede el limite permitido")
+    finally:
+        os.close(descriptor)
+    try:
+        after = os.lstat(path)
+    except OSError as exc:
+        raise RuntimeError("La fuente importada cambio durante su validacion") from exc
+    if (
+        _path_is_symlink_or_reparse(path)
+        or (before.st_dev, before.st_ino, before.st_size)
+        != (after.st_dev, after.st_ino, after.st_size)
+        or total != after.st_size
+    ):
+        raise RuntimeError("La fuente importada cambio durante su validacion")
+    return b"".join(chunks)
+
+
+def _validate_xlsx_mime(source_bytes: bytes) -> None:
+    if not source_bytes.startswith(b"PK") or not zipfile.is_zipfile(BytesIO(source_bytes)):
+        raise RuntimeError("La fuente importada no es un XLSX valido")
+    try:
+        with zipfile.ZipFile(BytesIO(source_bytes)) as package:
+            names = set(package.namelist())
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise RuntimeError("La fuente importada no es un XLSX valido") from exc
+    if not {"[Content_Types].xml", "xl/workbook.xml"} <= names:
+        raise RuntimeError("La fuente importada no coincide con el MIME XLSX")
+
+
+def _validate_mixed_job_provenance(job: dict, payload: dict) -> None:
+    metadata = job.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise RuntimeError("Metadata de job invalida")
+    expected_values = {
+        "mixed_item_count": payload["item_count"],
+        "mixed_section_count": len(payload["sections"]),
+        "catalog_item_counts": {
+            group["catalog"]: len(group["items"]) for group in payload["groups"]
+        },
+        "catalog_source_hashes": {
+            group["catalog"]: group["catalog_source_hash"]
+            for group in payload["groups"]
+        },
+        "quote_currency": payload["quote_currency"],
+    }
+    for key, expected in expected_values.items():
+        if key in metadata and metadata[key] != expected:
+            raise RuntimeError(f"{key} de metadata no coincide con JSON de entrada")
+
+    imported = payload["imported_source"]
+    if imported is None:
+        if any(
+            key in metadata
+            for key in ("import_source", "import_item_count", "import_source_path")
+        ):
+            raise RuntimeError("Metadata importada inesperada para carrito de catalogo")
+        return
+    expected_import = {
+        "import_id": imported["import_id"],
+        "original_filename": imported["original_filename"],
+        "source_hash": imported["source_hash"],
+    }
+    if "import_source" in metadata and metadata["import_source"] != expected_import:
+        raise RuntimeError("Procedencia importada de metadata no coincide con JSON")
+    if (
+        "import_item_count" in metadata
+        and metadata["import_item_count"] != len(imported["items"])
+    ):
+        raise RuntimeError("Conteo importado de metadata no coincide con JSON")
+    expected_path = imported.get("storage_path", imported.get("source_path"))
+    if "import_source_path" in metadata and metadata["import_source_path"] != expected_path:
+        raise RuntimeError("Ruta importada de metadata no coincide con JSON")
+
+
+def _download_imported_source(
+    client,
+    payload: dict,
+    tmp_dir: Path,
+    *,
+    job: dict | None = None,
+) -> Path | None:
+    from mobiliti_saas.quote_engine.mixed_catalog import validate_mixed_catalog_payload
+
+    checked = validate_mixed_catalog_payload(payload)
+    imported = checked.get("imported_source")
+    if imported is None:
+        return None
+    storage_path = imported.get("storage_path", imported.get("source_path"))
+    if not isinstance(storage_path, str) or not storage_path:
+        raise RuntimeError("Fuente importada sin ruta de storage validada")
+    storage_provider = imported.get("storage_provider")
+    if storage_provider is None and job is not None:
+        storage_provider = _job_input_storage_provider(job)
+    if storage_provider not in {"supabase", "r2", "cloudflare-r2", "cloudflare"}:
+        raise RuntimeError("Fuente importada sin proveedor de storage validado")
+    if job is None:
+        raise RuntimeError("Job requerido para validar la fuente importada")
+    expected_storage_path = (
+        f"users/{job.get('usuario_id')}/jobs/{job.get('id')}/import-source.xlsx"
+    )
+    if storage_path != expected_storage_path:
+        raise RuntimeError("Ruta de fuente importada no corresponde al job")
+    if storage_provider != _job_input_storage_provider(job):
+        raise RuntimeError("Proveedor de fuente importada no corresponde al job")
+
+    target = _safe_tmp_target(tmp_dir, "import-source.xlsx")
+    client.storage_download_from_provider(
+        storage_path,
+        target,
+        storage_provider,
+    )
+    if target.parent.resolve(strict=True) != Path(tmp_dir).resolve(strict=True):
+        raise RuntimeError("Ruta de fuente importada fuera del temporal")
+    source_bytes = _read_regular_file_once(
+        target,
+        max_bytes=MAX_IMPORTED_SOURCE_BYTES,
+    )
+    if not hmac.compare_digest(
+        hashlib.sha256(source_bytes).hexdigest(),
+        imported["source_hash"],
+    ):
+        raise RuntimeError("La fuente importada cambio despues de validarse")
+    _validate_xlsx_mime(source_bytes)
+    return target
 
 
 def _read_cart_payload(source_json: Path) -> dict:
@@ -703,8 +938,114 @@ def _is_json_cart_job(job: dict) -> bool:
     return _has_json_input_hint(job) or _has_supported_json_cart_source_type(job) or "source_type" in metadata
 
 
-def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Path:
+def _validate_local_input_file(job: dict, local_input: Path, input_extension: str) -> None:
+    try:
+        source_stat = os.lstat(local_input)
+    except OSError as exc:
+        raise RuntimeError("Archivo de entrada local no disponible") from exc
+    if not stat.S_ISREG(source_stat.st_mode) or _path_is_symlink_or_reparse(local_input):
+        raise RuntimeError("Archivo de entrada local inseguro")
+    if source_stat.st_size <= 0 or source_stat.st_size > MAX_IMPORTED_SOURCE_BYTES:
+        raise RuntimeError("Archivo de entrada fuera del limite permitido")
+    metadata = job.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise RuntimeError("Metadata de job invalida")
+    expected_size = metadata.get("file_size")
+    if expected_size is not None and (
+        type(expected_size) is not int or expected_size != source_stat.st_size
+    ):
+        raise RuntimeError("Tamano de entrada no coincide con metadata")
+    if input_extension == ".xlsx" and expected_size is not None:
+        source_bytes = _read_regular_file_once(
+            local_input,
+            max_bytes=MAX_IMPORTED_SOURCE_BYTES,
+        )
+        _validate_xlsx_mime(source_bytes)
+    if input_extension == ".pdf" and expected_size is not None:
+        with local_input.open("rb") as source_file:
+            if source_file.read(5) != b"%PDF-":
+                raise RuntimeError("El archivo de entrada no coincide con el MIME PDF")
+
+
+def convert_validated_payload(
+    source_type: str,
+    payload: dict,
+    local_input: Path,
+    tmp_dir: Path,
+    imported_source_path: Path | None,
+) -> Path:
+    """Convierte una sola vez un payload ya validado a la fuente del parser."""
+
+    if not isinstance(payload, dict) or payload.get("source_type") != source_type:
+        raise RuntimeError("source_type validado no coincide con payload")
+    conversions = {
+        TARKETT_CART_SOURCE_TYPE: (
+            "quotation_from_tarkett.xlsx",
+            _convert_tarkett_cart_to_quotation,
+        ),
+        OFFIHO_CART_SOURCE_TYPE: (
+            "quotation_from_offiho.xlsx",
+            _convert_offiho_cart_to_quotation,
+        ),
+        SUPPLIER_CART_SOURCE_TYPE: (
+            "quotation_from_supplier.xlsx",
+            _convert_supplier_cart_to_quotation,
+        ),
+        MIXED_CATALOG_CART_SOURCE_TYPE: (
+            "quotation_from_mixed_catalog.xlsx",
+            _convert_mixed_catalog_cart_to_quotation,
+        ),
+    }
+    conversion = conversions.get(source_type)
+    if conversion is None:
+        raise RuntimeError("Tipo de fuente JSON no soportado")
+    has_import = (
+        source_type == MIXED_CATALOG_CART_SOURCE_TYPE
+        and payload.get("imported_source") is not None
+    )
+    if has_import != (imported_source_path is not None):
+        raise RuntimeError("Fuente importada validada no coincide con payload")
+    if source_type != MIXED_CATALOG_CART_SOURCE_TYPE and imported_source_path is not None:
+        raise RuntimeError("Fuente importada inesperada para tipo de payload")
+
+    output_name, converter = conversion
+    converted_input = _safe_tmp_target(tmp_dir, output_name)
+    if has_import:
+        converter(
+            local_input,
+            converted_input,
+            payload,
+            imported_source_path=imported_source_path,
+        )
+    else:
+        converter(local_input, converted_input, payload)
+    try:
+        converted_stat = os.lstat(converted_input)
+    except OSError as exc:
+        raise RuntimeError("El convertidor no produjo una fuente para el parser") from exc
+    if (
+        not stat.S_ISREG(converted_stat.st_mode)
+        or _path_is_symlink_or_reparse(converted_input)
+        or converted_input.parent.resolve(strict=True) != Path(tmp_dir).resolve(strict=True)
+    ):
+        raise RuntimeError("El convertidor produjo una fuente insegura")
+    converted_bytes = _read_regular_file_once(
+        converted_input,
+        max_bytes=MAX_IMPORTED_SOURCE_BYTES,
+    )
+    _validate_xlsx_mime(converted_bytes)
+    return converted_input
+
+
+def _prepare_generator_input(
+    job: dict,
+    local_input: Path,
+    tmp_dir: Path,
+    *,
+    client=None,
+) -> PreparedGeneratorInput:
     input_extension = _input_extension_for_job(job)
+    _validate_local_input_file(job, local_input, input_extension)
     if _is_json_cart_job(job):
         payload = _read_cart_payload(local_input)
         source_type = payload.get("source_type")
@@ -713,12 +1054,16 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
         source_type = source_type.strip()
 
         metadata = job.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            raise RuntimeError("Metadata de job invalida")
         metadata_source_type = _json_job_source_type(job)
         if metadata_source_type is None:
             raise RuntimeError("source_type de metadata ausente para JSON de entrada")
         if metadata_source_type != source_type:
             raise RuntimeError("source_type de metadata no coincide con JSON de entrada")
 
+        imported_source_path = None
+        canonical_rows: tuple[QuotationDataRow, ...] = ()
         if source_type == MIXED_CATALOG_CART_SOURCE_TYPE:
             from mobiliti_saas.quote_engine.mixed_catalog import validate_mixed_catalog_payload
 
@@ -726,36 +1071,39 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
                 payload = validate_mixed_catalog_payload(payload)
             except ValueError as exc:
                 raise RuntimeError(f"Payload de cotizacion mixta invalido: {exc}") from exc
+            _validate_mixed_job_provenance(job, payload)
+            try:
+                canonical_rows = tuple(quotation_data_rows(payload))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(f"Filas canonicas de cotizacion invalidas: {exc}") from exc
+            if not canonical_rows or len(canonical_rows) != payload["item_count"]:
+                raise RuntimeError("Carrito mixto sin filas canonicas completas")
+            if payload["imported_source"] is not None:
+                if client is None:
+                    raise RuntimeError("Cliente de storage requerido para fuente importada")
+                imported_source_path = _download_imported_source(
+                    client,
+                    payload,
+                    tmp_dir,
+                    job=job,
+                )
 
-        conversions = {
-            TARKETT_CART_SOURCE_TYPE: (
-                "quotation_from_tarkett.xlsx",
-                _convert_tarkett_cart_to_quotation,
-                "tarkett_converted",
-            ),
-            OFFIHO_CART_SOURCE_TYPE: (
-                "quotation_from_offiho.xlsx",
-                _convert_offiho_cart_to_quotation,
-                "offiho_converted",
-            ),
-            SUPPLIER_CART_SOURCE_TYPE: (
-                "quotation_from_supplier.xlsx",
-                _convert_supplier_cart_to_quotation,
-                "supplier_converted",
-            ),
-            MIXED_CATALOG_CART_SOURCE_TYPE: (
-                "quotation_from_mixed_catalog.xlsx",
-                _convert_mixed_catalog_cart_to_quotation,
-                "mixed_catalog_converted",
-            ),
+        conversion_flags = {
+            TARKETT_CART_SOURCE_TYPE: "tarkett_converted",
+            OFFIHO_CART_SOURCE_TYPE: "offiho_converted",
+            SUPPLIER_CART_SOURCE_TYPE: "supplier_converted",
+            MIXED_CATALOG_CART_SOURCE_TYPE: "mixed_catalog_converted",
         }
-        conversion = conversions.get(source_type)
-        if conversion is None:
+        conversion_flag = conversion_flags.get(source_type)
+        if conversion_flag is None:
             raise RuntimeError("Tipo de fuente JSON no soportado")
-
-        output_name, converter, conversion_flag = conversion
-        converted_input = tmp_dir / output_name
-        converter(local_input, converted_input, payload)
+        converted_input = convert_validated_payload(
+            source_type,
+            payload,
+            local_input,
+            tmp_dir,
+            imported_source_path,
+        )
         metadata["input_extension"] = ".json"
         metadata[conversion_flag] = True
         if source_type == SUPPLIER_CART_SOURCE_TYPE:
@@ -789,21 +1137,32 @@ def _prepare_generator_input(job: dict, local_input: Path, tmp_dir: Path) -> Pat
                     "auto_electrification_rate": deepcopy(
                         payload["auto_electrification_rate"]
                     ),
-                    "descuento": 0,
                 }
             )
         job["metadata"] = metadata
-        return converted_input
+        return PreparedGeneratorInput(
+            parser_source=converted_input,
+            original_quotation=imported_source_path,
+            quotation_data=canonical_rows,
+        )
     if input_extension != ".pdf":
-        return local_input
+        return PreparedGeneratorInput(
+            parser_source=local_input,
+            original_quotation=local_input,
+            quotation_data=(),
+        )
 
-    converted_input = tmp_dir / "quotation_from_pdf.xlsx"
+    converted_input = _safe_tmp_target(tmp_dir, "quotation_from_pdf.xlsx")
     _convert_pdf_to_quotation(local_input, converted_input, _template_path())
     metadata = job.get("metadata") or {}
     metadata["input_extension"] = ".pdf"
     metadata["pdf_converted"] = True
     job["metadata"] = metadata
-    return converted_input
+    return PreparedGeneratorInput(
+        parser_source=converted_input,
+        original_quotation=converted_input,
+        quotation_data=(),
+    )
 
 
 def _job_input_storage_provider(job: dict) -> str:
@@ -871,9 +1230,131 @@ def _delete_job_input(client: SupabaseClient, job: dict) -> None:
     client.storage_delete(job.get("input_path") or "")
 
 
-def _run_generator(job: dict, input_path: Path, output_path: Path) -> None:
+def _validate_job_input_reference(job: dict) -> None:
+    job_id = str(job.get("id") or "").strip()
+    user_id = str(job.get("usuario_id") or "").strip()
+    object_path = str(job.get("input_path") or "").strip()
+    if not job_id or not user_id or not object_path:
+        raise RuntimeError("Job sin procedencia de entrada completa")
+    if (
+        "\\" in object_path
+        or object_path.startswith("/")
+        or "?" in object_path
+        or "#" in object_path
+        or ".." in object_path.split("/")
+        or any(not segment for segment in object_path.split("/"))
+    ):
+        raise RuntimeError("Ruta de entrada de job invalida")
+    expected_prefix = f"users/{user_id}/jobs/{job_id}/"
+    if not object_path.startswith(expected_prefix):
+        raise RuntimeError("Ruta de entrada no corresponde al job")
+    metadata = job.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise RuntimeError("Metadata de job invalida")
+    explicit_provider = (
+        metadata.get("resolved_input_storage_provider")
+        or metadata.get("input_storage_provider")
+        or metadata.get("storage_provider")
+        or metadata.get("quote_storage_provider")
+    )
+    if explicit_provider is not None and str(explicit_provider).strip().lower() not in {
+        "supabase",
+        "r2",
+        "cloudflare-r2",
+        "cloudflare",
+    }:
+        raise RuntimeError("Proveedor de storage del job invalido")
+
+
+def _cleanup_completed_import_source(client: SupabaseClient, final_job: dict) -> bool:
+    metadata = final_job.get("metadata") or {}
+    imported = metadata.get("import_source") if isinstance(metadata, dict) else None
+    if not isinstance(imported, dict):
+        return False
+    try:
+        import_id = str(uuid.UUID(str(imported.get("import_id") or "")))
+        final_job_id = str(uuid.UUID(str(final_job.get("id") or "")))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    user_id = final_job.get("usuario_id")
+    rows = client.rest(
+        "GET",
+        "/saas_quote_jobs",
+        params={"id": f"eq.{import_id}", "select": "*", "limit": "2"},
+    )
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        return False
+    source = rows[0]
+    source_metadata = source.get("metadata") or {}
+    if (
+        source.get("status") != "failed"
+        or str(source.get("usuario_id")) != str(user_id)
+        or not isinstance(source_metadata, dict)
+        or source_metadata.get("import_consumed_by_job_id") != final_job_id
+    ):
+        return False
+    prefix = f"users/{user_id}/jobs/{import_id}/"
+    preview_paths = source_metadata.get("import_preview_paths")
+    if preview_paths is None:
+        preview_paths = {}
+    if not isinstance(preview_paths, dict):
+        return False
+    paths = [
+        source.get("input_path"),
+        source_metadata.get("import_manifest_path"),
+        *preview_paths.values(),
+    ]
+    clean_paths = []
+    for raw_path in paths:
+        path = str(raw_path or "").strip().lstrip("/")
+        if not path:
+            continue
+        if not path.startswith(prefix) or ".." in path.split("/"):
+            return False
+        if path not in clean_paths:
+            clean_paths.append(path)
+    provider = str(
+        source_metadata.get("input_storage_provider")
+        or source_metadata.get("storage_provider")
+        or STORAGE_PROVIDER
+    ).strip().lower()
+    for path in clean_paths:
+        if hasattr(client, "storage_delete_from_provider"):
+            client.storage_delete_from_provider(path, provider)
+        else:
+            client.storage_delete(path)
+    cleaned_metadata = dict(source_metadata)
+    cleaned_metadata.pop("import_manifest_path", None)
+    cleaned_metadata.pop("import_preview_paths", None)
+    cleaned_metadata.pop("import_source_hash", None)
+    cleaned_metadata.pop("import_item_count", None)
+    cleaned_metadata["import_consumed_cleanup_at"] = _utc_now()
+    updated = client.rest(
+        "PATCH",
+        (
+            f"/saas_quote_jobs?id=eq.{urllib.parse.quote(import_id, safe='-')}"
+            "&status=eq.failed"
+        ),
+        data={"input_path": None, "metadata": cleaned_metadata, "updated_at": _utc_now()},
+    )
+    return isinstance(updated, list) and len(updated) == 1 and isinstance(updated[0], dict)
+
+
+def _run_generator(
+    job: dict,
+    generator_input: PreparedGeneratorInput | Path,
+    output_path: Path,
+) -> None:
     metadata = job.get("metadata") or {}
     job["metadata"] = metadata
+    if isinstance(generator_input, Path):
+        generator_input = PreparedGeneratorInput(
+            parser_source=generator_input,
+            original_quotation=generator_input,
+            quotation_data=(),
+        )
+    if not isinstance(generator_input, PreparedGeneratorInput):
+        raise TypeError("Entrada preparada del generador invalida")
     engine = QUOTE_ENGINE
     if engine == "auto":
         engine = "python"
@@ -881,7 +1362,14 @@ def _run_generator(job: dict, input_path: Path, output_path: Path) -> None:
     if engine in {"python", "openpyxl", "online"}:
         from online_quote_generator import generate_online_quote
 
-        generate_online_quote(input_path, output_path, metadata, _template_path())
+        generate_online_quote(
+            source_path=generator_input.parser_source,
+            output_path=output_path,
+            metadata=metadata,
+            template_path=_template_path(),
+            original_quotation_path=generator_input.original_quotation,
+            quotation_data_rows=generator_input.quotation_data,
+        )
         return
     raise RuntimeError(
         f"QUOTE_ENGINE invalido: {QUOTE_ENGINE}. "
@@ -1139,6 +1627,7 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
         return None
 
     job = {**job, **claimed}
+    _validate_job_input_reference(job)
     job_id = job["id"]
     attempt_token = job["attempt_token"]
     output_path = f"users/{job['usuario_id']}/jobs/{job_id}/attempts/{attempt_token}/output.xlsx"
@@ -1155,7 +1644,12 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
                 update_progress(client, job, 45)
                 _download_job_input(client, job, local_input)
                 update_progress(client, job, 55)
-                generator_input = _prepare_generator_input(job, local_input, tmp_dir)
+                generator_input = _prepare_generator_input(
+                    job,
+                    local_input,
+                    tmp_dir,
+                    client=client,
+                )
                 heartbeat.ensure_owned()
                 _run_generator(job, generator_input, local_output)
                 heartbeat.ensure_owned()
@@ -1205,6 +1699,10 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
                 raise WorkerCompletionFailed(
                     "No se pudo confirmar durablemente la finalizacion"
                 ) from completion_error
+            try:
+                _cleanup_completed_import_source(client, job)
+            except Exception as exc:
+                print(f"WARN: no se pudo limpiar fuente importada consumida de {job_id}: {exc}")
             try:
                 _delete_job_input(client, job)
             except Exception as exc:

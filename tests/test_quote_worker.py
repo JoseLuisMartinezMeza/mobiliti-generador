@@ -1,18 +1,33 @@
 import os
 import subprocess
 import sys
+import hashlib
 import json
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from openpyxl import Workbook
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mobiliti_saas", "worker"))
 
 import quote_worker
+import online_quote_generator
 import render_web_worker
+from mobiliti_saas.quote_engine.mixed_catalog import build_mixed_catalog_cart_payload
+from mobiliti_saas.quote_engine.quotation_import import build_import_manifest
+from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
+from quotation_import_fixtures import write_import_fixture
+
+
+def _write_minimal_parser_xlsx(path):
+    workbook = Workbook()
+    workbook.active.title = "Quotation"
+    workbook.save(path)
+    workbook.close()
 
 
 def test_tarkett_catalog_sync_publishes_changed_snapshot_and_respects_interval(monkeypatch):
@@ -499,7 +514,7 @@ def test_process_job_converts_tarkett_json_before_generator(monkeypatch):
     def fake_convert(source_json, output_xlsx, payload):
         seen["source_json"] = source_json.name
         seen["source_type"] = payload["source_type"]
-        output_xlsx.write_bytes(b"converted")
+        _write_minimal_parser_xlsx(output_xlsx)
 
     def fake_generator(job, input_path, output_path):
         seen["generator_input"] = input_path.name
@@ -536,7 +551,7 @@ def test_process_job_converts_offiho_json_before_generator(monkeypatch):
     def fake_convert(source_json, output_xlsx, payload):
         seen["converted_input"] = source_json.name
         seen["source_type"] = payload["source_type"]
-        output_xlsx.write_bytes(b"converted")
+        _write_minimal_parser_xlsx(output_xlsx)
 
     def fake_generator(job, input_path, output_path):
         seen["generator_input"] = input_path.name
@@ -629,6 +644,14 @@ def _valid_mixed_worker_payload():
                 "items": [line],
             }
         ],
+        "imported_source": None,
+        "sections": [
+            {
+                "id": "section-1",
+                "title": "Recepción",
+                "item_keys": ["tarkett:T-1"],
+            }
+        ],
         "rate_summary": [rate],
         "auto_electrification_rate": {
             "base_currency": "MXN",
@@ -638,6 +661,165 @@ def _valid_mixed_worker_payload():
             "rate_effective_date": "2026-07-19",
             "rate_retrieved_at": "2026-07-19T20:00:00Z",
         },
+    }
+
+
+def _valid_imported_worker_payload(tmp_path):
+    source = write_import_fixture(tmp_path / "worker-import.xlsx")
+    manifest, _images = build_import_manifest(
+        source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=source.name,
+    )
+    imported_key = f"import:{manifest['import_id']}:11"
+    payload = build_mixed_catalog_cart_payload(
+        [],
+        catalogs={},
+        rate_rows=[{
+            "currency": "USD",
+            "effective_date": "2026-07-21",
+            "mxn_per_unit": "18.500000",
+            "retrieved_at": "2026-07-21T00:00:00Z",
+        }],
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Recepción",
+            "item_keys": [imported_key],
+        }],
+        imported_source={
+            "manifest": manifest,
+            "items": [{
+                "kind": "imported",
+                "import_id": manifest["import_id"],
+                "source_row": 11,
+                "source_currency": "USD",
+                "quantity": "2",
+                "overrides": {
+                    "name": "Alien Task Chair revisada",
+                    "description": "Silla operativa revisada",
+                    "dimension": "630 x 565 x 1000 mm",
+                    "unit_price": "82.00",
+                    "provider": "Sunon",
+                },
+            }],
+            "source_currency": "USD",
+        },
+    )
+    payload["imported_source"].update(
+        storage_path=(
+            "users/7/jobs/11111111-1111-4111-8111-111111111111/"
+            "import-source.xlsx"
+        ),
+        storage_provider="supabase",
+    )
+    return payload, source
+
+
+def _valid_mixed_imported_worker_payload(tmp_path):
+    source = write_import_fixture(tmp_path / "worker-mixed-import.xlsx")
+    manifest, _images = build_import_manifest(
+        source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=source.name,
+    )
+    imported_key = f"import:{manifest['import_id']}:11"
+    tarkett = TarkettCatalogItem(
+        code="T-1",
+        name="Piso Tarkett",
+        unit="M2",
+        available_quantity=Decimal("10"),
+        unit_price=Decimal("100"),
+        price_source="catalog",
+    )
+    payload = build_mixed_catalog_cart_payload(
+        [{"catalog": "tarkett", "code": "T-1", "quantity": "1"}],
+        catalogs={
+            "tarkett": {
+                "source_hash": "a" * 64,
+                "items": [tarkett],
+                "by_code": {tarkett.code: tarkett},
+            }
+        },
+        rate_rows=[{
+            "currency": "USD",
+            "effective_date": date.today().isoformat(),
+            "mxn_per_unit": "18.500000",
+            "retrieved_at": f"{date.today().isoformat()}T00:00:00Z",
+        }],
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Recepción",
+            "item_keys": ["tarkett:T-1", imported_key],
+        }],
+        imported_source={
+            "manifest": manifest,
+            "items": [{
+                "kind": "imported",
+                "import_id": manifest["import_id"],
+                "source_row": 11,
+                "source_currency": "USD",
+                "quantity": "2",
+                "overrides": {
+                    "name": "Alien Task Chair revisada",
+                    "description": "Silla operativa revisada",
+                    "dimension": "630 x 565 x 1000 mm",
+                    "unit_price": "82.00",
+                    "provider": "Sunon",
+                },
+            }],
+            "source_currency": "USD",
+        },
+        today=date.today(),
+    )
+    storage_path = (
+        "users/7/jobs/11111111-1111-4111-8111-111111111111/"
+        "import-source.xlsx"
+    )
+    payload["imported_source"].update(
+        storage_path=storage_path,
+        storage_provider="supabase",
+    )
+    return payload, source
+
+
+def _imported_worker_job(payload=None):
+    metadata = {
+        "source_type": "mixed_catalog_cart",
+        "input_extension": ".json",
+        "storage_provider": "supabase",
+    }
+    if payload is not None:
+        imported = payload["imported_source"]
+        metadata.update(
+            mixed_item_count=payload["item_count"],
+            mixed_section_count=len(payload["sections"]),
+            catalog_item_counts={
+                group["catalog"]: len(group["items"])
+                for group in payload["groups"]
+            },
+            catalog_source_hashes={
+                group["catalog"]: group["catalog_source_hash"]
+                for group in payload["groups"]
+            },
+            quote_currency=payload["quote_currency"],
+            import_source={
+                "import_id": imported["import_id"],
+                "original_filename": imported["original_filename"],
+                "source_hash": imported["source_hash"],
+            },
+            import_item_count=len(imported["items"]),
+            import_source_path=imported.get(
+                "storage_path", imported.get("source_path")
+            ),
+        )
+    return {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "usuario_id": 7,
+        "metadata": metadata,
     }
 
 
@@ -686,7 +868,7 @@ def test_process_job_converts_mixed_cart_once_and_sets_identity_exchange(monkeyp
         seen["converter_calls"] += 1
         seen["payload"] = cart_payload
         seen["output_name"] = output_xlsx.name
-        output_xlsx.write_bytes(b"converted")
+        _write_minimal_parser_xlsx(output_xlsx)
 
     def fake_generator(job, input_path, output_path):
         seen["generator_calls"] += 1
@@ -713,6 +895,7 @@ def test_process_job_converts_mixed_cart_once_and_sets_identity_exchange(monkeyp
             "metadata": {
                 "source_type": "mixed_catalog_cart",
                 "input_extension": ".json",
+                "descuento": 40,
             },
         },
     )
@@ -726,9 +909,447 @@ def test_process_job_converts_mixed_cart_once_and_sets_identity_exchange(monkeyp
     assert seen["metadata"]["base_currency"] == "EUR"
     assert seen["metadata"]["quote_currency"] == "EUR"
     assert seen["metadata"]["exchange_rate"] == "1.000000"
-    assert seen["metadata"]["descuento"] == 0
+    assert seen["metadata"]["descuento"] == 40
     assert seen["metadata"]["rate_summary"] == payload["rate_summary"]
     assert seen["metadata"]["auto_electrification_rate"] == payload["auto_electrification_rate"]
+
+
+def test_prepared_generator_input_preserves_plain_provider_source(tmp_path):
+    source = write_import_fixture(tmp_path / "provider-quotation.xlsx")
+    prepared = quote_worker._prepare_generator_input(
+        {
+            "id": "job-provider",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-provider/input.xlsx",
+            "metadata": {
+                "input_extension": ".xlsx",
+                "file_size": source.stat().st_size,
+            },
+        },
+        source,
+        tmp_path,
+    )
+
+    assert isinstance(prepared, quote_worker.PreparedGeneratorInput)
+    assert prepared.parser_source == source
+    assert prepared.original_quotation == source
+    assert prepared.quotation_data == ()
+
+
+def test_prepared_generator_input_catalog_only_uses_none_and_all_canonical_rows(
+    monkeypatch,
+    tmp_path,
+):
+    payload = _valid_mixed_worker_payload()
+    source = tmp_path / "catalog-only.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        lambda _source, output, _payload: _write_minimal_parser_xlsx(output),
+    )
+
+    prepared = quote_worker._prepare_generator_input(
+        {
+            "id": "job-catalog-only",
+            "usuario_id": 7,
+            "input_path": "users/7/jobs/job-catalog-only/input.json",
+            "metadata": {
+                "source_type": "mixed_catalog_cart",
+                "input_extension": ".json",
+                "mixed_item_count": 1,
+                "mixed_section_count": 1,
+                "catalog_item_counts": {"tarkett": 1},
+                "catalog_source_hashes": {"tarkett": "a" * 64},
+                "quote_currency": "EUR",
+            },
+        },
+        source,
+        tmp_path,
+    )
+
+    assert isinstance(prepared, quote_worker.PreparedGeneratorInput)
+    assert prepared.parser_source.name == "quotation_from_mixed_catalog.xlsx"
+    assert prepared.original_quotation is None
+    assert len(prepared.quotation_data) == payload["item_count"] == 1
+    row = prepared.quotation_data[0]
+    assert (row.item_key, row.section_id, row.section_title, row.position) == (
+        "tarkett:T-1",
+        "section-1",
+        "Recepción",
+        1,
+    )
+    assert row.source_hash == "a" * 64
+    assert len(row.row_hash) == 64
+
+
+def test_prepared_generator_input_rejects_non_xlsx_converter_output(
+    monkeypatch,
+    tmp_path,
+):
+    payload = _valid_mixed_worker_payload()
+    source = tmp_path / "catalog-only.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    converter_calls = []
+
+    def fake_convert(_source, output, _payload):
+        converter_calls.append(output)
+        output.write_bytes(b"not-an-xlsx")
+
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        fake_convert,
+    )
+
+    with pytest.raises(RuntimeError, match="XLSX"):
+        quote_worker._prepare_generator_input(
+            {
+                "id": "job-invalid-synthetic",
+                "usuario_id": 7,
+                "input_path": "users/7/jobs/job-invalid-synthetic/input.json",
+                "metadata": {
+                    "source_type": "mixed_catalog_cart",
+                    "input_extension": ".json",
+                    "mixed_item_count": 1,
+                    "mixed_section_count": 1,
+                    "catalog_item_counts": {"tarkett": 1},
+                    "catalog_source_hashes": {"tarkett": "a" * 64},
+                    "quote_currency": "EUR",
+                },
+            },
+            source,
+            tmp_path,
+        )
+
+    assert len(converter_calls) == 1
+
+
+def test_worker_passes_original_import_and_all_canonical_rows_to_generator(
+    monkeypatch,
+    tmp_path,
+):
+    payload, imported_source = _valid_mixed_imported_worker_payload(tmp_path)
+    job = _imported_worker_job(payload)
+    job.update(
+        status="queued",
+        input_path=(
+            "users/7/jobs/11111111-1111-4111-8111-111111111111/input.json"
+        ),
+        output_path=None,
+        attempt_token=None,
+        lease_expires_at=None,
+        updated_at="2026-07-22T00:00:00Z",
+    )
+    client = FencedWorkerClient()
+    client.job = dict(job)
+    client.objects = {
+        job["input_path"]: json.dumps(payload).encode("utf-8"),
+        payload["imported_source"]["storage_path"]: imported_source.read_bytes(),
+    }
+    downloads = []
+
+    def storage_download_from_provider(object_path, destination, provider):
+        downloads.append((object_path, provider))
+        Path(destination).write_bytes(client.objects[object_path])
+
+    def storage_delete_from_provider(object_path, provider):
+        client.deletes.append(object_path)
+        client.objects.pop(object_path, None)
+
+    client.storage_download_from_provider = storage_download_from_provider
+    client.storage_delete_from_provider = storage_delete_from_provider
+    captured = {}
+
+    def capture_generator(current_job, prepared, output_path):
+        captured["prepared_type"] = type(prepared)
+        captured["parser_name"] = prepared.parser_source.name
+        captured["original_name"] = prepared.original_quotation.name
+        captured["original_hash"] = hashlib.sha256(
+            prepared.original_quotation.read_bytes()
+        ).hexdigest()
+        captured["rows"] = prepared.quotation_data
+        captured["metadata"] = dict(current_job["metadata"])
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(quote_worker, "_run_generator", capture_generator)
+    monkeypatch.setattr(quote_worker, "WORKER_HEARTBEAT_SECONDS", 3600)
+
+    quote_worker.process_job(client, dict(job))
+
+    assert captured["prepared_type"] is quote_worker.PreparedGeneratorInput
+    assert captured["parser_name"] == "quotation_from_mixed_catalog.xlsx"
+    assert captured["original_name"] == "import-source.xlsx"
+    assert captured["original_hash"] == payload["imported_source"]["source_hash"]
+    rows = captured["rows"]
+    assert len(rows) == payload["item_count"] == 2
+    assert [row.item_key for row in rows] == payload["sections"][0]["item_keys"]
+    assert [(row.section_id, row.section_title, row.position) for row in rows] == [
+        ("section-1", "Recepción", 1),
+        ("section-1", "Recepción", 2),
+    ]
+    assert [row.source_hash for row in rows] == [
+        "a" * 64,
+        payload["imported_source"]["source_hash"],
+    ]
+    assert all(len(row.row_hash) == 64 for row in rows)
+    import_path = payload["imported_source"]["storage_path"]
+    assert downloads.count((import_path, "supabase")) == 1
+
+
+def test_online_wrapper_forwards_explicit_original_and_canonical_rows(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "parser.xlsx"
+    original = tmp_path / "original.xlsx"
+    output = tmp_path / "output.xlsx"
+    rows = (object(), object())
+    captured = {}
+
+    def fake_generate_quote(*args, **kwargs):
+        captured.update(args=args, kwargs=kwargs)
+        return output
+
+    monkeypatch.setattr(online_quote_generator, "generate_quote", fake_generate_quote)
+
+    result = online_quote_generator.generate_online_quote(
+        source,
+        output,
+        {"proyecto": "Handoff"},
+        tmp_path / "template.xlsx",
+        original_quotation_path=original,
+        quotation_data_rows=rows,
+    )
+
+    assert result == output
+    assert captured["kwargs"]["original_quotation_path"] == original
+    assert captured["kwargs"]["quotation_data_rows"] is rows
+
+
+@pytest.mark.parametrize("storage_contract", ("canonical", "legacy"))
+def test_worker_downloads_validated_import_source_and_passes_verified_path_to_builder(
+    monkeypatch, tmp_path, storage_contract
+):
+    payload, source = _valid_imported_worker_payload(tmp_path)
+    expected_storage_path = payload["imported_source"]["storage_path"]
+    if storage_contract == "legacy":
+        payload["imported_source"]["source_path"] = payload["imported_source"].pop(
+            "storage_path"
+        )
+        payload["imported_source"].pop("storage_provider")
+    local_input = tmp_path / "input.json"
+    local_input.write_text(json.dumps(payload), encoding="utf-8")
+    seen = {"downloads": [], "conversions": []}
+
+    class Client:
+        def storage_download_from_provider(self, storage_path, destination, provider):
+            seen["downloads"].append((storage_path, provider))
+            destination.write_bytes(source.read_bytes())
+
+    def fake_convert(
+        source_json,
+        output_xlsx,
+        cart_payload,
+        *,
+        imported_source_path,
+    ):
+        seen["conversions"].append(
+            (
+                source_json.name,
+                imported_source_path.name,
+                hashlib.sha256(imported_source_path.read_bytes()).hexdigest(),
+            )
+        )
+        _write_minimal_parser_xlsx(output_xlsx)
+
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        fake_convert,
+    )
+    output = quote_worker._prepare_generator_input(
+        _imported_worker_job(),
+        local_input,
+        tmp_path,
+        client=Client(),
+    )
+
+    assert output.name == "quotation_from_mixed_catalog.xlsx"
+    assert seen["downloads"] == [(
+        expected_storage_path,
+        "supabase",
+    )]
+    assert seen["conversions"] == [(
+        "input.json",
+        "import-source.xlsx",
+        payload["imported_source"]["source_hash"],
+    )]
+
+
+def test_completed_mixed_job_cleans_consumed_import_source_only_after_success():
+    final_job_id = "11111111-1111-4111-8111-111111111111"
+    import_id = "22222222-2222-4222-8222-222222222222"
+    prefix = f"users/7/jobs/{import_id}/"
+    source = {
+        "id": import_id,
+        "usuario_id": 7,
+        "status": "failed",
+        "input_path": f"{prefix}input.xlsx",
+        "metadata": {
+            "input_storage_provider": "supabase",
+            "import_consumed_by_job_id": final_job_id,
+            "import_manifest_path": f"{prefix}preview/hash/manifest.json",
+            "import_preview_paths": {"9": f"{prefix}preview/hash/row-9.png"},
+        },
+    }
+    deleted = []
+    patched = []
+
+    class Client:
+        def rest(self, method, path, params=None, data=None):
+            if method == "GET":
+                assert params == {"id": f"eq.{import_id}", "select": "*", "limit": "2"}
+                return [source]
+            patched.append((path, data))
+            return [{**source, **(data or {})}]
+
+        def storage_delete_from_provider(self, path, provider):
+            deleted.append((path, provider))
+
+    cleaned = quote_worker._cleanup_completed_import_source(
+        Client(),
+        {
+            "id": final_job_id,
+            "usuario_id": 7,
+            "metadata": {"import_source": {"import_id": import_id}},
+        },
+    )
+
+    assert cleaned is True
+    assert deleted == [
+        (f"{prefix}input.xlsx", "supabase"),
+        (f"{prefix}preview/hash/manifest.json", "supabase"),
+        (f"{prefix}preview/hash/row-9.png", "supabase"),
+    ]
+    assert len(patched) == 1
+    patch_path, updates = patched[0]
+    assert f"id=eq.{import_id}" in patch_path and "status=eq.failed" in patch_path
+    assert updates["input_path"] is None
+    assert "import_manifest_path" not in updates["metadata"]
+    assert "import_preview_paths" not in updates["metadata"]
+    assert updates["metadata"]["import_consumed_by_job_id"] == final_job_id
+
+
+def test_worker_converter_rejects_imported_row_remap_without_leaving_output(tmp_path):
+    payload, source = _valid_imported_worker_payload(tmp_path)
+    manifest, _images = build_import_manifest(
+        source.read_bytes(),
+        import_id=payload["imported_source"]["import_id"],
+        original_filename=payload["imported_source"]["original_filename"],
+    )
+    authoritative_row_9 = next(
+        item for item in manifest["items"] if item["source_row"] == 9
+    )
+    remapped_key = f"import:{manifest['import_id']}:9"
+    imported_line = payload["imported_source"]["items"][0]
+    imported_line.update(
+        source_row=9,
+        canonical_key=remapped_key,
+        source_reference=(
+            f"{payload['imported_source']['original_filename']}#Quotation!9"
+        ),
+        row_hash=authoritative_row_9["row_hash"],
+    )
+    payload["sections"][0]["item_keys"] = [remapped_key]
+    local_input = tmp_path / "input.json"
+    local_input.write_text(json.dumps(payload), encoding="utf-8")
+
+    class Client:
+        def storage_download_from_provider(self, storage_path, destination, provider):
+            destination.write_bytes(source.read_bytes())
+
+    with pytest.raises(ValueError, match="fila importada"):
+        quote_worker._prepare_generator_input(
+            _imported_worker_job(),
+            local_input,
+            tmp_path,
+            client=Client(),
+        )
+
+    assert not (tmp_path / "quotation_from_mixed_catalog.xlsx").exists()
+
+
+@pytest.mark.parametrize("failure", ("changed_hash", "download_failure", "oversized"))
+def test_worker_does_not_build_output_when_import_source_cannot_be_verified(
+    monkeypatch, tmp_path, failure
+):
+    payload, source = _valid_imported_worker_payload(tmp_path)
+    local_input = tmp_path / "input.json"
+    local_input.write_text(json.dumps(payload), encoding="utf-8")
+    conversions = []
+
+    class Client:
+        def storage_download_from_provider(self, storage_path, destination, provider):
+            if failure == "download_failure":
+                raise RuntimeError("storage unavailable")
+            data = source.read_bytes()
+            destination.write_bytes(data + (b"changed" if failure == "changed_hash" else b""))
+
+    if failure == "oversized":
+        monkeypatch.setattr(quote_worker, "MAX_IMPORTED_SOURCE_BYTES", 1)
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        lambda *_args, **_kwargs: conversions.append("convert"),
+    )
+
+    with pytest.raises(RuntimeError):
+        quote_worker._prepare_generator_input(
+            _imported_worker_job(),
+            local_input,
+            tmp_path,
+            client=Client(),
+        )
+
+    assert conversions == []
+    assert not (tmp_path / "quotation_from_mixed_catalog.xlsx").exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda imported: imported.update(storage_provider="browser"),
+        lambda imported: imported.update(storage_path="C:/client/source.xlsx"),
+        lambda imported: imported.update(storage_path="users/7/jobs/not-a-uuid/import-source.xlsx"),
+    ),
+)
+def test_worker_rejects_import_storage_reference_before_download(
+    monkeypatch, tmp_path, mutation
+):
+    payload, _source = _valid_imported_worker_payload(tmp_path)
+    mutation(payload["imported_source"])
+    local_input = tmp_path / "input.json"
+    local_input.write_text(json.dumps(payload), encoding="utf-8")
+    downloads = []
+
+    class Client:
+        def storage_download_from_provider(self, *args):
+            downloads.append(args)
+
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        lambda *_args, **_kwargs: pytest.fail("converter must not run"),
+    )
+    with pytest.raises(RuntimeError, match="Payload de cotizacion mixta invalido"):
+        quote_worker._prepare_generator_input(
+            _imported_worker_job(),
+            local_input,
+            tmp_path,
+            client=Client(),
+        )
+    assert downloads == []
 
 
 @pytest.mark.parametrize(
@@ -904,7 +1525,7 @@ def test_process_job_converts_supplier_cart_and_sets_frozen_catalog_metadata(mon
     def fake_convert(source_json, output_xlsx, cart_payload):
         seen["converted_input"] = source_json.name
         seen["payload"] = cart_payload
-        output_xlsx.write_bytes(b"converted")
+        _write_minimal_parser_xlsx(output_xlsx)
 
     def fake_generator(job, input_path, output_path):
         seen["generator_input"] = input_path.name
@@ -956,7 +1577,7 @@ def test_process_job_uses_source_type_when_input_name_is_not_json(monkeypatch):
 
     def fake_convert(source_json, output_xlsx, payload):
         seen["converted_input"] = source_json.name
-        output_xlsx.write_bytes(b"converted")
+        _write_minimal_parser_xlsx(output_xlsx)
 
     def fake_generator(job, input_path, output_path):
         seen["generator_input"] = input_path.name
@@ -1065,7 +1686,7 @@ def test_prepare_generator_input_reads_cart_json_once(monkeypatch, tmp_path):
     monkeypatch.setattr(
         quote_worker,
         "_convert_offiho_cart_to_quotation",
-        lambda source_json, output_xlsx, payload: output_xlsx.write_bytes(b"converted"),
+        lambda source_json, output_xlsx, payload: _write_minimal_parser_xlsx(output_xlsx),
     )
 
     output = quote_worker._prepare_generator_input(
@@ -1090,7 +1711,7 @@ def test_process_job_downloads_input_from_job_storage_provider(monkeypatch):
     def fake_convert(source_json, output_xlsx, payload):
         seen["converted_input"] = source_json.name
         seen["source_type"] = payload["source_type"]
-        output_xlsx.write_bytes(b"converted")
+        _write_minimal_parser_xlsx(output_xlsx)
 
     def fake_generator(job, input_path, output_path):
         seen["generator_input"] = input_path.name
@@ -1532,12 +2153,15 @@ def test_real_mixed_conversion_and_generator_preserve_pricing_metadata_across_he
             "direccion": "Direccion",
             "razon_social": "Empresa SA",
             "image_provider": "pillow",
+            "descuento": 40,
         },
     )
     client.objects = {client.job["input_path"]: json.dumps(payload).encode("utf-8")}
     real_run_generator = quote_worker._run_generator
     worker_template = (
-        Path("mobiliti_saas/worker/templates/Formato Cotizacion 2026 GDL.xlsx").resolve()
+        Path(
+            "mobiliti_saas/worker/templates/Formato Cotizacion 2026 Oficial.xlsx"
+        ).resolve()
     )
     seen = {}
 
@@ -1566,7 +2190,7 @@ def test_real_mixed_conversion_and_generator_preserve_pricing_metadata_across_he
         assert current["auto_electrification_rate"] == payload["auto_electrification_rate"]
         assert current["catalog_source_hashes"] == {"tarkett": "a" * 64}
         assert current["quote_currency"] == "EUR"
-        assert current["descuento"] == 0
+        assert current["descuento"] == 40
 
 
 def test_postgres_client_threads_attempt_and_lease_filters_into_update(monkeypatch):

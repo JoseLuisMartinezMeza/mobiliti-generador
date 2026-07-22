@@ -3292,25 +3292,42 @@ def _official_section_needs(
 def _bind_authoritative_canonical_rows(
     lines: Sequence[_OfficialPresentationLine],
     canonical_rows: Sequence[QuotationDataRow],
-) -> tuple[tuple[_OfficialPresentationLine, ...], tuple[SectionNeed, ...]]:
-    if len(lines) != len(canonical_rows):
+    source: Path | bytes,
+) -> tuple[
+    tuple[_OfficialPresentationLine, ...],
+    tuple[SectionNeed, ...],
+    tuple[QuotationDataRow, ...],
+]:
+    base_lines = tuple(line for line in lines if line.origin != "lumbro")
+    if len(base_lines) != len(canonical_rows):
         raise ValueError("La cantidad canónica no coincide con la presentación")
 
-    bound: list[_OfficialPresentationLine] = []
-    identity_map: dict[str, str] = {}
+    bound_bases: dict[str, _OfficialPresentationLine] = {}
+    canonical_by_source_key: dict[str, QuotationDataRow] = {}
     for position, (line, canonical) in enumerate(
-        zip(lines, canonical_rows, strict=True),
+        zip(base_lines, canonical_rows, strict=True),
         start=1,
     ):
         expected_origin = line.origin
-        if expected_origin in {"imported", "lumbro"}:
+        if expected_origin == "imported":
             origin_matches = canonical.origin == expected_origin
         else:
-            origin_matches = canonical.origin not in {"imported", "lumbro"}
+            source_reference = str(
+                line.item.referencia_fuente if line.item is not None else ""
+            ).strip()
+            referenced_origin = (
+                source_reference.partition(":")[0].strip().lower()
+                if ":" in source_reference
+                else ""
+            )
+            origin_matches = (
+                canonical.origin == referenced_origin
+                if referenced_origin
+                else canonical.origin != "imported"
+            )
         comparisons = {
             "position": canonical.position == position,
             "origin": origin_matches,
-            "source_row": canonical.source_row == line.source_row,
             "original_currency": canonical.original_currency
             == line.original_currency,
             "original_cost": canonical.original_cost == line.original_cost,
@@ -3325,31 +3342,96 @@ def _bind_authoritative_canonical_rows(
         )
         if mismatch is not None:
             raise ValueError(f"Fila canónica no coincide: {mismatch}")
-        identity_map[line.item_key] = canonical.item_key
-        bound.append(
-            replace(
-                line,
-                item_key=canonical.item_key,
-                section_id=canonical.section_id,
-                section_title=canonical.section_title,
-                region=canonical.region,
-                origin=canonical.origin,
-                upstream_row_hash=canonical.upstream_row_hash,
-            )
+        canonical_by_source_key[line.item_key] = canonical
+        bound_bases[line.item_key] = replace(
+            line,
+            item_key=canonical.item_key,
+            section_id=canonical.section_id,
+            section_title=canonical.section_title,
+            region=canonical.region,
+            origin=canonical.origin,
+            source_row=canonical.source_row,
+            upstream_row_hash=canonical.upstream_row_hash,
         )
 
-    rebound = tuple(
-        replace(
-            line,
-            parent_item_key=(
-                identity_map[line.parent_item_key]
-                if line.parent_item_key is not None
-                else None
-            ),
-        )
-        for line in bound
+    rebound: list[_OfficialPresentationLine] = []
+    original_lines: list[_OfficialPresentationLine] = []
+    seen_keys: set[str] = set()
+    for line in lines:
+        if line.origin != "lumbro":
+            bound = bound_bases[line.item_key]
+        else:
+            parent_source_key = line.parent_item_key
+            if parent_source_key is None or parent_source_key not in bound_bases:
+                raise ValueError("Accesorio Lumbro sin producto padre canónico")
+            parent = bound_bases[parent_source_key]
+            prefix = f"{parent_source_key}:"
+            if not line.item_key.startswith(prefix):
+                raise ValueError("Identidad Lumbro derivada inconsistente")
+            bound = replace(
+                line,
+                item_key=f"{parent.item_key}:{line.item_key[len(prefix):]}",
+                parent_item_key=parent.item_key,
+                section_id=parent.section_id,
+                section_title=parent.section_title,
+            )
+        if bound.item_key in seen_keys:
+            raise ValueError("Identidad canónica duplicada en la presentación")
+        seen_keys.add(bound.item_key)
+        original_lines.append(line)
+        rebound.append(bound)
+
+    source_hash = _official_file_hash(source)
+    enriched_rows: list[QuotationDataRow] = []
+    for position, (original, bound) in enumerate(
+        zip(original_lines, rebound, strict=True),
+        start=1,
+    ):
+        if original.origin == "lumbro":
+            enriched = _canonical_row_from_line(bound, position, source_hash)
+        else:
+            enriched = _with_canonical_hash(
+                replace(
+                    canonical_by_source_key[original.item_key],
+                    position=position,
+                    row_hash="",
+                )
+            )
+        enriched_rows.append(enriched)
+
+    result = tuple(rebound)
+    return (
+        result,
+        _official_section_needs(result),
+        tuple(enriched_rows),
     )
-    return rebound, _official_section_needs(rebound)
+
+
+def _canonical_row_from_line(
+    line: _OfficialPresentationLine,
+    position: int,
+    source_hash: str,
+) -> QuotationDataRow:
+    return _with_canonical_hash(
+        QuotationDataRow(
+            item_key=line.item_key,
+            section_id=line.section_id,
+            section_title=line.section_title,
+            position=position,
+            origin=line.origin,
+            source_row=line.source_row,
+            original_currency=line.original_currency,
+            original_cost=line.original_cost,
+            frozen_rate=line.frozen_rate,
+            converted_cost=line.converted_cost,
+            quantity=line.quantity,
+            provider=line.provider,
+            region=line.region,
+            source_hash=source_hash,
+            upstream_row_hash=line.upstream_row_hash,
+            row_hash="",
+        )
+    )
 
 
 def _official_canonical_rows(
@@ -3357,31 +3439,10 @@ def _official_canonical_rows(
     source: Path | bytes,
 ) -> tuple[QuotationDataRow, ...]:
     source_hash = _official_file_hash(source)
-    result: list[QuotationDataRow] = []
-    for position, line in enumerate(lines, start=1):
-        result.append(
-            _with_canonical_hash(
-                QuotationDataRow(
-                    item_key=line.item_key,
-                    section_id=line.section_id,
-                    section_title=line.section_title,
-                    position=position,
-                    origin=line.origin,
-                    source_row=line.source_row,
-                    original_currency=line.original_currency,
-                    original_cost=line.original_cost,
-                    frozen_rate=line.frozen_rate,
-                    converted_cost=line.converted_cost,
-                    quantity=line.quantity,
-                    provider=line.provider,
-                    region=line.region,
-                    source_hash=source_hash,
-                    upstream_row_hash=line.upstream_row_hash,
-                    row_hash="",
-                )
-            )
-        )
-    return tuple(result)
+    return tuple(
+        _canonical_row_from_line(line, position, source_hash)
+        for position, line in enumerate(lines, start=1)
+    )
 
 
 def _official_dimension_write(coordinate: str, value: str) -> MobilitiCellWrite:
@@ -3646,7 +3707,7 @@ def generate_quote(
         )
     else:
         raise TypeError("original_quotation_path debe ser Path, str o None")
-    image_payloads = _source_product_images(normalized_original or normalized_source)
+    image_payloads = _source_product_images(normalized_source)
     lines, needs = _official_presentation_lines(
         items,
         metadata,
@@ -3657,8 +3718,11 @@ def generate_quote(
     if handed_off_rows is None:
         canonical_rows = _official_canonical_rows(lines, normalized_source)
     else:
-        lines, needs = _bind_authoritative_canonical_rows(lines, handed_off_rows)
-        canonical_rows = handed_off_rows
+        lines, needs, canonical_rows = _bind_authoritative_canonical_rows(
+            lines,
+            handed_off_rows,
+            normalized_source,
+        )
     mobiliti = _build_official_mobiliti(
         base,
         lines,
