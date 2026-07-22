@@ -1627,7 +1627,6 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
         return None
 
     job = {**job, **claimed}
-    _validate_job_input_reference(job)
     job_id = job["id"]
     attempt_token = job["attempt_token"]
     output_path = f"users/{job['usuario_id']}/jobs/{job_id}/attempts/{attempt_token}/output.xlsx"
@@ -1640,6 +1639,7 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
         local_output = tmp_dir / "output.xlsx"
         started_at = time.perf_counter()
         try:
+            _validate_job_input_reference(job)
             with _LeaseHeartbeat(client, job) as heartbeat:
                 update_progress(client, job, 45)
                 _download_job_input(client, job, local_input)

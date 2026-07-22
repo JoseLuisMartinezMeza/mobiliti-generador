@@ -1868,6 +1868,46 @@ def test_process_job_marks_failed(monkeypatch):
     assert failed_payload["metadata"]["generation_seconds"] >= 0
 
 
+def test_claimed_job_with_foreign_input_path_records_failure_and_releases_lease(
+    monkeypatch,
+):
+    client = FakeClient()
+    client.claim_input_path = "users/99/jobs/job-1/input.xlsx"
+    generator_calls = []
+    monkeypatch.setattr(
+        quote_worker,
+        "_run_generator",
+        lambda *_args: generator_calls.append("generate"),
+    )
+
+    with pytest.raises(RuntimeError, match="Ruta de entrada no corresponde al job"):
+        quote_worker.process_job(
+            client,
+            {
+                "id": "job-1",
+                "usuario_id": 7,
+                "input_path": "users/7/jobs/job-1/input.xlsx",
+                "metadata": {},
+            },
+        )
+
+    statuses = [
+        data["status"]
+        for _method, _path, data in client.calls
+        if isinstance(data, dict) and "status" in data
+    ]
+    assert statuses == ["processing", "failed"]
+    failed_payload = next(
+        data
+        for _method, _path, data in client.calls
+        if isinstance(data, dict) and data.get("status") == "failed"
+    )
+    assert failed_payload["lease_expires_at"] is None
+    assert "Ruta de entrada no corresponde al job" in failed_payload["error_message"]
+    assert generator_calls == []
+    assert not any(method == "UPLOAD" for method, _path, _data in client.calls)
+
+
 def test_process_job_rejects_output_larger_than_storage_limit(monkeypatch):
     client = FakeClient()
 
