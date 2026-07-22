@@ -337,6 +337,68 @@ def test_cost_writes_reject_invalid_numeric_contract(field, value, message):
         )
 
 
+def test_real_quotation_data_row_accepts_numeric_18_2_maximum_converted_cost():
+    row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
+    maximum = Decimal("9999999999999999.99")
+    canonical = _row(
+        "item-1",
+        original=Decimal("999999999999.999999"),
+        rate=Decimal("10000.000000"),
+        converted=maximum,
+    )
+
+    assert isinstance(canonical, QuotationDataRow)
+    assert build_mobiliti_pricing_writes(
+        [canonical],
+        row_map,
+        bindings=(_binding("item-1", 14),),
+    ) == (MobilitiCellWrite("J14", "number", maximum),)
+
+
+@pytest.mark.parametrize(
+    ("converted", "message"),
+    [
+        (Decimal("10000000000000000.00"), "NUMERIC\\(18,2\\)"),
+        (Decimal("1.000"), "NUMERIC\\(18,2\\)"),
+    ],
+    ids=("seventeen-integral-digits", "scale-three"),
+)
+def test_converted_cost_rejects_numeric_18_2_magnitude_and_scale(
+    converted, message
+):
+    row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
+    if converted == Decimal("1.000"):
+        original = rate = Decimal("1.000000")
+    else:
+        original = Decimal("100000000000.000000")
+        rate = Decimal("100000.000000")
+
+    with pytest.raises(ValueError, match=message):
+        build_mobiliti_pricing_writes(
+            [_row("item-1", original=original, rate=rate, converted=converted)],
+            row_map,
+            bindings=(_binding("item-1", 14),),
+        )
+
+
+def test_pricing_detects_post_multiplication_numeric_18_2_overflow():
+    row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
+
+    with pytest.raises(ValueError, match="converted_cost.*NUMERIC\\(18,2\\)"):
+        build_mobiliti_pricing_writes(
+            [
+                _row(
+                    "item-1",
+                    original=Decimal("100000000000.000000"),
+                    rate=Decimal("100000.000000"),
+                    converted=Decimal("0.00"),
+                )
+            ],
+            row_map,
+            bindings=(_binding("item-1", 14),),
+        )
+
+
 def test_lumbro_accessory_is_a_frozen_decimal_and_never_a_k6_formula():
     cost = lumbro_frozen_cost(Decimal("100.000000"), Decimal("0.054054"))
 
@@ -344,6 +406,19 @@ def test_lumbro_accessory_is_a_frozen_decimal_and_never_a_k6_formula():
     assert isinstance(cost, Decimal)
     assert "$K$6" not in str(cost)
     assert MobilitiCellWrite("J14", "number", cost).kind == "number"
+
+
+def test_lumbro_accepts_numeric_18_2_maximum_and_rejects_overflow():
+    assert lumbro_frozen_cost(
+        Decimal("999999999999.999999"),
+        Decimal("10000.000000"),
+    ) == Decimal("9999999999999999.99")
+
+    with pytest.raises(ValueError, match="Lumbro.*NUMERIC\\(18,2\\)"):
+        lumbro_frozen_cost(
+            Decimal("100000000000.000000"),
+            Decimal("100000.000000"),
+        )
 
 
 @pytest.mark.parametrize("ambiguous", [None, "100", 100, True])

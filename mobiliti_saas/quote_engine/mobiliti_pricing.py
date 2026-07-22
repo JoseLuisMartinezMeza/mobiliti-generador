@@ -18,8 +18,10 @@ from .quotation_sheets import QuotationDataRow
 
 
 CENT = Decimal("0.01")
-MAX_NUMERIC_SCALE = 6
-MAX_NUMERIC_INTEGRAL_DIGITS = 12
+NUMERIC_18_6_SCALE = 6
+NUMERIC_18_6_INTEGRAL_DIGITS = 12
+NUMERIC_18_2_SCALE = 2
+NUMERIC_18_2_INTEGRAL_DIGITS = 16
 MAX_EXCEL_CELL_TEXT_LENGTH = 32_767
 QUOTE_CURRENCIES = frozenset(("MXN", "USD", "EUR"))
 
@@ -117,13 +119,13 @@ def build_mobiliti_pricing_writes(
             "frozen_rate",
             positive=True,
         )
-        converted = _numeric_18_6(
+        converted = _numeric_18_2(
             canonical.converted_cost,
             "converted_cost",
             positive=False,
         )
         expected = _converted_cost(original, rate)
-        _numeric_18_6(expected, "converted_cost", positive=False)
+        _numeric_18_2(expected, "converted_cost", positive=False)
         if converted != expected:
             raise ValueError("Costo convertido canónico inconsistente")
 
@@ -146,7 +148,7 @@ def lumbro_frozen_cost(
     original = _numeric_18_6(original_mxn, "precio Lumbro", positive=False)
     rate = _numeric_18_6(frozen_rate, "tipo congelado Lumbro", positive=True)
     result = _converted_cost(original, rate)
-    _numeric_18_6(result, "costo congelado Lumbro", positive=False)
+    _numeric_18_2(result, "costo congelado Lumbro", positive=False)
     return result
 
 
@@ -193,6 +195,38 @@ def _numeric_18_6(
     *,
     positive: bool,
 ) -> Decimal:
+    return _numeric_contract(
+        value,
+        field_name,
+        positive=positive,
+        scale_limit=NUMERIC_18_6_SCALE,
+        integral_digits_limit=NUMERIC_18_6_INTEGRAL_DIGITS,
+    )
+
+
+def _numeric_18_2(
+    value: object,
+    field_name: str,
+    *,
+    positive: bool,
+) -> Decimal:
+    return _numeric_contract(
+        value,
+        field_name,
+        positive=positive,
+        scale_limit=NUMERIC_18_2_SCALE,
+        integral_digits_limit=NUMERIC_18_2_INTEGRAL_DIGITS,
+    )
+
+
+def _numeric_contract(
+    value: object,
+    field_name: str,
+    *,
+    positive: bool,
+    scale_limit: int,
+    integral_digits_limit: int,
+) -> Decimal:
     if type(value) is not Decimal:
         raise TypeError(f"{field_name} debe ser Decimal y no bool")
     if not value.is_finite():
@@ -205,11 +239,13 @@ def _numeric_18_6(
     scale = max(-exponent, 0)
     integral_digits = max(value.adjusted() + 1, 1) if not value.is_zero() else 1
     if (
-        scale > MAX_NUMERIC_SCALE
-        or integral_digits > MAX_NUMERIC_INTEGRAL_DIGITS
-        or len(digits) > MAX_NUMERIC_SCALE + MAX_NUMERIC_INTEGRAL_DIGITS
+        scale > scale_limit
+        or integral_digits > integral_digits_limit
+        or len(digits) > scale_limit + integral_digits_limit
     ):
-        raise ValueError(f"{field_name} excede NUMERIC(18,6)")
+        raise ValueError(
+            f"{field_name} excede NUMERIC(18,{scale_limit})"
+        )
     return value
 
 
@@ -219,7 +255,7 @@ def _converted_cost(original: Decimal, rate: Decimal) -> Decimal:
             context.prec = 64
             return (original * rate).quantize(CENT, rounding=ROUND_HALF_UP)
     except InvalidOperation as error:
-        raise ValueError("Costo convertido excede NUMERIC(18,6)") from error
+        raise ValueError("Costo convertido excede NUMERIC(18,2)") from error
 
 
 def _safe_k8_text(value: object) -> str:
