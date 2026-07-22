@@ -907,12 +907,16 @@ def test_jobs_rls_is_guarded_idempotent_and_non_destructive():
 
 
 def test_bootstrap_mirrors_catalog_migrations():
-    bootstrap = BOOTSTRAP.read_bytes()
-    catalog_migration = CATALOG_MIGRATION.read_bytes()
-    jobs_migration = JOBS_RLS_MIGRATION.read_bytes()
-    mixed_migration = MIXED_MIGRATION.read_bytes()
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    catalog_migration = CATALOG_MIGRATION.read_text(encoding="utf-8")
+    jobs_migration = JOBS_RLS_MIGRATION.read_text(encoding="utf-8")
+    mixed_migration = MIXED_MIGRATION.read_text(encoding="utf-8")
 
     assert bootstrap.count(catalog_migration) == 1
     assert bootstrap.count(jobs_migration) == 1
     assert bootstrap.count(mixed_migration) == 1
-    assert b"saas_supplier_catalog_snapshots (\n    supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett'))" in bootstrap
+    legacy_snapshots = _statement(
+        bootstrap,
+        "CREATE TABLE IF NOT EXISTS saas_supplier_catalog_snapshots",
+    )
+    assert "supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett'))" in legacy_snapshots
