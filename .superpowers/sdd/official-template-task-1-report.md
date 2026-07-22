@@ -1,6 +1,6 @@
 # Reporte — Tarea 1: Promote and Verify the Official Template
 
-Fecha: 2026-07-21  
+Fecha: 2026-07-21
 Estado: DONE
 
 ## Implementación
