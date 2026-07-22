@@ -1874,41 +1874,21 @@ def _translate_official_calc_chain(
         sheet_id=_workbook_sheet_id(base, "Mobiliti"),
         coordinate_map=mobiliti_map,
     )
-    cotizacion_map = _cotizacion_calc_map(
-        base.parts[base.sheet_part("Cotizacion")], cotizacion
-    )
     cotizacion_sheet_id = _workbook_sheet_id(base, "Cotizacion")
-    content = translate_calc_chain(
-        content,
-        sheet_id=cotizacion_sheet_id,
-        coordinate_map=cotizacion_map,
-    )
     if not isinstance(content, bytes):
         raise TypeError("calcChain traducido debe ser bytes")
-    extra_coordinates: list[str] = []
-    first_product_row = cotizacion.product_rows[0]
-    for product_row in cotizacion.product_rows:
-        extra_coordinates.append(f"I{product_row}")
-        if product_row != first_product_row:
-            extra_coordinates.append(f"G{product_row}")
-    content = _append_calc_chain_coordinates(
+    return _rebuild_cotizacion_calc_chain(
         content,
         sheet_id=cotizacion_sheet_id,
-        coordinates=extra_coordinates,
+        cotizacion=cotizacion,
     )
-    _validate_cotizacion_product_calc_chain(
-        content,
-        sheet_id=cotizacion_sheet_id,
-        product_rows=cotizacion.product_rows,
-    )
-    return content
 
 
-def _append_calc_chain_coordinates(
+def _rebuild_cotizacion_calc_chain(
     payload: bytes,
     *,
     sheet_id: int,
-    coordinates: Sequence[str],
+    cotizacion: CotizacionSheetMutation,
 ) -> bytes:
     try:
         root = ET.fromstring(payload)
@@ -1916,9 +1896,27 @@ def _append_calc_chain_coordinates(
         raise ValueError("calcChain traducido invalido") from error
     if root.tag != f"{{{MAIN}}}calcChain":
         raise ValueError("Raiz calcChain traducida invalida")
+
+    formula_root = _worksheet_root(cotizacion.xml, "Cotizacion")
+    formula_cells: list[tuple[str, ET.Element]] = []
+    formula_coordinates: set[str] = set()
+    for cell in formula_root.findall(f".//{{{MAIN}}}c"):
+        formula = cell.find(f"{{{MAIN}}}f")
+        if formula is None:
+            continue
+        coordinate = cell.attrib.get("r", "")
+        if _CELL.fullmatch(coordinate) is None:
+            raise ValueError("Formula Cotizacion sin coordenada valida")
+        if coordinate in formula_coordinates:
+            raise ValueError(f"Formula Cotizacion duplicada: {coordinate}")
+        formula_coordinates.add(coordinate)
+        formula_cells.append((coordinate, formula))
+    formula_cells.sort(key=lambda item: _cell_coordinate_sort_key(item[0]))
+
     target_sheet_id = str(sheet_id)
     effective_sheet_id: str | None = None
-    existing: set[str] = set()
+    preserved: list[ET.Element] = []
+    source_metadata: dict[str, list[dict[str, str]]] = {}
     for cell in root:
         if cell.tag != f"{{{MAIN}}}c":
             raise ValueError("Hijo calcChain traducido invalido")
@@ -1928,67 +1926,115 @@ def _append_calc_chain_coordinates(
         if "i" in cell.attrib:
             effective_sheet_id = cell.attrib["i"]
         if effective_sheet_id != target_sheet_id:
+            preserved.append(cell)
             continue
-        if coordinate in existing:
-            raise ValueError(f"Coordenada calcChain duplicada: {coordinate}")
-        existing.add(coordinate)
-
-    requested: set[str] = set()
-    for coordinate in coordinates:
-        if _CELL.fullmatch(coordinate) is None:
-            raise ValueError("Coordenada calcChain adicional invalida")
-        if coordinate in requested:
-            raise ValueError(f"Coordenada calcChain adicional duplicada: {coordinate}")
-        requested.add(coordinate)
-        if coordinate in existing:
-            continue
-        ET.SubElement(
-            root,
-            f"{{{MAIN}}}c",
-            {"r": coordinate, "i": target_sheet_id},
+        source_metadata.setdefault(coordinate, []).append(
+            {
+                name: value
+                for name, value in cell.attrib.items()
+                if name not in {"r", "i"}
+            }
         )
-        existing.add(coordinate)
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    for coordinate, formula in formula_cells:
+        attributes = {"r": coordinate, "i": target_sheet_id}
+        source_coordinate = _cotizacion_calc_metadata_source(
+            coordinate,
+            cotizacion,
+            source_metadata,
+        )
+        if source_coordinate is not None:
+            attributes.update(
+                _select_calc_chain_metadata(
+                    source_metadata[source_coordinate],
+                    formula,
+                )
+            )
+        preserved.append(ET.Element(f"{{{MAIN}}}c", attributes))
+    root[:] = preserved
+    rebuilt = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    _validate_calc_chain_sheet_coordinates(
+        rebuilt,
+        sheet_id=sheet_id,
+        expected=formula_coordinates,
+    )
+    return rebuilt
 
 
-def _validate_cotizacion_product_calc_chain(
+def _cotizacion_calc_metadata_source(
+    coordinate: str,
+    mutation: CotizacionSheetMutation,
+    source_metadata: Mapping[str, Sequence[Mapping[str, str]]],
+) -> str | None:
+    match = _CELL.fullmatch(coordinate)
+    if match is None:
+        raise ValueError("Coordenada Cotizacion invalida")
+    column = match.group("column")
+    row = int(match.group("row"))
+    editable_column = column_index_from_string(column) <= 10
+    if editable_column and row in mutation.product_rows:
+        template = f"{column}{CANONICAL_COTIZACION_FIRST_PRODUCT_ROW}"
+        return template if template in source_metadata else None
+
+    subtotal_row = mutation.total_row - 5
+    if editable_column and subtotal_row <= row <= mutation.total_row:
+        template = f"{column}{CANONICAL_COTIZACION_TOTAL_START + row - subtotal_row}"
+        return template if template in source_metadata else None
+
+    shifted_terms_start = CANONICAL_COTIZACION_TERMS_START + mutation.terms_row_delta
+    if editable_column and row >= shifted_terms_start:
+        template = f"{column}{row - mutation.terms_row_delta}"
+        return template if template in source_metadata else None
+    return coordinate if coordinate in source_metadata else None
+
+
+def _select_calc_chain_metadata(
+    candidates: Sequence[Mapping[str, str]],
+    formula: ET.Element,
+) -> dict[str, str]:
+    if not candidates:
+        return {}
+    is_array = formula.attrib.get("t") == "array"
+    return dict(
+        min(
+            enumerate(candidates),
+            key=lambda item: (
+                item[1].get("a") != "1" if is_array else item[1].get("a") == "1",
+                item[0],
+            ),
+        )[1]
+    )
+
+
+def _cell_coordinate_sort_key(coordinate: str) -> tuple[int, int]:
+    match = _CELL.fullmatch(coordinate)
+    if match is None:
+        raise ValueError("Coordenada de celda invalida")
+    return (
+        int(match.group("row")),
+        column_index_from_string(match.group("column")),
+    )
+
+
+def _validate_calc_chain_sheet_coordinates(
     payload: bytes,
     *,
     sheet_id: int,
-    product_rows: Sequence[int],
+    expected: set[str],
 ) -> None:
-    try:
-        root = ET.fromstring(payload)
-    except (ET.ParseError, TypeError) as error:
-        raise ValueError("calcChain Cotizacion invalido") from error
+    root = ET.fromstring(payload)
     target_sheet_id = str(sheet_id)
-    product_row_set = set(product_rows)
     effective_sheet_id: str | None = None
-    seen: set[str] = set()
     actual: list[str] = []
     for cell in root:
         if "i" in cell.attrib:
             effective_sheet_id = cell.attrib["i"]
-        if effective_sheet_id != target_sheet_id:
-            continue
-        coordinate = cell.attrib.get("r", "")
-        match = _CELL.fullmatch(coordinate)
-        if match is None:
-            raise ValueError("Coordenada calcChain Cotizacion invalida")
-        if coordinate in seen:
-            raise ValueError(f"Coordenada calcChain Cotizacion duplicada: {coordinate}")
-        seen.add(coordinate)
-        if int(match.group("row")) in product_row_set:
-            actual.append(coordinate)
-
-    expected = {
-        f"{column}{row}"
-        for row in product_rows
-        for column in ("F", "H", "I", "J")
-    }
-    expected.update(f"G{row}" for row in product_rows[1:])
-    if len(actual) != len(expected) or set(actual) != expected:
-        raise ValueError("Cobertura calcChain de productos Cotizacion incompleta")
+        if effective_sheet_id == target_sheet_id:
+            actual.append(cell.attrib.get("r", ""))
+    if len(actual) != len(set(actual)):
+        raise ValueError("calcChain Cotizacion contiene coordenadas duplicadas")
+    if set(actual) != expected:
+        raise ValueError("calcChain Cotizacion no coincide con sus formulas finales")
 
 
 def _mobiliti_calc_map(payload: bytes, row_map: MobilitiRowMap) -> dict[str, tuple[str, ...]]:
@@ -2031,30 +2077,6 @@ def _mobiliti_calc_map(payload: bytes, row_map: MobilitiRowMap) -> dict[str, tup
     for source_row in range(CANONICAL_MOBILITI_AUX_START, CANONICAL_MOBILITI_AUX_END + 1):
         add(source_row, (source_row + auxiliary_delta,))
     return {source: tuple(dict.fromkeys(destinations)) for source, destinations in result.items()}
-
-
-def _cotizacion_calc_map(
-    payload: bytes,
-    mutation: CotizacionSheetMutation,
-) -> dict[str, tuple[str, ...]]:
-    root = _worksheet_root(payload, "Cotizacion")
-    formulas_by_row = _formula_coordinates_by_row(root)
-    result: dict[str, tuple[str, ...]] = {}
-    for source in formulas_by_row.get(17, ()):
-        column = _CELL.fullmatch(source).group("column")
-        result[source] = tuple(f"{column}{row}" for row in mutation.product_rows)
-    total_delta = mutation.total_row - CANONICAL_COTIZACION_TOTAL_ROW
-    for source_row in range(19, 25):
-        for source in formulas_by_row.get(source_row, ()):
-            column = _CELL.fullmatch(source).group("column")
-            result[source] = (f"{column}{source_row + total_delta}",)
-    for source_row, coordinates in formulas_by_row.items():
-        if source_row < CANONICAL_COTIZACION_TERMS_START:
-            continue
-        for source in coordinates:
-            column = _CELL.fullmatch(source).group("column")
-            result[source] = (f"{column}{source_row + mutation.terms_row_delta}",)
-    return result
 
 
 def _validate_compose_paths(template: Path, output: Path) -> tuple[Path, Path]:

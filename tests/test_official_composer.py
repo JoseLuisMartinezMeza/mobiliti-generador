@@ -278,6 +278,55 @@ def _calc_chain_coordinates_for_sheet(
     return coordinates
 
 
+def _worksheet_formula_coordinates(payload: bytes) -> list[str]:
+    root = ET.fromstring(payload)
+    return [
+        cell.attrib["r"]
+        for cell in root.findall(f".//{{{MAIN}}}c")
+        if cell.find(f"{{{MAIN}}}f") is not None
+    ]
+
+
+def _calc_chain_entries_except_sheet(
+    payload: bytes,
+    sheet_id: int,
+) -> tuple[tuple[str | None, bytes], ...]:
+    root = ET.fromstring(payload)
+    effective_sheet_id: str | None = None
+    entries: list[tuple[str | None, bytes]] = []
+    for cell in root.findall(f"{{{MAIN}}}c"):
+        if "i" in cell.attrib:
+            effective_sheet_id = cell.attrib["i"]
+        if effective_sheet_id != str(sheet_id):
+            entries.append((effective_sheet_id, ET.tostring(cell)))
+    return tuple(entries)
+
+
+def _calc_chain_metadata_for_sheet(
+    payload: bytes,
+    sheet_id: int,
+) -> dict[str, tuple[tuple[str, str], ...]]:
+    root = ET.fromstring(payload)
+    effective_sheet_id: str | None = None
+    metadata: dict[str, tuple[tuple[str, str], ...]] = {}
+    for cell in root.findall(f"{{{MAIN}}}c"):
+        if "i" in cell.attrib:
+            effective_sheet_id = cell.attrib["i"]
+        if effective_sheet_id != str(sheet_id):
+            continue
+        coordinate = cell.attrib["r"]
+        if coordinate in metadata:
+            continue
+        metadata[coordinate] = tuple(
+            sorted(
+                (name, value)
+                for name, value in cell.attrib.items()
+                if name not in {"r", "i"}
+            )
+        )
+    return metadata
+
+
 def _minimal_request(output: Path) -> ComposeRequest:
     return _request_for_sections(output, (1,))
 
@@ -362,7 +411,7 @@ def _request_for_sections(output: Path, section_sizes: tuple[int, ...]) -> Compo
 
 
 @pytest.mark.parametrize("product_count", (1, 2, 9))
-def test_calc_chain_exactly_covers_every_cotizacion_product_formula(
+def test_calc_chain_exactly_matches_every_final_cotizacion_formula(
     tmp_path: Path,
     product_count: int,
 ) -> None:
@@ -377,17 +426,19 @@ def test_calc_chain_exactly_covers_every_cotizacion_product_formula(
     calc_part = official_composer_module._calc_chain_part(base)
     assert calc_part is not None
     sheet_id = official_composer_module._workbook_sheet_id(base, "Cotizacion")
+    cotizacion_part = base.sheet_part("Cotizacion")
+    formula_coordinates = _worksheet_formula_coordinates(
+        mutation.replacements[cotizacion_part]
+    )
+    assert len(formula_coordinates) == len(set(formula_coordinates))
+    assert {"P20", "L121"}.issubset(formula_coordinates)
     coordinates = _calc_chain_coordinates_for_sheet(
         mutation.replacements[calc_part],
         sheet_id,
     )
-    product_rows = set(request.cotizacion.product_rows)
-    actual_product_coordinates = [
-        coordinate
-        for coordinate in coordinates
-        if int("".join(character for character in coordinate if character.isdigit()))
-        in product_rows
-    ]
+    assert len(coordinates) == len(set(coordinates))
+    assert set(coordinates) == set(formula_coordinates)
+
     expected_product_coordinates = {
         f"{column}{row}"
         for row in request.cotizacion.product_rows
@@ -396,8 +447,37 @@ def test_calc_chain_exactly_covers_every_cotizacion_product_formula(
     expected_product_coordinates.update(
         f"G{row}" for row in request.cotizacion.product_rows[1:]
     )
-    assert set(actual_product_coordinates) == expected_product_coordinates
-    assert len(actual_product_coordinates) == len(set(actual_product_coordinates))
+    assert expected_product_coordinates.issubset(coordinates)
+    subtotal_row = request.cotizacion.total_row - 5
+    expected_total_coordinates = {
+        f"H{subtotal_row + offset}" for offset in (0, 1, 3, 4, 5)
+    }
+    assert expected_total_coordinates.issubset(coordinates)
+    chain_metadata = _calc_chain_metadata_for_sheet(
+        mutation.replacements[calc_part],
+        sheet_id,
+    )
+    for row in request.cotizacion.product_rows:
+        assert dict(chain_metadata[f"F{row}"])["l"] == "1"
+        assert dict(chain_metadata[f"J{row}"])["s"] == "1"
+    assert dict(chain_metadata[f"H{subtotal_row}"])["a"] == "1"
+    base_metadata = _calc_chain_metadata_for_sheet(base.parts[calc_part], sheet_id)
+    assert chain_metadata["P20"] == base_metadata["P20"]
+    assert chain_metadata["L121"] == base_metadata["L121"]
+
+    mobiliti_only = official_composer_module.translate_calc_chain(
+        base.parts[calc_part],
+        sheet_id=official_composer_module._workbook_sheet_id(base, "Mobiliti"),
+        coordinate_map=official_composer_module._mobiliti_calc_map(
+            base.parts[base.sheet_part("Mobiliti")],
+            request.mobiliti.row_map,
+        ),
+    )
+    assert isinstance(mobiliti_only, bytes)
+    assert _calc_chain_entries_except_sheet(
+        mutation.replacements[calc_part],
+        sheet_id,
+    ) == _calc_chain_entries_except_sheet(mobiliti_only, sheet_id)
 
     before_workbook = ET.fromstring(base.parts["xl/workbook.xml"])
     after_workbook = ET.fromstring(mutation.replacements["xl/workbook.xml"])
