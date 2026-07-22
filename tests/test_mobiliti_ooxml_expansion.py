@@ -1,6 +1,7 @@
 from pathlib import Path
 import posixpath
 from decimal import Decimal
+import re
 from zipfile import ZipFile
 import xml.etree.ElementTree as ET
 
@@ -36,6 +37,14 @@ MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 XM = "http://schemas.microsoft.com/office/excel/2006/main"
+TEST_CELL_REFERENCE = re.compile(
+    r"(?P<column>\$?[A-Z]{1,3})(?P<row_abs>\$?)(?P<row>[1-9][0-9]*)$"
+)
+TEST_RANGE_REFERENCE = re.compile(
+    r"(?:(?P<sheet>'(?:[^']|'')+'|[^'!]+)!)?"
+    r"(?P<first>\$?[A-Z]{1,3}\$?[1-9][0-9]*)"
+    r"(?::(?P<last>\$?[A-Z]{1,3}\$?[1-9][0-9]*))?$"
+)
 
 pytestmark = [
     pytest.mark.filterwarnings("ignore:Data Validation extension is not supported"),
@@ -124,6 +133,93 @@ def _formula_rows(formula: str, column: str) -> list[int]:
     return [int(row) for row in __import__("re").findall(fr"\b{column}(\d+)\b", formula)]
 
 
+def _reference_with_test_rows(reference: str, rows: tuple[int, ...]) -> str:
+    match = TEST_RANGE_REFERENCE.fullmatch(reference)
+    assert match is not None
+    endpoints = [match.group("first")]
+    if match.group("last"):
+        endpoints.append(match.group("last"))
+    rewritten = []
+    for endpoint, row in zip(endpoints, rows, strict=True):
+        cell = TEST_CELL_REFERENCE.fullmatch(endpoint)
+        assert cell is not None
+        rewritten.append(f"{cell.group('column')}{cell.group('row_abs')}{row}")
+    prefix = f"{match.group('sheet')}!" if match.group("sheet") else ""
+    return prefix + ":".join(rewritten)
+
+
+def _is_test_local_mobiliti_sheet(sheet: str | None) -> bool:
+    if sheet is None:
+        return True
+    normalized = sheet[1:-1].replace("''", "'") if sheet.startswith("'") else sheet
+    return normalized.casefold() == "mobiliti"
+
+
+def _derive_official_formula(
+    coordinate: str,
+    target: str,
+    row_map,
+    *,
+    range_overrides: dict[str, str] | None = None,
+) -> str:
+    formula = _official_formula(coordinate)
+    result = ["="]
+    for token in Tokenizer(formula).items:
+        value = token.value
+        match = (
+            TEST_RANGE_REFERENCE.fullmatch(value)
+            if token.type == "OPERAND" and token.subtype == "RANGE"
+            else None
+        )
+        if match is not None:
+            if value in (range_overrides or {}):
+                value = range_overrides[value]
+            else:
+                value = translate_formula(
+                    "=" + value,
+                    origin=coordinate,
+                    target=target,
+                )[1:]
+                endpoints = [match.group("first")]
+                if match.group("last"):
+                    endpoints.append(match.group("last"))
+                parsed = [TEST_CELL_REFERENCE.fullmatch(item) for item in endpoints]
+                rows = [int(item.group("row")) for item in parsed if item is not None]
+                if (
+                    len(rows) == len(endpoints)
+                    and _is_test_local_mobiliti_sheet(match.group("sheet"))
+                    and all(573 <= row <= 610 for row in rows)
+                ):
+                    value = _reference_with_test_rows(
+                        token.value,
+                        tuple(row_map.total_row + row - 573 for row in rows),
+                    )
+        result.append(value)
+    return "".join(result)
+
+
+def _expected_total_subtotal_rows(row_map, coordinate: str = "H573") -> list[int]:
+    canonical = [
+        int(token.value[1:])
+        for token in Tokenizer(_official_formula(coordinate)).items
+        if token.type == "OPERAND"
+        and token.subtype == "RANGE"
+        and token.value.startswith("H")
+        and token.value[1:].isdigit()
+        and int(token.value[1:]) in range(47, 573, 35)
+    ]
+    assert len(canonical) == 16
+    return (
+        list(reversed(row_map.subtotal_rows))
+        if canonical[0] > canonical[-1]
+        else list(row_map.subtotal_rows)
+    )
+
+
+def _formula_token_signature(formula: str) -> list[tuple[str, str, str]]:
+    return [(token.type, token.subtype, token.value) for token in Tokenizer(formula).items]
+
+
 @pytest.mark.parametrize("count", [34, 100])
 def test_one_section_keeps_every_product_and_official_formulas(tmp_path, count):
     row_map, workbook, worksheet = _render(tmp_path, count)
@@ -164,12 +260,17 @@ def test_more_than_sixteen_sections_clone_official_blocks(tmp_path, section_coun
         )
         subtotal_formula = worksheet.cell(last.subtotal_row, 8).value
         assert subtotal_formula.ref == f"H{last.subtotal_row}"
-        assert subtotal_formula.text == (
-            f"=SUM(IFERROR(H{last.product_start}:H{last.product_start},0))"
+        assert subtotal_formula.text == _derive_official_formula(
+            "H82",
+            f"H{last.subtotal_row}",
+            row_map,
+            range_overrides={
+                "H49:H81": f"H{last.product_start}:H{last.product_start}"
+            },
         )
-        assert set(_formula_rows(worksheet.cell(row_map.total_row, 8).value, "H")) == set(
-            row_map.subtotal_rows
-        )
+        assert _formula_rows(
+            worksheet.cell(row_map.total_row, 8).value, "H"
+        ) == _expected_total_subtotal_rows(row_map)
     finally:
         workbook.close()
 
@@ -309,6 +410,188 @@ def test_unmoved_array_formula_is_preserved_with_cache_and_attributes():
     assert result_formula.text == original_formula.text
     assert result_formula.attrib == original_formula.attrib
     assert result_cell.find(f"{{{MAIN}}}v").text == "123"
+
+
+@pytest.mark.parametrize(
+    "needs",
+    [
+        [SectionNeed("large", "GRANDE", 34)],
+        [
+            SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
+            for index in range(20)
+        ],
+    ],
+    ids=["34-products", "20-sections"],
+)
+@pytest.mark.parametrize(
+    ("coordinate", "formula_type"),
+    [("P9", "array"), ("AS15", "dataTable")],
+)
+def test_static_special_formulas_follow_relocated_total_preserving_metadata(
+    needs, coordinate, formula_type
+):
+    root = _official_root()
+    cell = root.find(f".//{{{MAIN}}}c[@r='{coordinate}']")
+    formula = cell.find(f"{{{MAIN}}}f")
+    assert formula is not None
+    formula.attrib.clear()
+    formula.set("t", formula_type)
+    formula.set("ref", coordinate)
+    formula.set("opaque", "keep")
+    if formula_type == "array":
+        formula.text = "P8/H573"
+    else:
+        formula.text = None
+        formula.set("r1", "AC573")
+        formula.set("r2", "$H$574")
+        formula.set("inputCell", "Mobiliti!$AC$573")
+
+    mutation = build_mobiliti_sheet(
+        ET.tostring(root, encoding="utf-8", xml_declaration=True), needs, []
+    )
+    output = ET.fromstring(mutation.xml)
+    result_cell = output.find(f".//{{{MAIN}}}c[@r='{coordinate}']")
+    result = result_cell.find(f"{{{MAIN}}}f")
+
+    assert result.attrib["t"] == formula_type
+    assert result.attrib["ref"] == coordinate
+    assert result.attrib["opaque"] == "keep"
+    if formula_type == "array":
+        assert result.text == f"P8/H{mutation.row_map.total_row}"
+    else:
+        assert result.text is None
+        assert result.attrib["r1"] == f"AC{mutation.row_map.total_row}"
+        assert result.attrib["r2"] == f"$H${mutation.row_map.total_row + 1}"
+        assert result.attrib["inputCell"] == f"Mobiliti!$AC${mutation.row_map.total_row}"
+    assert result_cell.find(f"{{{MAIN}}}v") is None
+
+
+@pytest.mark.parametrize("formula_type", ["array", "dataTable"])
+def test_static_multicell_special_that_references_moved_total_fails_preflight(
+    formula_type
+):
+    root = _official_root()
+    formula = root.find(f".//{{{MAIN}}}c[@r='P9']/{{{MAIN}}}f")
+    assert formula is not None
+    formula.attrib.clear()
+    formula.set("t", formula_type)
+    formula.set("ref", "P9:Q9")
+    formula.set("r1", "H573")
+    formula.text = "P8/H573" if formula_type == "array" else None
+
+    with pytest.raises(ValueError, match=fr"{formula_type}.*P9.*preflight"):
+        build_mobiliti_sheet(
+            ET.tostring(root, encoding="utf-8", xml_declaration=True),
+            [SectionNeed("large", "GRANDE", 34)],
+            [],
+        )
+
+
+def test_single_cell_datatable_without_text_translates_all_a1_attributes_when_cloned():
+    root = _official_root()
+    formula = root.find(f".//{{{MAIN}}}c[@r='W14']/{{{MAIN}}}f")
+    assert formula is not None
+    formula.attrib.clear()
+    formula.set("t", "dataTable")
+    formula.set("ref", "W14")
+    formula.set("r1", "H573")
+    formula.set("r2", "$AC$574")
+    formula.set("inputCell", "Mobiliti!$H$573")
+    formula.set("opaque", "keep")
+    formula.text = None
+
+    mutation = build_mobiliti_sheet(
+        ET.tostring(root, encoding="utf-8", xml_declaration=True),
+        [SectionNeed("large", "GRANDE", 34)],
+        [],
+    )
+    output = ET.fromstring(mutation.xml)
+    for row in (14, 15):
+        cell = output.find(f".//{{{MAIN}}}c[@r='W{row}']")
+        result = cell.find(f"{{{MAIN}}}f")
+        assert result.text is None
+        assert result.attrib == {
+            "t": "dataTable",
+            "ref": f"W{row}",
+            "r1": f"H{mutation.row_map.total_row}",
+            "r2": f"$AC${mutation.row_map.total_row + 1}",
+            "inputCell": f"Mobiliti!$H${mutation.row_map.total_row}",
+            "opaque": "keep",
+        }
+        assert cell.find(f"{{{MAIN}}}v") is None
+
+
+def test_multicell_datatable_without_text_fails_closed_before_mutation():
+    root = _official_root()
+    formula = root.find(f".//{{{MAIN}}}c[@r='W14']/{{{MAIN}}}f")
+    assert formula is not None
+    formula.attrib.clear()
+    formula.set("t", "dataTable")
+    formula.set("ref", "W14:W46")
+    formula.set("r1", "H573")
+    formula.text = None
+    payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    with pytest.raises(ValueError, match=r"dataTable.*W14.*clonar"):
+        build_mobiliti_sheet(
+            payload,
+            [SectionNeed("large", "GRANDE", 34)],
+            [],
+        )
+
+    result = ET.fromstring(payload).find(
+        f".//{{{MAIN}}}c[@r='W14']/{{{MAIN}}}f"
+    )
+    assert result.attrib["ref"] == "W14:W46"
+    assert result.text is None
+
+
+def test_total_shared_follower_without_text_expands_exact_subtotal_sequence():
+    root = _official_root()
+    total_row = root.find(f".//{{{MAIN}}}row[@r='573']")
+    follower = total_row.find(f"{{{MAIN}}}c[@r='H573']/{{{MAIN}}}f")
+    assert follower is not None and follower.text
+    original = "=" + follower.text
+    master_cell = ET.Element(f"{{{MAIN}}}c", {"r": "AK573"})
+    master = ET.SubElement(
+        master_cell,
+        f"{{{MAIN}}}f",
+        {"t": "shared", "si": "900", "ref": "H573:AK573"},
+    )
+    master.text = translate_formula(
+        original,
+        origin="H573",
+        target="AK573",
+    )[1:]
+    total_row.append(master_cell)
+    follower.attrib.clear()
+    follower.set("t", "shared")
+    follower.set("si", "900")
+    follower.text = None
+    needs = [
+        SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
+        for index in range(20)
+    ]
+
+    mutation = build_mobiliti_sheet(
+        ET.tostring(root, encoding="utf-8", xml_declaration=True), needs, []
+    )
+    output = ET.fromstring(mutation.xml)
+    result = output.find(
+        f".//{{{MAIN}}}c[@r='H{mutation.row_map.total_row}']/{{{MAIN}}}f"
+    )
+    local_rows = [
+        int(token.value[1:])
+        for token in Tokenizer("=" + result.text).items
+        if token.type == "OPERAND"
+        and token.subtype == "RANGE"
+        and token.value.startswith("H")
+        and token.value[1:].isdigit()
+    ]
+
+    assert local_rows == _expected_total_subtotal_rows(mutation.row_map)
+    assert len(local_rows) == 20
+    assert not ({"t", "ref", "si"} & set(result.attrib))
 
 
 @pytest.mark.parametrize(
@@ -469,6 +752,62 @@ def test_multirange_sqref_translates_mixed_fixed_dynamic_and_x14_tokens():
     assert all(len(tokens := node.attrib["sqref"].split()) == len(set(tokens)) for node in conditional_nodes)
 
 
+def test_dv_and_x14_extra_sections_preserve_full_absolute_template_tokens():
+    root = _official_root()
+    data_validations = root.find(f"{{{MAIN}}}dataValidations")
+    assert data_validations is not None
+    ET.SubElement(
+        data_validations,
+        f"{{{MAIN}}}dataValidation",
+        {
+            "type": "list",
+            "marker": "absolute-dv",
+            "sqref": "'Mobiliti'!$E$49:$E$81 $B$2",
+        },
+    )
+    ext_lst = root.find(f"{{{MAIN}}}extLst")
+    extension = ET.SubElement(ext_lst, "{urn:mobiliti:test:x14}validation")
+    extension.set("marker", "absolute-x14")
+    ET.SubElement(extension, f"{{{XM}}}sqref").text = "$F$49:$F$81 $C$3"
+    needs = [
+        SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
+        for index in range(20)
+    ]
+
+    mutation = build_mobiliti_sheet(
+        ET.tostring(root, encoding="utf-8", xml_declaration=True), needs, []
+    )
+    output = ET.fromstring(mutation.xml)
+    target_sections = [mutation.row_map.sections[1], *mutation.row_map.sections[16:]]
+    expected_dv = [
+        (
+            f"'Mobiliti'!$E${section.product_start}:"
+            f"$E${section.product_start + section.capacity - 1}"
+        )
+        for section in target_sections
+    ]
+    expected_x14 = [
+        (
+            f"$F${section.product_start}:"
+            f"$F${section.product_start + section.capacity - 1}"
+        )
+        for section in target_sections
+    ]
+    validation = output.find(
+        f".//{{{MAIN}}}dataValidation[@marker='absolute-dv']"
+    )
+    x14_sqref = output.find(".//*[@marker='absolute-x14']/{%s}sqref" % XM)
+
+    assert validation.attrib["sqref"].split() == [
+        expected_dv[0], "$B$2", *expected_dv[1:]
+    ]
+    assert x14_sqref.text.split() == [expected_x14[0], "$C$3", *expected_x14[1:]]
+    assert len(validation.attrib["sqref"].split()) == len(
+        set(validation.attrib["sqref"].split())
+    )
+    assert len(x14_sqref.text.split()) == len(set(x14_sqref.text.split()))
+
+
 @pytest.mark.parametrize(
     "needs",
     [
@@ -507,6 +846,69 @@ def test_merges_clone_product_and_total_rows_preserving_cross_boundary(needs):
     assert references.count("AR14:AT14") == 1
     assert len(references) == len(set(references))
     assert references == sorted(references, key=_merge_sort_key)
+
+
+def test_moved_total_removes_stale_ai_aj_cells_and_merges_but_keeps_ak_sidecar():
+    root = _official_root()
+    total_row = root.find(f".//{{{MAIN}}}row[@r='573']")
+    assert total_row is not None
+    for coordinate, value in (
+        ("AI573", "TOTAL-AI"),
+        ("AJ573", "TOTAL-AJ"),
+        ("AK573", "SIDECAR-AK"),
+    ):
+        existing = total_row.find(f"{{{MAIN}}}c[@r='{coordinate}']")
+        if existing is not None:
+            total_row.remove(existing)
+        cell = ET.SubElement(total_row, f"{{{MAIN}}}c", {"r": coordinate, "t": "inlineStr"})
+        inline = ET.SubElement(cell, f"{{{MAIN}}}is")
+        ET.SubElement(inline, f"{{{MAIN}}}t").text = value
+    total_row[:] = sorted(
+        total_row,
+        key=lambda cell: __import__("openpyxl").utils.column_index_from_string(
+            "".join(filter(str.isalpha, cell.attrib["r"]))
+        ),
+    )
+    merges = root.find(f"{{{MAIN}}}mergeCells")
+    assert merges is not None
+    for reference in ("AH573:AI573", "AI573:AJ573"):
+        ET.SubElement(merges, f"{{{MAIN}}}mergeCell", {"ref": reference})
+    merges.set("count", str(len(merges)))
+    needs = [
+        SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
+        for index in range(20)
+    ]
+
+    mutation = build_mobiliti_sheet(
+        ET.tostring(root, encoding="utf-8", xml_declaration=True), needs, []
+    )
+    output = ET.fromstring(mutation.xml)
+    stale_row = output.find(f".//{{{MAIN}}}row[@r='573']")
+    moved_row = output.find(
+        f".//{{{MAIN}}}row[@r='{mutation.row_map.total_row}']"
+    )
+    merge_refs = [
+        node.attrib["ref"]
+        for node in output.findall(f"{{{MAIN}}}mergeCells/{{{MAIN}}}mergeCell")
+    ]
+
+    assert stale_row.find(f"{{{MAIN}}}c[@r='AI573']") is None
+    assert stale_row.find(f"{{{MAIN}}}c[@r='AJ573']") is None
+    assert stale_row.find(f"{{{MAIN}}}c[@r='AK573']") is not None
+    assert moved_row.find(
+        f"{{{MAIN}}}c[@r='AI{mutation.row_map.total_row}']"
+    ) is not None
+    assert moved_row.find(
+        f"{{{MAIN}}}c[@r='AJ{mutation.row_map.total_row}']"
+    ) is not None
+    expected_merges = {
+        f"AH{mutation.row_map.total_row}:AI{mutation.row_map.total_row}",
+        f"AI{mutation.row_map.total_row}:AJ{mutation.row_map.total_row}",
+    }
+    assert "AH573:AI573" not in merge_refs
+    assert "AI573:AJ573" not in merge_refs
+    assert expected_merges <= set(merge_refs)
+    assert all(merge_refs.count(reference) == 1 for reference in expected_merges)
 
 
 def _merge_sort_key(reference: str):
@@ -569,9 +971,45 @@ def test_total_translates_whole_formula_and_replaces_only_local_canonical_operan
         and token.value[1:].isdigit()
     ]
 
-    assert local_rows == list(reversed(mutation.row_map.subtotal_rows))
+    assert local_rows == _expected_total_subtotal_rows(mutation.row_map)
     assert result.startswith(expected_external.split("+Other!", 1)[0] + "+(")
     assert result.endswith("+" + expected_external.rsplit("+", 1)[-1])
+
+
+def test_total_translates_structural_prefix_suffix_before_expanding_operands():
+    root = _official_root()
+    formula = root.find(f".//{{{MAIN}}}c[@r='H573']/{{{MAIN}}}f")
+    assert formula is not None and formula.text
+    formula.text = (
+        f"$AJ$574+Other!$AJ$574+({formula.text})+Mobiliti!$AJ$610"
+    )
+    needs = [
+        SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
+        for index in range(20)
+    ]
+
+    mutation = build_mobiliti_sheet(
+        ET.tostring(root, encoding="utf-8", xml_declaration=True), needs, []
+    )
+    output = ET.fromstring(mutation.xml)
+    result = output.find(
+        f".//{{{MAIN}}}c[@r='H{mutation.row_map.total_row}']/{{{MAIN}}}f"
+    ).text
+    local_rows = [
+        int(token.value[1:])
+        for token in Tokenizer("=" + result).items
+        if token.type == "OPERAND"
+        and token.subtype == "RANGE"
+        and token.value.startswith("H")
+        and token.value[1:].isdigit()
+    ]
+
+    assert result.startswith(
+        f"$AJ${mutation.row_map.total_row + 1}+Other!$AJ$574+("
+    )
+    assert result.endswith(f")+Mobiliti!$AJ${mutation.row_map.total_row + 37}")
+    assert local_rows == _expected_total_subtotal_rows(mutation.row_map)
+    assert len(local_rows) == 20
 
 
 @pytest.mark.parametrize("corruption", ["duplicate", "missing", "reordered"])
@@ -639,7 +1077,7 @@ def test_empty_section_subtotal_is_official_but_has_no_phantom_product_operand()
     )
 
 
-def test_all_used_and_unused_product_rows_keep_official_formula_columns_and_styles():
+def test_all_product_rows_keep_styles_and_used_unused_rows_match_official_formulas():
     root = _official_root()
     mutation = build_mobiliti_sheet(
         ET.tostring(root, encoding="utf-8", xml_declaration=True),
@@ -648,6 +1086,15 @@ def test_all_used_and_unused_product_rows_keep_official_formula_columns_and_styl
     )
     output = ET.fromstring(mutation.xml)
     input_columns = {4, 5, 6, 8, 10, 11, 16}
+    used_row = mutation.row_map.item_rows[0]
+    used_rows = set(mutation.row_map.item_rows)
+    unused_row = next(
+        row
+        for section in mutation.row_map.sections
+        for row in range(section.product_start, section.subtotal_row)
+        if row not in used_rows
+    )
+    formula_check_rows = {used_row, unused_row}
 
     for section_index, section in enumerate(mutation.row_map.sections):
         source_row_number = 14 if section_index == 0 else 49
@@ -688,6 +1135,25 @@ def test_all_used_and_unused_product_rows_keep_official_formula_columns_and_styl
                 target_cells[column].find(f"{{{MAIN}}}f") is not None
                 for column in formula_columns
             )
+            if row_number in formula_check_rows:
+                for column in formula_columns:
+                    source_coordinate = (
+                        f"{__import__('openpyxl').utils.get_column_letter(column)}"
+                        f"{source_row_number}"
+                    )
+                    target_coordinate = (
+                        f"{__import__('openpyxl').utils.get_column_letter(column)}"
+                        f"{row_number}"
+                    )
+                    actual = target_cells[column].find(f"{{{MAIN}}}f").text
+                    expected = _derive_official_formula(
+                        source_coordinate,
+                        target_coordinate,
+                        mutation.row_map,
+                    )[1:]
+                    assert _formula_token_signature("=" + actual) == (
+                        _formula_token_signature("=" + expected)
+                    )
             assert all(
                 target_cells[column].find(f"{{{MAIN}}}f").attrib.get("t") != "shared"
                 for column in formula_columns

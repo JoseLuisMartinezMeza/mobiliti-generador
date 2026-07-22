@@ -267,6 +267,11 @@ def apply_mobiliti_layout(editor: WorksheetEditor, row_map: MobilitiRowMap) -> N
     """Limpia solo la tabla oficial que será reconstruida desde sus clones."""
 
     editor.row_map = row_map
+    if row_map.total_row != CANONICAL_TOTAL_ROW:
+        canonical_total = editor.require_row(CANONICAL_TOTAL_ROW)
+        for cell in list(canonical_total.findall(f"{{{MAIN}}}c")):
+            if _cell_column(cell) <= 36:  # El bloque total oficial llega hasta AJ.
+                canonical_total.remove(cell)
     target_rows = {
         row
         for section in row_map.sections
@@ -295,9 +300,19 @@ def _translate_static_structural_formulas(
             if row_number >= 13 and _cell_column(cell) <= TABLE_LAST_COLUMN:
                 continue
             formula = cell.find(f"{{{MAIN}}}f")
-            if formula is None or formula.attrib.get("t") in {"array", "dataTable"}:
+            if formula is None:
                 continue
             coordinate = cell.attrib["r"]
+            if formula.attrib.get("t") in {"array", "dataTable"}:
+                if formula.attrib.get("ref") == coordinate:
+                    _translate_special_formula(
+                        cell,
+                        formula,
+                        origin=coordinate,
+                        target=coordinate,
+                        row_map=row_map,
+                    )
+                continue
             source_text = editor.formulas.source_text(formula, coordinate)
             translated_text = _translate_official_formula(
                 "=" + source_text,
@@ -351,11 +366,65 @@ def _preflight_cloneable_formulas(canonical: OfficialMobilitiBlock) -> None:
             formula_type = formula.attrib.get("t")
             if formula_type in {"array", "dataTable"}:
                 coordinate = cell.attrib.get("r", "?")
-                if formula.attrib.get("ref") != coordinate or not formula.text:
+                if formula.attrib.get("ref") != coordinate or (
+                    formula_type == "array" and not formula.text
+                ):
                     raise ValueError(
                         f"La fórmula {formula_type} de {coordinate} no se puede "
                         "clonar de forma segura"
                     )
+
+
+def _preflight_static_special_formulas(
+    editor: WorksheetEditor, row_map: MobilitiRowMap
+) -> None:
+    if row_map.total_row == CANONICAL_TOTAL_ROW:
+        return
+    for cell in editor.sheet_data.findall(f".//{{{MAIN}}}c"):
+        formula = cell.find(f"{{{MAIN}}}f")
+        if formula is None or formula.attrib.get("t") not in {"array", "dataTable"}:
+            continue
+        coordinate = cell.attrib["r"]
+        for attribute in ("ref", "r1", "r2"):
+            if attribute in formula.attrib and _RANGE_REFERENCE.fullmatch(
+                formula.attrib[attribute]
+            ) is None:
+                raise ValueError(
+                    f"La fórmula {formula.attrib['t']} de {coordinate} tiene "
+                    f"{attribute} inválido en preflight"
+                )
+        if formula.attrib.get("ref") == coordinate:
+            continue
+        if _special_formula_has_moved_structural_reference(formula):
+            raise ValueError(
+                f"La fórmula {formula.attrib['t']} de {coordinate} requiere "
+                "preflight antes de mover el total"
+            )
+
+
+def _special_formula_has_moved_structural_reference(formula: ET.Element) -> bool:
+    values = list(formula.attrib.values())
+    if formula.text:
+        values.extend(
+            token.value
+            for token in Tokenizer("=" + formula.text).items
+            if token.type == "OPERAND" and token.subtype == "RANGE"
+        )
+    for value in values:
+        match = _RANGE_REFERENCE.fullmatch(value)
+        if match is None or not _is_local_mobiliti_reference(match.group("sheet")):
+            continue
+        endpoints = [match.group("first")]
+        if match.group("last"):
+            endpoints.append(match.group("last"))
+        parsed = [_CELL_REFERENCE.fullmatch(endpoint) for endpoint in endpoints]
+        if all(item is not None for item in parsed) and any(
+            CANONICAL_TOTAL_ROW <= int(item.group("row")) <= CANONICAL_AUXILIARY_END
+            for item in parsed
+            if item is not None
+        ):
+            return True
+    return False
 
 
 def clone_section_header(
@@ -444,12 +513,15 @@ def clone_total_row(
         # el original para incluir cualquier sección adicional a las 16 oficiales.
         source_cell = _find_cell(canonical_row, _cell_column(cell))
         source_formula = None if source_cell is None else source_cell.find(f"{{{MAIN}}}f")
-        if source_formula is not None and source_formula.text:
+        if source_formula is not None:
+            source_text = editor.formulas.source_text(
+                source_formula, source_cell.attrib["r"]
+            )
             formula.text = _translate_total_formula(
-                "=" + source_formula.text,
+                "=" + source_text,
                 origin=source_cell.attrib["r"],
                 target=cell.attrib["r"],
-                subtotal_rows=row_map.subtotal_rows,
+                row_map=row_map,
             )[1:]
 
 
@@ -679,21 +751,20 @@ def _move_cell(
         return
     formula_type = formula.attrib.get("t")
     if formula_type in {"array", "dataTable"}:
-        if formula.attrib.get("ref") != origin or not formula.text:
+        if formula.attrib.get("ref") != origin or (
+            formula_type == "array" and not formula.text
+        ):
             raise ValueError(
                 f"La fórmula {formula_type} de {origin} no se puede clonar de forma segura"
             )
-        formula.text = _translate_official_formula(
-            "=" + formula.text,
+        _translate_special_formula(
+            cell,
+            formula,
             origin=origin,
             target=target,
             row_map=row_map,
             product_range=product_range,
-        )[1:]
-        formula.set("ref", target)
-        value = cell.find(f"{{{MAIN}}}v")
-        if value is not None:
-            cell.remove(value)
+        )
         return
     source_text = formula_index.source_text(formula, origin)
     formula.text = _translate_official_formula(
@@ -709,6 +780,52 @@ def _move_cell(
     value = cell.find(f"{{{MAIN}}}v")
     if value is not None:
         cell.remove(value)
+
+
+def _translate_special_formula(
+    cell: ET.Element,
+    formula: ET.Element,
+    *,
+    origin: str,
+    target: str,
+    row_map: MobilitiRowMap,
+    product_range: tuple[int, int] | None = None,
+) -> None:
+    formula_type = formula.attrib.get("t")
+    if formula_type not in {"array", "dataTable"}:
+        raise ValueError(f"Fórmula especial inválida en {origin}")
+    if formula_type == "array" and not formula.text:
+        raise ValueError(f"La fórmula array de {origin} no tiene texto")
+
+    changed = False
+    if formula.text:
+        translated_text = _translate_official_formula(
+            "=" + formula.text,
+            origin=origin,
+            target=target,
+            row_map=row_map,
+            product_range=product_range,
+        )[1:]
+        changed = translated_text != formula.text
+        formula.text = translated_text
+
+    for attribute, value in list(formula.attrib.items()):
+        if attribute == "t" or _RANGE_REFERENCE.fullmatch(value) is None:
+            continue
+        translated_value = _translate_official_formula(
+            "=" + value,
+            origin=origin,
+            target=target,
+            row_map=row_map,
+            product_range=product_range,
+        )[1:]
+        changed = changed or translated_value != value
+        formula.set(attribute, translated_value)
+
+    if changed:
+        cached_value = cell.find(f"{{{MAIN}}}v")
+        if cached_value is not None:
+            cell.remove(cached_value)
 
 
 def _translate_official_formula(
@@ -824,13 +941,13 @@ def _translate_total_formula(
     *,
     origin: str,
     target: str,
-    subtotal_rows: Sequence[int],
+    row_map: MobilitiRowMap,
 ) -> str:
-    translated = translate_formula(
+    translated = _translate_official_formula(
         formula,
         origin=origin,
         target=target,
-        sheet="Mobiliti",
+        row_map=row_map,
     )
     tokens = Tokenizer(formula).items
     translated_tokens = Tokenizer(translated).items
@@ -885,9 +1002,9 @@ def _translate_total_formula(
                 f"El total oficial requiere 16 subtotales únicos en orden canónico: {origin}"
             )
     rows = (
-        list(reversed(subtotal_rows))
+        list(reversed(row_map.subtotal_rows))
         if source_rows == descending
-        else list(subtotal_rows)
+        else list(row_map.subtotal_rows)
     )
     references = separator.join(
         _reference_with_rows(source_references[0], (row,)) for row in rows
@@ -992,7 +1109,7 @@ def _sort_cells(row: ET.Element) -> None:
 def _translate_sqref(value: str, row_map: MobilitiRowMap) -> str:
     result = []
     seen = set()
-    canonical_columns: list[tuple[str, str]] = []
+    canonical_templates: list[str] = []
     for token in value.split():
         match = _RANGE_REFERENCE.fullmatch(token)
         section_index = _sqref_token_section_index(token)
@@ -1003,18 +1120,18 @@ def _translate_sqref(value: str, row_map: MobilitiRowMap) -> str:
             translated = _translate_sqref_token(
                 token, 14 + section_index * 35, section.product_start, section.capacity
             )
-            if section_index == 1:
-                first = _CELL_REFERENCE.fullmatch(match.group("first"))
-                last = _CELL_REFERENCE.fullmatch(match.group("last"))
-                canonical_columns.append((first.group("column"), last.group("column")))
+            if section_index == 1 and token not in canonical_templates:
+                canonical_templates.append(token)
         if translated not in seen:
             result.append(translated)
             seen.add(translated)
     for section in row_map.sections[len(CANONICAL_SUBTOTAL_ROWS) :]:
-        for first_column, last_column in canonical_columns:
-            token = (
-                f"{first_column}{section.product_start}:"
-                f"{last_column}{section.product_start + section.capacity - 1}"
+        for template in canonical_templates:
+            token = _translate_sqref_token(
+                template,
+                49,
+                section.product_start,
+                section.capacity,
             )
             if token not in seen:
                 result.append(token)
@@ -1102,6 +1219,9 @@ def _replace_merges(
             continue
         min_col, min_row, max_col, max_row = bounds
         cross_boundary = min_col <= TABLE_LAST_COLUMN < max_col
+        canonical_total = (
+            min_row == max_row == CANONICAL_TOTAL_ROW and max_col <= 36
+        )
         dynamic_table = (
             min_row >= 13
             and max_row <= CANONICAL_TOTAL_ROW
@@ -1109,7 +1229,7 @@ def _replace_merges(
             and not cross_boundary
         )
         auxiliary = min_row >= CANONICAL_AUXILIARY_START and max_row <= CANONICAL_AUXILIARY_END
-        if not dynamic_table and not auxiliary:
+        if not dynamic_table and not auxiliary and not canonical_total:
             preserved.append(deepcopy(merge))
     generated = []
     for index, section in enumerate(row_map.sections):
@@ -1210,6 +1330,7 @@ def build_mobiliti_sheet(
     editor = WorksheetEditor.from_xml(official_sheet_xml)
     canonical = capture_official_mobiliti_block(editor)
     _preflight_cloneable_formulas(canonical)
+    _preflight_static_special_formulas(editor, row_map)
     _translate_static_structural_formulas(editor, row_map)
     apply_mobiliti_layout(editor, row_map)
 
