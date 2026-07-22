@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -21,6 +22,7 @@ from mobiliti_saas.quote_engine.mobiliti_layout import (  # noqa: E402
     plan_mobiliti_layout,
 )
 from mobiliti_saas.quote_engine import generate_quote  # noqa: E402
+import mobiliti_saas.quote_engine.official_composer as official_composer_module  # noqa: E402
 from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage  # noqa: E402
 from mobiliti_saas.quote_engine.ooxml_package import (  # noqa: E402
     relationship_part_name,
@@ -45,6 +47,7 @@ from mobiliti_saas.quote_engine.official_composer import (  # noqa: E402
     CotizacionProductImage,
     CotizacionSection,
     CotizacionSheetEditor,
+    _translate_estrategia,
     compose_official_quote,
 )
 from mobiliti_saas.quote_engine.official_template import (  # noqa: E402
@@ -1164,3 +1167,304 @@ def test_active_engine_embedded_source_image_reaches_cotizacion_anchor(
         and package.parts[name].startswith(b"\x89PNG\r\n\x1a\n")
         for name in package.parts
     )
+
+
+@pytest.mark.parametrize(
+    "surface",
+    ("mobiliti_formula", "cotizacion_terms", "cotizacion_style", "row_height", "merge"),
+)
+def test_composer_rejects_any_change_outside_the_exact_sheet_allowlist(
+    tmp_path: Path,
+    surface: str,
+) -> None:
+    output = tmp_path / f"exact-{surface}.xlsx"
+    request = _minimal_request(output)
+    if surface == "mobiliti_formula":
+        root = ET.fromstring(request.mobiliti.xml)
+        coordinate = f"W{request.mobiliti.row_map.item_rows[0]}"
+        formula = _cell(root, coordinate).find(f"{{{MAIN}}}f")
+        assert formula is not None
+        formula.text = "1+1"
+        request = replace(
+            request,
+            mobiliti=replace(
+                request.mobiliti,
+                xml=ET.tostring(root, encoding="utf-8", xml_declaration=True),
+            ),
+        )
+    else:
+        root = ET.fromstring(request.cotizacion.xml)
+        product_row = request.cotizacion.product_rows[0]
+        if surface == "cotizacion_terms":
+            terms_row = 28 + request.cotizacion.terms_row_delta
+            term = _cell(root, f"A{terms_row}")
+            value = term.find(f"{{{MAIN}}}v")
+            assert value is not None
+            value.text = "999999"
+        elif surface == "cotizacion_style":
+            _cell(root, f"A{product_row}").attrib["s"] = "0"
+        elif surface == "row_height":
+            row = root.find(f"{{{MAIN}}}sheetData/{{{MAIN}}}row[@r='{product_row}']")
+            assert row is not None
+            row.attrib["ht"] = "999"
+        else:
+            merge = root.find(f"{{{MAIN}}}mergeCells/{{{MAIN}}}mergeCell[@ref='A16:J16']")
+            assert merge is not None
+            merge.attrib["ref"] = "A16:I16"
+        request = replace(
+            request,
+            cotizacion=replace(
+                request.cotizacion,
+                xml=ET.tostring(root, encoding="utf-8", xml_declaration=True),
+            ),
+        )
+
+    with pytest.raises(ValueError, match="contrato exacto"):
+        compose_official_quote(request)
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("targets", ((999,), (17, 17)))
+def test_composer_rejects_product_images_outside_unique_product_rows(
+    tmp_path: Path,
+    targets: tuple[int, ...],
+) -> None:
+    image = tmp_path / "safe.png"
+    Image.new("RGB", (16, 16), (10, 20, 30)).save(image)
+    output = tmp_path / f"bad-image-{'-'.join(map(str, targets))}.xlsx"
+    request = _minimal_request(output)
+    cotizacion = replace(
+        request.cotizacion,
+        images=tuple(CotizacionProductImage(image.resolve(), row) for row in targets),
+    )
+
+    with pytest.raises(ValueError, match="filas de producto"):
+        compose_official_quote(replace(request, cotizacion=cotizacion))
+
+    assert not output.exists()
+
+
+def test_product_picture_ids_are_unique_and_names_are_deterministic(tmp_path: Path) -> None:
+    first = tmp_path / "customer-name.png"
+    second = tmp_path / "another-customer-name.png"
+    Image.new("RGB", (16, 16), (10, 20, 30)).save(first)
+    Image.new("RGB", (16, 16), (40, 50, 60)).save(second)
+    output = tmp_path / "deterministic-pictures.xlsx"
+    request = _request_for_sections(output, (2,))
+    product_rows = request.cotizacion.product_rows
+    cotizacion = replace(
+        request.cotizacion,
+        images=(
+            CotizacionProductImage(first.resolve(), product_rows[0]),
+            CotizacionProductImage(second.resolve(), product_rows[1]),
+        ),
+    )
+
+    compose_official_quote(replace(request, cotizacion=cotizacion))
+
+    package = XlsxPackage.read(output)
+    drawing_part, _drawing_rels = _cotizacion_drawing_parts(package)
+    drawing = ET.fromstring(package.parts[drawing_part])
+    ids = [node.attrib["id"] for node in drawing.findall(f".//{{{XDR}}}cNvPr")]
+    assert len(ids) == len(set(ids))
+    product_names = []
+    for anchor in drawing.findall(f"{{{XDR}}}oneCellAnchor"):
+        row = anchor.findtext(f"{{{XDR}}}from/{{{XDR}}}row")
+        if row in {str(number - 1) for number in product_rows}:
+            node = anchor.find(f".//{{{XDR}}}cNvPr")
+            assert node is not None
+            product_names.append(node.attrib["name"])
+    assert product_names == ["Imagen de producto 0001", "Imagen de producto 0002"]
+
+
+def test_composer_rejects_inline_string_value_smuggling(tmp_path: Path) -> None:
+    output = tmp_path / "inline-smuggling.xlsx"
+    request = _minimal_request(output)
+    root = ET.fromstring(request.cotizacion.xml)
+    header = _cell(root, "B3")
+    ET.SubElement(header, f"{{{MAIN}}}v").text = "contenido oculto"
+    cotizacion = replace(
+        request.cotizacion,
+        xml=ET.tostring(root, encoding="utf-8", xml_declaration=True),
+    )
+
+    with pytest.raises(ValueError, match="inlineStr exacto"):
+        compose_official_quote(replace(request, cotizacion=cotizacion))
+
+    assert not output.exists()
+
+
+def test_audit_failure_never_leaves_output_or_compose_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "audit-failure.xlsx"
+
+    def fail_contract(*_args, **_kwargs) -> None:
+        raise ValueError("fallo de auditoría inyectado")
+
+    monkeypatch.setattr(official_composer_module, "verify_output_contract", fail_contract)
+
+    with pytest.raises(ValueError, match="fallo de auditoría"):
+        compose_official_quote(_minimal_request(output))
+
+    assert not output.exists()
+    assert not tuple(tmp_path.glob(".*.compose-*.tmp"))
+
+
+def test_publication_race_preserves_existing_output_and_recovers_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "race.xlsx"
+    recovered = tmp_path / "recovered"
+    recovered.mkdir()
+    real_rename = official_composer_module.os.rename
+
+    def race_publish(source: Path, destination: Path) -> None:
+        Path(destination).write_bytes(b"archivo del usuario")
+        raise FileExistsError("carrera EEXIST simulada")
+
+    def recover_candidate(candidate: Path) -> None:
+        real_rename(candidate, recovered / candidate.name)
+
+    monkeypatch.setattr(
+        official_composer_module,
+        "_atomic_publish_no_replace",
+        race_publish,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        official_composer_module,
+        "_recycle_candidate",
+        recover_candidate,
+        raising=False,
+    )
+
+    with pytest.raises(FileExistsError):
+        compose_official_quote(_minimal_request(output))
+
+    assert output.read_bytes() == b"archivo del usuario"
+    assert not tuple(tmp_path.glob(".*.compose-*.tmp"))
+    assert len(tuple(recovered.iterdir())) == 1
+
+
+def test_compose_paths_reject_lexical_parent_segments_before_resolution(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "existing"
+    nested.mkdir()
+    output = nested / ".." / "lexical.xlsx"
+    request = replace(_minimal_request(tmp_path / "safe.xlsx"), output=output)
+
+    with pytest.raises(ValueError, match="segmentos léxicos"):
+        compose_official_quote(request)
+
+    assert not (tmp_path / "lexical.xlsx").exists()
+
+
+def test_compose_paths_reject_windows_reparse_points(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "reparse.xlsx"
+    monkeypatch.setattr(
+        official_composer_module,
+        "_path_is_reparse_point",
+        lambda path: Path(path) == tmp_path,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="reparse point"):
+        compose_official_quote(_minimal_request(output))
+
+    assert not output.exists()
+
+
+def test_estrategia_translation_never_rewrites_reference_like_string_literals() -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    part = base.sheet_part("Estrategia Comercial ")
+    root = ET.fromstring(base.parts[part])
+    formula = _cell(root, "B7").find(f"{{{MAIN}}}f")
+    assert formula is not None
+    formula.text = (
+        'IF("Mobiliti!$G$14:$G$571"="literal",0,'
+        'SUMIF(Mobiliti!$G$14:$G$571,"P00500",Mobiliti!$AD$14:$AD$571))'
+    )
+    row_map = plan_mobiliti_layout([SectionNeed("large", "Large", 100)])
+
+    translated = ET.fromstring(
+        _translate_estrategia(
+            ET.tostring(root, encoding="utf-8", xml_declaration=True),
+            row_map,
+            30,
+        )
+    )
+    result = _cell(translated, "B7").findtext(f"{{{MAIN}}}f")
+    assert '"Mobiliti!$G$14:$G$571"' in result
+    assert f"Mobiliti!$G$14:$G${row_map.last_product_row}" in result
+    assert f"Mobiliti!$AD$14:$AD${row_map.last_product_row}" in result
+
+
+def test_estrategia_subtotal_translation_only_changes_range_tokens() -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    part = base.sheet_part("Estrategia Comercial ")
+    root = ET.fromstring(base.parts[part])
+    formula = _cell(root, "B63").find(f"{{{MAIN}}}f")
+    assert formula is not None
+    formula.text = (
+        'IF("Cotizacion!H19"="literal",0,'
+        'IF(B61=0,C61,B61*Cotizacion!H19))'
+    )
+    row_map = plan_mobiliti_layout([SectionNeed("large", "Large", 100)])
+
+    translated = ET.fromstring(
+        _translate_estrategia(
+            ET.tostring(root, encoding="utf-8", xml_declaration=True),
+            row_map,
+            30,
+        )
+    )
+    result = _cell(translated, "B63").findtext(f"{{{MAIN}}}f")
+    assert '"Cotizacion!H19"' in result
+    assert "B61*Cotizacion!H25" in result
+
+
+def test_composed_zip_bytes_ignore_output_name_image_name_and_image_mtime(
+    tmp_path: Path,
+) -> None:
+    first_image = tmp_path / "first-customer-name.png"
+    second_image = tmp_path / "second-customer-name.png"
+    Image.new("RGB", (24, 16), (90, 40, 10)).save(first_image)
+    second_image.write_bytes(first_image.read_bytes())
+    os.utime(first_image, (1_000_000_000, 1_000_000_000))
+    os.utime(second_image, (1_700_000_000, 1_700_000_000))
+    first_output = tmp_path / "first-output.xlsx"
+    second_output = tmp_path / "different-output-name.xlsx"
+
+    first_request = _minimal_request(first_output)
+    second_request = _minimal_request(second_output)
+    first_cotizacion = replace(
+        first_request.cotizacion,
+        images=(
+            CotizacionProductImage(
+                first_image.resolve(),
+                first_request.cotizacion.product_rows[0],
+            ),
+        ),
+    )
+    second_cotizacion = replace(
+        second_request.cotizacion,
+        images=(
+            CotizacionProductImage(
+                second_image.resolve(),
+                second_request.cotizacion.product_rows[0],
+            ),
+        ),
+    )
+
+    compose_official_quote(replace(first_request, cotizacion=first_cotizacion))
+    compose_official_quote(replace(second_request, cotizacion=second_cotizacion))
+
+    assert first_output.read_bytes() == second_output.read_bytes()

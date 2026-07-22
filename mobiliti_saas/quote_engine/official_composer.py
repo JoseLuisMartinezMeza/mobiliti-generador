@@ -8,19 +8,27 @@ contrato y publica el ZIP sólo después de auditar el archivo candidato.
 from __future__ import annotations
 
 from copy import deepcopy
+import ctypes
 from dataclasses import dataclass, field
 from decimal import Decimal
+import errno
 import os
 from pathlib import Path
 import posixpath
 import re
+import shutil
+import stat
+import subprocess
+import sys
 from types import MappingProxyType
 from typing import Mapping, Sequence
+import uuid
 from xml.etree import ElementTree as ET
 
+from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils.cell import column_index_from_string, get_column_letter
 
-from .mobiliti_layout import MobilitiRowMap
+from .mobiliti_layout import MobilitiRowMap, SectionNeed
 from .ooxml_formula import translate_calc_chain, translate_formula
 from .ooxml_package import (
     OFFICE_DOCUMENT_RELATIONSHIPS,
@@ -28,13 +36,18 @@ from .ooxml_package import (
     PackageAudit,
     PackageMutation,
     XlsxPackage,
-    assert_package_preserved,
+    assert_packages_preserved,
     relationship_part_name,
     relationship_type_uris,
     resolve_internal_target,
     validate_part_name,
 )
-from .ooxml_worksheet import MobilitiSheetMutation
+from .ooxml_worksheet import (
+    MobilitiCellWrite,
+    MobilitiSheetMutation,
+    WorksheetEditor,
+    build_mobiliti_sheet,
+)
 from .official_template import TemplateContract, verify_official_template
 from .quotation_sheets import SheetAddition
 
@@ -293,6 +306,11 @@ class CotizacionSheetEditor:
             gap_templates = tuple(rows[number] for number in range(25, 28))
         except KeyError as error:
             raise ValueError("Bloques oficiales de Cotizacion incompletos") from error
+        product_h_formula = _formula_text(product_template, "H17")
+        product_j_formula = _formula_text(product_template, "J17")
+        subtotal_formula = _formula_text(total_templates[0], "H19")
+        if None in {product_h_formula, product_j_formula, subtotal_formula}:
+            raise ValueError("Fórmulas oficiales de Cotizacion incompletas")
 
         self._write_metadata(metadata)
         preserved_headers = [row for number, row in sorted(rows.items()) if number < 16]
@@ -334,7 +352,7 @@ class CotizacionSheetEditor:
                     row,
                     f"H{target_row}",
                     translate_formula(
-                        "=F17*G17",
+                        product_h_formula,
                         origin="H17",
                         target=f"H{target_row}",
                         sheet="Cotizacion",
@@ -345,7 +363,7 @@ class CotizacionSheetEditor:
                     row,
                     f"J{target_row}",
                     translate_formula(
-                        "=E17*I17",
+                        product_j_formula,
                         origin="J17",
                         target=f"J{target_row}",
                         sheet="Cotizacion",
@@ -367,10 +385,32 @@ class CotizacionSheetEditor:
         total_row = CANONICAL_COTIZACION_TOTAL_ROW + total_delta
         if total_row + (CANONICAL_COTIZACION_PRINT_END - CANONICAL_COTIZACION_TOTAL_ROW) > XLSX_MAX_ROWS:
             raise ValueError("Cotizacion excede la capacidad física de XLSX")
+        translated_subtotal = translate_formula(
+            subtotal_formula,
+            origin="H19",
+            target=f"H{subtotal_row}",
+            sheet="Cotizacion",
+        )
+        subtotal_ranges = [
+            token
+            for token in _formula_range_tokens(translated_subtotal[1:])
+            if re.fullmatch(r"J[1-9][0-9]*:J[1-9][0-9]*", token)
+        ]
+        if len(subtotal_ranges) != 1:
+            raise ValueError("Rango subtotal oficial Cotizacion inesperado")
+        translated_subtotal = translate_formula(
+            subtotal_formula,
+            origin="H19",
+            target=f"H{subtotal_row}",
+            range_overrides={
+                subtotal_ranges[0]: f"J{product_rows[0]}:J{product_rows[-1]}"
+            },
+            sheet="Cotizacion",
+        )
         _set_formula(
             totals[0],
             f"H{subtotal_row}",
-            f"=SUM(IFERROR(J{product_rows[0]}:J{product_rows[-1]},0))",
+            translated_subtotal,
             attributes={"t": "array", "ref": f"H{subtotal_row}"},
         )
         _set_number(totals[2], f"H{subtotal_row + 2}", Decimal("0"))
@@ -451,18 +491,22 @@ def compose_official_quote(request: ComposeRequest) -> PackageAudit:
     verify_official_template(template, request.contract)
     base = XlsxPackage.read(template)
     mutation = build_allowlisted_mutation(base, request)
-    candidate = _candidate_path(output)
-    base.write_new(candidate, mutation)
-    audit = assert_package_preserved(template, candidate, mutation.allowed_parts)
+    payload = base.to_bytes(mutation)
+    candidate_package = XlsxPackage.from_bytes(payload)
+    audit = assert_packages_preserved(base, candidate_package, mutation.allowed_parts)
     verify_output_contract(
-        candidate,
+        candidate_package,
         request.contract,
         request.mobiliti.row_map,
         cotizacion_total_row=request.cotizacion.total_row,
     )
-    if output.exists():
-        raise FileExistsError(f"La salida ya existe: {output}")
-    os.rename(candidate, output)
+    candidate = _write_candidate(output, payload)
+    try:
+        _atomic_publish_no_replace(candidate, output)
+    except BaseException:
+        if candidate.exists():
+            _recycle_candidate(candidate)
+        raise
     return audit
 
 
@@ -538,7 +582,7 @@ def build_allowlisted_mutation(
 
 
 def verify_output_contract(
-    output: Path,
+    output: Path | XlsxPackage,
     contract: TemplateContract,
     row_map: MobilitiRowMap,
     *,
@@ -546,7 +590,7 @@ def verify_output_contract(
 ) -> None:
     """Verifica invariantes oficiales antes de publicar el candidato."""
 
-    package = XlsxPackage.read(Path(output))
+    package = output if isinstance(output, XlsxPackage) else XlsxPackage.read(Path(output))
     rows = package._sheet_rows()
     names = [name for name, _state, _index, _part in rows]
     if len(names) != len({name.casefold() for name in names}):
@@ -614,6 +658,13 @@ def merge_cotizacion_product_images(
 
     if mutation.related_parts or mutation.related_additions:
         raise ValueError("Cotizacion ya contiene partes relacionadas no verificadas")
+    image_rows = tuple(image.target_row for image in mutation.images)
+    if len(image_rows) != len(set(image_rows)) or not set(image_rows).issubset(
+        mutation.product_rows
+    ):
+        raise ValueError(
+            "Las imágenes Cotizacion deben pertenecer a filas de producto únicas"
+        )
     sheet_part = base.sheet_part("Cotizacion")
     sheet_root = ET.fromstring(base.parts[sheet_part])
     drawing_nodes = sheet_root.findall(f"{{{MAIN}}}drawing")
@@ -684,7 +735,7 @@ def merge_cotizacion_product_images(
                 target_row=image.target_row,
                 width=width,
                 height=height,
-                name=image.path.name,
+                name=f"Imagen de producto {sequence:04d}",
             )
         )
         next_picture_id += 1
@@ -711,7 +762,16 @@ def merge_cotizacion_product_images(
 
 def _translate_fletes(payload: bytes, row_map: MobilitiRowMap) -> bytes:
     root = _worksheet_root(payload, "Fletes")
-    _replace_formula(root, "D19", f"=Mobiliti!H{row_map.total_row}")
+    source = _formula_in_root(root, "D19")
+    if source is None or _formula_range_tokens(source).count("Mobiliti!H573") != 1:
+        raise ValueError("Fórmula oficial inesperada: Fletes!D19")
+    translated = _translate_formula_with_overrides(
+        source,
+        coordinate="D19",
+        sheet="Fletes",
+        overrides={"Mobiliti!H573": f"Mobiliti!H{row_map.total_row}"},
+    )
+    _replace_formula(root, "D19", "=" + translated)
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
@@ -719,125 +779,321 @@ def _validate_declared_sheet_surfaces(
     base: XlsxPackage,
     request: ComposeRequest,
 ) -> None:
-    """Impide que una mutación tipada esconda escrituras estáticas arbitrarias."""
+    """Reconstruye la allowlist tipada y compara la estructura completa."""
 
-    official_mobiliti = _worksheet_root(
-        base.parts[base.sheet_part("Mobiliti")], "Mobiliti"
-    )
-    candidate_mobiliti = _worksheet_root(request.mobiliti.xml, "Mobiliti")
-    translated_static = {"E4", "E8", "P9", "AU11"}
-    mutable_mobiliti = {"K4", "K8", *translated_static}
-    _assert_static_cells_unchanged(
-        official_mobiliti,
-        candidate_mobiliti,
-        mutable=lambda coordinate, row, _column: (
-            coordinate in mutable_mobiliti or row >= 13
-        ),
-        sheet="Mobiliti",
-    )
-    _validate_translated_static_mobiliti_formulas(
-        official_mobiliti,
-        candidate_mobiliti,
+    _validate_exact_mobiliti_surface(base, request.mobiliti)
+    _validate_exact_cotizacion_surface(
+        base,
+        request.cotizacion,
         request.mobiliti.row_map,
     )
 
-    official_cotizacion = _worksheet_root(
-        base.parts[base.sheet_part("Cotizacion")], "Cotizacion"
-    )
-    candidate_cotizacion = _worksheet_root(request.cotizacion.xml, "Cotizacion")
-    mutable_header = {"B3", "B7", "B8", "B9", "B10", "B11", "B12"}
-    _assert_static_cells_unchanged(
-        official_cotizacion,
-        candidate_cotizacion,
-        mutable=lambda coordinate, row, column: (
-            coordinate in mutable_header or (row >= 16 and column <= 10)
-        ),
-        sheet="Cotizacion",
-    )
 
-
-def _assert_static_cells_unchanged(
-    official: ET.Element,
-    candidate: ET.Element,
-    *,
-    mutable,
-    sheet: str,
+def _validate_exact_mobiliti_surface(
+    base: XlsxPackage,
+    mutation: MobilitiSheetMutation,
 ) -> None:
-    official_cells = _cell_payloads(official)
-    candidate_cells = _cell_payloads(candidate)
-    for coordinate in set(official_cells) | set(candidate_cells):
-        match = _CELL.fullmatch(coordinate)
-        if match is None:
-            raise ValueError(f"Coordenada inválida en {sheet}")
-        row = int(match.group("row"))
-        column = column_index_from_string(match.group("column"))
-        if mutable(coordinate, row, column):
-            continue
-        if official_cells.get(coordinate) != candidate_cells.get(coordinate):
-            raise ValueError(
-                f"Escritura fuera de la superficie mutable: {sheet}!{coordinate}"
+    candidate = _worksheet_root(mutation.xml, "Mobiliti")
+    _validate_exact_inline_strings(candidate, "Mobiliti")
+    row_map = mutation.row_map
+    needs = [
+        SectionNeed(section.id, section.title, section.item_count)
+        for section in row_map.sections
+    ]
+    input_kinds = {
+        "D": ("text",),
+        "E": ("text",),
+        "F": ("text",),
+        "H": ("number",),
+        "J": ("number",),
+        "K": ("text", "number"),
+        "P": ("text",),
+    }
+    writes: list[MobilitiCellWrite] = []
+    for row in row_map.item_rows:
+        for column, allowed_kinds in input_kinds.items():
+            coordinate = f"{column}{row}"
+            cell = _cell_in_root(candidate, coordinate)
+            if cell is None:
+                continue
+            kind, value = _exact_allowed_typed_value(
+                cell,
+                allowed_kinds,
+                allow_blank=True,
             )
+            if kind is not None:
+                writes.append(MobilitiCellWrite(coordinate, kind, value))
+
+    official_payload = base.parts[base.sheet_part("Mobiliti")]
+    expected = build_mobiliti_sheet(official_payload, needs, writes)
+    if expected.row_map != row_map:
+        raise ValueError("Mobiliti no cumple el contrato exacto de layout")
+    editor = WorksheetEditor.from_xml(expected.xml)
+    selector_writes: list[MobilitiCellWrite] = []
+    for coordinate, kind in (("K4", "boolean"), ("K8", "text")):
+        cell = _cell_in_root(candidate, coordinate)
+        if cell is None:
+            raise ValueError(f"Mobiliti no cumple el contrato exacto: {coordinate}")
+        value = _exact_typed_value(cell, kind, allow_blank=False)
+        selector_writes.append(MobilitiCellWrite(coordinate, kind, value))
+    editor.set_typed_values(selector_writes)
+    _assert_exact_worksheet(editor.root, candidate, "Mobiliti")
 
 
-def _cell_payloads(root: ET.Element) -> dict[str, bytes]:
-    result: dict[str, bytes] = {}
-    for cell in root.findall(f".//{{{MAIN}}}c"):
-        coordinate = cell.attrib.get("r", "")
-        if coordinate in result:
-            raise ValueError(f"Celda OOXML duplicada: {coordinate}")
-        result[coordinate] = ET.tostring(cell, encoding="utf-8")
-    return result
-
-
-def _validate_translated_static_mobiliti_formulas(
-    official: ET.Element,
-    candidate: ET.Element,
+def _validate_exact_cotizacion_surface(
+    base: XlsxPackage,
+    mutation: CotizacionSheetMutation,
     row_map: MobilitiRowMap,
 ) -> None:
-    total_row = row_map.total_row
-    expected = {
-        "E4": f"AD{total_row}",
-        "E8": f"(AD{total_row}-M{total_row})/AD{total_row}",
-        "P9": f"P8/H{total_row}",
+    candidate = _worksheet_root(mutation.xml, "Cotizacion")
+    _validate_exact_inline_strings(candidate, "Cotizacion")
+    product_rows = mutation.product_rows
+    if (
+        not product_rows
+        or tuple(sorted(set(product_rows))) != product_rows
+        or len(product_rows) != len(row_map.item_rows)
+    ):
+        raise ValueError("Cotizacion no cumple el contrato exacto de filas de producto")
+    if mutation.terms_row_delta != mutation.total_row - CANONICAL_COTIZACION_TOTAL_ROW:
+        raise ValueError("Cotizacion no cumple el contrato exacto de términos")
+    subtotal_row = mutation.total_row - 5
+    if subtotal_row <= CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW:
+        raise ValueError("Cotizacion no cumple el contrato exacto de totales")
+    if any(
+        row <= CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW or row >= subtotal_row
+        for row in product_rows
+    ):
+        raise ValueError("Cotizacion no cumple el contrato exacto de filas de producto")
+
+    metadata_coordinates = {
+        "quotation_number": "B3",
+        "project": "B7",
+        "client": "B8",
+        "email": "B9",
+        "phone": "B10",
+        "address": "B11",
+        "business_name": "B12",
     }
-    official_au11 = _formula_in_root(official, "AU11")
-    if official_au11 is None:
-        raise ValueError("Fórmula oficial Mobiliti!AU11 ausente")
-    auxiliary_delta = total_row - CANONICAL_MOBILITI_TOTAL_ROW
-    expected["AU11"] = re.sub(
-        r"(?P<prefix>\$A[MN]\$)(?P<row>57[7-9]|58[0-9]|59[0-8])\b",
-        lambda match: (
-            match.group("prefix")
-            + str(int(match.group("row")) + auxiliary_delta)
-        ),
-        official_au11,
-    )
-    for coordinate, formula in expected.items():
-        cell = _cell_in_root(candidate, coordinate)
-        official_cell = _cell_in_root(official, coordinate)
-        if cell is None or official_cell is None:
-            raise ValueError(f"Celda Mobiliti estática ausente: {coordinate}")
-        if _formula_in_root(candidate, coordinate) != formula:
-            raise ValueError(
-                f"Escritura fuera de la superficie mutable: Mobiliti!{coordinate}"
-            )
-        official_attributes = dict(official_cell.attrib)
-        candidate_attributes = dict(cell.attrib)
-        if candidate_attributes != official_attributes:
-            raise ValueError(
-                f"Metadatos estáticos Mobiliti alterados: {coordinate}"
-            )
-        cached = cell.find(f"{{{MAIN}}}v")
-        if auxiliary_delta == 0:
-            if ET.tostring(cell, encoding="utf-8") != ET.tostring(
-                official_cell,
-                encoding="utf-8",
-            ):
-                raise ValueError(
-                    f"Celda estática Mobiliti alterada sin reubicación: {coordinate}"
+    metadata_values = {
+        field: _exact_inline_text(_require_root_cell(candidate, coordinate), coordinate)
+        for field, coordinate in metadata_coordinates.items()
+    }
+    metadata = CotizacionMetadata(**metadata_values)
+
+    sections: list[CotizacionSection] = []
+    current_title: str | None = None
+    current_products: list[CotizacionProduct] = []
+    product_set = set(product_rows)
+    first_discount: Decimal | None = None
+    mobiliti_rows: list[int] = []
+    product_sequence = 0
+    for worksheet_row in range(CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW, subtotal_row):
+        if worksheet_row not in product_set:
+            if current_title is not None:
+                if not current_products:
+                    raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
+                sections.append(
+                    CotizacionSection(current_title, tuple(current_products))
                 )
-        elif cached is not None:
-            raise ValueError(f"Cache estática Mobiliti no fue invalidada: {coordinate}")
+            current_title = _exact_inline_text(
+                _require_root_cell(candidate, f"A{worksheet_row}"),
+                f"A{worksheet_row}",
+            )
+            current_products = []
+            continue
+        if current_title is None:
+            raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
+        product_sequence += 1
+        quantity = _exact_typed_value(
+            _require_root_cell(candidate, f"E{worksheet_row}"),
+            "number",
+            allow_blank=False,
+        )
+        if first_discount is None:
+            first_discount = _exact_typed_value(
+                _require_root_cell(candidate, f"G{worksheet_row}"),
+                "number",
+                allow_blank=False,
+            )
+        formula = _exact_formula_text(
+            _require_root_cell(candidate, f"F{worksheet_row}"),
+            f"F{worksheet_row}",
+        )
+        match = re.fullmatch(r"Mobiliti!X([1-9][0-9]*)", formula)
+        if match is None:
+            raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
+        mobiliti_row = int(match.group(1))
+        mobiliti_rows.append(mobiliti_row)
+        current_products.append(
+            CotizacionProduct(
+                item_key=f"contract-{product_sequence}",
+                name=_exact_inline_text(
+                    _require_root_cell(candidate, f"A{worksheet_row}"),
+                    f"A{worksheet_row}",
+                ),
+                description=_exact_inline_text(
+                    _require_root_cell(candidate, f"C{worksheet_row}"),
+                    f"C{worksheet_row}",
+                ),
+                dimensions=_exact_inline_text(
+                    _require_root_cell(candidate, f"D{worksheet_row}"),
+                    f"D{worksheet_row}",
+                ),
+                quantity=quantity,
+                mobiliti_row=mobiliti_row,
+                discount=first_discount,
+            )
+        )
+    if current_title is None or not current_products:
+        raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
+    sections.append(CotizacionSection(current_title, tuple(current_products)))
+    if tuple(mobiliti_rows) != row_map.item_rows:
+        raise ValueError("Cotizacion no cumple el contrato exacto de filas Mobiliti")
+
+    expected = CotizacionSheetEditor.from_xml(
+        base.parts[base.sheet_part("Cotizacion")]
+    ).compose(metadata=metadata, sections=tuple(sections))
+    if (
+        expected.total_row != mutation.total_row
+        or expected.terms_row_delta != mutation.terms_row_delta
+        or expected.product_rows != mutation.product_rows
+    ):
+        raise ValueError("Cotizacion no cumple el contrato exacto de layout")
+    expected_root = _worksheet_root(expected.xml, "Cotizacion")
+    _assert_exact_worksheet(expected_root, candidate, "Cotizacion")
+
+
+def _require_root_cell(root: ET.Element, coordinate: str) -> ET.Element:
+    cell = _cell_in_root(root, coordinate)
+    if cell is None:
+        raise ValueError(f"Celda requerida ausente: {coordinate}")
+    return cell
+
+
+def _validate_exact_inline_strings(root: ET.Element, sheet: str) -> None:
+    for cell in root.findall(f".//{{{MAIN}}}c[@t='inlineStr']"):
+        coordinate = cell.attrib.get("r", "?")
+        _exact_inline_text(cell, f"{sheet}!{coordinate}")
+
+
+def _exact_inline_text(cell: ET.Element, coordinate: str) -> str:
+    children = list(cell)
+    if cell.attrib.get("t") != "inlineStr" or len(children) != 1:
+        raise ValueError(f"inlineStr exacto inválido: {coordinate}")
+    inline = children[0]
+    if inline.tag != f"{{{MAIN}}}is" or inline.attrib or len(inline) != 1:
+        raise ValueError(f"inlineStr exacto inválido: {coordinate}")
+    text = inline[0]
+    allowed_text_attributes = {f"{{{XML}}}space"}
+    if (
+        text.tag != f"{{{MAIN}}}t"
+        or set(text.attrib) - allowed_text_attributes
+        or text.attrib.get(f"{{{XML}}}space") not in {None, "preserve"}
+        or len(text)
+    ):
+        raise ValueError(f"inlineStr exacto inválido: {coordinate}")
+    return text.text or ""
+
+
+def _exact_typed_value(
+    cell: ET.Element,
+    kind: str,
+    *,
+    allow_blank: bool,
+) -> Decimal | str | bool | None:
+    children = list(cell)
+    if not children and cell.attrib.get("t") is None and allow_blank:
+        return None
+    coordinate = cell.attrib.get("r", "?")
+    if kind == "text":
+        return _exact_inline_text(cell, coordinate)
+    if kind == "boolean":
+        if (
+            cell.attrib.get("t") != "b"
+            or len(children) != 1
+            or children[0].tag != f"{{{MAIN}}}v"
+            or children[0].attrib
+            or children[0].text not in {"0", "1"}
+        ):
+            raise ValueError(f"Booleano tipado inválido: {coordinate}")
+        return children[0].text == "1"
+    if kind == "number":
+        if (
+            cell.attrib.get("t") is not None
+            or len(children) != 1
+            or children[0].tag != f"{{{MAIN}}}v"
+            or children[0].attrib
+            or children[0].text is None
+        ):
+            raise ValueError(f"Número tipado inválido: {coordinate}")
+        try:
+            value = Decimal(children[0].text)
+        except Exception as error:
+            raise ValueError(f"Número tipado inválido: {coordinate}") from error
+        if not value.is_finite():
+            raise ValueError(f"Número tipado inválido: {coordinate}")
+        return value
+    raise ValueError(f"Tipo de celda no permitido: {kind}")
+
+
+def _exact_allowed_typed_value(
+    cell: ET.Element,
+    allowed_kinds: Sequence[str],
+    *,
+    allow_blank: bool,
+) -> tuple[str | None, Decimal | str | bool | None]:
+    children = list(cell)
+    if not children and cell.attrib.get("t") is None and allow_blank:
+        return None, None
+    cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        kind = "text"
+    elif cell_type == "b":
+        kind = "boolean"
+    elif cell_type is None:
+        kind = "number"
+    else:
+        raise ValueError(f"Tipo de celda tipada inválido: {cell.attrib.get('r', '?')}")
+    if kind not in allowed_kinds:
+        raise ValueError(f"Tipo de celda fuera de allowlist: {cell.attrib.get('r', '?')}")
+    return kind, _exact_typed_value(cell, kind, allow_blank=allow_blank)
+
+
+def _exact_formula_text(cell: ET.Element, coordinate: str) -> str:
+    children = list(cell)
+    if (
+        cell.attrib.get("t") is not None
+        or len(children) != 1
+        or children[0].tag != f"{{{MAIN}}}f"
+        or children[0].attrib
+        or children[0].text is None
+    ):
+        raise ValueError(f"Fórmula exacta inválida: {coordinate}")
+    return children[0].text
+
+
+def _assert_exact_worksheet(
+    expected: ET.Element,
+    candidate: ET.Element,
+    sheet: str,
+) -> None:
+    if _xml_signature(expected) != _xml_signature(candidate):
+        raise ValueError(
+            f"{sheet} no cumple el contrato exacto de mutación: "
+            "escritura fuera de la superficie mutable"
+        )
+
+
+def _xml_signature(node: ET.Element) -> tuple:
+    text = node.text
+    if text is not None and not text.strip() and node.tag != f"{{{MAIN}}}t":
+        text = None
+    return (
+        node.tag,
+        tuple(sorted(node.attrib.items())),
+        text,
+        tuple(_xml_signature(child) for child in node),
+    )
 
 
 def _translate_estrategia(
@@ -846,33 +1102,93 @@ def _translate_estrategia(
     cotizacion_total_row: int,
 ) -> bytes:
     root = _worksheet_root(payload, "Estrategia Comercial ")
-    range_pattern = re.compile(
-        r"(Mobiliti!\$?[A-Z]{1,3}\$14:\$?[A-Z]{1,3}\$)571\b"
-    )
     for row in range(7, 39):
         for column in ("B", "C"):
             coordinate = f"{column}{row}"
             formula = _formula_in_root(root, coordinate)
             if formula is None:
                 raise ValueError(f"Fórmula oficial ausente: Estrategia!{coordinate}")
-            translated, count = range_pattern.subn(
-                rf"\g<1>{row_map.last_product_row}", formula
-            )
-            if count != 2:
+            references = []
+            overrides: dict[str, str] = {}
+            for token in _formula_range_tokens(formula):
+                match = re.fullmatch(
+                    r"Mobiliti!(?P<first>\$?[A-Z]{1,3}\$14):"
+                    r"(?P<column>\$?[A-Z]{1,3}\$)571",
+                    token,
+                )
+                if match is None:
+                    continue
+                references.append(token)
+                overrides[token] = (
+                    f"Mobiliti!{match.group('first')}:"
+                    f"{match.group('column')}{row_map.last_product_row}"
+                )
+            if len(references) != 2:
                 raise ValueError(f"Rangos oficiales inesperados: Estrategia!{coordinate}")
+            translated = _translate_formula_with_overrides(
+                formula,
+                coordinate=coordinate,
+                sheet="Estrategia Comercial ",
+                overrides=overrides,
+            )
             _replace_formula(root, coordinate, "=" + translated)
-    _replace_formula(root, "D59", f"=Cotizacion!H{cotizacion_total_row}")
+    total_formula = _formula_in_root(root, "D59")
+    if total_formula is None or _formula_range_tokens(total_formula).count(
+        "Cotizacion!H24"
+    ) != 1:
+        raise ValueError("Referencia oficial inesperada: Estrategia!D59")
+    translated_total = _translate_formula_with_overrides(
+        total_formula,
+        coordinate="D59",
+        sheet="Estrategia Comercial ",
+        overrides={"Cotizacion!H24": f"Cotizacion!H{cotizacion_total_row}"},
+    )
+    _replace_formula(root, "D59", "=" + translated_total)
     subtotal_row = cotizacion_total_row - 5
     for coordinate in ("B63", "B64", "B68"):
         formula = _formula_in_root(root, coordinate)
-        if formula is None or "Cotizacion!H19" not in formula:
+        if formula is None or _formula_range_tokens(formula).count("Cotizacion!H19") != 1:
             raise ValueError(f"Referencia oficial inesperada: Estrategia!{coordinate}")
+        translated = _translate_formula_with_overrides(
+            formula,
+            coordinate=coordinate,
+            sheet="Estrategia Comercial ",
+            overrides={"Cotizacion!H19": f"Cotizacion!H{subtotal_row}"},
+        )
         _replace_formula(
             root,
             coordinate,
-            "=" + formula.replace("Cotizacion!H19", f"Cotizacion!H{subtotal_row}"),
+            "=" + translated,
         )
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _formula_range_tokens(formula: str) -> list[str]:
+    try:
+        tokens = Tokenizer("=" + formula).items
+    except Exception as error:
+        raise ValueError("Fórmula oficial no tokenizable") from error
+    return [
+        token.value
+        for token in tokens
+        if token.type == "OPERAND" and token.subtype == "RANGE"
+    ]
+
+
+def _translate_formula_with_overrides(
+    formula: str,
+    *,
+    coordinate: str,
+    sheet: str,
+    overrides: Mapping[str, str],
+) -> str:
+    return translate_formula(
+        "=" + formula,
+        origin=coordinate,
+        target=coordinate,
+        range_overrides=overrides,
+        sheet=sheet,
+    )[1:]
 
 
 def _add_workbook_sheets(
@@ -1084,6 +1400,19 @@ def _validate_compose_paths(template: Path, output: Path) -> tuple[Path, Path]:
     for label, path in (("plantilla", template), ("salida", output)):
         if not path.is_absolute():
             raise ValueError(f"La ruta de {label} debe ser absoluta")
+        if ".." in path.parts:
+            raise ValueError(f"La ruta de {label} contiene segmentos léxicos inseguros")
+        for component in (path, *path.parents):
+            if _path_is_reparse_point(component):
+                raise ValueError(
+                    f"La ruta de {label} no puede atravesar un reparse point"
+                )
+        if any(
+            ":" in component
+            for index, component in enumerate(path.parts)
+            if index > 0
+        ):
+            raise ValueError(f"La ruta de {label} contiene un alias de dispositivo")
         if any(parent.exists() and parent.is_symlink() for parent in (path, *path.parents)):
             raise ValueError(f"La ruta de {label} no puede atravesar symlinks")
     if not template.exists() or not template.is_file():
@@ -1099,12 +1428,156 @@ def _validate_compose_paths(template: Path, output: Path) -> tuple[Path, Path]:
     return template.resolve(strict=True), output.resolve(strict=False)
 
 
-def _candidate_path(output: Path) -> Path:
+def _path_is_reparse_point(path: Path) -> bool:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _write_candidate(output: Path, payload: bytes) -> Path:
     for index in range(1, 10_001):
         candidate = output.with_name(f".{output.name}.compose-{index}.tmp")
-        if not candidate.exists():
-            return candidate
+        try:
+            stream = candidate.open("xb")
+        except FileExistsError:
+            continue
+        try:
+            with stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:
+            if candidate.exists():
+                _recycle_candidate(candidate)
+            raise
+        return candidate
     raise FileExistsError("No se pudo reservar un candidato OOXML")
+
+
+def _atomic_publish_no_replace(candidate: Path, output: Path) -> None:
+    """Publica atómicamente sin reemplazar un nombre creado por una carrera."""
+
+    if os.name == "nt":
+        os.rename(candidate, output)
+        return
+    if sys.platform.startswith("linux") and _linux_rename_no_replace(candidate, output):
+        return
+    if sys.platform == "darwin" and _darwin_rename_no_replace(candidate, output):
+        return
+    try:
+        os.link(candidate, output)
+    except FileExistsError as error:
+        raise FileExistsError(f"La salida ya existe: {output}") from error
+    _recycle_candidate(candidate)
+
+
+def _linux_rename_no_replace(candidate: Path, output: Path) -> bool:
+    try:
+        function = ctypes.CDLL(None, use_errno=True).renameat2
+    except AttributeError:
+        return False
+    function.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    function.restype = ctypes.c_int
+    result = function(
+        -100,
+        os.fsencode(candidate),
+        -100,
+        os.fsencode(output),
+        1,
+    )
+    if result == 0:
+        return True
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(f"La salida ya existe: {output}")
+    if error_number in {errno.ENOSYS, errno.EINVAL, getattr(errno, "ENOTSUP", 95)}:
+        return False
+    raise OSError(error_number, os.strerror(error_number), str(output))
+
+
+def _darwin_rename_no_replace(candidate: Path, output: Path) -> bool:
+    try:
+        function = ctypes.CDLL(None, use_errno=True).renamex_np
+    except AttributeError:
+        return False
+    function.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+    function.restype = ctypes.c_int
+    result = function(os.fsencode(candidate), os.fsencode(output), 0x00000004)
+    if result == 0:
+        return True
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(f"La salida ya existe: {output}")
+    if error_number in {errno.ENOSYS, errno.EINVAL, getattr(errno, "ENOTSUP", 45)}:
+        return False
+    raise OSError(error_number, os.strerror(error_number), str(output))
+
+
+def _recycle_candidate(candidate: Path) -> None:
+    """Retira un candidato únicamente mediante Trash/Recycle Bin o cuarentena."""
+
+    candidate = Path(candidate)
+    if not candidate.exists():
+        return
+    command: list[str] | None = None
+    if os.name == "nt":
+        profile = Path(os.environ.get("USERPROFILE", ""))
+        script = profile / ".codex" / "bin" / "Send-ToRecycleBin.ps1"
+        if script.is_file():
+            command = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                "-LiteralPath",
+                str(candidate),
+            ]
+    elif sys.platform == "darwin" and Path("/usr/bin/trash").is_file():
+        command = ["/usr/bin/trash", str(candidate)]
+    else:
+        gio = shutil.which("gio")
+        trash_put = shutil.which("trash-put")
+        if gio:
+            command = [gio, "trash", str(candidate)]
+        elif trash_put:
+            command = [trash_put, str(candidate)]
+    if command is not None:
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass
+    for _attempt in range(100):
+        quarantine_directory = candidate.parent / (
+            f".mobiliti-recovery-{uuid.uuid4().hex}"
+        )
+        try:
+            os.mkdir(quarantine_directory, mode=0o700)
+        except FileExistsError:
+            continue
+        os.rename(candidate, quarantine_directory / candidate.name)
+        return
+    raise RuntimeError(
+        f"No se pudo mover el candidato a una cuarentena recuperable: {candidate}"
+    )
 
 
 def _worksheet_root(payload: bytes, name: str) -> ET.Element:
@@ -1386,11 +1859,14 @@ def _shift_anchor_rows(anchor: ET.Element, delta: int) -> None:
 
 
 def _next_picture_id(root: ET.Element) -> int:
-    values = []
+    values: list[int] = []
     for node in root.findall(f".//{{{XDR}}}cNvPr"):
         raw = node.attrib.get("id", "")
-        if raw.isdigit():
-            values.append(int(raw))
+        if not raw.isdigit() or int(raw) <= 0:
+            raise ValueError("ID cNvPr Cotizacion inválido")
+        values.append(int(raw))
+    if len(values) != len(set(values)):
+        raise ValueError("IDs cNvPr Cotizacion duplicados")
     return max(values, default=0) + 1
 
 

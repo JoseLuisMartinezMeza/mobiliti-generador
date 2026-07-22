@@ -5,6 +5,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
+import mobiliti_saas.quote_engine.ooxml_package as ooxml_package_module
 from mobiliti_saas.quote_engine.ooxml_package import (
     PackageMutation,
     XlsxPackage,
@@ -259,3 +260,93 @@ def test_assert_package_preserved_rejects_protected_part_change(tmp_path):
             target,
             allowed_parts={"xl/worksheets/sheet1.xml"},
         )
+
+
+def test_audit_rejects_casefold_colliding_zip_part_names(tmp_path: Path) -> None:
+    source = make_minimal_xlsx_package(tmp_path / "casefold-collision.xlsx")
+    with ZipFile(source, "a", ZIP_DEFLATED) as archive:
+        archive.writestr("XL/styles.xml", b"<styleSheet/>")
+
+    with pytest.raises(ValueError, match="identidad.*duplicada"):
+        XlsxPackage.read(source)
+
+
+@pytest.mark.parametrize(
+    "part_name",
+    (
+        "custom//item.xml",
+        "custom/./item.xml",
+        "custom/%2e%2e/item.xml",
+        "custom/item.xml?query=1",
+        "custom/item.xml#fragment",
+        "custom/directory/",
+    ),
+)
+def test_audit_rejects_ambiguous_or_aliasing_part_names(
+    tmp_path: Path,
+    part_name: str,
+) -> None:
+    source = make_minimal_xlsx_package(tmp_path / "ambiguous-name.xlsx")
+    with ZipFile(source, "a", ZIP_DEFLATED) as archive:
+        archive.writestr(part_name, b"<part/>")
+
+    with pytest.raises(ValueError, match="Ruta OOXML"):
+        XlsxPackage.read(source)
+
+
+def test_mutation_rejects_casefold_collision_with_existing_part(tmp_path: Path) -> None:
+    source = make_minimal_xlsx_package(tmp_path / "source.xlsx")
+    output = tmp_path / "must-not-exist.xlsx"
+
+    with pytest.raises(ValueError, match="identidad.*colisionada"):
+        XlsxPackage.read(source).write_new(
+            output,
+            PackageMutation(additions={"XL/styles.xml": b"<styleSheet/>"}),
+        )
+
+    assert not output.exists()
+
+
+def test_zip_preflight_rejects_high_compression_ratio_before_loading_parts(
+    tmp_path: Path,
+) -> None:
+    source = make_minimal_xlsx_package(tmp_path / "compression-bomb.xlsx")
+    with ZipFile(source, "a", ZIP_DEFLATED) as archive:
+        archive.writestr("custom/compression-bomb.bin", b"0" * (2 * 1024 * 1024))
+
+    with pytest.raises(ValueError, match="ratio de compresión"):
+        XlsxPackage.read(source)
+
+
+def test_zip_preflight_enforces_per_part_limit_before_reading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = make_minimal_xlsx_package(tmp_path / "oversized-part.xlsx")
+    monkeypatch.setattr(ooxml_package_module, "MAX_ZIP_PART_BYTES", 8, raising=False)
+
+    with pytest.raises(ValueError, match="límite por parte"):
+        XlsxPackage.read(source)
+
+
+def test_package_serialization_is_byte_deterministic_with_additions(tmp_path: Path) -> None:
+    source = make_minimal_xlsx_package(tmp_path / "source.xlsx")
+    package = XlsxPackage.read(source)
+    first_mutation = PackageMutation(
+        additions={
+            "custom/a.xml": b"<a/>",
+            "custom/b.xml": b"<b/>",
+        }
+    )
+    reversed_mutation = PackageMutation(
+        additions={
+            "custom/b.xml": b"<b/>",
+            "custom/a.xml": b"<a/>",
+        }
+    )
+
+    first = package.to_bytes(first_mutation)
+    second = package.to_bytes(reversed_mutation)
+
+    assert first == second
+    assert XlsxPackage.from_bytes(first).parts["custom/a.xml"] == b"<a/>"

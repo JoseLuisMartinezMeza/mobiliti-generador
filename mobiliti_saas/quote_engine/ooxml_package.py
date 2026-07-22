@@ -6,11 +6,14 @@ from dataclasses import dataclass, field
 import hashlib
 from io import BytesIO
 import ntpath
+import os
 from pathlib import Path
 import posixpath
 import re
 import threading
+from types import MappingProxyType
 from typing import AbstractSet, Mapping
+import unicodedata
 from xml.etree import ElementTree
 import zipfile
 
@@ -33,6 +36,13 @@ _SAFE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,10}\Z")
 _PROTECTED_ALLOCATION_PREFIXES = ("xl/externalLinks/", "xl/richData/")
 _STRICT_OOXML_MARKER = b"http://purl.oclc.org/ooxml/"
 XML_SERIALIZATION_LOCK = threading.RLock()
+MAX_ZIP_ENTRIES = 10_000
+MAX_ZIP_PART_BYTES = 64 * 1024 * 1024
+MAX_ZIP_TOTAL_BYTES = 256 * 1024 * 1024
+MAX_ZIP_COMPRESSION_RATIO = 100
+ZIP_READ_CHUNK_BYTES = 1024 * 1024
+_CANONICAL_ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+_SUPPORTED_COMPRESSION_TYPES = frozenset((zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED))
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,15 @@ class PackageMutation:
 
     replacements: Mapping[str, bytes] = field(default_factory=dict)
     additions: Mapping[str, bytes] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        replacements = _validated_bytes_mapping(self.replacements, "reemplazos")
+        additions = _validated_bytes_mapping(self.additions, "adiciones")
+        _validate_unique_part_identities(
+            tuple((*replacements, *additions)), "Mutación OOXML"
+        )
+        object.__setattr__(self, "replacements", MappingProxyType(replacements))
+        object.__setattr__(self, "additions", MappingProxyType(additions))
 
     @property
     def allowed_parts(self) -> frozenset[str]:
@@ -95,9 +114,27 @@ class XlsxPackage:
         path: Path | None,
     ) -> "XlsxPackage":
         entries = archive.infolist()
+        _preflight_archive(entries)
         names = tuple(item.filename for item in entries)
         infos = {item.filename: item for item in entries}
-        parts = {item.filename: archive.read(item) for item in entries}
+        parts: dict[str, bytes] = {}
+        for item in entries:
+            chunks: list[bytes] = []
+            size = 0
+            with archive.open(item, "r") as stream:
+                while True:
+                    chunk = stream.read(ZIP_READ_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_ZIP_PART_BYTES or size > item.file_size:
+                        raise ValueError(
+                            f"Parte ZIP excede el límite declarado: {item.filename}"
+                        )
+                    chunks.append(chunk)
+            if size != item.file_size:
+                raise ValueError(f"Tamaño ZIP inconsistente: {item.filename}")
+            parts[item.filename] = b"".join(chunks)
         return cls(path=path, infos=infos, parts=parts, archive_names=names)
 
     def hashes(self, exclude: AbstractSet[str] | None = None) -> dict[str, str]:
@@ -117,6 +154,7 @@ class XlsxPackage:
         duplicate_names = _duplicates(names)
         if duplicate_names:
             raise ValueError(f"Partes ZIP duplicadas: {sorted(duplicate_names)}")
+        _validate_unique_part_identities(names, "Parte ZIP")
         for name in names:
             _validate_part_name(name)
 
@@ -499,34 +537,74 @@ class XlsxPackage:
             raise ValueError(f"Hoja OOXML duplicada: {sorted(duplicates)}")
         return result
 
-    def write_new(self, output: Path, mutation: PackageMutation) -> None:
-        """Escribe un paquete nuevo preservando las partes no modificadas."""
+    def to_bytes(self, mutation: PackageMutation) -> bytes:
+        """Serializa una mutación con metadatos ZIP deterministas."""
 
-        output = Path(output)
-        if output.exists():
-            raise FileExistsError(f"La salida ya existe: {output}")
-        overlap = set(mutation.replacements) & set(mutation.additions)
-        if overlap:
-            raise ValueError(f"Partes duplicadas: {sorted(overlap)}")
-        for name in (*mutation.replacements, *mutation.additions):
-            _validate_part_name(name)
-        unknown = set(mutation.replacements) - set(self.parts)
-        if unknown:
-            raise ValueError(f"Reemplazos inexistentes: {sorted(unknown)}")
-        existing_additions = set(mutation.additions) & set(self.parts)
-        if existing_additions:
-            raise ValueError(f"Adiciones existentes: {sorted(existing_additions)}")
-
+        _validate_package_mutation(self, mutation)
+        stream = BytesIO()
         with zipfile.ZipFile(
-            output,
-            "x",
+            stream,
+            "w",
             zipfile.ZIP_DEFLATED,
             compresslevel=6,
         ) as target:
             for name, info in self.infos.items():
                 target.writestr(info, mutation.replacements.get(name, self.parts[name]))
-            for name in sorted(mutation.additions):
-                target.writestr(name, mutation.additions[name])
+            for name in sorted(mutation.additions, key=canonical_part_identity):
+                target.writestr(
+                    _canonical_zip_info(name),
+                    mutation.additions[name],
+                    compress_type=zipfile.ZIP_DEFLATED,
+                    compresslevel=6,
+                )
+        return stream.getvalue()
+
+    def write_new(self, output: Path, mutation: PackageMutation) -> None:
+        """Escribe de forma exclusiva bytes ya validados del paquete."""
+
+        output = Path(output)
+        content = self.to_bytes(mutation)
+        try:
+            stream = output.open("xb")
+        except FileExistsError as error:
+            raise FileExistsError(f"La salida ya existe: {output}") from error
+        with stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+
+def _validate_package_mutation(package: XlsxPackage, mutation: PackageMutation) -> None:
+    if not isinstance(mutation, PackageMutation):
+        raise TypeError("Mutación OOXML inválida")
+    overlap = set(mutation.replacements) & set(mutation.additions)
+    if overlap:
+        raise ValueError(f"Partes duplicadas: {sorted(overlap)}")
+    names = tuple((*mutation.replacements, *mutation.additions))
+    _validate_unique_part_identities(names, "Mutación OOXML")
+    unknown = set(mutation.replacements) - set(package.parts)
+    if unknown:
+        raise ValueError(f"Reemplazos inexistentes: {sorted(unknown)}")
+    base_identities = {
+        canonical_part_identity(name): name for name in package.parts
+    }
+    collisions = {
+        name: base_identities[canonical_part_identity(name)]
+        for name in mutation.additions
+        if canonical_part_identity(name) in base_identities
+    }
+    if collisions:
+        raise ValueError(f"identidad OOXML colisionada: {sorted(collisions)}")
+
+
+def _canonical_zip_info(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, date_time=_CANONICAL_ZIP_TIMESTAMP)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.create_system = 3
+    info.create_version = 20
+    info.extract_version = 20
+    info.external_attr = 0o600 << 16
+    return info
 
 
 def assert_package_preserved(
@@ -538,12 +616,29 @@ def assert_package_preserved(
 
     before = XlsxPackage.read(source)
     after = XlsxPackage.read(output)
+    return assert_packages_preserved(before, after, allowed_parts)
+
+
+def assert_packages_preserved(
+    before: XlsxPackage,
+    after: XlsxPackage,
+    allowed_parts: AbstractSet[str],
+) -> PackageAudit:
+    """Audita dos paquetes ya cargados sin archivos candidatos intermedios."""
+
+    if not isinstance(before, XlsxPackage) or not isinstance(after, XlsxPackage):
+        raise TypeError("Paquetes OOXML de auditoría inválidos")
+    allowed_identities = {canonical_part_identity(name) for name in allowed_parts}
     changed = {
         name
         for name in set(before.parts) | set(after.parts)
         if before.parts.get(name) != after.parts.get(name)
     }
-    unexpected = changed - set(allowed_parts)
+    unexpected = {
+        name
+        for name in changed
+        if canonical_part_identity(name) not in allowed_identities
+    }
     if unexpected:
         raise ValueError(f"Partes protegidas modificadas: {sorted(unexpected)}")
     return PackageAudit(
@@ -572,6 +667,13 @@ def validate_part_name(name: str) -> None:
     """Valida públicamente una ruta OPC antes de exponerla en metadatos."""
 
     _validate_part_name(name)
+
+
+def canonical_part_identity(name: str) -> str:
+    """Identidad canónica usada para detectar aliases de una parte OPC."""
+
+    _validate_part_name(name)
+    return unicodedata.normalize("NFC", name).casefold()
 
 
 def relationship_owner(rels_name: str) -> str | None:
@@ -647,15 +749,79 @@ def _duplicates(values: tuple[str, ...]) -> set[str]:
     return duplicates
 
 
+def _validated_bytes_mapping(value: Mapping[str, bytes], label: str) -> dict[str, bytes]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"Mapa de {label} OOXML inválido")
+    result: dict[str, bytes] = {}
+    for name, content in value.items():
+        _validate_part_name(name)
+        if not isinstance(content, bytes):
+            raise TypeError(f"Contenido de {label} OOXML inválido: {name}")
+        result[name] = bytes(content)
+    return result
+
+
+def _validate_unique_part_identities(names: tuple[str, ...], label: str) -> None:
+    owners: dict[str, str] = {}
+    collisions: set[str] = set()
+    for name in names:
+        identity = canonical_part_identity(name)
+        previous = owners.get(identity)
+        if previous is not None and previous != name:
+            collisions.update((previous, name))
+        owners[identity] = name
+    if collisions:
+        raise ValueError(f"{label} con identidad duplicada: {sorted(collisions)}")
+
+
+def _preflight_archive(entries: list[zipfile.ZipInfo]) -> None:
+    if len(entries) > MAX_ZIP_ENTRIES:
+        raise ValueError("El paquete ZIP excede el límite de entradas")
+    names = tuple(item.filename for item in entries)
+    duplicates = _duplicates(names)
+    if duplicates:
+        raise ValueError(f"Partes ZIP duplicadas: {sorted(duplicates)}")
+    _validate_unique_part_identities(names, "Parte ZIP")
+    total = 0
+    for item in entries:
+        _validate_part_name(item.filename)
+        if item.flag_bits & 0x1:
+            raise ValueError(f"Parte ZIP cifrada no permitida: {item.filename}")
+        if item.compress_type not in _SUPPORTED_COMPRESSION_TYPES:
+            raise ValueError(f"Compresión ZIP no permitida: {item.filename}")
+        if item.file_size < 0 or item.compress_size < 0:
+            raise ValueError(f"Tamaño ZIP inválido: {item.filename}")
+        if item.file_size > MAX_ZIP_PART_BYTES:
+            raise ValueError(f"Parte ZIP excede el límite por parte: {item.filename}")
+        total += item.file_size
+        if total > MAX_ZIP_TOTAL_BYTES:
+            raise ValueError("El paquete ZIP excede el límite total descomprimido")
+        if item.file_size:
+            if item.compress_size == 0:
+                raise ValueError(f"Parte ZIP con ratio de compresión inválido: {item.filename}")
+            ratio = item.file_size / item.compress_size
+            if ratio > MAX_ZIP_COMPRESSION_RATIO:
+                raise ValueError(
+                    f"Parte ZIP excede el ratio de compresión: {item.filename}"
+                )
+
+
 def _validate_part_name(name: str) -> None:
-    if not name:
+    if not isinstance(name, str) or not name:
         raise ValueError("Ruta OOXML vacia")
     if name.startswith(("/", "\\")) or ntpath.isabs(name):
         raise ValueError(f"Ruta absoluta OOXML: {name}")
-    if "\\" in name or ":" in name:
+    if "\\" in name or ":" in name or any(character in name for character in "%?#"):
         raise ValueError(f"Ruta OOXML invalida: {name}")
-    if ".." in name.split("/"):
+    segments = name.split("/")
+    if any(not segment or segment == "." for segment in segments):
+        raise ValueError(f"Ruta OOXML ambigua: {name}")
+    if ".." in segments:
         raise ValueError(f"Ruta con traversal OOXML: {name}")
+    if posixpath.normpath(name) != name:
+        raise ValueError(f"Ruta OOXML no canónica: {name}")
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in name):
+        raise ValueError(f"Ruta OOXML invalida: {name}")
 
 
 def _relationship_owner(rels_name: str) -> str | None:
@@ -706,8 +872,11 @@ def _validate_relationship_target(target: str) -> None:
         raise ValueError("Ruta OOXML vacia")
     if target.startswith(("/", "\\")) or ntpath.isabs(target):
         raise ValueError(f"Ruta absoluta OOXML: {target}")
-    if "\\" in target or ":" in target:
+    if "\\" in target or ":" in target or any(character in target for character in "%?"):
         raise ValueError(f"Ruta OOXML invalida: {target}")
+    segments = target.split("/")
+    if any(not segment or segment == "." for segment in segments):
+        raise ValueError(f"Ruta OOXML ambigua: {target}")
 
 
 def _parse_content_types(
@@ -723,6 +892,7 @@ def _parse_content_types(
         raise ValueError("Content types OOXML inválidos")
     defaults: dict[str, str] = {}
     overrides: dict[str, str] = {}
+    override_identities: set[str] = set()
     for child in root:
         if child.tag == f"{{{CONTENT_TYPES}}}Default":
             extension = child.get("Extension", "").casefold()
@@ -737,9 +907,11 @@ def _parse_content_types(
                 raise ValueError("Content type OOXML inválido")
             normalized = part_name[1:]
             _validate_part_name(normalized)
-            if normalized in overrides:
+            identity = canonical_part_identity(normalized)
+            if normalized in overrides or identity in override_identities:
                 raise ValueError("Content type OOXML duplicado o inválido")
             overrides[normalized] = content_type
+            override_identities.add(identity)
         else:
             raise ValueError("Content types OOXML inválidos")
     return defaults, overrides
