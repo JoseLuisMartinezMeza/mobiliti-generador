@@ -1338,15 +1338,45 @@ def test_load_catalog_accepts_valid_dns_ip_and_idna_urls(url):
     assert load_supplier_catalog_data(payload)["items"][0]["image_url"] == url
 
 
-def test_catalog_item_and_cart_row_limits_are_enforced_before_iteration():
+def test_catalog_item_limit_is_enforced_before_iteration():
     payload = catalog_payload()
     payload["items"] = [payload["items"][0]] * (supplier_module.MAX_CATALOG_ITEMS + 1)
     with pytest.raises(ValueError, match="limite de items"):
         load_supplier_catalog_data(payload)
 
-    raw = {"internal_id": "alma:kun:kc8611n01rop", "quantity": "1", "base_option_id": "powder-coated-aluminium", "add_on_option_ids": []}
-    with pytest.raises(ValueError, match="limite de filas"):
-        build_supplier_cart_payload([raw] * (supplier_module.MAX_CART_ROWS + 1), catalog_payload(), "USD", [])
+
+def test_supplier_cart_accepts_700_unique_lines_above_old_limit():
+    base_item = catalog_payload()["items"][0]
+    items = []
+    raw_items = []
+    for position in range(700):
+        item = deepcopy(base_item)
+        internal_id = f"alma:large:{position + 1}"
+        item.update(
+            internal_id=internal_id,
+            product_key=f"large-{position + 1}",
+            sku=f"LARGE-{position + 1}",
+        )
+        items.append(item)
+        raw_items.append(
+            {
+                "internal_id": internal_id,
+                "quantity": "1",
+                "base_option_id": "powder-coated-aluminium",
+                "add_on_option_ids": [],
+            }
+        )
+
+    cart = build_supplier_cart_payload(
+        raw_items,
+        catalog_payload(items=items),
+        "USD",
+        [],
+    )
+
+    assert len(cart["items"]) == 700
+    assert cart["items"][0]["internal_id"] == "alma:large:1"
+    assert cart["items"][-1]["internal_id"] == "alma:large:700"
 
 
 def test_options_warnings_and_compatibility_limits_are_enforced():

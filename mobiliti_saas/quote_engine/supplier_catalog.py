@@ -41,7 +41,6 @@ QUANTITY_LIMIT = Decimal("1000000")
 SIX_PLACES = Decimal("0.000001")
 TWO_PLACES = Decimal("0.01")
 MAX_CATALOG_ITEMS = 10_000
-MAX_CART_ROWS = 500
 MAX_OPTIONS_PER_ITEM = 200
 MAX_COMPATIBLE_OPTION_IDS = 200
 MAX_WARNINGS_PER_ITEM = 100
@@ -175,8 +174,9 @@ def build_supplier_cart_payload(
 ) -> dict[str, Any]:
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError("El carrito de proveedor esta vacio")
-    if len(raw_items) > MAX_CART_ROWS:
-        raise ValueError(f"El carrito excede el limite de filas: {MAX_CART_ROWS}")
+    from .quotation_import import validate_quote_size
+
+    validate_quote_size(section_counts=[len(raw_items)], encoded_bytes=0)
     loaded = load_supplier_catalog_data(catalog)
     quote_currency = _currency(quote_currency)
     by_id = loaded["by_internal_id"]

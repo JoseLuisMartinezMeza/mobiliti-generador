@@ -7,6 +7,8 @@ CATALOG_MIGRATION = SETUP / "2026_07_multi_supplier_catalogs.sql"
 JOBS_RLS_MIGRATION = SETUP / "2026_07_jobs_rls.sql"
 BOOTSTRAP = SETUP / "create_tables.sql"
 MIXED_MIGRATION = SETUP / "2026_07_mixed_catalog_cart.sql"
+PHYSICAL_LIMITS_MIGRATION = SETUP / "2026_07_quote_physical_limits.sql"
+PHYSICAL_QUOTE_LINE_LIMIT = 1_048_512
 SQL_FILES = (CATALOG_MIGRATION, BOOTSTRAP)
 EXPECTED_SUPPLIERS = ("cr-global", "sonara", "sunon", "alma", "lumbro")
 SUPPLIER_ALLOWLIST_CONTEXTS = (
@@ -37,6 +39,51 @@ def _function_sql(sql, name):
     if end == -1:
         end = len(sql)
     return sql[start:end]
+
+
+def _function_definition(sql, name):
+    start = sql.rindex(f"CREATE OR REPLACE FUNCTION {name}")
+    end = sql.index("\n$$;", start) + len("\n$$;")
+    return re.sub(r"\s+", " ", sql[start:end]).strip()
+
+
+def test_quote_physical_limits_migration_replaces_both_reservation_rpcs_safely():
+    migration = PHYSICAL_LIMITS_MIGRATION.read_text(encoding="utf-8")
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+
+    for name in ("saas_reserve_catalog_items", "saas_reserve_mixed_cart"):
+        migrated = _function_definition(migration, name)
+        current = _function_definition(bootstrap, name)
+        assert migrated == current
+        assert f"> {PHYSICAL_QUOTE_LINE_LIMIT}" in migrated
+        assert "SECURITY DEFINER" in migrated
+        assert "SET search_path = public, pg_temp" in migrated
+        assert "FOR UPDATE" in migrated
+        assert "pg_advisory_xact_lock" in migrated
+
+    catalog = _function_definition(migration, "saas_reserve_catalog_items")
+    assert "jsonb_array_length(p_lines) = 0" in catalog
+    assert "jsonb_array_length(p_lines) > 500" not in catalog
+    assert "ORDER BY line ->> 'internal_id'" in catalog
+    assert "INSERT INTO saas_catalog_reservations" in catalog
+    assert "RETURN NEXT" in catalog
+
+    mixed = _function_definition(migration, "saas_reserve_mixed_cart")
+    assert "jsonb_array_length(p_groups) NOT BETWEEN 1 AND 7" in mixed
+    assert "jsonb_array_length(v_group -> 'items') = 0" in mixed
+    assert "v_total_lines > 500" not in mixed
+    assert "ORDER BY catalog, identity" in mixed
+    assert "INSERT INTO saas_tarkett_reservations" in mixed
+    assert "INSERT INTO saas_offiho_reservations" in mixed
+    assert "INSERT INTO saas_catalog_reservations" in mixed
+
+    signatures = (
+        "saas_reserve_catalog_items(INTEGER, UUID, TEXT, JSONB)",
+        "saas_reserve_mixed_cart(INTEGER, UUID, JSONB)",
+    )
+    for signature in signatures:
+        assert f"REVOKE ALL ON FUNCTION {signature}" in migration
+        assert f"GRANT EXECUTE ON FUNCTION {signature} TO service_role" in migration
 
 
 def test_mixed_cart_rpcs_are_additive_atomic_and_service_role_only():
@@ -158,7 +205,10 @@ def test_all_supplier_sql_allowlists_include_lumbro():
         sql = sql_path.read_text(encoding="utf-8")
         contexts = _supplier_allowlist_context_sql(sql)
 
-        assert len(_supplier_allowlists(sql)) == len(SUPPLIER_ALLOWLIST_CONTEXTS)
+        replacement_allowlists = 1 if sql_path == BOOTSTRAP else 0
+        assert len(_supplier_allowlists(sql)) == (
+            len(SUPPLIER_ALLOWLIST_CONTEXTS) + replacement_allowlists
+        )
         assert tuple(contexts) == tuple(label for label, _ in SUPPLIER_ALLOWLIST_CONTEXTS)
         for label, context_sql in contexts.items():
             assert _supplier_allowlists(context_sql) == [EXPECTED_SUPPLIERS], label

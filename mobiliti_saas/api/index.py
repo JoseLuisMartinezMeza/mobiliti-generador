@@ -1688,8 +1688,12 @@ def db_reserve_catalog_items(
         clean_job_id = str(uuid.UUID(str(quote_job_id)))
     except (TypeError, ValueError, AttributeError):
         raise RuntimeError("Reserva de catalogo invalida") from None
-    if clean_user_id <= 0 or not isinstance(lines, list) or not 1 <= len(lines) <= 500:
+    if clean_user_id <= 0 or not isinstance(lines, list) or not lines:
         raise RuntimeError("Reserva de catalogo invalida")
+    try:
+        validate_quote_size(section_counts=[len(lines)], encoded_bytes=0)
+    except ValueError as exc:
+        raise RuntimeError(f"Reserva de catalogo invalida: {exc}") from exc
 
     normalized = []
     internal_ids = set()
