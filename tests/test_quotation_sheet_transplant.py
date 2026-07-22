@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 import posixpath
 from types import MappingProxyType
+from typing import Mapping
 from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -205,6 +206,23 @@ def test_table_without_style_info_materializes_and_merges_custom_source_default(
     ) == _table_style_signature(_part_bytes(source, "xl/styles.xml"), "CustomQuoteStyle")
 
 
+def test_table_without_style_info_is_inserted_before_ext_lst(tmp_path):
+    source = _source_without_table_style_info(
+        tmp_path,
+        default_style="CustomQuoteStyle",
+        filename="custom-default-with-ext.xlsx",
+        with_ext_lst=True,
+    )
+
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    table_part = next(name for name in addition.parts if name.startswith("xl/tables/"))
+    table = ET.fromstring(addition.parts[table_part])
+    child_names = tuple(child.tag.rsplit("}", 1)[-1] for child in table)
+
+    assert child_names[-2:] == ("tableStyleInfo", "extLst")
+
+
 def test_table_without_style_info_rejects_theme_dependent_builtin_default_when_unsafe(
     tmp_path,
 ):
@@ -242,6 +260,66 @@ def test_table_without_style_info_materializes_builtin_default_when_theme_is_ide
 
     assert style_info is not None
     assert style_info.attrib["name"] == "TableStyleMedium2"
+
+
+@pytest.mark.parametrize(
+    "style_name",
+    (
+        "TableStyleLight1",
+        "TableStyleLight21",
+        "TableStyleMedium1",
+        "TableStyleMedium28",
+        "TableStyleDark1",
+        "TableStyleDark11",
+    ),
+)
+def test_builtin_table_style_exact_boundaries_are_allowed_with_identical_theme(
+    style_name, tmp_path
+):
+    source = _source_without_table_style_info(
+        tmp_path,
+        default_style=style_name,
+        filename=f"valid-{style_name}.xlsx",
+    )
+    destination = _destination_with_source_theme(source)
+
+    addition = transplant_quotation(source, destination)
+    assert addition is not None
+    table_part = next(name for name in addition.parts if name.startswith("xl/tables/"))
+    style_info = ET.fromstring(addition.parts[table_part]).find(
+        "m:tableStyleInfo", NS
+    )
+
+    assert style_info is not None
+    assert style_info.attrib["name"] == style_name
+
+
+@pytest.mark.parametrize(
+    "style_name",
+    (
+        "TableStyleLight0",
+        "TableStyleLight22",
+        "TableStyleLight999",
+        "TableStyleMedium0",
+        "TableStyleMedium29",
+        "TableStyleMedium999",
+        "TableStyleDark0",
+        "TableStyleDark12",
+        "TableStyleDark999",
+        "None",
+    ),
+)
+def test_builtin_table_style_out_of_range_is_rejected_even_with_identical_theme(
+    style_name, tmp_path
+):
+    source = _source_without_table_style_info(
+        tmp_path,
+        default_style=style_name,
+        filename=f"invalid-{style_name}.xlsx",
+    )
+
+    with pytest.raises(ValueError, match="(?i)table.*style|estilo.*tabla"):
+        transplant_quotation(source, _destination_with_source_theme(source))
 
 
 def test_remap_source_styles_covers_cell_row_and_column_references(tmp_path):
@@ -660,6 +738,62 @@ def test_table_formula_tokenizer_rewrites_bare_range_operands_but_never_text(tmp
     )
 
 
+def test_table_formula_tokenizer_rewrites_all_compound_range_identifiers(tmp_path):
+    formula = (
+        'CONCAT("Table1:Table2",'
+        "SUM(Table1[Columna 1]:Table2[Columna 2]),"
+        "SUM(Table1[Columna 1]:Table1[Columna 2]),"
+        "SUM(Table1:Table2),SUM((Table1,Table2)),Table1!A1,'Table2'!A1)"
+    )
+    source = _source_with_two_table_identities(
+        tmp_path,
+        formula=formula,
+        filename="compound-table-ranges.xlsx",
+    )
+
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    table = next(
+        ET.fromstring(content)
+        for name, content in addition.parts.items()
+        if name.startswith("xl/tables/")
+        and ET.fromstring(content).attrib["name"].startswith("Table1_Quotation_")
+    )
+    expected = (
+        'CONCAT("Table1:Table2",'
+        "SUM(Table1_Quotation_1[Columna 1]:Table2_Quotation_1[Columna 2]),"
+        "SUM(Table1_Quotation_1[Columna 1]:Table1_Quotation_1[Columna 2]),"
+        "SUM(Table1_Quotation_1:Table2_Quotation_1),"
+        "SUM((Table1_Quotation_1,Table2_Quotation_1)),"
+        "Table1!A1,'Table2'!A1)"
+    )
+    formulas = (
+        ET.fromstring(addition.xml).findtext(
+            ".//m:c[@r='N12']/m:f", namespaces=NS
+        ),
+        table.findtext(".//m:calculatedColumnFormula", namespaces=NS),
+        next(
+            name.text for name in addition.defined_names if name.name == "QuoteLocal"
+        ),
+    )
+
+    assert formulas == (expected, expected, expected)
+
+
+def test_table_formula_tokenizer_fails_closed_on_unbalanced_mapped_range(tmp_path):
+    source = _source_with_table_identity(
+        tmp_path,
+        table_id=1,
+        name="Table1",
+        display_name="Table1",
+        formula="SUM(Table1])",
+        filename="unbalanced-table-range.xlsx",
+    )
+
+    with pytest.raises(ValueError, match="(?i)tabla|referencia|ambigua"):
+        transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
 def test_table_identity_preflight_rejects_ambiguous_names_duplicate_destination_and_literal_refs(tmp_path):
     destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
     ambiguous = _source_with_table_identity(
@@ -727,8 +861,10 @@ def test_closure_allocation_is_deterministic_collision_free_and_rewrites_relativ
     assert set(collided.parts).isdisjoint(destination.parts)
     assert all(not name.startswith(("xl/externalLinks/", "xl/richData/")) for name in collided.parts)
     _assert_all_internal_targets_resolve(collided.parts)
-    assert _closure_payloads(first.parts, first.sheet_part) == _closure_payloads(
-        collided.parts, collided.sheet_part
+    assert _closure_payloads(
+        first.parts, first.sheet_part, first.content_types
+    ) == _closure_payloads(
+        collided.parts, collided.sheet_part, collided.content_types
     )
 
 
@@ -842,6 +978,40 @@ def test_all_allowed_image_profiles_preserve_independent_binary_signatures(
     assert addition.content_types[output_media] == content_type
 
 
+@pytest.mark.parametrize(
+    ("extension", "content_type", "signature"),
+    (
+        ("png", "image/png", b"\x89PNG\r\n\x1a\nsemantic"),
+        ("jpg", "image/jpeg", b"\xff\xd8\xff\xe0semantic"),
+        ("jpeg", "image/jpeg", b"\xff\xd8\xff\xe1semantic"),
+        ("gif", "image/gif", b"GIF87asemantic"),
+        ("gif", "image/gif", b"GIF89asemantic"),
+        ("bmp", "image/bmp", b"BMsemantic"),
+        ("tif", "image/tiff", b"II*\x00semantic"),
+        ("tiff", "image/tiff", b"MM\x00*semantic"),
+    ),
+)
+def test_semantic_signature_classifies_every_valid_binary_image_profile(
+    extension, content_type, signature, tmp_path
+):
+    source = _source_with_image_profile(
+        tmp_path,
+        extension=extension,
+        content_type=content_type,
+        signature=signature,
+        filename=f"semantic-{extension}-{signature[:6].hex()}.xlsx",
+    )
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    output = _compose_additions(
+        OFFICIAL_TEMPLATE,
+        tmp_path / f"semantic-output-{extension}-{signature[:6].hex()}.xlsx",
+        (addition,),
+    )
+
+    assert _quotation_signature(output) == _quotation_signature(source)
+
+
 def test_relationship_profiles_validate_external_schemes_target_mode_and_printer_signature(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     sheet_rels_name = "xl/worksheets/_rels/original-quotation.xml.rels"
@@ -926,6 +1096,13 @@ def test_exact_transitional_relationship_uris_are_enforced_and_strict_types_reje
         transplant_quotation(
             strict_relationship_types, XlsxPackage.read(OFFICIAL_TEMPLATE)
         )
+
+
+def test_workbook_relationship_contract_documents_transitional_only():
+    documentation = XlsxPackage.workbook_related_part.__doc__ or ""
+
+    assert "transitional" in documentation.casefold()
+    assert "strict" not in documentation.casefold()
 
 
 def test_real_strict_spreadsheet_namespace_fails_closed_early(tmp_path):
@@ -1152,6 +1329,53 @@ def test_shared_string_ct_rst_rejects_invalid_cardinality_order_and_bounds(share
 
     with pytest.raises(ValueError, match="(?i)shared string|CT_Rst|rich|fon.t"):
         inline_source_shared_strings(sheet, (shared_string.encode(),))
+
+
+@pytest.mark.parametrize(
+    "shared_string",
+    (
+        f'<si xmlns="{MAIN}">intruso<t>A</t></si>',
+        f'<si xmlns="{MAIN}"><r unexpected="1"><t>A</t></r></si>',
+        f'<si xmlns="{MAIN}"><r>intruso<t>A</t></r></si>',
+        f'<si xmlns="{MAIN}"><r><rPr><b/></rPr>intruso<t>A</t></r></si>',
+        f'<si xmlns="{MAIN}"><r><t>A</t>intruso</r></si>',
+        f'<si xmlns="{MAIN}"><t>A</t><rPh sb="0" eb="1">intruso<t>a</t></rPh></si>',
+        f'<si xmlns="{MAIN}"><t>A</t><rPh sb="0" eb="1"><t>a</t>intruso</rPh></si>',
+        f'<si xmlns="{MAIN}"><t>A</t><rPh sb="0" eb="1" unexpected="1"><t>a</t></rPh></si>',
+        f'<si xmlns="{MAIN}"><t>A</t><rPh sb="0" eb="1"><t>a</t><t>b</t></rPh></si>',
+        f'<si xmlns="{MAIN}"><t>A</t><phoneticPr fontId="0">intruso</phoneticPr></si>',
+        f'<si xmlns="{MAIN}"><t>A</t><phoneticPr fontId="0" unexpected="1"/></si>',
+    ),
+)
+def test_shared_string_wrappers_reject_attributes_and_non_whitespace_mixed_content(
+    shared_string,
+):
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    ).encode()
+
+    with pytest.raises(ValueError, match="(?i)shared|string|rich|fon.t|atributo"):
+        inline_source_shared_strings(sheet, (shared_string.encode(),))
+
+
+def test_shared_string_wrappers_allow_only_formatting_whitespace_between_nodes():
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    ).encode()
+    shared_string = f'''<si xmlns="{MAIN}">
+      <r>
+        <rPr><b/></rPr>
+        <t>A</t>
+      </r>
+      <rPh sb="0" eb="1">
+        <t>a</t>
+      </rPh>
+      <phoneticPr fontId="0" type="Hiragana" alignment="distributed"/>
+    </si>'''.encode()
+
+    output = inline_source_shared_strings(sheet, (shared_string,))
+
+    assert ET.fromstring(output).find(".//m:phoneticPr", NS) is not None
 
 
 @pytest.mark.parametrize(
@@ -1637,8 +1861,14 @@ def _quotation_signature(path: Path) -> tuple:
     )
 
 
-def _relationship_graph_signature(parts: dict[str, bytes], start: str) -> tuple:
+def _relationship_graph_signature(
+    parts: dict[str, bytes],
+    start: str,
+    explicit_content_types: Mapping[str, str] | None = None,
+) -> tuple:
     content_type_map = _content_type_map(parts)
+    if explicit_content_types is not None:
+        content_type_map.update(explicit_content_types)
 
     def visit(owner: str, stack: tuple[str, ...]) -> tuple:
         if owner in stack:
@@ -1655,7 +1885,16 @@ def _relationship_graph_signature(parts: dict[str, bytes], start: str) -> tuple:
             target = posixpath.normpath(posixpath.join(posixpath.dirname(owner), attrs["Target"]))
             payload = parts[target]
             content_type = content_type_map.get(target)
-            if target.endswith((".png", ".bin")):
+            relationship_type = attrs["Type"]
+            if relationship_type == f"{OFFICE_REL}/image":
+                content = _validated_image_payload(content_type, payload)
+            elif relationship_type == f"{OFFICE_REL}/printerSettings":
+                expected = (
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.printerSettings"
+                )
+                if content_type != expected:
+                    raise AssertionError("content type de printerSettings inválido")
                 content = payload
             else:
                 parsed = ET.fromstring(payload)
@@ -1676,6 +1915,20 @@ def _relationship_graph_signature(parts: dict[str, bytes], start: str) -> tuple:
         return tuple(sorted(rows, key=lambda row: row[:2]))
 
     return visit(start, ())
+
+
+def _validated_image_payload(content_type: str | None, payload: bytes) -> bytes:
+    signatures = {
+        "image/png": (b"\x89PNG\r\n\x1a\n",),
+        "image/jpeg": (b"\xff\xd8\xff",),
+        "image/gif": (b"GIF87a", b"GIF89a"),
+        "image/bmp": (b"BM",),
+        "image/tiff": (b"II*\x00", b"MM\x00*"),
+    }
+    allowed = signatures.get(content_type or "")
+    if allowed is None or not payload.startswith(allowed):
+        raise AssertionError("perfil binario de imagen inválido")
+    return payload
 
 
 def _style_signature(
@@ -2000,8 +2253,12 @@ def _shared_strings(parts: dict[str, bytes]) -> tuple[ET.Element, ...]:
     return tuple(ET.fromstring(parts["xl/sharedStrings.xml"]).findall("m:si", NS))
 
 
-def _closure_payloads(parts: dict[str, bytes], sheet_part: str) -> tuple:
-    signature = _relationship_graph_signature(parts, sheet_part)
+def _closure_payloads(
+    parts: dict[str, bytes],
+    sheet_part: str,
+    content_types: Mapping[str, str],
+) -> tuple:
+    signature = _relationship_graph_signature(parts, sheet_part, content_types)
     return signature
 
 
@@ -2137,11 +2394,88 @@ def _source_with_table_identity(
     )
 
 
+def _source_with_two_table_identities(
+    tmp_path: Path,
+    *,
+    formula: str,
+    filename: str,
+) -> Path:
+    source = build_rich_quotation_fixture(tmp_path / ("base-" + filename))
+    first_table_name = "xl/tables/table7.xml"
+    second_table_name = "xl/tables/table8.xml"
+    original_table = _part_bytes(source, first_table_name)
+    first_table = ET.fromstring(original_table)
+    first_table.attrib.update(
+        {"id": "1", "name": "Table1", "displayName": "Table1"}
+    )
+    first_column = first_table.find("m:tableColumns/m:tableColumn", NS)
+    calculated = ET.Element(f"{{{MAIN}}}calculatedColumnFormula")
+    calculated.text = formula
+    first_column.insert(0, calculated)
+    second_table = ET.fromstring(original_table)
+    second_table.attrib.update(
+        {"id": "2", "name": "Table2", "displayName": "Table2"}
+    )
+
+    worksheet_name = "xl/worksheets/original-quotation.xml"
+    worksheet = ET.fromstring(_part_bytes(source, worksheet_name))
+    row = worksheet.find("m:sheetData/m:row[@r='12']", NS)
+    cell = ET.SubElement(row, f"{{{MAIN}}}c", {"r": "N12"})
+    ET.SubElement(cell, f"{{{MAIN}}}f").text = formula
+    table_parts = worksheet.find("m:tableParts", NS)
+    table_parts.attrib["count"] = "2"
+    ET.SubElement(
+        table_parts,
+        f"{{{MAIN}}}tablePart",
+        {f"{{{OFFICE_REL}}}id": "rIdTable2"},
+    )
+
+    sheet_rels_name = "xl/worksheets/_rels/original-quotation.xml.rels"
+    sheet_rels = _append_relationship(
+        _part_bytes(source, sheet_rels_name),
+        (
+            "rIdTable2",
+            f"{OFFICE_REL}/table",
+            "../tables/table8.xml",
+            None,
+        ),
+    )
+    workbook = ET.fromstring(_part_bytes(source, "xl/workbook.xml"))
+    quote_local = next(
+        item
+        for item in workbook.findall("m:definedNames/m:definedName", NS)
+        if item.attrib.get("name") == "QuoteLocal"
+    )
+    quote_local.text = formula
+    content_types = ET.fromstring(_part_bytes(source, "[Content_Types].xml"))
+    ET.SubElement(
+        content_types,
+        f"{{{CONTENT_TYPES}}}Override",
+        {
+            "PartName": "/" + second_table_name,
+            "ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml",
+        },
+    )
+    return _rewrite_package(
+        source,
+        tmp_path / filename,
+        {
+            first_table_name: _xml_bytes(first_table),
+            second_table_name: _xml_bytes(second_table),
+            worksheet_name: _xml_bytes(worksheet),
+            sheet_rels_name: sheet_rels,
+            "xl/workbook.xml": _xml_bytes(workbook),
+            "[Content_Types].xml": _xml_bytes(content_types),
+        },
+    )
+
+
 def _source_without_table_style_info(
     tmp_path: Path,
     *,
     default_style: str,
     filename: str,
+    with_ext_lst: bool = False,
 ) -> Path:
     source = build_rich_quotation_fixture(tmp_path / ("base-" + filename))
     table_name = "xl/tables/table7.xml"
@@ -2149,6 +2483,8 @@ def _source_without_table_style_info(
     style_info = table.find("m:tableStyleInfo", NS)
     assert style_info is not None
     table.remove(style_info)
+    if with_ext_lst:
+        ET.SubElement(table, f"{{{MAIN}}}extLst")
     styles = ET.fromstring(_part_bytes(source, "xl/styles.xml"))
     table_styles = styles.find("m:tableStyles", NS)
     assert table_styles is not None
@@ -2160,6 +2496,43 @@ def _source_without_table_style_info(
             table_name: _xml_bytes(table),
             "xl/styles.xml": _xml_bytes(styles),
         },
+    )
+
+
+def _destination_with_source_theme(source: Path) -> XlsxPackage:
+    destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    destination_theme = destination.workbook_related_part("theme")
+    assert destination_theme is not None
+    return replace(
+        destination,
+        parts={
+            **destination.parts,
+            destination_theme: _part_bytes(source, "xl/theme/theme7.xml"),
+        },
+    )
+
+
+def _source_with_image_profile(
+    tmp_path: Path,
+    *,
+    extension: str,
+    content_type: str,
+    signature: bytes,
+    filename: str,
+) -> Path:
+    source = build_rich_quotation_fixture(tmp_path / ("base-" + filename))
+    rels_name = "xl/drawings/_rels/drawing7.xml.rels"
+    media_name = f"xl/media/image7.{extension}"
+    return _rewrite_package(
+        source,
+        tmp_path / filename,
+        {
+            rels_name: _part_bytes(source, rels_name).replace(
+                b"../media/image7.png", f"../media/image7.{extension}".encode()
+            ),
+            media_name: signature,
+        },
+        content_type=("/" + media_name, content_type),
     )
 
 

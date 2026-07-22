@@ -195,7 +195,7 @@ class XlsxPackage:
         return matches[0][2]
 
     def workbook_related_part(self, relationship_name: str) -> str | None:
-        """Resuelve una relación exacta transitional/strict del workbook."""
+        """Resuelve una relación transitional exacta del workbook."""
 
         rels_name = "xl/_rels/workbook.xml.rels"
         if rels_name not in self.parts:

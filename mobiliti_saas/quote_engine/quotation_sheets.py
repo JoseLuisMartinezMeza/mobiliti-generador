@@ -1003,9 +1003,16 @@ def _remap_source_styles_with_parts(
         if style_infos:
             style_infos[0].attrib["name"] = style_name
         else:
-            table.append(
-                ET.Element(f"{{{MAIN}}}tableStyleInfo", {"name": style_name})
+            style_info = ET.Element(
+                f"{{{MAIN}}}tableStyleInfo", {"name": style_name}
             )
+            extension_list = table.find(f"{{{MAIN}}}extLst")
+            insertion_index = (
+                list(table).index(extension_list)
+                if extension_list is not None
+                else len(table)
+            )
+            table.insert(insertion_index, style_info)
         if is_custom:
             table_style_names.add(style_name)
         for element in table.iter():
@@ -1143,11 +1150,15 @@ def _resolve_table_style_dependency(
 
 
 def _is_builtin_table_style(style_name: str) -> bool:
-    return re.fullmatch(
-        r"TableStyle(?:Light|Medium|Dark)[1-9][0-9]*",
+    match = re.fullmatch(
+        r"TableStyle(Light|Medium|Dark)([1-9][0-9]*)",
         style_name,
         re.IGNORECASE,
-    ) is not None
+    )
+    if match is None:
+        return False
+    limits = {"light": 21, "medium": 28, "dark": 11}
+    return int(match.group(2)) <= limits[match.group(1).casefold()]
 
 
 def _parse_worksheet(content: bytes) -> ET.Element:
@@ -1254,8 +1265,14 @@ def _validate_rich_run(element: ET.Element) -> str:
     children = list(element)
     text_tag = f"{{{MAIN}}}t"
     properties_tag = f"{{{MAIN}}}rPr"
-    if len(children) not in {1, 2}:
+    if (
+        element.attrib
+        or (element.text and element.text.strip())
+        or len(children) not in {1, 2}
+    ):
         raise ValueError("Cardinalidad de rich run inválida")
+    if any(child.tail and child.tail.strip() for child in children):
+        raise ValueError("Contenido mixto de rich run inválido")
     text_index = 0
     if children[0].tag == properties_tag:
         _validate_run_properties(children[0])
@@ -1375,7 +1392,10 @@ def _validate_run_color(element: ET.Element) -> None:
 
 
 def _validate_phonetic_run(element: ET.Element, base_length: int) -> None:
-    if set(element.attrib) != {"sb", "eb"}:
+    if (
+        set(element.attrib) != {"sb", "eb"}
+        or (element.text and element.text.strip())
+    ):
         raise ValueError("Atributos de fonética inválidos")
     start = _integer_attribute(element, "sb", default=None)
     end = _integer_attribute(element, "eb", default=None)
@@ -1387,6 +1407,7 @@ def _validate_phonetic_run(element: ET.Element, base_length: int) -> None:
         or end > base_length
         or len(children) != 1
         or children[0].tag != f"{{{MAIN}}}t"
+        or (children[0].tail and children[0].tail.strip())
     ):
         raise ValueError("Límites de fonética inválidos")
     _validate_text_node(children[0])
@@ -1394,7 +1415,11 @@ def _validate_phonetic_run(element: ET.Element, base_length: int) -> None:
 
 def _validate_phonetic_properties(element: ET.Element) -> None:
     allowed = {"fontId", "type", "alignment"}
-    if list(element) or not set(element.attrib).issubset(allowed):
+    if (
+        list(element)
+        or (element.text and element.text.strip())
+        or not set(element.attrib).issubset(allowed)
+    ):
         raise ValueError("phoneticPr de shared string inválido")
     font_id = _integer_attribute(element, "fontId", default=None)
     if font_id is None:
@@ -1956,8 +1981,6 @@ def _rewrite_structured_references(
                 )
         elif item.type == Token.OPERAND and item.subtype == Token.RANGE:
             rewritten = _rewrite_table_range_operand(value, normalized)
-            if rewritten is None and _mentions_table_identifier(value, normalized):
-                raise ValueError(f"Referencia de tabla ambigua: {context}")
             if rewritten is not None:
                 value = rewritten
         output.append(value)
@@ -1968,22 +1991,88 @@ def _rewrite_table_range_operand(
     value: str,
     renamed: Mapping[str, tuple[str, str]],
 ) -> str | None:
-    quoted = value.startswith("'")
-    if quoted:
-        closing = value.find("'", 1)
-        if closing < 0:
-            return None
-        identifier = value[1:closing]
-        suffix = value[closing + 1 :]
-    else:
-        bracket = value.find("[")
-        identifier = value if bracket < 0 else value[:bracket]
-        suffix = "" if bracket < 0 else value[bracket:]
-    replacement = renamed.get(identifier.casefold())
-    if replacement is None or (suffix and not suffix.startswith("[")):
-        return None
-    new = replacement[1]
-    return (f"'{new}'" if quoted else new) + suffix
+    output: list[str] = []
+    index = 0
+    bracket_depth = 0
+    malformed_brackets = False
+    changed = False
+
+    while index < len(value):
+        character = value[index]
+        if bracket_depth:
+            output.append(character)
+            if character == "[":
+                bracket_depth += 1
+            elif character == "]":
+                bracket_depth -= 1
+            index += 1
+            continue
+        if character == "[":
+            bracket_depth = 1
+            output.append(character)
+            index += 1
+            continue
+        if character == "]":
+            malformed_brackets = True
+            output.append(character)
+            index += 1
+            continue
+        if character == "'":
+            closing = index + 1
+            quoted_identifier: list[str] = []
+            while closing < len(value):
+                quoted_character = value[closing]
+                if quoted_character != "'":
+                    quoted_identifier.append(quoted_character)
+                    closing += 1
+                    continue
+                if closing + 1 < len(value) and value[closing + 1] == "'":
+                    quoted_identifier.append("'")
+                    closing += 2
+                    continue
+                break
+            if closing >= len(value):
+                if _mentions_table_identifier(value[index + 1 :], renamed):
+                    raise ValueError("Referencia de tabla entre comillas ambigua")
+                output.append(value[index:])
+                index = len(value)
+                continue
+            original = value[index : closing + 1]
+            replacement = renamed.get("".join(quoted_identifier).casefold())
+            previous = value[index - 1] if index else ""
+            following = value[closing + 1] if closing + 1 < len(value) else ""
+            if replacement is not None and previous != "!" and following != "!":
+                output.append("'" + replacement[1].replace("'", "''") + "'")
+                changed = True
+            else:
+                output.append(original)
+            index = closing + 1
+            continue
+        if _is_table_identifier_character(character):
+            end = index + 1
+            while end < len(value) and _is_table_identifier_character(value[end]):
+                end += 1
+            identifier = value[index:end]
+            replacement = renamed.get(identifier.casefold())
+            previous = value[index - 1] if index else ""
+            following = value[end] if end < len(value) else ""
+            if replacement is not None and previous != "!" and following != "!":
+                output.append(replacement[1])
+                changed = True
+            else:
+                output.append(identifier)
+            index = end
+            continue
+        output.append(character)
+        index += 1
+
+    if changed and (bracket_depth or malformed_brackets):
+        raise ValueError("Referencia estructurada de tabla ambigua")
+    return "".join(output) if changed else None
+
+
+def _is_table_identifier_character(character: str) -> bool:
+    return character.isascii() and (character.isalnum() or character in "_.\\")
 
 
 def _mentions_table_identifier(
@@ -1992,7 +2081,7 @@ def _mentions_table_identifier(
 ) -> bool:
     return any(
         re.search(
-            rf"(?<![A-Za-z0-9_.\\])'?{re.escape(old)}'?(?=$|\[)",
+            rf"(?<![A-Za-z0-9_.\\]){re.escape(old)}(?![A-Za-z0-9_.\\])",
             value,
             re.IGNORECASE,
         )
