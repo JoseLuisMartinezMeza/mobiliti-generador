@@ -5,20 +5,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
-import json
+from io import BytesIO
+from types import MappingProxyType
 import re
+import struct
 from typing import Mapping, Sequence
-import xml.etree.ElementTree as ET
+from urllib.parse import unquote
+from xml.sax.saxutils import escape
 
 
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-XML = "http://www.w3.org/XML/1998/namespace"
 XLSX_MAX_ROWS = 1_048_576
 _TWO_PLACES = Decimal("0.01")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_UNSAFE_TEXT_PREFIXES = ("=", "+", "-", "@")
-
-ET.register_namespace("", MAIN)
+_HASH_DOMAIN = b"mobiliti:quotation-data-row:v1\0"
+# NUMERIC(18,6) is the narrowest existing persistent numeric contract.
+_DECIMAL_RULES = {
+    "original_cost": (6, 12),
+    "frozen_rate": (6, 12),
+    "converted_cost": (2, 16),
+    "quantity": (6, 12),
+}
+_INVISIBLE = "\ufeff\u200b\u200c\u200d\u2060"
 
 
 @dataclass(frozen=True)
@@ -29,6 +37,18 @@ class SheetAddition:
     state: str
     xml: bytes
     parts: Mapping[str, bytes] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or self.name != "Quotation_Data":
+            raise ValueError("Nombre de hoja Quotation_Data inválido")
+        if self.state != "veryHidden" or not isinstance(self.xml, bytes):
+            raise ValueError("SheetAddition inválido")
+        copied: dict[str, bytes] = {}
+        for name, content in self.parts.items():
+            if not isinstance(name, str) or not isinstance(content, bytes):
+                raise TypeError("Partes de SheetAddition inválidas")
+            copied[name] = bytes(content)
+        object.__setattr__(self, "parts", MappingProxyType(copied))
 
 
 @dataclass(frozen=True)
@@ -49,6 +69,7 @@ class QuotationDataRow:
     provider: str
     region: str
     source_hash: str
+    upstream_row_hash: str
     row_hash: str
 
 
@@ -56,25 +77,22 @@ QUOTATION_DATA_HEADERS = tuple(item.name for item in fields(QuotationDataRow))
 
 
 def quotation_data_rows(payload: object) -> tuple[QuotationDataRow, ...]:
-    """Materializa las líneas validadas en el orden declarado por secciones."""
+    """Materializa el payload congelado sin heredar límites de negocio ajenos."""
 
-    from .mixed_catalog import validate_mixed_catalog_payload
-
-    checked = validate_mixed_catalog_payload(payload)
-    items = _items_by_key(checked)
+    checked = _preflight_payload(payload)
     ordered: list[QuotationDataRow] = []
-    expected_keys: list[str] = []
+    expected_keys: set[str] = set()
 
-    for section in checked["sections"]:
+    for section in checked.sections:
         section_id = section["id"]
         section_title = section["title"]
         _validate_safe_text(section_id)
         _validate_safe_text(section_title)
         for item_key in section["item_keys"]:
-            if item_key in expected_keys or item_key not in items:
+            if item_key in expected_keys or item_key not in checked.items:
                 raise ValueError("Orden de Quotation_Data inconsistente")
-            expected_keys.append(item_key)
-            line, source_hash, origin, source_row, upstream_row_hash = items[item_key]
+            expected_keys.add(item_key)
+            line, source_hash, origin, source_row, upstream_row_hash = checked.items[item_key]
             row = QuotationDataRow(
                 item_key=item_key,
                 section_id=section_id,
@@ -82,24 +100,21 @@ def quotation_data_rows(payload: object) -> tuple[QuotationDataRow, ...]:
                 position=len(ordered) + 1,
                 origin=origin,
                 source_row=source_row,
-                original_currency=line["original_currency"],
-                original_cost=_decimal(line["original_unit_price"], "original_cost"),
-                frozen_rate=_decimal(line["frozen_exchange_rate"], "frozen_rate"),
-                converted_cost=_decimal(line["unit_price"], "converted_cost"),
-                quantity=_decimal(line["quantity"], "quantity"),
-                provider=line["provider"] if origin == "imported" else line["supplier"],
+                original_currency=line.get("original_currency"),
+                original_cost=_decimal(line.get("original_unit_price"), "original_cost"),
+                frozen_rate=_decimal(line.get("frozen_exchange_rate"), "frozen_rate"),
+                converted_cost=_decimal(line.get("unit_price"), "converted_cost"),
+                quantity=_decimal(line.get("quantity"), "quantity"),
+                provider=line.get("provider") if origin == "imported" else line.get("supplier"),
                 region=_region(line, origin),
                 source_hash=source_hash,
+                upstream_row_hash=upstream_row_hash,
                 row_hash="",
             )
-            _validate_row_values(row, upstream_row_hash=upstream_row_hash)
+            _validate_row_values(row)
             ordered.append(_with_canonical_hash(row))
 
-    if (
-        len(ordered) != checked["item_count"]
-        or expected_keys != [key for section in checked["sections"] for key in section["item_keys"]]
-        or set(expected_keys) != set(items)
-    ):
+    if len(ordered) != checked.item_count or expected_keys != set(checked.items):
         raise ValueError("Orden de Quotation_Data inconsistente")
     return tuple(ordered)
 
@@ -109,60 +124,89 @@ def build_quotation_data_sheet(rows: Sequence[QuotationDataRow]) -> SheetAdditio
 
     if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
         raise TypeError("Las filas de Quotation_Data deben ser una secuencia")
-    materialized = tuple(rows)
-    if len(materialized) + 1 > XLSX_MAX_ROWS:
+    row_count = len(rows)
+    if row_count + 1 > XLSX_MAX_ROWS:
         raise ValueError("Quotation_Data excede el límite físico de filas XLSX")
-    _validate_rows(materialized)
-    table = [
-        QUOTATION_DATA_HEADERS,
-        *(tuple(getattr(row, name) for name in QUOTATION_DATA_HEADERS) for row in materialized),
-    ]
     return SheetAddition(
         name="Quotation_Data",
         state="veryHidden",
-        xml=inline_worksheet_xml(table),
+        xml=_stream_worksheet_xml(rows, row_count),
     )
 
 
-def inline_worksheet_xml(rows: Sequence[Sequence[object]]) -> bytes:
-    """Serializa una tabla limitada a SpreadsheetML seguro, sin fórmulas."""
-
-    if not rows or len(rows) > XLSX_MAX_ROWS:
-        raise ValueError("Filas de Quotation_Data inválidas")
-    width = len(rows[0])
-    if not 1 <= width <= 16_384 or any(len(row) != width for row in rows):
-        raise ValueError("Tabla de Quotation_Data inconsistente")
-
-    root = ET.Element(f"{{{MAIN}}}worksheet")
-    ET.SubElement(root, f"{{{MAIN}}}dimension", {"ref": f"A1:{_column_name(width)}{len(rows)}"})
-    sheet_data = ET.SubElement(root, f"{{{MAIN}}}sheetData")
-    for row_index, values in enumerate(rows, start=1):
-        row = ET.SubElement(sheet_data, f"{{{MAIN}}}row", {"r": str(row_index)})
-        for column_index, value in enumerate(values, start=1):
-            _append_cell(row, f"{_column_name(column_index)}{row_index}", value)
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True, short_empty_elements=True)
-
-
-def _items_by_key(payload: dict) -> dict[str, tuple[dict, str, str, int | None, str | None]]:
-    result: dict[str, tuple[dict, str, str, int | None, str | None]] = {}
-    for group in payload["groups"]:
-        source_hash = group["catalog_source_hash"]
+def _preflight_payload(payload: object) -> "_Payload":
+    if not isinstance(payload, dict):
+        raise ValueError("Payload de Quotation_Data inválido")
+    item_count = payload.get("item_count")
+    if type(item_count) is not int or item_count < 0:
+        raise ValueError("Conteo de Quotation_Data inconsistente")
+    if item_count + 1 > XLSX_MAX_ROWS:
+        raise ValueError("Quotation_Data excede el límite físico de filas XLSX")
+    groups = payload.get("groups")
+    sections = payload.get("sections")
+    if not isinstance(groups, list) or not isinstance(sections, list) or not sections:
+        raise ValueError("Payload de Quotation_Data inválido")
+    result: dict[str, tuple[dict, str, str, int | None, str]] = {}
+    for group in groups:
+        if not isinstance(group, dict) or not isinstance(group.get("items"), list):
+            raise ValueError("Grupo de Quotation_Data inválido")
+        source_hash = group.get("catalog_source_hash")
+        _validate_hash(source_hash, "source_hash")
+        catalog = group.get("catalog")
+        _validate_safe_text(catalog)
         for line in group["items"]:
-            _add_item(result, line["canonical_key"], (line, source_hash, line["catalog"], None, None))
-    imported = payload["imported_source"]
+            if not isinstance(line, dict) or line.get("catalog") != catalog:
+                raise ValueError("Línea de Quotation_Data inválida")
+            _add_item(result, line.get("canonical_key"), (line, source_hash, catalog, None, ""))
+    imported = payload.get("imported_source")
     if imported is not None:
+        if not isinstance(imported, dict) or not isinstance(imported.get("items"), list):
+            raise ValueError("Fuente importada de Quotation_Data inválida")
         for line in imported["items"]:
+            if not isinstance(line, dict) or line.get("kind") != "imported":
+                raise ValueError("Línea importada de Quotation_Data inválida")
+            source_row = line.get("source_row")
+            if type(source_row) is not int or source_row <= 0:
+                raise ValueError("source_row de Quotation_Data inválido")
+            _validate_hash(line.get("source_hash"), "source_hash")
+            _validate_hash(line.get("row_hash"), "upstream_row_hash")
             _add_item(
                 result,
-                line["canonical_key"],
-                (line, line["source_hash"], "imported", line["source_row"], line["row_hash"]),
+                line.get("canonical_key"),
+                (line, line.get("source_hash"), "imported", source_row, line.get("row_hash")),
             )
-    return result
+    normalized_sections: list[dict] = []
+    seen_section_ids: set[str] = set()
+    flattened: list[str] = []
+    for section in sections:
+        if not isinstance(section, dict) or set(section) != {"id", "title", "item_keys"}:
+            raise ValueError("Sección de Quotation_Data inválida")
+        section_id, title, keys = section["id"], section["title"], section["item_keys"]
+        _validate_safe_text(section_id)
+        _validate_safe_text(title)
+        if section_id in seen_section_ids or not isinstance(keys, list) or not keys:
+            raise ValueError("Sección de Quotation_Data inválida")
+        seen_section_ids.add(section_id)
+        for key in keys:
+            _validate_safe_text(key)
+            flattened.append(key)
+        normalized_sections.append(section)
+    if len(result) != item_count or len(flattened) != item_count or len(set(flattened)) != item_count or set(flattened) != set(result):
+        raise ValueError("Orden de Quotation_Data inconsistente")
+    return _Payload(item_count, result, tuple(normalized_sections))
 
 
-def _add_item(result: dict, key: object, value: tuple[dict, str, str, int | None, str | None]) -> None:
+@dataclass(frozen=True)
+class _Payload:
+    item_count: int
+    items: Mapping[str, tuple[dict, str, str, int | None, str]]
+    sections: tuple[dict, ...]
+
+
+def _add_item(result: dict, key: object, value: tuple[dict, str, str, int | None, str]) -> None:
     if not isinstance(key, str) or key in result:
         raise ValueError("Claves de Quotation_Data duplicadas")
+    _validate_safe_text(key)
     result[key] = value
 
 
@@ -174,50 +218,70 @@ def _region(line: dict, origin: str) -> str:
 
 
 def _with_canonical_hash(row: QuotationDataRow) -> QuotationDataRow:
-    payload = {
-        name: _hash_value(getattr(row, name))
-        for name in QUOTATION_DATA_HEADERS
-        if name != "row_hash"
-    }
-    digest = hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    digest = _row_hash(row)
     return QuotationDataRow(**{**row.__dict__, "row_hash": digest})
 
 
-def _hash_value(value: object) -> object:
-    if isinstance(value, Decimal):
-        return format(value, "f")
-    return value
+def _row_hash(row: QuotationDataRow) -> str:
+    digest = hashlib.sha256(_HASH_DOMAIN)
+    for name in QUOTATION_DATA_HEADERS:
+        if name == "row_hash":
+            continue
+        value = getattr(row, name)
+        if isinstance(value, Decimal):
+            kind, encoded = b"d", _decimal_text(value, name).encode("ascii")
+        elif type(value) is int:
+            kind, encoded = b"i", str(value).encode("ascii")
+        elif value is None:
+            kind, encoded = b"n", b""
+        elif isinstance(value, str):
+            kind, encoded = b"s", value.encode("utf-8")
+        else:
+            raise TypeError("Tipo de hash Quotation_Data inválido")
+        encoded_name = name.encode("ascii")
+        digest.update(struct.pack(">H", len(encoded_name)))
+        digest.update(encoded_name)
+        digest.update(kind)
+        digest.update(struct.pack(">I", len(encoded)))
+        digest.update(encoded)
+    return digest.hexdigest()
 
 
-def _validate_rows(rows: tuple[QuotationDataRow, ...]) -> None:
+def _stream_worksheet_xml(rows: Sequence[QuotationDataRow], row_count: int) -> bytes:
+    output = BytesIO()
+    _write(output, f'<?xml version="1.0" encoding="utf-8"?><worksheet xmlns="{MAIN}"><dimension ref="A1:P{row_count + 1}"/><sheetData>')
+    _write_xml_row(output, 1, QUOTATION_DATA_HEADERS)
     seen_keys: set[str] = set()
     for position, row in enumerate(rows, start=1):
-        _validate_row_values(row, upstream_row_hash=None)
+        _validate_row_values(row)
         if row.position != position or row.item_key in seen_keys:
             raise ValueError("Orden de Quotation_Data inconsistente")
         seen_keys.add(row.item_key)
-        if row.row_hash != _with_canonical_hash(row).row_hash:
+        if row.row_hash != _row_hash(row):
             raise ValueError("row_hash de Quotation_Data inválido")
+        _write_xml_row(output, position + 1, tuple(getattr(row, name) for name in QUOTATION_DATA_HEADERS))
+    _write(output, "</sheetData></worksheet>")
+    return output.getvalue()
 
 
-def _validate_row_values(row: QuotationDataRow, *, upstream_row_hash: str | None) -> None:
+def _validate_row_values(row: QuotationDataRow) -> None:
     if not isinstance(row, QuotationDataRow):
         raise TypeError("Fila de Quotation_Data inválida")
     if type(row.position) is not int or row.position < 1:
         raise ValueError("Posición de Quotation_Data inválida")
-    if row.source_row is not None and (type(row.source_row) is not int or row.source_row <= 7):
+    if row.source_row is not None and (type(row.source_row) is not int or row.source_row <= 0):
         raise ValueError("source_row de Quotation_Data inválido")
-    if row.origin not in {"imported", "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro"}:
+    if not isinstance(row.origin, str) or not row.origin:
         raise ValueError("Origen de Quotation_Data inválido")
     if (row.origin == "imported") != (row.source_row is not None):
         raise ValueError("source_row de Quotation_Data inconsistente")
     for text in (row.item_key, row.section_id, row.section_title, row.origin, row.original_currency, row.provider, row.region):
         _validate_safe_text(text)
-    for digest, field_name in ((row.source_hash, "source_hash"), (upstream_row_hash, "row_hash")):
-        if digest is not None and (not isinstance(digest, str) or _SHA256.fullmatch(digest) is None):
-            raise ValueError(f"{field_name} de Quotation_Data inválido")
+    _validate_hash(row.source_hash, "source_hash")
+    if row.origin == "imported":
+        _validate_hash(row.upstream_row_hash, "upstream_row_hash")
+    elif row.upstream_row_hash != "":
+        raise ValueError("upstream_row_hash de Quotation_Data inválido")
     for value, field_name, positive in (
         (row.original_cost, "original_cost", False),
         (row.frozen_rate, "frozen_rate", True),
@@ -226,6 +290,7 @@ def _validate_row_values(row: QuotationDataRow, *, upstream_row_hash: str | None
     ):
         if type(value) is not Decimal or not value.is_finite() or (positive and value <= 0) or (not positive and value < 0):
             raise ValueError(f"{field_name} de Quotation_Data inválido")
+        _decimal_text(value, field_name)
     if row.converted_cost != (row.original_cost * row.frozen_rate).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP):
         raise ValueError("Costo convertido de Quotation_Data inconsistente")
 
@@ -239,52 +304,93 @@ def _decimal(value: object, field_name: str) -> Decimal:
         raise ValueError(f"{field_name} de Quotation_Data inválido") from error
     if not number.is_finite():
         raise ValueError(f"{field_name} de Quotation_Data inválido")
-    return number
+    _decimal_text(number, field_name)
+    return Decimal(0) if number.is_zero() else number.normalize()
 
 
-def _validate_safe_text(value: object) -> None:
-    if not isinstance(value, str) or not value:
+def _decimal_text(value: Decimal, field_name: str) -> str:
+    scale, integral_digits = _DECIMAL_RULES[field_name]
+    tuple_value = value.as_tuple()
+    actual_scale = max(-tuple_value.exponent, 0)
+    adjusted = value.adjusted() if not value.is_zero() else 0
+    actual_integral = max(adjusted + 1, 1)
+    if actual_scale > scale or actual_integral > integral_digits or len(tuple_value.digits) > scale + integral_digits:
+        raise ValueError(f"{field_name} de Quotation_Data inválido")
+    if value.is_zero():
+        return "0"
+    text = format(value.normalize(), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _validate_safe_text(value: object, *, allow_empty: bool = False) -> None:
+    if not isinstance(value, str) or (not value and not allow_empty):
         raise ValueError("Texto de Quotation_Data inseguro")
-    folded = value.casefold()
+    if len(value) > 10_000 or any(not _is_xml_10_character(ord(char)) for char in value):
+        raise ValueError("Texto de Quotation_Data inseguro")
+    inspected = _inspection_text(value)
+    folded = inspected.casefold()
     if (
-        value.lstrip().startswith(_UNSAFE_TEXT_PREFIXES)
-        or "http://" in folded
-        or "https://" in folded
-        or "blob:" in folded
-        or "data:" in folded
+        any(char in value for char in _INVISIBLE)
+        or re.search(r"(?:https?|file|data|blob):", folded) is not None
         or "base64" in folded
         or "x-amz-signature" in folded
         or "signature=" in folded
         or "?sig=" in folded
-        or "\\" in value
-        or re.search(r"(?:^|/)\.(?:temp|tmp)(?:/|$)", folded) is not None
-        or re.search(r"(?:^|/)(?:tmp|temp|temporary)(?:/|$)", folded) is not None
+        or re.search(r"(?:^|[\\/])(?:tmp|temp|temporary)(?:[\\/]|$)", folded) is not None
+        or re.search(r"(?:^|[\\/])\.(?:tmp|temp)(?:[\\/]|$)", folded) is not None
+        or re.search(r"(?:^[a-z]:[\\/]|^[\\/]{2})", folded) is not None
     ):
         raise ValueError("Texto de Quotation_Data inseguro")
-    if any(ord(char) < 0x20 and char not in "\t\n\r" for char in value):
-        raise ValueError("Texto de Quotation_Data inseguro")
 
 
-def _append_cell(row: ET.Element, coordinate: str, value: object) -> None:
-    cell = ET.SubElement(row, f"{{{MAIN}}}c", {"r": coordinate})
+def _inspection_text(value: str) -> str:
+    inspected = value.translate({ord(char): None for char in _INVISIBLE})
+    for _ in range(2):
+        decoded = unquote(inspected)
+        if decoded == inspected:
+            break
+        inspected = decoded
+    return inspected
+
+
+def _write_xml_row(output: BytesIO, row_number: int, values: Sequence[object]) -> None:
+    _write(output, f'<row r="{row_number}">')
+    for column, value in enumerate(values, start=1):
+        coordinate = f"{_column_name(column)}{row_number}"
+        _write_xml_cell(output, coordinate, value)
+    _write(output, "</row>")
+
+
+def _write_xml_cell(output: BytesIO, coordinate: str, value: object) -> None:
     if isinstance(value, str):
-        _validate_safe_text(value)
-        cell.set("t", "inlineStr")
-        inline = ET.SubElement(cell, f"{{{MAIN}}}is")
-        text = ET.SubElement(inline, f"{{{MAIN}}}t")
-        if _has_significant_whitespace(value):
-            text.set(f"{{{XML}}}space", "preserve")
-        text.text = value
+        _validate_safe_text(value, allow_empty=True)
+        space = ' xml:space="preserve"' if _has_significant_whitespace(value) else ""
+        _write(output, f'<c r="{coordinate}" t="inlineStr"><is><t{space}>{escape(value)}</t></is></c>')
     elif type(value) is int:
-        ET.SubElement(cell, f"{{{MAIN}}}v").text = str(value)
+        _write(output, f'<c r="{coordinate}"><v>{value}</v></c>')
     elif isinstance(value, Decimal):
-        if not value.is_finite():
-            raise ValueError("Número de Quotation_Data inválido")
-        ET.SubElement(cell, f"{{{MAIN}}}v").text = format(value, "f")
+        _write(output, f'<c r="{coordinate}"><v>{_decimal_text(value, _decimal_field_for_coordinate(coordinate))}</v></c>')
     elif value is None:
-        return
+        _write(output, f'<c r="{coordinate}"/>')
     else:
         raise TypeError("Tipo de celda Quotation_Data inválido")
+
+
+def _decimal_field_for_coordinate(coordinate: str) -> str:
+    return {"H": "original_cost", "I": "frozen_rate", "J": "converted_cost", "K": "quantity"}[re.match(r"[A-Z]+", coordinate).group()]
+
+
+def _write(output: BytesIO, text: str) -> None:
+    output.write(text.encode("utf-8"))
+
+
+def _validate_hash(value: object, field_name: str) -> None:
+    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+        raise ValueError(f"{field_name} de Quotation_Data inválido")
+
+
+def _is_xml_10_character(codepoint: int) -> bool:
+    return codepoint in {0x9, 0xA, 0xD} or 0x20 <= codepoint <= 0xD7FF or 0xE000 <= codepoint <= 0xFFFD or 0x10000 <= codepoint <= 0x10FFFF
 
 
 def _column_name(index: int) -> str:
