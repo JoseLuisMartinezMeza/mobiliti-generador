@@ -962,6 +962,17 @@ def _remap_source_styles_with_parts(
     rewritten_parts = _materialize_related_theme_refs(
         related_parts, resolved_theme
     )
+    default_table_style, custom_table_styles = _source_table_style_registry(
+        source_styles
+    )
+    destination_theme: bytes | None = None
+    if destination_package is not None:
+        destination_theme_part = destination_package.workbook_related_part("theme")
+        if destination_theme_part is not None:
+            destination_theme = destination_package.parts[destination_theme_part]
+    builtins_are_theme_safe = (
+        source_theme is not None and source_theme == destination_theme
+    )
     tables: dict[str, tuple[ET.Element, dict[str, str]]] = {}
     table_style_names: set[str] = set()
     for name, content in rewritten_parts.items():
@@ -978,10 +989,24 @@ def _remap_source_styles_with_parts(
         style_infos = table.findall(f"{{{MAIN}}}tableStyleInfo")
         if len(style_infos) > 1:
             raise ValueError(f"tableStyleInfo duplicado: {name}")
+        style_name = (
+            style_infos[0].get("name") if style_infos else default_table_style
+        )
+        if not style_name:
+            raise ValueError(f"Estilo efectivo de tabla ausente: {name}")
+        style_name, is_custom = _resolve_table_style_dependency(
+            style_name,
+            custom_table_styles,
+            builtins_are_theme_safe=builtins_are_theme_safe,
+            part_name=name,
+        )
         if style_infos:
-            style_name = style_infos[0].get("name")
-            if not style_name:
-                raise ValueError(f"tableStyleInfo inválido: {name}")
+            style_infos[0].attrib["name"] = style_name
+        else:
+            table.append(
+                ET.Element(f"{{{MAIN}}}tableStyleInfo", {"name": style_name})
+            )
+        if is_custom:
             table_style_names.add(style_name)
         for element in table.iter():
             for attribute in element.attrib:
@@ -1048,7 +1073,13 @@ def _remap_source_styles_with_parts(
         style_info = table.find(f"{{{MAIN}}}tableStyleInfo")
         if style_info is not None:
             old_name = style_info.attrib["name"]
-            style_info.attrib["name"] = merger.table_style_name_map[old_name]
+            mapped_name = merger.table_style_name_map.get(old_name)
+            if mapped_name is not None:
+                style_info.attrib["name"] = mapped_name
+            elif not (
+                builtins_are_theme_safe and _is_builtin_table_style(old_name)
+            ):
+                raise ValueError(f"Estilo de tabla sin remapeo: {old_name}")
         for element in table.iter():
             for attribute in tuple(element.attrib):
                 if not _is_dxf_id_attribute(attribute):
@@ -1066,6 +1097,57 @@ def _remap_source_styles_with_parts(
         rewritten_parts,
         table_name_map,
     )
+
+
+def _source_table_style_registry(
+    source_styles: bytes,
+) -> tuple[str | None, Mapping[str, str]]:
+    root = _parse_style_sheet_document(source_styles)[0]
+    section = root.find(f"{{{MAIN}}}tableStyles")
+    if section is None:
+        return None, MappingProxyType({})
+    registry: dict[str, str] = {}
+    for style in section.findall(f"{{{MAIN}}}tableStyle"):
+        name = style.get("name")
+        if not name or any(
+            unicodedata.category(character) in {"Cc", "Cf"} for character in name
+        ):
+            raise ValueError("Nombre de tableStyle fuente inválido")
+        key = name.casefold()
+        if key in registry:
+            raise ValueError(f"tableStyle fuente duplicado: {name}")
+        registry[key] = name
+    default = section.get("defaultTableStyle")
+    if default is not None and not default:
+        raise ValueError("defaultTableStyle fuente inválido")
+    return default, MappingProxyType(registry)
+
+
+def _resolve_table_style_dependency(
+    style_name: str,
+    custom_styles: Mapping[str, str],
+    *,
+    builtins_are_theme_safe: bool,
+    part_name: str,
+) -> tuple[str, bool]:
+    custom_name = custom_styles.get(style_name.casefold())
+    if custom_name is not None:
+        return custom_name, True
+    if not _is_builtin_table_style(style_name):
+        raise ValueError(f"Estilo de tabla fuente no resoluble: {part_name}")
+    if not builtins_are_theme_safe:
+        raise ValueError(
+            f"Estilo de tabla {style_name} depende de un tema destino distinto"
+        )
+    return style_name, False
+
+
+def _is_builtin_table_style(style_name: str) -> bool:
+    return re.fullmatch(
+        r"TableStyle(?:Light|Medium|Dark)[1-9][0-9]*",
+        style_name,
+        re.IGNORECASE,
+    ) is not None
 
 
 def _parse_worksheet(content: bytes) -> ET.Element:
@@ -1186,19 +1268,110 @@ def _validate_rich_run(element: ET.Element) -> str:
 
 
 def _validate_run_properties(element: ET.Element) -> None:
-    allowed = {
+    order = (
         "rFont", "charset", "family", "b", "i", "strike", "outline",
         "shadow", "condense", "extend", "color", "sz", "u", "vertAlign",
         "scheme",
-    }
-    seen: set[str] = set()
+    )
+    positions = {name: index for index, name in enumerate(order)}
+    if element.attrib or (element.text and element.text.strip()):
+        raise ValueError("CT_RPr de rich run inválido")
+    previous = -1
     for child in element:
         if not child.tag.startswith(f"{{{MAIN}}}"):
             raise ValueError("Propiedad de rich run fuera de namespace")
         local_name = child.tag.rsplit("}", 1)[-1]
-        if local_name not in allowed or local_name in seen or list(child):
+        position = positions.get(local_name)
+        if (
+            position is None
+            or position <= previous
+            or list(child)
+            or (child.text and child.text.strip())
+            or (child.tail and child.tail.strip())
+        ):
             raise ValueError("Propiedad de rich run inválida")
-        seen.add(local_name)
+        _validate_run_property_value(child, local_name)
+        previous = position
+
+
+def _validate_run_property_value(element: ET.Element, name: str) -> None:
+    attributes = set(element.attrib)
+    value = element.get("val")
+    if name == "rFont":
+        if (
+            attributes != {"val"}
+            or not value
+            or len(value) > 255
+            or any(unicodedata.category(character) in {"Cc", "Cf"} for character in value)
+        ):
+            raise ValueError("rFont de rich run inválido")
+        return
+    if name in {"charset", "family"}:
+        if attributes != {"val"} or value is None or re.fullmatch(r"[0-9]+", value) is None:
+            raise ValueError(f"{name} de rich run inválido")
+        number = int(value)
+        limit = 255 if name == "charset" else 5
+        if number > limit:
+            raise ValueError(f"{name} de rich run fuera de rango")
+        return
+    if name in {"b", "i", "strike", "outline", "shadow", "condense", "extend"}:
+        if not attributes.issubset({"val"}) or value not in {
+            None, "0", "1", "true", "false",
+        }:
+            raise ValueError(f"Booleano {name} de rich run inválido")
+        return
+    if name == "color":
+        _validate_run_color(element)
+        return
+    if name == "sz":
+        if attributes != {"val"} or value is None:
+            raise ValueError("Tamaño de rich run inválido")
+        try:
+            size = Decimal(value)
+        except InvalidOperation as error:
+            raise ValueError("Tamaño de rich run inválido") from error
+        if not size.is_finite() or size <= 0 or size > 409:
+            raise ValueError("Tamaño de rich run fuera de rango")
+        return
+    enums = {
+        "u": {"single", "double", "singleAccounting", "doubleAccounting", "none"},
+        "vertAlign": {"baseline", "superscript", "subscript"},
+        "scheme": {"major", "minor", "none"},
+    }
+    allowed = enums[name]
+    optional = name == "u"
+    if not attributes.issubset({"val"}) or (
+        value is None and not optional
+    ) or (value is not None and value not in allowed):
+        raise ValueError(f"Enum {name} de rich run inválido")
+
+
+def _validate_run_color(element: ET.Element) -> None:
+    allowed = {"rgb", "indexed", "auto", "theme", "tint"}
+    if not set(element.attrib).issubset(allowed):
+        raise ValueError("Color de rich run inválido")
+    bases = [name for name in ("rgb", "indexed", "auto", "theme") if name in element.attrib]
+    if len(bases) != 1:
+        raise ValueError("Color de rich run ambiguo")
+    base = bases[0]
+    value = element.attrib[base]
+    if base == "rgb" and re.fullmatch(r"[0-9A-Fa-f]{8}", value) is None:
+        raise ValueError("RGB de rich run inválido")
+    if base in {"indexed", "theme"}:
+        if re.fullmatch(r"[0-9]+", value) is None:
+            raise ValueError("Índice de color de rich run inválido")
+        if base == "theme" and int(value) >= len(_THEME_COLOR_ORDER):
+            raise ValueError("Tema de color de rich run fuera de rango")
+    if base == "auto" and value not in {"0", "1", "true", "false"}:
+        raise ValueError("Auto color de rich run inválido")
+    tint_raw = element.get("tint")
+    if tint_raw is not None:
+        try:
+            tint = Decimal(tint_raw)
+        except InvalidOperation as error:
+            raise ValueError("Tint de rich run inválido") from error
+        if not tint.is_finite() or tint < -1 or tint > 1:
+            raise ValueError("Tint de rich run fuera de rango")
 
 
 def _validate_phonetic_run(element: ET.Element, base_length: int) -> None:
@@ -1226,6 +1399,16 @@ def _validate_phonetic_properties(element: ET.Element) -> None:
     font_id = _integer_attribute(element, "fontId", default=None)
     if font_id is None:
         raise ValueError("phoneticPr sin fontId")
+    phonetic_type = element.get("type")
+    if phonetic_type is not None and phonetic_type not in {
+        "halfwidthKatakana", "fullwidthKatakana", "Hiragana", "noConversion",
+    }:
+        raise ValueError("Tipo de phoneticPr inválido")
+    alignment = element.get("alignment")
+    if alignment is not None and alignment not in {
+        "noControl", "left", "center", "distributed",
+    }:
+        raise ValueError("Alineación de phoneticPr inválida")
 
 
 def _parse_style_sheet(content: bytes) -> ET.Element:

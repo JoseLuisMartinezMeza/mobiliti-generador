@@ -185,6 +185,65 @@ def test_style_merge_keeps_official_records_and_remaps_custom_numfmt_cf_and_tabl
     assert _all_style_counts_are_exact(merged_styles)
 
 
+def test_table_without_style_info_materializes_and_merges_custom_source_default(
+    tmp_path,
+):
+    source = _source_without_table_style_info(
+        tmp_path, default_style="CustomQuoteStyle", filename="custom-default.xlsx"
+    )
+
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    table_part = next(name for name in addition.parts if name.startswith("xl/tables/"))
+    style_info = ET.fromstring(addition.parts[table_part]).find(
+        "m:tableStyleInfo", NS
+    )
+
+    assert style_info is not None
+    assert _table_style_signature(
+        addition.replacements["xl/styles.xml"], style_info.attrib["name"]
+    ) == _table_style_signature(_part_bytes(source, "xl/styles.xml"), "CustomQuoteStyle")
+
+
+def test_table_without_style_info_rejects_theme_dependent_builtin_default_when_unsafe(
+    tmp_path,
+):
+    source = _source_without_table_style_info(
+        tmp_path, default_style="TableStyleMedium2", filename="unsafe-builtin.xlsx"
+    )
+
+    with pytest.raises(ValueError, match="(?i)table.*style|estilo.*tabla|tema|theme"):
+        transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
+def test_table_without_style_info_materializes_builtin_default_when_theme_is_identical(
+    tmp_path,
+):
+    source = _source_without_table_style_info(
+        tmp_path, default_style="TableStyleMedium2", filename="safe-builtin.xlsx"
+    )
+    destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    destination_theme = destination.workbook_related_part("theme")
+    assert destination_theme is not None
+    theme_safe_destination = replace(
+        destination,
+        parts={
+            **destination.parts,
+            destination_theme: _part_bytes(source, "xl/theme/theme7.xml"),
+        },
+    )
+
+    addition = transplant_quotation(source, theme_safe_destination)
+    assert addition is not None
+    table_part = next(name for name in addition.parts if name.startswith("xl/tables/"))
+    style_info = ET.fromstring(addition.parts[table_part]).find(
+        "m:tableStyleInfo", NS
+    )
+
+    assert style_info is not None
+    assert style_info.attrib["name"] == "TableStyleMedium2"
+
+
 def test_remap_source_styles_covers_cell_row_and_column_references(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     source_package = XlsxPackage.read(source)
@@ -743,6 +802,46 @@ def test_relationship_profiles_reject_executable_and_mismatched_images(tmp_path)
             transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
 
 
+@pytest.mark.parametrize(
+    ("extension", "content_type", "signature"),
+    (
+        ("png", "image/png", b"\x89PNG\r\n\x1a\nfixture"),
+        ("jpg", "image/jpeg", b"\xff\xd8\xff\xe0fixture"),
+        ("gif", "image/gif", b"GIF89afixture"),
+        ("bmp", "image/bmp", b"BMfixture"),
+        ("tiff", "image/tiff", b"II*\x00fixture"),
+    ),
+)
+def test_all_allowed_image_profiles_preserve_independent_binary_signatures(
+    extension, content_type, signature, tmp_path
+):
+    source = build_rich_quotation_fixture(tmp_path / f"source-{extension}.xlsx")
+    rels_name = "xl/drawings/_rels/drawing7.xml.rels"
+    media_name = f"xl/media/image7.{extension}"
+    source_with_format = _rewrite_package(
+        source,
+        tmp_path / f"image-{extension}.xlsx",
+        {
+            rels_name: _part_bytes(source, rels_name).replace(
+                b"../media/image7.png", f"../media/image7.{extension}".encode()
+            ),
+            media_name: signature,
+        },
+        content_type=("/" + media_name, content_type),
+    )
+
+    addition = transplant_quotation(
+        source_with_format, XlsxPackage.read(OFFICIAL_TEMPLATE)
+    )
+    assert addition is not None
+    output_media = next(
+        name for name in addition.parts if name.endswith("." + extension)
+    )
+
+    assert addition.parts[output_media] == signature
+    assert addition.content_types[output_media] == content_type
+
+
 def test_relationship_profiles_validate_external_schemes_target_mode_and_printer_signature(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     sheet_rels_name = "xl/worksheets/_rels/original-quotation.xml.rels"
@@ -1053,6 +1152,87 @@ def test_shared_string_ct_rst_rejects_invalid_cardinality_order_and_bounds(share
 
     with pytest.raises(ValueError, match="(?i)shared string|CT_Rst|rich|fon.t"):
         inline_source_shared_strings(sheet, (shared_string.encode(),))
+
+
+@pytest.mark.parametrize(
+    "run_properties",
+    (
+        "<rPr><i/><b/></rPr>",
+        '<rPr unexpected="1"><b/></rPr>',
+        '<rPr><b val="yes"/></rPr>',
+        '<rPr><u val="wavy"/></rPr>',
+        '<rPr><vertAlign val="middle"/></rPr>',
+        '<rPr><scheme val="fixture"/></rPr>',
+        "<rPr><rFont/></rPr>",
+    ),
+)
+def test_shared_string_ct_rpr_rejects_invalid_order_attributes_and_enums(
+    run_properties,
+):
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    ).encode()
+    shared_string = (
+        f'<si xmlns="{MAIN}"><r>{run_properties}<t>A</t></r></si>'
+    ).encode()
+
+    with pytest.raises(ValueError, match="(?i)rich|rPr|propiedad|orden|enum"):
+        inline_source_shared_strings(sheet, (shared_string,))
+
+
+def test_shared_string_ct_rpr_accepts_schema_order_and_valid_simple_values():
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    ).encode()
+    shared_string = f'''<si xmlns="{MAIN}"><r><rPr>
+      <rFont val="Arial"/><charset val="1"/><family val="2"/>
+      <b val="0"/><i/><strike val="false"/><outline/><shadow/><condense/><extend/>
+      <color rgb="FF123456"/><sz val="11.5"/><u val="double"/>
+      <vertAlign val="superscript"/><scheme val="minor"/>
+    </rPr><t>A</t></r></si>'''.encode()
+
+    output = inline_source_shared_strings(sheet, (shared_string,))
+
+    assert ET.fromstring(output).find(".//m:rPr/m:scheme", NS).attrib == {
+        "val": "minor"
+    }
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    (
+        'fontId="0" type="katakana"',
+        'fontId="0" alignment="right"',
+    ),
+)
+def test_shared_string_phonetic_properties_reject_invalid_simple_enums(attributes):
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    ).encode()
+    shared_string = (
+        f'<si xmlns="{MAIN}"><t>A</t><phoneticPr {attributes}/></si>'
+    ).encode()
+
+    with pytest.raises(ValueError, match="(?i)phonetic|fon.t|tipo|alineaci"):
+        inline_source_shared_strings(sheet, (shared_string,))
+
+
+def test_shared_string_phonetic_properties_accept_valid_type_and_alignment():
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    ).encode()
+    shared_string = (
+        f'<si xmlns="{MAIN}"><t>A</t><phoneticPr fontId="0" '
+        'type="Hiragana" alignment="distributed"/></si>'
+    ).encode()
+
+    output = inline_source_shared_strings(sheet, (shared_string,))
+
+    assert ET.fromstring(output).find(".//m:phoneticPr", NS).attrib == {
+        "fontId": "0",
+        "type": "Hiragana",
+        "alignment": "distributed",
+    }
 
 
 def test_sheet_addition_content_types_have_exact_safe_coverage():
@@ -1953,6 +2133,32 @@ def _source_with_table_identity(
             table_name: _xml_bytes(table),
             worksheet_name: _xml_bytes(worksheet),
             "xl/workbook.xml": _xml_bytes(workbook),
+        },
+    )
+
+
+def _source_without_table_style_info(
+    tmp_path: Path,
+    *,
+    default_style: str,
+    filename: str,
+) -> Path:
+    source = build_rich_quotation_fixture(tmp_path / ("base-" + filename))
+    table_name = "xl/tables/table7.xml"
+    table = ET.fromstring(_part_bytes(source, table_name))
+    style_info = table.find("m:tableStyleInfo", NS)
+    assert style_info is not None
+    table.remove(style_info)
+    styles = ET.fromstring(_part_bytes(source, "xl/styles.xml"))
+    table_styles = styles.find("m:tableStyles", NS)
+    assert table_styles is not None
+    table_styles.attrib["defaultTableStyle"] = default_style
+    return _rewrite_package(
+        source,
+        tmp_path / filename,
+        {
+            table_name: _xml_bytes(table),
+            "xl/styles.xml": _xml_bytes(styles),
         },
     )
 
