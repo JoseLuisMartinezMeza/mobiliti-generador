@@ -197,7 +197,7 @@ def build_rich_quotation_fixture(
         "xl/tables/table7.xml": (
             f'<table xmlns="{MAIN}" id="7" name="QuoteTable" displayName="QuoteTable" ref="A8:N12" totalsRowShown="0"><autoFilter ref="A8:N12"/><tableColumns count="14">{table_columns}</tableColumns><tableStyleInfo name="CustomQuoteStyle" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>'
         ).encode("utf-8"),
-        "xl/printerSettings/printerSettings7.bin": b"PRINTER\x00SETTINGS\xff",
+        "xl/printerSettings/printerSettings7.bin": _valid_printer_settings(),
         "xl/sharedStrings.xml": _rich_shared_strings(),
         "xl/styles.xml": _rich_styles(),
     }
@@ -269,6 +269,19 @@ def _rich_shared_strings() -> bytes:
   <si><r><rPr><b/><color rgb="FF006699"/></rPr><t xml:space="preserve"> Rich </t></r><r><rPr><i/></rPr><t>Text</t></r><rPh sb="0" eb="4"><t>ritchi</t></rPh><phoneticPr fontId="1" type="noConversion"/></si>
   <si><t>Producto Uno</t></si>
 </sst>'''.encode("utf-8")
+
+
+def _valid_printer_settings() -> bytes:
+    """DEVMODEW minimo y coherente para validar printerSettings sin payload opaco."""
+
+    payload = bytearray(220)
+    device_name = "Mobiliti Printer".encode("utf-16le")
+    payload[: len(device_name)] = device_name
+    payload[64:66] = (0x0401).to_bytes(2, "little")
+    payload[66:68] = (1).to_bytes(2, "little")
+    payload[68:70] = (220).to_bytes(2, "little")
+    payload[70:72] = (0).to_bytes(2, "little")
+    return bytes(payload)
 
 
 def _rich_styles() -> bytes:

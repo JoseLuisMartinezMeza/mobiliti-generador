@@ -36,6 +36,10 @@ OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationship
 PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
 NS = {"m": MAIN, "r": OFFICE_REL, "p": PACKAGE_REL, "ct": CONTENT_TYPES}
+STRICT_OFFICE_REL = "http://purl.oclc.org/ooxml/officeDocument/relationships"
+MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+X14AC = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+XR = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
 
 
 def test_transplanted_quotation_preserves_semantic_signature_and_official_parts(tmp_path):
@@ -291,6 +295,249 @@ def test_relationship_closure_keeps_external_hyperlink_and_binary_bytes(tmp_path
     assert addition.parts[printer] == source_package.parts["xl/printerSettings/printerSettings7.bin"]
 
 
+def test_relationship_profiles_reject_executable_and_mismatched_images(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    content_types = _part_bytes(source, "[Content_Types].xml")
+    drawing_rels = _part_bytes(source, "xl/drawings/_rels/drawing7.xml.rels")
+    png = _part_bytes(source, "xl/media/image7.png")
+    cases = (
+        (
+            "executable-as-image.xlsx",
+            {"xl/media/image7.png": b"MZ" + b"\x00" * 128},
+            None,
+        ),
+        (
+            "executable-mime.xlsx",
+            {
+                "[Content_Types].xml": content_types.replace(
+                    b'ContentType="image/png"',
+                    b'ContentType="application/x-msdownload"',
+                    1,
+                )
+            },
+            None,
+        ),
+        (
+            "png-as-jpeg.xlsx",
+            {
+                "xl/drawings/_rels/drawing7.xml.rels": drawing_rels.replace(
+                    b"../media/image7.png", b"../media/image7.jpg"
+                ),
+                "xl/media/image7.jpg": png,
+                "[Content_Types].xml": content_types.replace(
+                    b'<Default Extension="png" ContentType="image/png"/>',
+                    b'<Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/>',
+                ),
+            },
+            None,
+        ),
+    )
+
+    for filename, replacements, content_type in cases:
+        malformed = _rewrite_package(
+            source,
+            tmp_path / filename,
+            replacements,
+            content_type=content_type,
+        )
+        with pytest.raises(ValueError, match="(?i)imagen|ejecutable|firma|content type"):
+            transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
+def test_relationship_profiles_validate_external_schemes_target_mode_and_printer_signature(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    sheet_rels_name = "xl/worksheets/_rels/original-quotation.xml.rels"
+    sheet_rels = _part_bytes(source, sheet_rels_name)
+    cases = (
+        (
+            "javascript-link.xlsx",
+            {sheet_rels_name: sheet_rels.replace(b"https://example.com/spec?q=1", b"javascript:alert(1)")},
+            "(?i)esquema|externa|hyperlink",
+        ),
+        (
+            "external-image.xlsx",
+            {
+                "xl/drawings/_rels/drawing7.xml.rels": _rels_document(
+                    ("rIdImage", f"{OFFICE_REL}/image", "https://example.com/image.png", "External")
+                )
+            },
+            "(?i)TargetMode|externa|image",
+        ),
+        (
+            "invalid-printer.xlsx",
+            {"xl/printerSettings/printerSettings7.bin": b"PRINTER\x00SETTINGS\xff"},
+            "(?i)printer|firma|DEVMODE",
+        ),
+    )
+
+    for filename, replacements, message in cases:
+        malformed = _rewrite_package(source, tmp_path / filename, replacements)
+        with pytest.raises(ValueError, match=message):
+            transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
+def test_exact_transitional_and_strict_relationship_uris_are_enforced(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    workbook_rels_name = "xl/_rels/workbook.xml.rels"
+    spoofed_workbook = _rewrite_package(
+        source,
+        tmp_path / "spoofed-workbook.xlsx",
+        {
+            workbook_rels_name: _part_bytes(source, workbook_rels_name).replace(
+                f'{OFFICE_REL}/worksheet'.encode(),
+                b"https://attacker.invalid/worksheet",
+                1,
+            )
+        },
+    )
+    spoofed_root = _rewrite_package(
+        source,
+        tmp_path / "spoofed-root.xlsx",
+        {
+            "_rels/.rels": _part_bytes(source, "_rels/.rels").replace(
+                f'{OFFICE_REL}/officeDocument'.encode(),
+                b"https://attacker.invalid/officeDocument",
+            )
+        },
+    )
+    strict = _rewrite_package(
+        source,
+        tmp_path / "strict-rel-types.xlsx",
+        {
+            name: payload.replace(OFFICE_REL.encode(), STRICT_OFFICE_REL.encode())
+            for name, payload in _read_parts(source).items()
+            if name.endswith(".rels")
+        },
+    )
+
+    with pytest.raises(ValueError, match="(?i)relaci.n.*hoja|worksheet"):
+        transplant_quotation(spoofed_workbook, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    with pytest.raises(ValueError, match="(?i)officeDocument|ra.z"):
+        XlsxPackage.read(spoofed_root)
+    assert transplant_quotation(strict, XlsxPackage.read(OFFICIAL_TEMPLATE)) is not None
+
+
+def test_mc_ignorable_prefixes_survive_mutated_sheet_and_styles(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    worksheet_name = "xl/worksheets/original-quotation.xml"
+    worksheet = _part_bytes(source, worksheet_name).replace(
+        f'<worksheet xmlns="{MAIN}" xmlns:r="{OFFICE_REL}">'.encode(),
+        (
+            f'<worksheet xmlns="{MAIN}" xmlns:r="{OFFICE_REL}" xmlns:mc="{MC}" '
+            f'xmlns:x14ac="{X14AC}" xmlns:xr="{XR}" mc:Ignorable="x14ac xr">'
+        ).encode(),
+    ).replace(
+        b"</worksheet>",
+        b'<extLst><ext uri="{fixture}"><x14ac:dyDescent val="0.25"/><xr:future/></ext></extLst></worksheet>',
+    )
+    styles = _part_bytes(source, "xl/styles.xml").replace(
+        f'<styleSheet xmlns="{MAIN}">'.encode(),
+        (
+            f'<styleSheet xmlns="{MAIN}" xmlns:mc="{MC}" xmlns:xr="{XR}" '
+            'mc:Ignorable="xr">'
+        ).encode(),
+    ).replace(
+        b"</styleSheet>",
+        b'<extLst><ext uri="{fixture}"><xr:future/></ext></extLst></styleSheet>',
+    )
+    enriched = _rewrite_package(
+        source,
+        tmp_path / "mc.xlsx",
+        {worksheet_name: worksheet, "xl/styles.xml": styles},
+    )
+
+    addition = transplant_quotation(enriched, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    _assert_ignorable_prefixes(addition.xml, ("x14ac", "xr"))
+
+    merger = StyleTableMerger.from_xml(styles)
+    merger.merge_referenced_styles(_part_bytes(source, "xl/styles.xml"), {1})
+    _assert_ignorable_prefixes(merger.to_xml(), ("xr",))
+
+
+def test_mc_ignorable_rejects_undeclared_prefix(tmp_path):
+    sheet = (
+        f'<worksheet xmlns="{MAIN}" xmlns:mc="{MC}" mc:Ignorable="x14ac">'
+        '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    ).encode()
+
+    with pytest.raises(ValueError, match="(?i)Ignorable|prefijo"):
+        inline_source_shared_strings(sheet, ("valor",))
+
+
+@pytest.mark.parametrize(
+    "shared_string",
+    (
+        f'<si xmlns="{MAIN}"><t>A</t><r><t>B</t></r></si>',
+        f'<si xmlns="{MAIN}"><r><t>A</t><t>B</t></r></si>',
+        f'<si xmlns="{MAIN}"><phoneticPr fontId="0"/><rPh sb="0" eb="1"><t>a</t></rPh><t>A</t></si>',
+        f'<si xmlns="{MAIN}"><t>A</t><rPh sb="0" eb="2"><t>a</t></rPh></si>',
+    ),
+)
+def test_shared_string_ct_rst_rejects_invalid_cardinality_order_and_bounds(shared_string):
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>'
+    ).encode()
+
+    with pytest.raises(ValueError, match="(?i)shared string|CT_Rst|rich|fon.t"):
+        inline_source_shared_strings(sheet, (shared_string.encode(),))
+
+
+def test_sheet_addition_content_types_have_exact_safe_coverage():
+    sheet_xml = f'<worksheet xmlns="{MAIN}"><sheetData/></worksheet>'.encode()
+    valid = SheetAddition(
+        name="Quotation",
+        state="visible",
+        xml=sheet_xml,
+        parts={"xl/worksheets/q.xml": sheet_xml},
+        replacements={"xl/styles.xml": b"styles"},
+        content_types={
+            "xl/worksheets/q.xml": "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+        },
+        replacement_content_types={
+            "xl/styles.xml": "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"
+        },
+        sheet_part="xl/worksheets/q.xml",
+    )
+    assert valid.content_types.keys() == valid.parts.keys()
+    assert valid.replacement_content_types.keys() == valid.replacements.keys()
+
+    with pytest.raises(ValueError, match="(?i)coverage|cobertura|content type"):
+        replace(valid, content_types={})
+    with pytest.raises(ValueError, match="(?i)coverage|cobertura|content type"):
+        replace(valid, replacement_content_types={})
+    with pytest.raises(ValueError, match="(?i)ruta|OOXML"):
+        replace(
+            valid,
+            parts={"../q.xml": sheet_xml},
+            content_types={"../q.xml": "application/xml"},
+            sheet_part="../q.xml",
+        )
+    with pytest.raises(ValueError, match="(?i)worksheet|relaci.n"):
+        replace(valid, relationship_type="https://attacker.invalid/worksheet")
+
+
+def test_closure_allocation_reserves_orphan_content_type_overrides():
+    destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    root = ET.fromstring(destination.parts["[Content_Types].xml"])
+    ET.SubElement(
+        root,
+        f"{{{CONTENT_TYPES}}}Override",
+        {"PartName": "/xl/media/quotation_original1.png", "ContentType": "image/png"},
+    )
+    with_reserved_override = replace(
+        destination,
+        parts={**destination.parts, "[Content_Types].xml": _xml_bytes(root)},
+    )
+
+    allocated = with_reserved_override.allocate_closure(
+        {"xl/media/source.png": b"\x89PNG\r\n\x1a\n"},
+        prefix="quotation_original",
+    )
+
+    assert allocated["xl/media/source.png"] == "xl/media/quotation_original2.png"
+
+
 def test_relationship_closure_rejects_cycles_dangling_targets_and_traversal(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     drawing_rels = "xl/drawings/_rels/drawing7.xml.rels"
@@ -410,6 +657,8 @@ def test_transplant_rejects_spoofed_relationship_type_and_duplicate_sheet_id(tmp
         "xl/activeX/activeX1.bin",
         "xl/ctrlProps/ctrlProp1.xml",
         "xl/customUI/customUI.xml",
+        "customUI/customUI.xml",
+        "xl/media/PAYLOAD.EXE",
     ),
 )
 def test_transplant_rejects_orphan_active_parts_by_normalized_name(tmp_path, part_name):
@@ -759,6 +1008,16 @@ def _canonical(element: ET.Element) -> tuple:
         element.text or "",
         tuple(_canonical(child) for child in element),
     )
+
+
+def _assert_ignorable_prefixes(content: bytes, expected: tuple[str, ...]) -> None:
+    root_offset = content.find(b"<", content.find(b"?>") + 2)
+    start_tag = content[root_offset : content.find(b">", root_offset)].decode("utf-8")
+    root = ET.fromstring(content)
+    assert root.attrib[f"{{{MC}}}Ignorable"].split() == list(expected)
+    for prefix in expected:
+        assert f'xmlns:{prefix}="' in start_tag
+        assert f"<{prefix}:" in content.decode("utf-8")
 
 
 def _canonical_without_num_fmt_id(element: ET.Element) -> tuple:

@@ -18,6 +18,13 @@ PACKAGE_RELATIONSHIPS = "http://schemas.openxmlformats.org/package/2006/relation
 OFFICE_DOCUMENT_RELATIONSHIPS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 )
+STRICT_OFFICE_DOCUMENT_RELATIONSHIPS = (
+    "http://purl.oclc.org/ooxml/officeDocument/relationships"
+)
+OFFICE_DOCUMENT_RELATIONSHIP_BASES = (
+    OFFICE_DOCUMENT_RELATIONSHIPS,
+    STRICT_OFFICE_DOCUMENT_RELATIONSHIPS,
+)
 SPREADSHEETML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
 _SAFE_ALLOCATION_PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
@@ -119,6 +126,9 @@ class XlsxPackage:
                 relationship_id = relationship.get("Id")
                 if not relationship_id:
                     raise ValueError(f"Relacion OOXML sin Id: {rels_name}")
+                target_mode = relationship.get("TargetMode", "")
+                if target_mode.casefold() not in {"", "internal", "external"}:
+                    raise ValueError(f"TargetMode OOXML invalido: {rels_name}")
             duplicate_ids = _duplicates(
                 tuple(relationship["Id"] for relationship in relationships)
             )
@@ -138,6 +148,7 @@ class XlsxPackage:
                     raise ValueError(
                         f"Relacion OOXML sin destino: {rels_name} -> {resolved}"
                     )
+        self._audit_office_document_relationship()
 
     def sheet_part(self, name: str) -> str:
         """Resuelve una hoja por workbook relationships, nunca por sheetN."""
@@ -170,24 +181,54 @@ class XlsxPackage:
         return matches[0][2]
 
     def workbook_related_part(self, relationship_name: str) -> str | None:
-        """Resuelve una relación única del workbook por su sufijo de tipo."""
+        """Resuelve una relación exacta transitional/strict del workbook."""
 
         rels_name = "xl/_rels/workbook.xml.rels"
         if rels_name not in self.parts:
             raise ValueError("Relaciones del workbook ausentes")
         relationships = _parse_relationships(rels_name, self.parts[rels_name])
-        expected_suffix = "/" + relationship_name
+        if relationship_name not in {"styles", "sharedStrings", "theme"}:
+            raise ValueError(f"Tipo de relacion workbook invalido: {relationship_name}")
+        expected_types = relationship_type_uris(relationship_name)
         matches = [
             relationship
             for relationship in relationships
-            if relationship.get("Type", "").endswith(expected_suffix)
-            and relationship.get("TargetMode", "").casefold() != "external"
+            if relationship.get("Type") in expected_types
         ]
         if not matches:
             return None
         if len(matches) != 1:
             raise ValueError(f"Relación workbook duplicada: {relationship_name}")
+        if matches[0].get("TargetMode", "").casefold() == "external":
+            raise ValueError(f"Relacion workbook externa invalida: {relationship_name}")
         return _resolve_internal_target("xl/workbook.xml", matches[0]["Target"])
+
+    def declared_part_names(self) -> frozenset[str]:
+        """Incluye los Override OPC aunque la parte declarada sea huérfana."""
+
+        _defaults, overrides = _parse_content_types(
+            self.parts.get("[Content_Types].xml")
+        )
+        return frozenset(overrides)
+
+    def _audit_office_document_relationship(self) -> None:
+        rels_name = "_rels/.rels"
+        if rels_name not in self.parts:
+            raise ValueError("Relaciones raíz OOXML ausentes")
+        relationships = _parse_relationships(rels_name, self.parts[rels_name])
+        matches = [
+            relationship
+            for relationship in relationships
+            if relationship.get("Type") in relationship_type_uris("officeDocument")
+        ]
+        if len(matches) != 1:
+            raise ValueError("Relacion officeDocument raíz inválida")
+        relationship = matches[0]
+        if relationship.get("TargetMode", "").casefold() == "external":
+            raise ValueError("Relacion officeDocument raíz externa")
+        workbook_part = _resolve_internal_target(None, relationship["Target"])
+        if workbook_part != "xl/workbook.xml":
+            raise ValueError("Destino officeDocument raíz inválido")
 
     def shared_strings(self) -> tuple[bytes, ...]:
         """Devuelve cada CT_Rst completo para no aplanar rich text."""
@@ -266,7 +307,7 @@ class XlsxPackage:
                 raise ValueError(f"Clausura OOXML sin propietario: {rels_name}")
 
         allocated: dict[str, str] = {}
-        occupied = set(self.parts)
+        occupied = set(self.parts) | set(self.declared_part_names())
         generated: set[str] = set()
         sequence = 1
         for source_name in owner_parts:
@@ -360,8 +401,10 @@ class XlsxPackage:
             used_sheet_ids.add(sheet_id)
             used_relationship_ids.add(relationship_id)
             relationship = relationships.get(relationship_id)
-            if relationship is None or not relationship.get("Type", "").endswith(
-                "/worksheet"
+            if (
+                relationship is None
+                or relationship.get("Type") not in relationship_type_uris("worksheet")
+                or relationship.get("TargetMode", "").casefold() == "external"
             ):
                 raise ValueError(f"Relación de hoja OOXML inválida: {name}")
             target = _resolve_internal_target(
@@ -432,6 +475,32 @@ def relationship_part_name(owner: str) -> str:
     _validate_part_name(owner)
     directory, filename = posixpath.split(owner)
     return posixpath.join(directory, "_rels", filename + ".rels")
+
+
+def relationship_type_uris(name: str) -> frozenset[str]:
+    """URIs exactas permitidas para una relación Office transitional/strict."""
+
+    if not isinstance(name, str) or re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", name) is None:
+        raise ValueError("Nombre de relación Office inválido")
+    return frozenset(f"{base}/{name}" for base in OFFICE_DOCUMENT_RELATIONSHIP_BASES)
+
+
+def validate_part_name(name: str) -> None:
+    """Valida públicamente una ruta OPC antes de exponerla en metadatos."""
+
+    _validate_part_name(name)
+
+
+def relationship_owner(rels_name: str) -> str | None:
+    """Devuelve el propietario OPC de una parte .rels validada."""
+
+    return _relationship_owner(rels_name)
+
+
+def resolve_internal_target(owner: str | None, target: str) -> str:
+    """Resuelve un Target interno con las reglas de traversal del paquete."""
+
+    return _resolve_internal_target(owner, target)
 
 
 def rewrite_relationship_targets(

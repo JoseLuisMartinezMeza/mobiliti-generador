@@ -8,11 +8,13 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 from io import BytesIO
 from pathlib import Path
+import posixpath
 from types import MappingProxyType
 import re
 import struct
 from typing import Mapping, Sequence
 from urllib.parse import unquote
+from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -20,13 +22,19 @@ from .ooxml_package import (
     OFFICE_DOCUMENT_RELATIONSHIPS,
     PACKAGE_RELATIONSHIPS,
     XlsxPackage,
+    relationship_owner,
+    relationship_type_uris,
+    resolve_internal_target,
     rewrite_relationship_targets,
+    validate_part_name,
 )
 
 
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 WORKSHEET_RELATIONSHIP = f"{OFFICE_DOCUMENT_RELATIONSHIPS}/worksheet"
+WORKSHEET_RELATIONSHIP_TYPES = relationship_type_uris("worksheet")
+MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 XLSX_MAX_ROWS = 1_048_576
 _TWO_PLACES = Decimal("0.01")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -84,7 +92,7 @@ _INDEXED_STYLE_COMPONENTS = {
     "fillId": ("fills", "fill"),
     "borderId": ("borders", "border"),
 }
-_SAFE_CLOSURE_RELATIONSHIPS = {
+_SAFE_CLOSURE_RELATIONSHIPS = (
     "drawing",
     "image",
     "comments",
@@ -92,12 +100,16 @@ _SAFE_CLOSURE_RELATIONSHIPS = {
     "table",
     "hyperlink",
     "printerSettings",
-    "chart",
-    "chartUserShapes",
+)
+_RELATIONSHIP_KIND_BY_TYPE = {
+    relationship_type: kind
+    for kind in _SAFE_CLOSURE_RELATIONSHIPS
+    for relationship_type in relationship_type_uris(kind)
 }
-_SAFE_CLOSURE_RELATIONSHIP_TYPES = {
-    f"{OFFICE_DOCUMENT_RELATIONSHIPS}/{name}"
-    for name in _SAFE_CLOSURE_RELATIONSHIPS
+_UNSUPPORTED_RELATIONSHIP_KIND_BY_TYPE = {
+    relationship_type: kind
+    for kind in ("chart", "chartUserShapes")
+    for relationship_type in relationship_type_uris(kind)
 }
 _ACTIVE_RELATIONSHIP_MARKERS = (
     "vbaproject",
@@ -118,6 +130,38 @@ _ACTIVE_PART_MARKERS = (
     "xl/connections.xml",
     "xl/attachedtoolbars",
 )
+_ACTIVE_PATH_SEGMENTS = {
+    "activex",
+    "ctrlprops",
+    "customui",
+    "embeddings",
+    "externallinks",
+    "macrosheets",
+    "vbaproject",
+}
+_EXECUTABLE_EXTENSIONS = {
+    ".bat", ".cmd", ".com", ".cpl", ".dll", ".exe", ".hta", ".jar",
+    ".js", ".jse", ".lnk", ".msi", ".msp", ".ps1", ".reg", ".scr",
+    ".vbe", ".vbs",
+}
+_EXECUTABLE_CONTENT_TYPE_MARKERS = (
+    "application/x-dosexec",
+    "application/x-executable",
+    "application/x-msdownload",
+    "application/x-msi",
+    "application/vnd.microsoft.portable-executable",
+    "text/javascript",
+)
+_DRAWING = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+_IMAGE_PROFILES = {
+    ".png": ("image/png", (b"\x89PNG\r\n\x1a\n",)),
+    ".jpg": ("image/jpeg", (b"\xff\xd8\xff",)),
+    ".jpeg": ("image/jpeg", (b"\xff\xd8\xff",)),
+    ".gif": ("image/gif", (b"GIF87a", b"GIF89a")),
+    ".bmp": ("image/bmp", (b"BM",)),
+    ".tif": ("image/tiff", (b"II*\x00", b"MM\x00*")),
+    ".tiff": ("image/tiff", (b"II*\x00", b"MM\x00*")),
+}
 
 
 @dataclass(frozen=True)
@@ -169,6 +213,7 @@ class SheetAddition:
     parts: Mapping[str, bytes] = field(default_factory=dict)
     replacements: Mapping[str, bytes] = field(default_factory=dict)
     content_types: Mapping[str, str] = field(default_factory=dict)
+    replacement_content_types: Mapping[str, str] = field(default_factory=dict)
     sheet_part: str | None = None
     relationship_type: str = WORKSHEET_RELATIONSHIP
     defined_names: tuple[LocalDefinedName, ...] = ()
@@ -188,13 +233,22 @@ class SheetAddition:
         replacements = _immutable_bytes_mapping(self.replacements, "Reemplazos")
         if set(additions) & set(replacements):
             raise ValueError("Partes y reemplazos de SheetAddition duplicados")
-        content_types: dict[str, str] = {}
-        for name, content_type in self.content_types.items():
-            if not isinstance(name, str) or not isinstance(content_type, str) or not content_type:
-                raise TypeError("Content types de SheetAddition inválidos")
-            content_types[name] = content_type
-        if not isinstance(self.relationship_type, str) or not self.relationship_type.endswith(
-            "/worksheet"
+        for name in (*additions, *replacements):
+            validate_part_name(name)
+        content_types = _immutable_content_types(
+            self.content_types,
+            additions,
+            "adiciones",
+            allow_legacy_quotation_data=self.name == "Quotation_Data",
+        )
+        replacement_content_types = _immutable_content_types(
+            self.replacement_content_types,
+            replacements,
+            "reemplazos",
+        )
+        if (
+            not isinstance(self.relationship_type, str)
+            or self.relationship_type not in WORKSHEET_RELATIONSHIP_TYPES
         ):
             raise ValueError("Tipo de relación de SheetAddition inválido")
         if self.sheet_part is not None:
@@ -209,6 +263,11 @@ class SheetAddition:
         object.__setattr__(self, "parts", additions)
         object.__setattr__(self, "replacements", replacements)
         object.__setattr__(self, "content_types", MappingProxyType(content_types))
+        object.__setattr__(
+            self,
+            "replacement_content_types",
+            MappingProxyType(replacement_content_types),
+        )
 
 
 @dataclass(frozen=True)
@@ -300,7 +359,7 @@ def inline_source_shared_strings(
 ) -> bytes:
     """Convierte celdas shared-string a inlineStr sin perder CT_Rst rico."""
 
-    root = _parse_worksheet(sheet_xml)
+    root, namespace_prefixes = _parse_worksheet_document(sheet_xml)
     _validate_unique_cell_references(root)
     if isinstance(shared_strings, (str, bytes)) or not isinstance(
         shared_strings, Sequence
@@ -326,7 +385,7 @@ def inline_source_shared_strings(
             inline.append(deepcopy(child))
         cell.insert(value_index, inline)
         cell.attrib["t"] = "inlineStr"
-    return _xml_bytes(root)
+    return _xml_bytes(root, namespace_prefixes)
 
 
 @dataclass
@@ -335,6 +394,7 @@ class StyleTableMerger:
 
     root: ET.Element
     component_maps: dict[str, dict[tuple, int]]
+    namespace_prefixes: dict[str, str] = field(default_factory=dict)
     dxf_map: dict[int, int] = field(default_factory=dict)
     table_style_name_map: dict[str, str] = field(default_factory=dict)
     _num_fmt_map: dict[int, int] = field(default_factory=dict, repr=False)
@@ -344,7 +404,7 @@ class StyleTableMerger:
 
     @classmethod
     def from_xml(cls, target_styles: bytes) -> "StyleTableMerger":
-        root = _parse_style_sheet(target_styles)
+        root, namespace_prefixes = _parse_style_sheet_document(target_styles)
         maps: dict[str, dict[tuple, int]] = {}
         for section_name, child_name in (
             ("fonts", "font"),
@@ -360,7 +420,11 @@ class StyleTableMerger:
                     _section_children(root, section_name, child_name)
                 )
             }
-        return cls(root=root, component_maps=maps)
+        return cls(
+            root=root,
+            component_maps=maps,
+            namespace_prefixes=namespace_prefixes,
+        )
 
     def merge_referenced_styles(
         self,
@@ -394,7 +458,7 @@ class StyleTableMerger:
             section = self.root.find(f"{{{MAIN}}}{section_name}")
             if section is not None:
                 section.attrib["count"] = str(len(section))
-        return _xml_bytes(self.root)
+        return _xml_bytes(self.root, self.namespace_prefixes)
 
     def _merge_cell_xf(self, style_id: int) -> int:
         assert self._source is not None
@@ -653,7 +717,7 @@ def transplant_quotation(
         return None
     source_state = source_package.sheet_state("Quotation")
     closure = source_package.relationship_closure(source_sheet)
-    _validate_passive_closure(closure)
+    _validate_passive_closure(source_package, closure, source_sheet)
     allocation = destination_package.allocate_closure(
         closure, prefix="quotation_original"
     )
@@ -688,6 +752,9 @@ def transplant_quotation(
         parts=rewritten,
         replacements={destination_styles_part: styles_xml},
         content_types=allocated_content_types,
+        replacement_content_types=destination_package.content_types_for(
+            {destination_styles_part}
+        ),
         sheet_part=target_sheet,
         relationship_type=WORKSHEET_RELATIONSHIP,
         defined_names=defined_names,
@@ -700,7 +767,7 @@ def _remap_source_styles_with_parts(
     target_styles: bytes,
     related_parts: Mapping[str, bytes],
 ) -> tuple[bytes, bytes, dict[str, bytes]]:
-    root = _parse_worksheet(sheet_xml)
+    root, worksheet_namespaces = _parse_worksheet_document(sheet_xml)
     _validate_unique_cell_references(root)
     # Las celdas sin `s` dependen del cellXf 0 del libro fuente.
     style_ids: set[int] = {0}
@@ -723,14 +790,16 @@ def _remap_source_styles_with_parts(
             dxf_ids.add(dxf_id)
 
     rewritten_parts = {name: bytes(content) for name, content in related_parts.items()}
-    tables: dict[str, ET.Element] = {}
+    tables: dict[str, tuple[ET.Element, dict[str, str]]] = {}
     table_style_names: set[str] = set()
     for name, content in rewritten_parts.items():
         if not name.startswith("xl/tables/") or name.endswith(".rels"):
             continue
         try:
-            table = ET.fromstring(content)
-        except ET.ParseError as error:
+            table, table_namespaces = _parse_xml_document(
+                content, f"Tabla OOXML inválida: {name}"
+            )
+        except ValueError as error:
             raise ValueError(f"Tabla OOXML inválida: {name}") from error
         if table.tag != f"{{{MAIN}}}table":
             raise ValueError(f"Tabla OOXML inválida: {name}")
@@ -742,7 +811,7 @@ def _remap_source_styles_with_parts(
             if not style_name:
                 raise ValueError(f"tableStyleInfo inválido: {name}")
             table_style_names.add(style_name)
-        tables[name] = table
+        tables[name] = (table, table_namespaces)
 
     merger = StyleTableMerger.from_xml(target_styles)
     style_map = merger.merge_referenced_styles(
@@ -783,25 +852,28 @@ def _remap_source_styles_with_parts(
             if old_id not in merger.dxf_map:
                 raise ValueError(f"Referencia dxf sin remapeo: {old_id}")
             element.attrib["dxfId"] = str(merger.dxf_map[old_id])
-    for name, table in tables.items():
+    for name, (table, table_namespaces) in tables.items():
         style_info = table.find(f"{{{MAIN}}}tableStyleInfo")
         if style_info is not None:
             old_name = style_info.attrib["name"]
             style_info.attrib["name"] = merger.table_style_name_map[old_name]
-        rewritten_parts[name] = _xml_bytes(table)
-    return _xml_bytes(root), merger.to_xml(), rewritten_parts
+        rewritten_parts[name] = _xml_bytes(table, table_namespaces)
+    return _xml_bytes(root, worksheet_namespaces), merger.to_xml(), rewritten_parts
 
 
 def _parse_worksheet(content: bytes) -> ET.Element:
+    return _parse_worksheet_document(content)[0]
+
+
+def _parse_worksheet_document(content: bytes) -> tuple[ET.Element, dict[str, str]]:
     if not isinstance(content, bytes):
         raise TypeError("Worksheet OOXML debe ser bytes")
-    try:
-        root = ET.fromstring(content)
-    except ET.ParseError as error:
-        raise ValueError("Worksheet OOXML inválido") from error
+    root, namespace_prefixes = _parse_xml_document(
+        content, "Worksheet OOXML inválido"
+    )
     if root.tag != f"{{{MAIN}}}worksheet":
         raise ValueError("Raíz de worksheet OOXML inválida")
-    return root
+    return root, namespace_prefixes
 
 
 def _validate_unique_cell_references(root: ET.Element) -> None:
@@ -843,26 +915,122 @@ def _shared_string_children(value: object) -> tuple[ET.Element, ...]:
         raise TypeError("Entrada de shared string inválida")
     if element.tag != f"{{{MAIN}}}si":
         raise ValueError("Shared string OOXML inválido")
-    allowed = {
-        f"{{{MAIN}}}t",
-        f"{{{MAIN}}}r",
-        f"{{{MAIN}}}rPh",
-        f"{{{MAIN}}}phoneticPr",
-    }
-    if any(child.tag not in allowed for child in element):
-        raise ValueError("Shared string OOXML contiene metadata no permitida")
     if element.text and element.text.strip():
         raise ValueError("Shared string OOXML ambiguo")
+    _validate_ct_rst(element)
     return tuple(deepcopy(child) for child in element)
 
 
+def _validate_ct_rst(element: ET.Element) -> None:
+    direct_text = f"{{{MAIN}}}t"
+    rich_run = f"{{{MAIN}}}r"
+    phonetic_run = f"{{{MAIN}}}rPh"
+    phonetic_properties = f"{{{MAIN}}}phoneticPr"
+    children = list(element)
+    index = 0
+    base_length = 0
+    if index < len(children) and children[index].tag == direct_text:
+        base_length = len(_validate_text_node(children[index]))
+        index += 1
+        if index < len(children) and children[index].tag == rich_run:
+            raise ValueError("CT_Rst no permite mezclar texto directo y rich runs")
+    else:
+        while index < len(children) and children[index].tag == rich_run:
+            base_length += len(_validate_rich_run(children[index]))
+            index += 1
+    while index < len(children) and children[index].tag == phonetic_run:
+        _validate_phonetic_run(children[index], base_length)
+        index += 1
+    if index < len(children) and children[index].tag == phonetic_properties:
+        _validate_phonetic_properties(children[index])
+        index += 1
+    if index != len(children):
+        raise ValueError("Orden o cardinalidad CT_Rst de shared string inválido")
+    for child in children:
+        if child.tail and child.tail.strip():
+            raise ValueError("Shared string OOXML ambiguo")
+
+
+def _validate_text_node(element: ET.Element) -> str:
+    if list(element) or any(
+        name != f"{{{XML_NS}}}space" for name in element.attrib
+    ):
+        raise ValueError("Texto CT_Rst inválido")
+    if element.get(f"{{{XML_NS}}}space") not in {None, "default", "preserve"}:
+        raise ValueError("xml:space de shared string inválido")
+    return element.text or ""
+
+
+def _validate_rich_run(element: ET.Element) -> str:
+    children = list(element)
+    text_tag = f"{{{MAIN}}}t"
+    properties_tag = f"{{{MAIN}}}rPr"
+    if len(children) not in {1, 2}:
+        raise ValueError("Cardinalidad de rich run inválida")
+    text_index = 0
+    if children[0].tag == properties_tag:
+        _validate_run_properties(children[0])
+        text_index = 1
+    if text_index >= len(children) or children[text_index].tag != text_tag:
+        raise ValueError("Orden de rich run inválido")
+    if text_index != len(children) - 1:
+        raise ValueError("Cardinalidad de rich run inválida")
+    return _validate_text_node(children[text_index])
+
+
+def _validate_run_properties(element: ET.Element) -> None:
+    allowed = {
+        "rFont", "charset", "family", "b", "i", "strike", "outline",
+        "shadow", "condense", "extend", "color", "sz", "u", "vertAlign",
+        "scheme",
+    }
+    seen: set[str] = set()
+    for child in element:
+        if not child.tag.startswith(f"{{{MAIN}}}"):
+            raise ValueError("Propiedad de rich run fuera de namespace")
+        local_name = child.tag.rsplit("}", 1)[-1]
+        if local_name not in allowed or local_name in seen or list(child):
+            raise ValueError("Propiedad de rich run inválida")
+        seen.add(local_name)
+
+
+def _validate_phonetic_run(element: ET.Element, base_length: int) -> None:
+    if set(element.attrib) != {"sb", "eb"}:
+        raise ValueError("Atributos de fonética inválidos")
+    start = _integer_attribute(element, "sb", default=None)
+    end = _integer_attribute(element, "eb", default=None)
+    children = list(element)
+    if (
+        start is None
+        or end is None
+        or start >= end
+        or end > base_length
+        or len(children) != 1
+        or children[0].tag != f"{{{MAIN}}}t"
+    ):
+        raise ValueError("Límites de fonética inválidos")
+    _validate_text_node(children[0])
+
+
+def _validate_phonetic_properties(element: ET.Element) -> None:
+    allowed = {"fontId", "type", "alignment"}
+    if list(element) or not set(element.attrib).issubset(allowed):
+        raise ValueError("phoneticPr de shared string inválido")
+    font_id = _integer_attribute(element, "fontId", default=None)
+    if font_id is None:
+        raise ValueError("phoneticPr sin fontId")
+
+
 def _parse_style_sheet(content: bytes) -> ET.Element:
+    return _parse_style_sheet_document(content)[0]
+
+
+def _parse_style_sheet_document(
+    content: bytes,
+) -> tuple[ET.Element, dict[str, str]]:
     if not isinstance(content, bytes):
         raise TypeError("Styles OOXML debe ser bytes")
-    try:
-        root = ET.fromstring(content)
-    except ET.ParseError as error:
-        raise ValueError("Styles OOXML inválidos") from error
+    root, namespace_prefixes = _parse_xml_document(content, "Styles OOXML inválidos")
     if root.tag != f"{{{MAIN}}}styleSheet":
         raise ValueError("Raíz de styles OOXML inválida")
     counts: dict[str, int] = {}
@@ -879,7 +1047,7 @@ def _parse_style_sheet(content: bytes) -> ET.Element:
             child.tag != f"{{{MAIN}}}{child_name}" for child in section
         ):
             raise ValueError(f"Sección de styles inválida: {section_name}")
-    return root
+    return root, namespace_prefixes
 
 
 def _section_children(
@@ -1000,7 +1168,18 @@ def _quotation_local_defined_names(
     return tuple(result)
 
 
-def _validate_passive_closure(closure: Mapping[str, bytes]) -> None:
+def _validate_passive_closure(
+    package: XlsxPackage,
+    closure: Mapping[str, bytes],
+    source_sheet: str,
+) -> None:
+    validate_part_name(source_sheet)
+    if not source_sheet.startswith("xl/worksheets/") or not source_sheet.endswith(".xml"):
+        raise ValueError("Ruta de worksheet Quotation inválida")
+    sheet_content_type = package.content_types_for({source_sheet})[source_sheet]
+    if sheet_content_type != "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml":
+        raise ValueError("Content type de worksheet Quotation inválido")
+    _parse_worksheet(package.parts[source_sheet])
     for name, content in closure.items():
         if not name.endswith(".rels"):
             continue
@@ -1016,11 +1195,194 @@ def _validate_passive_closure(closure: Mapping[str, bytes]) -> None:
             relationship_type = relationship.get("Type")
             if not relationship_type:
                 raise ValueError(f"Relación OOXML sin tipo: {name}")
-            kind = relationship_type.rsplit("/", 1)[-1]
-            if relationship_type not in _SAFE_CLOSURE_RELATIONSHIP_TYPES:
+            unsupported = _UNSUPPORTED_RELATIONSHIP_KIND_BY_TYPE.get(
+                relationship_type
+            )
+            if unsupported is not None:
                 raise ValueError(
-                    f"Relación OOXML no permitida en Quotation: {kind}"
+                    f"Transformación de relación {unsupported} no soportada"
                 )
+            kind = _RELATIONSHIP_KIND_BY_TYPE.get(relationship_type)
+            if kind is None:
+                raise ValueError(
+                    "Relación OOXML no permitida en Quotation: "
+                    + relationship_type.rsplit("/", 1)[-1]
+                )
+            owner = relationship_owner(name)
+            if owner is None:
+                raise ValueError("Relación de clausura sin propietario")
+            target_mode = relationship.get("TargetMode", "").casefold()
+            target = relationship.get("Target", "")
+            if kind == "hyperlink":
+                if target_mode != "external":
+                    raise ValueError("TargetMode de hyperlink externo inválido")
+                _validate_external_hyperlink(target)
+                continue
+            if target_mode == "external":
+                raise ValueError(f"TargetMode externo no permitido para {kind}")
+            if target_mode not in {"", "internal"}:
+                raise ValueError(f"TargetMode inválido para {kind}")
+            resolved = resolve_internal_target(owner, target)
+            if resolved not in closure:
+                raise ValueError(f"Clausura OOXML sin destino: {resolved}")
+            content_type = package.content_types_for({resolved})[resolved]
+            _validate_relationship_payload(
+                kind,
+                owner,
+                resolved,
+                closure[resolved],
+                content_type,
+            )
+
+
+def _validate_external_hyperlink(target: str) -> None:
+    if not target or any(ord(character) < 32 for character in target):
+        raise ValueError("Hyperlink externo inválido")
+    parsed = urlsplit(unquote(target))
+    scheme = parsed.scheme.casefold()
+    if scheme not in {"http", "https", "mailto"}:
+        raise ValueError(f"Esquema de hyperlink externo no permitido: {scheme}")
+    if scheme in {"http", "https"} and not parsed.netloc:
+        raise ValueError("Hyperlink HTTP sin host")
+    if scheme == "mailto" and "@" not in parsed.path:
+        raise ValueError("Hyperlink mailto inválido")
+
+
+def _validate_relationship_payload(
+    kind: str,
+    owner: str,
+    target: str,
+    content: bytes,
+    content_type: str,
+) -> None:
+    worksheet_owner = owner.startswith("xl/worksheets/")
+    drawing_owner = owner.startswith("xl/drawings/")
+    if kind == "drawing":
+        _require_part_profile(
+            worksheet_owner,
+            target,
+            "xl/drawings/",
+            ".xml",
+            content_type,
+            "application/vnd.openxmlformats-officedocument.drawing+xml",
+            kind,
+        )
+        _validate_xml_root(content, f"{{{_DRAWING}}}wsDr", kind)
+        return
+    if kind == "image":
+        if not drawing_owner or not target.startswith("xl/media/"):
+            raise ValueError("Ruta de image no permitida")
+        extension = posixpath.splitext(target)[1].casefold()
+        profile = _IMAGE_PROFILES.get(extension)
+        if profile is None:
+            raise ValueError(f"Formato de imagen no soportado: {extension}")
+        expected_type, signatures = profile
+        if content_type.casefold() != expected_type:
+            raise ValueError("Content type de imagen no coincide con extensión")
+        if not any(content.startswith(signature) for signature in signatures):
+            raise ValueError("Firma binaria de imagen no coincide con extensión")
+        return
+    if kind == "comments":
+        _require_part_profile(
+            worksheet_owner,
+            target,
+            "xl/comments/",
+            ".xml",
+            content_type,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml",
+            kind,
+        )
+        _validate_xml_root(content, f"{{{MAIN}}}comments", kind)
+        return
+    if kind == "vmlDrawing":
+        _require_part_profile(
+            worksheet_owner,
+            target,
+            "xl/drawings/",
+            ".vml",
+            content_type,
+            "application/vnd.openxmlformats-officedocument.vmlDrawing",
+            kind,
+        )
+        _validate_xml_root(content, "xml", kind)
+        return
+    if kind == "table":
+        _require_part_profile(
+            worksheet_owner,
+            target,
+            "xl/tables/",
+            ".xml",
+            content_type,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml",
+            kind,
+        )
+        _validate_xml_root(content, f"{{{MAIN}}}table", kind)
+        return
+    if kind == "printerSettings":
+        _require_part_profile(
+            worksheet_owner,
+            target,
+            "xl/printerSettings/",
+            ".bin",
+            content_type,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.printerSettings",
+            kind,
+        )
+        _validate_printer_settings(content)
+        return
+    raise ValueError(f"Perfil de relación no implementado: {kind}")
+
+
+def _require_part_profile(
+    owner_allowed: bool,
+    target: str,
+    prefix: str,
+    extension: str,
+    actual_content_type: str,
+    expected_content_type: str,
+    kind: str,
+) -> None:
+    if (
+        not owner_allowed
+        or not target.startswith(prefix)
+        or posixpath.splitext(target)[1].casefold() != extension.casefold()
+    ):
+        raise ValueError(f"Ruta de {kind} no permitida")
+    if actual_content_type.casefold() != expected_content_type.casefold():
+        raise ValueError(f"Content type de {kind} inválido")
+
+
+def _validate_xml_root(content: bytes, expected_tag: str, kind: str) -> None:
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError as error:
+        raise ValueError(f"XML de {kind} inválido") from error
+    if root.tag != expected_tag:
+        raise ValueError(f"Raíz XML de {kind} inválida")
+
+
+def _validate_printer_settings(content: bytes) -> None:
+    if not isinstance(content, bytes):
+        raise TypeError("printerSettings debe ser binario")
+    candidates = ((64, 68, 70, "utf-16le"), (32, 36, 38, "ascii"))
+    for name_end, size_offset, extra_offset, encoding in candidates:
+        if len(content) < extra_offset + 2:
+            continue
+        size = int.from_bytes(content[size_offset : size_offset + 2], "little")
+        extra = int.from_bytes(content[extra_offset : extra_offset + 2], "little")
+        raw_name = content[:name_end]
+        try:
+            name = raw_name.decode(encoding, errors="strict").split("\x00", 1)[0]
+        except UnicodeDecodeError:
+            continue
+        if (
+            name
+            and all(character.isprintable() for character in name)
+            and size >= extra_offset + 2
+            and size + extra <= len(content)
+        ):
+            return
+    raise ValueError("Firma DEVMODE de printerSettings inválida")
 
 
 def _reject_unsupported_active_content(package: XlsxPackage) -> None:
@@ -1028,12 +1390,26 @@ def _reject_unsupported_active_content(package: XlsxPackage) -> None:
     for marker in _ACTIVE_PART_MARKERS:
         if any(name.startswith(marker) if marker.endswith("/") else marker in name for name in lowered_names):
             raise ValueError(f"Contenido activo no permitido: {marker}")
+    for name, content in package.parts.items():
+        lowered = name.casefold()
+        segments = set(lowered.split("/"))
+        extension = posixpath.splitext(lowered)[1]
+        if segments & _ACTIVE_PATH_SEGMENTS or extension in _EXECUTABLE_EXTENSIONS:
+            raise ValueError(f"Contenido activo no permitido: {name}")
+        if content.startswith(b"MZ"):
+            raise ValueError(f"Contenido ejecutable no permitido: {name}")
     content_types = package.parts.get("[Content_Types].xml", b"").lower()
     if any(
         marker in content_types
         for marker in (b"macroenabled", b"vbaproject", b"oleobject", b"activex")
     ):
         raise ValueError("Contenido activo no permitido por content type")
+    try:
+        decoded_content_types = content_types.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("Content types OOXML inválidos") from error
+    if any(marker in decoded_content_types for marker in _EXECUTABLE_CONTENT_TYPE_MARKERS):
+        raise ValueError("Content type ejecutable no permitido")
     for name, content in package.parts.items():
         if not name.endswith(".rels"):
             continue
@@ -1059,8 +1435,125 @@ def _immutable_bytes_mapping(
     return MappingProxyType(copied)
 
 
-def _xml_bytes(root: ET.Element) -> bytes:
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+def _immutable_content_types(
+    source: Mapping[str, str],
+    expected_parts: Mapping[str, bytes],
+    label: str,
+    *,
+    allow_legacy_quotation_data: bool = False,
+) -> dict[str, str]:
+    if not isinstance(source, Mapping):
+        raise TypeError("Content types de SheetAddition inválidos")
+    values = dict(source)
+    if allow_legacy_quotation_data and not values and expected_parts:
+        if all(
+            name.startswith("xl/worksheets/") and name.endswith(".xml")
+            for name in expected_parts
+        ):
+            values = {
+                name: "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+                for name in expected_parts
+            }
+    copied: dict[str, str] = {}
+    for name, content_type in values.items():
+        if not isinstance(name, str) or not isinstance(content_type, str) or not content_type:
+            raise TypeError("Content types de SheetAddition inválidos")
+        validate_part_name(name)
+        copied[name] = content_type
+    if set(copied) != set(expected_parts):
+        raise ValueError(f"Cobertura de content type incompleta para {label}")
+    return copied
+
+
+def _parse_xml_document(
+    content: bytes,
+    message: str,
+) -> tuple[ET.Element, dict[str, str]]:
+    if not isinstance(content, bytes):
+        raise TypeError(message)
+    namespace_prefixes: dict[str, str] = {}
+    try:
+        for event, payload in ET.iterparse(
+            BytesIO(content), events=("start-ns", "start")
+        ):
+            if event == "start-ns":
+                prefix, uri = payload
+                normalized = prefix or ""
+                previous = namespace_prefixes.get(normalized)
+                if previous is not None and previous != uri:
+                    raise ValueError(f"{message}: prefijo XML ambiguo")
+                namespace_prefixes[normalized] = uri
+                continue
+            break
+        root = ET.fromstring(content)
+    except ET.ParseError as error:
+        raise ValueError(message) from error
+    _validate_mc_ignorable(root, namespace_prefixes, message)
+    return root, namespace_prefixes
+
+
+def _validate_mc_ignorable(
+    root: ET.Element,
+    namespace_prefixes: Mapping[str, str],
+    message: str,
+) -> None:
+    value = root.get(f"{{{MC}}}Ignorable")
+    if value is None:
+        return
+    tokens = value.split()
+    if not tokens or any(
+        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", token) is None
+        for token in tokens
+    ):
+        raise ValueError(f"{message}: mc:Ignorable inválido")
+    missing = [token for token in tokens if token not in namespace_prefixes]
+    if missing:
+        raise ValueError(
+            f"{message}: prefijo mc:Ignorable no declarado: {missing[0]}"
+        )
+
+
+def _xml_bytes(
+    root: ET.Element,
+    namespace_prefixes: Mapping[str, str] | None = None,
+) -> bytes:
+    prefixes = dict(namespace_prefixes or {})
+    ignorable = root.get(f"{{{MC}}}Ignorable", "").split()
+    for prefix in ignorable:
+        if prefix not in prefixes:
+            raise ValueError(f"Prefijo mc:Ignorable no declarado: {prefix}")
+    for prefix, uri in prefixes.items():
+        if prefix in {"xml", "xmlns"}:
+            continue
+        try:
+            ET.register_namespace(prefix, uri)
+        except ValueError as error:
+            if prefix in ignorable:
+                raise ValueError(
+                    f"Prefijo mc:Ignorable no serializable: {prefix}"
+                ) from error
+    content = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    declaration_end = content.find(b"?>")
+    root_start = content.find(b"<", declaration_end + 2)
+    root_end = content.find(b">", root_start)
+    if root_start < 0 or root_end < 0:
+        raise ValueError("Serialización XML inválida")
+    start_tag = content[root_start:root_end]
+    declarations = bytearray()
+    for prefix in ignorable:
+        marker = f"xmlns:{prefix}=".encode()
+        if marker in start_tag:
+            continue
+        uri = prefixes[prefix]
+        escaped_uri = escape(uri, {'"': "&quot;"})
+        declarations.extend(f' xmlns:{prefix}="{escaped_uri}"'.encode())
+    if declarations:
+        content = content[:root_end] + bytes(declarations) + content[root_end:]
+    serialized_root, serialized_prefixes = _parse_xml_document(
+        content, "XML serializado inválido"
+    )
+    _validate_mc_ignorable(serialized_root, serialized_prefixes, "XML serializado inválido")
+    return content
 
 
 def _preflight_payload(payload: object) -> "_Payload":
