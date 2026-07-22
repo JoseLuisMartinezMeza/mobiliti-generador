@@ -64,6 +64,7 @@ def test_translate_formula_leaves_quoted_text_and_mixed_references_intact_when_r
         ("='Source Sheet'!A1:B2", "A1", "C4", "='Source Sheet'!C4:D5"),
         ("=SUM(1:3,A:C)", "A1", "C4", "=SUM(4:6,C:E)"),
         ("=SUM(A1:A3,B1:B3)", "A1", "C4", "=SUM(C4:C6,D4:D6)"),
+        ("=SUM((A1:A3,B1:B3))", "A1", "C4", "=SUM((C4:C6,D4:D6))"),
     ],
 )
 def test_translate_formula_handles_supported_qualified_whole_and_union_ranges(
@@ -149,6 +150,27 @@ def test_calc_chain_deduplicates_a_clone_that_already_exists_and_preserves_order
     ]
 
 
+def test_calc_chain_deduplicates_against_final_unmapped_entries_not_moved_sources():
+    payload = b'''<calcChain xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <c r="W14" i="2" keep="first"/>
+  <c r="W47" keep="second"/>
+  <c r="W47" i="1" keep="other-sheet"/>
+</calcChain>'''
+
+    result = translate_calc_chain(
+        payload,
+        sheet_id=2,
+        coordinate_map={"W14": ["W14", "W47"], "W47": ["W48"]},
+    )
+
+    assert calc_chain_effective_entries(result) == [
+        ("W14", "2", {"r": "W14", "i": "2", "keep": "first"}),
+        ("W47", "2", {"r": "W47", "i": "2", "keep": "first"}),
+        ("W48", "2", {"r": "W48", "keep": "second"}),
+        ("W47", "1", {"r": "W47", "i": "1", "keep": "other-sheet"}),
+    ]
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -160,3 +182,8 @@ def test_calc_chain_deduplicates_a_clone_that_already_exists_and_preserves_order
 def test_calc_chain_rejects_invalid_root_namespace_or_direct_child(payload):
     with pytest.raises(FormulaTranslationError):
         translate_calc_chain(payload, sheet_id=2, coordinate_map={})
+
+
+def test_calc_chain_rejects_malformed_xml_with_context():
+    with pytest.raises(FormulaTranslationError, match="calcChain.xml no es XML válido"):
+        translate_calc_chain(b"<calcChain><c", sheet_id=2, coordinate_map={})

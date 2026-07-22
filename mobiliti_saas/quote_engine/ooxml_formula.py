@@ -146,25 +146,31 @@ def translate_calc_chain(
         cell_sheets.append((cell, effective_sheet_id))
 
     output: list[ET.Element] = []
-    existing_target_coordinates = {
+    unmapped_target_coordinates = {
         cell.attrib["r"]
         for cell, effective_id in cell_sheets
-        if effective_id == target_sheet_id
+        if effective_id == target_sheet_id and cell.attrib["r"] not in coordinate_map
     }
+    emitted_target_coordinates: set[str] = set()
 
     for cell, effective_id in cell_sheets:
         source = cell.attrib["r"]
         if effective_id != target_sheet_id or source not in coordinate_map:
             output.append(cell)
+            if effective_id == target_sheet_id:
+                emitted_target_coordinates.add(source)
             continue
 
         for destination in coordinate_map[source]:
-            if destination != source and destination in existing_target_coordinates:
+            if (
+                destination in unmapped_target_coordinates
+                or destination in emitted_target_coordinates
+            ):
                 continue
             clone = deepcopy(cell)
             clone.set("r", destination)
             output.append(clone)
-            existing_target_coordinates.add(destination)
+            emitted_target_coordinates.add(destination)
 
     root[:] = output
     translated = ET.tostring(root, encoding="utf-8", xml_declaration=True)
