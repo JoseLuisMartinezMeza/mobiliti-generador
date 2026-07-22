@@ -210,6 +210,19 @@ def _parse_relationships(rels_name: str, content: bytes) -> list[dict[str, str]]
 
 def _resolve_internal_target(owner: str | None, target: str) -> str:
     target_path = target.split("#", maxsplit=1)[0]
-    _validate_part_name(target_path)
+    _validate_relationship_target(target_path)
     owner_directory = "" if owner is None else posixpath.dirname(owner)
-    return posixpath.normpath(posixpath.join(owner_directory, target_path))
+    resolved = posixpath.normpath(posixpath.join(owner_directory, target_path))
+    if resolved == ".." or resolved.startswith("../"):
+        raise ValueError(f"Ruta con traversal OOXML: {target}")
+    _validate_part_name(resolved)
+    return resolved
+
+
+def _validate_relationship_target(target: str) -> None:
+    if not target:
+        raise ValueError("Ruta OOXML vacia")
+    if target.startswith(("/", "\\")) or ntpath.isabs(target):
+        raise ValueError(f"Ruta absoluta OOXML: {target}")
+    if "\\" in target or ":" in target:
+        raise ValueError(f"Ruta OOXML invalida: {target}")

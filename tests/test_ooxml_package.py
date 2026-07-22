@@ -17,6 +17,16 @@ from ooxml_test_helpers import (
 )
 
 
+ROOT = Path(__file__).resolve().parents[1]
+OFFICIAL_TEMPLATE = (
+    ROOT
+    / "mobiliti_saas"
+    / "worker"
+    / "templates"
+    / "Formato Cotizacion 2026 Oficial.xlsx"
+)
+
+
 def part_bytes(path: Path, name: str) -> bytes:
     with ZipFile(path) as archive:
         return archive.read(name)
@@ -61,11 +71,27 @@ def test_audit_ignores_external_relationship_destinations(tmp_path):
     XlsxPackage.read(source).audit()
 
 
+def test_audit_accepts_internal_target_normalized_within_package(tmp_path):
+    source = make_minimal_xlsx_package(tmp_path / "relative.xlsx")
+    with ZipFile(source, "a", ZIP_DEFLATED) as archive:
+        archive.writestr("xl/media/image1.png", b"image")
+        archive.writestr(
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            _relationships(("rId1", "../media/image1.png", None)),
+        )
+
+    XlsxPackage.read(source).audit()
+
+
+def test_audit_accepts_promoted_official_template():
+    XlsxPackage.read(OFFICIAL_TEMPLATE).audit()
+
+
 @pytest.mark.parametrize(
     ("target", "message"),
     [
         ("/xl/styles.xml", "Ruta absoluta"),
-        ("../styles.xml", "Ruta con traversal"),
+        ("../../../styles.xml", "Ruta con traversal"),
     ],
 )
 def test_audit_rejects_unsafe_internal_relationship_targets(tmp_path, target, message):
