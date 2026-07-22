@@ -212,6 +212,17 @@ class XlsxPackage:
         return frozenset(overrides)
 
     def _audit_office_document_relationship(self) -> None:
+        workbook_content = self.parts.get("xl/workbook.xml")
+        if workbook_content is None:
+            return
+        try:
+            workbook_root = ElementTree.fromstring(workbook_content)
+        except ElementTree.ParseError:
+            return
+        # `audit()` también sirve a paquetes OPC mínimos de pruebas. El perfil
+        # Excel se activa únicamente cuando la parte declara un workbook real.
+        if workbook_root.tag != f"{{{SPREADSHEETML}}}workbook":
+            return
         rels_name = "_rels/.rels"
         if rels_name not in self.parts:
             raise ValueError("Relaciones raíz OOXML ausentes")

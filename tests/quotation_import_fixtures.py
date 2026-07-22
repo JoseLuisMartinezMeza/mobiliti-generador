@@ -159,7 +159,10 @@ def build_rich_quotation_fixture(
 </xdr:wsDr>'''.encode("utf-8")
 
     table_columns = "".join(
-        f'<tableColumn id="{index}" name="Columna {index}"/>' for index in range(1, 15)
+        f'<tableColumn id="{index}" name="Columna {index}"'
+        + (' dataDxfId="0"' if index == 1 else "")
+        + "/>"
+        for index in range(1, 15)
     )
     parts = {
         "[Content_Types].xml": _rich_content_types(),
@@ -172,6 +175,7 @@ def build_rich_quotation_fixture(
             ("rId7", f"{OFFICE_REL}/worksheet", "worksheets/original-quotation.xml", None),
             ("rIdStyles", f"{OFFICE_REL}/styles", "styles.xml", None),
             ("rIdShared", f"{OFFICE_REL}/sharedStrings", "sharedStrings.xml", None),
+            ("rIdTheme", f"{OFFICE_REL}/theme", "theme/theme7.xml", None),
         ),
         "xl/worksheets/catalog.xml": (
             f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Catálogo</t></is></c></row></sheetData></worksheet>'
@@ -195,11 +199,12 @@ def build_rich_quotation_fixture(
         ).encode("utf-8"),
         "xl/drawings/vmlDrawing7.vml": b'<xml xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="comment-shape"/></xml>',
         "xl/tables/table7.xml": (
-            f'<table xmlns="{MAIN}" id="7" name="QuoteTable" displayName="QuoteTable" ref="A8:N12" totalsRowShown="0"><autoFilter ref="A8:N12"/><tableColumns count="14">{table_columns}</tableColumns><tableStyleInfo name="CustomQuoteStyle" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>'
+            f'<table xmlns="{MAIN}" id="7" name="QuoteTable" displayName="QuoteTable" ref="A8:N12" totalsRowShown="0" headerRowDxfId="0"><autoFilter ref="A8:N12"/><tableColumns count="14">{table_columns}</tableColumns><tableStyleInfo name="CustomQuoteStyle" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>'
         ).encode("utf-8"),
         "xl/printerSettings/printerSettings7.bin": _valid_printer_settings(),
         "xl/sharedStrings.xml": _rich_shared_strings(),
         "xl/styles.xml": _rich_styles(),
+        "xl/theme/theme7.xml": _rich_theme(),
     }
     path = Path(path)
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
@@ -250,6 +255,7 @@ def _rich_content_types() -> bytes:
         "/xl/worksheets/original-quotation.xml": "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
         "/xl/styles.xml": "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml",
         "/xl/sharedStrings.xml": "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml",
+        "/xl/theme/theme7.xml": "application/vnd.openxmlformats-officedocument.theme+xml",
         "/xl/drawings/drawing7.xml": "application/vnd.openxmlformats-officedocument.drawing+xml",
         "/xl/comments/comment7.xml": "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml",
         "/xl/tables/table7.xml": "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml",
@@ -300,3 +306,31 @@ def _rich_styles() -> bytes:
   <dxfs count="1"><dxf><font><color rgb="FFFF0000"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/></patternFill></fill><numFmt numFmtId="164" formatCode="&quot;Q-&quot;0.000"/></dxf></dxfs>
   <tableStyles count="1" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"><tableStyle name="CustomQuoteStyle" pivot="0" table="1" count="1"><tableStyleElement type="firstRowStripe" size="1" dxfId="0"/></tableStyle></tableStyles>
 </styleSheet>'''.encode("utf-8")
+
+
+def _rich_theme() -> bytes:
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="{drawing}" name="Fixture Theme">
+  <a:themeElements>
+    <a:clrScheme name="Fixture">
+      <a:dk1><a:sysClr val="windowText" lastClr="010203"/></a:dk1>
+      <a:lt1><a:sysClr val="window" lastClr="FEFEFE"/></a:lt1>
+      <a:dk2><a:srgbClr val="102030"/></a:dk2>
+      <a:lt2><a:srgbClr val="E0E1E2"/></a:lt2>
+      <a:accent1><a:srgbClr val="123456"/></a:accent1>
+      <a:accent2><a:srgbClr val="654321"/></a:accent2>
+      <a:accent3><a:srgbClr val="336699"/></a:accent3>
+      <a:accent4><a:srgbClr val="993366"/></a:accent4>
+      <a:accent5><a:srgbClr val="669933"/></a:accent5>
+      <a:accent6><a:srgbClr val="996633"/></a:accent6>
+      <a:hlink><a:srgbClr val="0000EE"/></a:hlink>
+      <a:folHlink><a:srgbClr val="551A8B"/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name="Fixture Fonts">
+      <a:majorFont><a:latin typeface="Fixture Major"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>
+      <a:minorFont><a:latin typeface="Fixture Minor"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>
+    </a:fontScheme>
+    <a:fmtScheme name="Fixture Format"/>
+  </a:themeElements>
+</a:theme>'''.encode("utf-8")

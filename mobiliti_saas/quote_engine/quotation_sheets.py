@@ -162,6 +162,24 @@ _IMAGE_PROFILES = {
     ".tif": ("image/tiff", (b"II*\x00", b"MM\x00*")),
     ".tiff": ("image/tiff", (b"II*\x00", b"MM\x00*")),
 }
+_DRAWING_MAIN = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_THEME_COLOR_ORDER = (
+    "lt1", "dk1", "lt2", "dk2", "accent1", "accent2",
+    "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink",
+)
+_DRAWING_COLOR_TRANSFORMS = {
+    "alpha", "alphaMod", "alphaOff", "blue", "blueMod", "blueOff",
+    "comp", "gamma", "gray", "green", "greenMod", "greenOff", "hue",
+    "hueMod", "hueOff", "inv", "invGamma", "lum", "lumMod", "lumOff",
+    "red", "redMod", "redOff", "sat", "satMod", "satOff", "shade", "tint",
+}
+
+
+@dataclass(frozen=True)
+class _ResolvedTheme:
+    colors: Mapping[str, str]
+    major_latin: str
+    minor_latin: str
 
 
 @dataclass(frozen=True)
@@ -395,6 +413,7 @@ class StyleTableMerger:
     root: ET.Element
     component_maps: dict[str, dict[tuple, int]]
     namespace_prefixes: dict[str, str] = field(default_factory=dict)
+    font_map: dict[int, int] = field(default_factory=dict)
     dxf_map: dict[int, int] = field(default_factory=dict)
     table_style_name_map: dict[str, str] = field(default_factory=dict)
     _num_fmt_map: dict[int, int] = field(default_factory=dict, repr=False)
@@ -433,14 +452,44 @@ class StyleTableMerger:
         *,
         dxf_ids: set[int] | None = None,
         table_style_names: set[str] | None = None,
+        font_ids: set[int] | None = None,
+        source_theme: bytes | None = None,
+    ) -> dict[int, int]:
+        """Fusiona de forma transaccional; un preflight fallido no deja residuos."""
+
+        working = deepcopy(self)
+        mapping = working._merge_referenced_styles_in_place(
+            source_styles,
+            style_ids,
+            dxf_ids=dxf_ids,
+            table_style_names=table_style_names,
+            font_ids=font_ids,
+            source_theme=source_theme,
+        )
+        for definition in fields(self):
+            setattr(self, definition.name, getattr(working, definition.name))
+        return mapping
+
+    def _merge_referenced_styles_in_place(
+        self,
+        source_styles: bytes,
+        style_ids: set[int],
+        *,
+        dxf_ids: set[int] | None,
+        table_style_names: set[str] | None,
+        font_ids: set[int] | None,
+        source_theme: bytes | None,
     ) -> dict[int, int]:
         source = _parse_style_sheet(source_styles)
+        resolved_theme = _resolved_theme_or_none(source_theme)
+        _materialize_spreadsheet_theme_refs(source, resolved_theme)
         self._source = source
         self._num_fmt_map = {}
         self._indexed_maps = {name: {} for name in ("fonts", "fills", "borders")}
         self._style_xf_map = {}
         self.dxf_map = {}
         self.table_style_name_map = {}
+        self.font_map = {}
 
         mapping: dict[int, int] = {}
         for style_id in sorted(style_ids):
@@ -449,8 +498,13 @@ class StyleTableMerger:
             mapping[style_id] = self._merge_cell_xf(style_id)
         for dxf_id in sorted(dxf_ids or ()):
             self._merge_dxf(dxf_id)
+        for font_id in sorted(font_ids or ()):
+            if type(font_id) is not int or font_id < 0:
+                raise ValueError("Referencia de fuente fonética inválida")
+            self._merge_indexed_component("fonts", "font", font_id)
         for style_name in sorted(table_style_names or ()):
             self._merge_table_style(style_name)
+        self.font_map = dict(self._indexed_maps["fonts"])
         return mapping
 
     def to_xml(self) -> bytes:
@@ -601,14 +655,48 @@ class StyleTableMerger:
             key = _element_key(clone)
             if any(_element_key(item) == key for item in target_section):
                 continue
-            used_names = {item.get("name", "") for item in target_section}
             source_name = clone.get("name")
             if not source_name:
                 raise ValueError("cellStyle sin nombre")
-            if source_name in used_names:
+            semantic_key = _element_key_without_attributes(
+                clone, {"name", "builtinId"}
+            )
+            equivalent = next(
+                (
+                    item
+                    for item in target_section
+                    if item.get("name", "").casefold() == source_name.casefold()
+                    and _element_key_without_attributes(
+                        item, {"name", "builtinId"}
+                    )
+                    == semantic_key
+                ),
+                None,
+            )
+            if equivalent is not None:
+                continue
+            generated_prefix = f"{source_name} Quotation ".casefold()
+            reusable = next(
+                (
+                    item
+                    for item in target_section
+                    if item.get("name", "").casefold().startswith(generated_prefix)
+                    and _element_key_without_attributes(
+                        item, {"name", "builtinId"}
+                    )
+                    == semantic_key
+                ),
+                None,
+            )
+            if reusable is not None:
+                continue
+            used_names = {
+                item.get("name", "").casefold() for item in target_section
+            }
+            if source_name.casefold() in used_names:
                 suffix = 1
                 candidate = f"{source_name} Quotation {suffix}"
-                while candidate in used_names:
+                while candidate.casefold() in used_names:
                     suffix += 1
                     candidate = f"{source_name} Quotation {suffix}"
                 clone.attrib["name"] = candidate
@@ -639,16 +727,41 @@ class StyleTableMerger:
                 raise ValueError("tableStyleElement sin dxfId")
             element.attrib["dxfId"] = str(self._merge_dxf(dxf_id))
         target_section = self._section("tableStyles")
-        existing = [
-            item for item in target_section if item.get("name") == style_name
+        semantic_key = _element_key_without_attributes(clone, {"name"})
+        same_name = [
+            item
+            for item in target_section
+            if item.get("name", "").casefold() == style_name.casefold()
         ]
-        if existing and _element_key(existing[0]) == _element_key(clone):
-            target_name = style_name
+        equivalent = next(
+            (
+                item
+                for item in same_name
+                if _element_key_without_attributes(item, {"name"}) == semantic_key
+            ),
+            None,
+        )
+        generated_prefix = f"{style_name}_Quotation_".casefold()
+        renamed_equivalent = next(
+            (
+                item
+                for item in target_section
+                if item.get("name", "").casefold().startswith(generated_prefix)
+                and _element_key_without_attributes(item, {"name"}) == semantic_key
+            ),
+            None,
+        )
+        if equivalent is not None:
+            target_name = equivalent.attrib["name"]
+        elif renamed_equivalent is not None:
+            target_name = renamed_equivalent.attrib["name"]
         else:
-            used_names = {item.get("name", "") for item in target_section}
+            used_names = {
+                item.get("name", "").casefold() for item in target_section
+            }
             target_name = style_name
             suffix = 1
-            while target_name in used_names:
+            while target_name.casefold() in used_names:
                 target_name = f"{style_name}_Quotation_{suffix}"
                 suffix += 1
             clone.attrib["name"] = target_name
@@ -683,6 +796,8 @@ def remap_source_styles(
     sheet_xml: bytes,
     source_styles: bytes,
     target_styles: bytes,
+    *,
+    source_theme: bytes | None = None,
 ) -> tuple[bytes, bytes]:
     """Fusiona y remapea refs de celdas, filas, columnas y CF estándar."""
 
@@ -691,6 +806,7 @@ def remap_source_styles(
         source_styles,
         target_styles,
         {},
+        source_theme=source_theme,
     )
     return remapped_sheet, merged_styles
 
@@ -731,11 +847,18 @@ def transplant_quotation(
     destination_styles_part = destination_package.workbook_related_part("styles")
     if source_styles_part is None or destination_styles_part is None:
         raise ValueError("Styles OOXML ausentes")
+    source_theme_part = source_package.workbook_related_part("theme")
+    source_theme = (
+        source_package.parts[source_theme_part]
+        if source_theme_part is not None
+        else None
+    )
     sheet_xml, styles_xml, rewritten = _remap_source_styles_with_parts(
         sheet_xml,
         source_package.parts[source_styles_part],
         destination_package.parts[destination_styles_part],
         rewritten,
+        source_theme=source_theme,
     )
     rewritten[target_sheet] = sheet_xml
 
@@ -766,8 +889,12 @@ def _remap_source_styles_with_parts(
     source_styles: bytes,
     target_styles: bytes,
     related_parts: Mapping[str, bytes],
+    *,
+    source_theme: bytes | None = None,
 ) -> tuple[bytes, bytes, dict[str, bytes]]:
     root, worksheet_namespaces = _parse_worksheet_document(sheet_xml)
+    resolved_theme = _resolved_theme_or_none(source_theme)
+    _materialize_spreadsheet_theme_refs(root, resolved_theme)
     _validate_unique_cell_references(root)
     # Las celdas sin `s` dependen del cellXf 0 del libro fuente.
     style_ids: set[int] = {0}
@@ -788,8 +915,16 @@ def _remap_source_styles_with_parts(
             if dxf_id is None:
                 raise ValueError("Referencia dxf inválida")
             dxf_ids.add(dxf_id)
+    phonetic_font_ids: set[int] = set()
+    for phonetic in root.findall(f".//{{{MAIN}}}phoneticPr"):
+        font_id = _integer_attribute(phonetic, "fontId", default=None)
+        if font_id is None:
+            raise ValueError("Referencia de fuente fonética inválida")
+        phonetic_font_ids.add(font_id)
 
-    rewritten_parts = {name: bytes(content) for name, content in related_parts.items()}
+    rewritten_parts = _materialize_related_theme_refs(
+        related_parts, resolved_theme
+    )
     tables: dict[str, tuple[ET.Element, dict[str, str]]] = {}
     table_style_names: set[str] = set()
     for name, content in rewritten_parts.items():
@@ -811,6 +946,13 @@ def _remap_source_styles_with_parts(
             if not style_name:
                 raise ValueError(f"tableStyleInfo inválido: {name}")
             table_style_names.add(style_name)
+        for element in table.iter():
+            for attribute in element.attrib:
+                if _is_dxf_id_attribute(attribute):
+                    dxf_id = _integer_attribute(element, attribute, default=None)
+                    if dxf_id is None:
+                        raise ValueError("Referencia dxf de tabla inválida")
+                    dxf_ids.add(dxf_id)
         tables[name] = (table, table_namespaces)
 
     merger = StyleTableMerger.from_xml(target_styles)
@@ -819,6 +961,8 @@ def _remap_source_styles_with_parts(
         style_ids,
         dxf_ids=dxf_ids,
         table_style_names=table_style_names,
+        font_ids=phonetic_font_ids,
+        source_theme=source_theme,
     )
     styled_column_ranges: list[tuple[int, int]] = []
     for column in root.findall(f".//{{{MAIN}}}col[@style]"):
@@ -852,11 +996,26 @@ def _remap_source_styles_with_parts(
             if old_id not in merger.dxf_map:
                 raise ValueError(f"Referencia dxf sin remapeo: {old_id}")
             element.attrib["dxfId"] = str(merger.dxf_map[old_id])
+    for phonetic in root.findall(f".//{{{MAIN}}}phoneticPr"):
+        old_id = int(phonetic.attrib["fontId"])
+        if old_id not in merger.font_map:
+            raise ValueError(f"Referencia de fuente fonética sin remapeo: {old_id}")
+        phonetic.attrib["fontId"] = str(merger.font_map[old_id])
     for name, (table, table_namespaces) in tables.items():
         style_info = table.find(f"{{{MAIN}}}tableStyleInfo")
         if style_info is not None:
             old_name = style_info.attrib["name"]
             style_info.attrib["name"] = merger.table_style_name_map[old_name]
+        for element in table.iter():
+            for attribute in tuple(element.attrib):
+                if not _is_dxf_id_attribute(attribute):
+                    continue
+                old_id = int(element.attrib[attribute])
+                if old_id not in merger.dxf_map:
+                    raise ValueError(
+                        f"Referencia dxf de tabla sin remapeo: {old_id}"
+                    )
+                element.attrib[attribute] = str(merger.dxf_map[old_id])
         rewritten_parts[name] = _xml_bytes(table, table_namespaces)
     return _xml_bytes(root, worksheet_namespaces), merger.to_xml(), rewritten_parts
 
@@ -1093,6 +1252,27 @@ def _element_key(element: ET.Element) -> tuple:
     )
 
 
+def _element_key_without_attributes(
+    element: ET.Element,
+    excluded: set[str],
+) -> tuple:
+    text = element.text or ""
+    if not text.strip():
+        text = ""
+    return (
+        element.tag,
+        tuple(
+            sorted(
+                (name, value)
+                for name, value in element.attrib.items()
+                if name not in excluded
+            )
+        ),
+        text,
+        tuple(_element_key(child) for child in element),
+    )
+
+
 def _num_fmts_by_id(root: ET.Element) -> dict[int, ET.Element]:
     result: dict[int, ET.Element] = {}
     for element in _section_children(
@@ -1118,6 +1298,210 @@ def _integer_attribute(
     if re.fullmatch(r"0|[1-9][0-9]*", value) is None:
         raise ValueError(f"Atributo de estilo inválido: {name}")
     return int(value)
+
+
+def _is_dxf_id_attribute(name: str) -> bool:
+    return name.rsplit("}", 1)[-1].casefold().endswith("dxfid")
+
+
+def _resolved_theme_or_none(content: bytes | None) -> _ResolvedTheme | None:
+    if content is None:
+        return None
+    root, _prefixes = _parse_xml_document(content, "Tema OOXML inválido")
+    if root.tag != f"{{{_DRAWING_MAIN}}}theme":
+        raise ValueError("Raíz de tema OOXML inválida")
+    theme_elements = root.findall(f"{{{_DRAWING_MAIN}}}themeElements")
+    if len(theme_elements) != 1:
+        raise ValueError("themeElements OOXML inválido")
+    color_schemes = theme_elements[0].findall(f"{{{_DRAWING_MAIN}}}clrScheme")
+    font_schemes = theme_elements[0].findall(f"{{{_DRAWING_MAIN}}}fontScheme")
+    if len(color_schemes) != 1 or len(font_schemes) != 1:
+        raise ValueError("Esquema de tema OOXML inválido")
+    colors: dict[str, str] = {}
+    for name in _THEME_COLOR_ORDER:
+        slots = color_schemes[0].findall(f"{{{_DRAWING_MAIN}}}{name}")
+        if len(slots) != 1 or len(slots[0]) != 1:
+            raise ValueError(f"Color de tema ausente o ambiguo: {name}")
+        color = slots[0][0]
+        if color.tag == f"{{{_DRAWING_MAIN}}}srgbClr":
+            value = color.get("val", "")
+        elif color.tag == f"{{{_DRAWING_MAIN}}}sysClr":
+            value = color.get("lastClr", "")
+        else:
+            raise ValueError(f"Color de tema no soportado: {name}")
+        if re.fullmatch(r"[0-9A-Fa-f]{6}", value) is None:
+            raise ValueError(f"Color de tema inválido: {name}")
+        colors[name] = value.upper()
+    colors.update(
+        {
+            "bg1": colors["lt1"],
+            "tx1": colors["dk1"],
+            "bg2": colors["lt2"],
+            "tx2": colors["dk2"],
+        }
+    )
+    major = _theme_latin_typeface(font_schemes[0], "majorFont")
+    minor = _theme_latin_typeface(font_schemes[0], "minorFont")
+    return _ResolvedTheme(
+        colors=MappingProxyType(colors),
+        major_latin=major,
+        minor_latin=minor,
+    )
+
+
+def _theme_latin_typeface(font_scheme: ET.Element, kind: str) -> str:
+    containers = font_scheme.findall(f"{{{_DRAWING_MAIN}}}{kind}")
+    if len(containers) != 1:
+        raise ValueError(f"Fuente de tema ausente: {kind}")
+    latin = containers[0].findall(f"{{{_DRAWING_MAIN}}}latin")
+    if len(latin) != 1:
+        raise ValueError(f"Fuente latina de tema ausente: {kind}")
+    typeface = latin[0].get("typeface", "")
+    if not typeface or any(ord(character) < 32 for character in typeface):
+        raise ValueError(f"Typeface de tema inválido: {kind}")
+    return typeface
+
+
+def _materialize_spreadsheet_theme_refs(
+    root: ET.Element,
+    theme: _ResolvedTheme | None,
+) -> bool:
+    changed = False
+    color_tags = {
+        f"{{{MAIN}}}color",
+        f"{{{MAIN}}}fgColor",
+        f"{{{MAIN}}}bgColor",
+    }
+    for element in root.iter():
+        if "theme" not in element.attrib:
+            continue
+        if element.tag not in color_tags:
+            raise ValueError("Referencia de tema SpreadsheetML no soportada")
+        if theme is None:
+            raise ValueError("Tema fuente ausente para referencia SpreadsheetML")
+        if set(element.attrib) & {"rgb", "indexed", "auto"}:
+            raise ValueError("Color de tema SpreadsheetML ambiguo")
+        theme_id = _integer_attribute(element, "theme", default=None)
+        if theme_id is None or theme_id >= len(_THEME_COLOR_ORDER):
+            raise ValueError("Índice de tema SpreadsheetML fuera de rango")
+        tint_raw = element.get("tint", "0")
+        try:
+            tint = Decimal(tint_raw)
+        except InvalidOperation as error:
+            raise ValueError("Tint de tema SpreadsheetML inválido") from error
+        if not tint.is_finite() or tint < -1 or tint > 1:
+            raise ValueError("Tint de tema SpreadsheetML fuera de rango")
+        rgb = _apply_tint(theme.colors[_THEME_COLOR_ORDER[theme_id]], tint)
+        element.attrib.pop("theme", None)
+        element.attrib.pop("tint", None)
+        element.attrib["rgb"] = "FF" + rgb
+        changed = True
+    for container in root.iter():
+        if container.tag not in {f"{{{MAIN}}}font", f"{{{MAIN}}}rPr"}:
+            continue
+        schemes = [
+            child
+            for child in container
+            if child.tag == f"{{{MAIN}}}scheme"
+        ]
+        if len(schemes) > 1:
+            raise ValueError("Esquema de fuente SpreadsheetML ambiguo")
+        if not schemes:
+            continue
+        scheme = schemes[0].get("val")
+        if scheme not in {"major", "minor"}:
+            raise ValueError(f"Esquema de fuente no soportado: {scheme}")
+        if theme is None:
+            raise ValueError("Tema fuente ausente para esquema de fuente")
+        typeface = theme.major_latin if scheme == "major" else theme.minor_latin
+        name_tag = (
+            f"{{{MAIN}}}name"
+            if container.tag == f"{{{MAIN}}}font"
+            else f"{{{MAIN}}}rFont"
+        )
+        names = [child for child in container if child.tag == name_tag]
+        if len(names) > 1:
+            raise ValueError("Nombre de fuente SpreadsheetML ambiguo")
+        if names:
+            names[0].attrib["val"] = typeface
+        else:
+            container.insert(0, ET.Element(name_tag, {"val": typeface}))
+        container.remove(schemes[0])
+        changed = True
+    return changed
+
+
+def _apply_tint(rgb: str, tint: Decimal) -> str:
+    result: list[int] = []
+    for offset in (0, 2, 4):
+        channel = Decimal(int(rgb[offset : offset + 2], 16))
+        if tint < 0:
+            adjusted = channel * (Decimal(1) + tint)
+        else:
+            adjusted = channel * (Decimal(1) - tint) + Decimal(255) * tint
+        result.append(
+            int(adjusted.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        )
+    return "".join(f"{channel:02X}" for channel in result)
+
+
+def _materialize_related_theme_refs(
+    related_parts: Mapping[str, bytes],
+    theme: _ResolvedTheme | None,
+) -> dict[str, bytes]:
+    rewritten = {name: bytes(content) for name, content in related_parts.items()}
+    for name, content in tuple(rewritten.items()):
+        if name.endswith(".rels") or not name.casefold().endswith(".xml"):
+            continue
+        root, prefixes = _parse_xml_document(
+            content, f"Parte XML relacionada inválida: {name}"
+        )
+        changed = _materialize_spreadsheet_theme_refs(root, theme)
+        changed = _materialize_drawing_theme_refs(root, theme) or changed
+        if changed:
+            rewritten[name] = _xml_bytes(root, prefixes)
+    return rewritten
+
+
+def _materialize_drawing_theme_refs(
+    root: ET.Element,
+    theme: _ResolvedTheme | None,
+) -> bool:
+    changed = False
+    for element in root.iter():
+        typeface = element.get("typeface")
+        if typeface and typeface.startswith("+"):
+            if theme is None:
+                raise ValueError("Tema fuente ausente para typeface DrawingML")
+            replacements = {
+                "+mj-lt": theme.major_latin,
+                "+mn-lt": theme.minor_latin,
+            }
+            if typeface not in replacements:
+                raise ValueError(f"Typeface de tema no soportado: {typeface}")
+            element.attrib["typeface"] = replacements[typeface]
+            changed = True
+        if element.tag != f"{{{_DRAWING_MAIN}}}schemeClr":
+            continue
+        if theme is None:
+            raise ValueError("Tema fuente ausente para schemeClr")
+        value = element.get("val", "")
+        rgb = theme.colors.get(value)
+        if rgb is None:
+            raise ValueError(f"schemeClr de tema no soportado: {value}")
+        if set(element.attrib) != {"val"}:
+            raise ValueError("schemeClr ambiguo")
+        for transform in element:
+            if (
+                not transform.tag.startswith(f"{{{_DRAWING_MAIN}}}")
+                or transform.tag.rsplit("}", 1)[-1]
+                not in _DRAWING_COLOR_TRANSFORMS
+            ):
+                raise ValueError("Transformación schemeClr no soportada")
+        element.tag = f"{{{_DRAWING_MAIN}}}srgbClr"
+        element.attrib["val"] = rgb
+        changed = True
+    return changed
 
 
 def _quotation_local_defined_names(

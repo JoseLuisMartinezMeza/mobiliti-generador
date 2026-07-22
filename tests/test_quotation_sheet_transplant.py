@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 from pathlib import Path
 import posixpath
@@ -191,6 +192,7 @@ def test_remap_source_styles_covers_cell_row_and_column_references(tmp_path):
         source_sheet,
         source_package.parts["xl/styles.xml"],
         XlsxPackage.read(OFFICIAL_TEMPLATE).parts["xl/styles.xml"],
+        source_theme=source_package.parts["xl/theme/theme7.xml"],
     )
     root = ET.fromstring(remapped_sheet)
 
@@ -209,7 +211,7 @@ def test_remap_source_styles_materializes_a_different_source_default_style(tmp_p
         b'<color theme="1"/><name val="Calibri"/>',
         b'<color rgb="FF778899"/><name val="SourceDefault"/>',
         1,
-    )
+    ).replace(b'<scheme val="minor"/>', b"", 1)
     sheet_xml = (
         f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Default</t></is></c></row></sheetData></worksheet>'
     ).encode()
@@ -237,6 +239,7 @@ def test_style_merge_is_idempotent_for_the_same_dependency_graph(tmp_path):
         {1, 2},
         dxf_ids={0},
         table_style_names={"CustomQuoteStyle"},
+        source_theme=_part_bytes(source, "xl/theme/theme7.xml"),
     )
     first_xml = merger.to_xml()
     second = merger.merge_referenced_styles(
@@ -244,10 +247,229 @@ def test_style_merge_is_idempotent_for_the_same_dependency_graph(tmp_path):
         {1, 2},
         dxf_ids={0},
         table_style_names={"CustomQuoteStyle"},
+        source_theme=_part_bytes(source, "xl/theme/theme7.xml"),
     )
 
     assert second == first
     assert merger.to_xml() == first_xml
+
+
+def test_phonetic_font_reference_is_validated_merged_and_remapped(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    inline = ET.fromstring(addition.xml).find(".//m:c[@r='A1']/m:is", NS)
+    phonetic = inline.find("m:phoneticPr", NS)
+    output_fonts = ET.fromstring(addition.replacements["xl/styles.xml"]).findall(
+        "m:fonts/m:font", NS
+    )
+    source_fonts = ET.fromstring(_part_bytes(source, "xl/styles.xml")).findall(
+        "m:fonts/m:font", NS
+    )
+
+    assert _canonical(output_fonts[int(phonetic.attrib["fontId"])]) == _canonical(
+        source_fonts[1]
+    )
+
+    invalid_shared = _part_bytes(source, "xl/sharedStrings.xml").replace(
+        b'phoneticPr fontId="1"', b'phoneticPr fontId="999"'
+    )
+    invalid = _rewrite_package(
+        source,
+        tmp_path / "invalid-phonetic-font.xlsx",
+        {"xl/sharedStrings.xml": invalid_shared},
+    )
+    with pytest.raises(ValueError, match="(?i)fon.t|font.*rango"):
+        transplant_quotation(invalid, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
+def test_direct_table_dxf_attributes_are_all_semantically_remapped(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    source_table = ET.fromstring(_part_bytes(source, "xl/tables/table7.xml"))
+    target_table_name = next(
+        name for name in addition.parts if name.startswith("xl/tables/")
+    )
+    target_table = ET.fromstring(addition.parts[target_table_name])
+    source_refs = _direct_dxf_attributes(source_table)
+    target_refs = _direct_dxf_attributes(target_table)
+
+    assert len(source_refs) == len(target_refs) == 2
+    source_styles = _part_bytes(source, "xl/styles.xml")
+    target_styles = addition.replacements["xl/styles.xml"]
+    assert [
+        _dxf_signature(target_styles, dxf_id) for _name, dxf_id in target_refs
+    ] == [
+        _dxf_signature(source_styles, dxf_id) for _name, dxf_id in source_refs
+    ]
+
+
+def test_style_merge_failure_is_transactional(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    source_styles = _styles_without_theme_refs(_part_bytes(source, "xl/styles.xml"))
+    merger = StyleTableMerger.from_xml(
+        XlsxPackage.read(OFFICIAL_TEMPLATE).parts["xl/styles.xml"]
+    )
+    before = merger.to_xml()
+
+    with pytest.raises(ValueError, match="(?i)estilo.*fuera de rango"):
+        merger.merge_referenced_styles(source_styles, {1, 999})
+
+    assert merger.to_xml() == before
+
+
+def test_style_name_collisions_are_casefolded_deterministic_and_idempotent(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    source_styles = _styles_without_theme_refs(_part_bytes(source, "xl/styles.xml"))
+    target_styles = XlsxPackage.read(OFFICIAL_TEMPLATE).parts["xl/styles.xml"]
+    target_styles = target_styles.replace(
+        b"</cellStyles>",
+        b'<cellStyle name="fixture style" xfId="0"/></cellStyles>',
+        1,
+    ).replace(
+        b"</tableStyles>",
+        b'<tableStyle name="customquotestyle" pivot="0" table="1" count="0"/></tableStyles>',
+        1,
+    )
+    merger = StyleTableMerger.from_xml(target_styles)
+
+    merger.merge_referenced_styles(
+        source_styles,
+        {1},
+        dxf_ids={0},
+        table_style_names={"CustomQuoteStyle"},
+    )
+    first = merger.to_xml()
+    merger.merge_referenced_styles(
+        source_styles,
+        {1},
+        dxf_ids={0},
+        table_style_names={"CustomQuoteStyle"},
+    )
+    second = merger.to_xml()
+    result = ET.fromstring(second)
+    cell_names = [item.attrib["name"] for item in result.findall("m:cellStyles/m:cellStyle", NS)]
+    table_names = [item.attrib["name"] for item in result.findall("m:tableStyles/m:tableStyle", NS)]
+    fixture_cell_names = [
+        name for name in cell_names if name.casefold().startswith("fixture style")
+    ]
+    fixture_table_names = [
+        name for name in table_names if name.casefold().startswith("customquotestyle")
+    ]
+
+    assert first == second
+    assert len({name.casefold() for name in fixture_cell_names}) == len(fixture_cell_names)
+    assert len({name.casefold() for name in fixture_table_names}) == len(fixture_table_names)
+    assert "Fixture Style Quotation 1" in cell_names
+    assert "CustomQuoteStyle_Quotation_1" in table_names
+    assert not any(
+        name.endswith((" 2", "_2"))
+        for name in (*fixture_cell_names, *fixture_table_names)
+    )
+
+
+@pytest.mark.parametrize("theme_source", ("fixture", "official"))
+def test_theme_references_are_materialized_against_source_theme(theme_source, tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / f"{theme_source}.xlsx")
+    source_styles = _part_bytes(source, "xl/styles.xml").replace(
+        b'<color theme="1"/>', b'<color theme="4" tint="0.25"/>', 1
+    )
+    if theme_source == "fixture":
+        theme = _part_bytes(source, "xl/theme/theme7.xml")
+    else:
+        theme = XlsxPackage.read(OFFICIAL_TEMPLATE).parts["xl/theme/theme1.xml"]
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Theme</t></is></c></row></sheetData></worksheet>'
+    ).encode()
+
+    remapped, merged = remap_source_styles(
+        sheet,
+        source_styles,
+        XlsxPackage.read(OFFICIAL_TEMPLATE).parts["xl/styles.xml"],
+        source_theme=theme,
+    )
+    style_id = int(ET.fromstring(remapped).find(".//m:c", NS).attrib["s"])
+    font = _font_for_style(merged, style_id)
+    expected_rgb, expected_typeface = _theme_font_semantics(theme, 4, "0.25", "minor")
+
+    color = font.find("m:color", NS)
+    assert color.attrib == {"rgb": expected_rgb}
+    assert font.find("m:name", NS).attrib["val"] == expected_typeface
+    assert font.find("m:scheme", NS) is None
+
+
+def test_theme_references_fail_closed_when_missing_or_unsupported(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    source_styles = _part_bytes(source, "xl/styles.xml").replace(
+        b'<color theme="1"/>', b'<color theme="99"/>', 1
+    )
+    sheet = (
+        f'<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1"/></row></sheetData></worksheet>'
+    ).encode()
+    target_styles = XlsxPackage.read(OFFICIAL_TEMPLATE).parts["xl/styles.xml"]
+
+    with pytest.raises(ValueError, match="(?i)tema|theme"):
+        remap_source_styles(
+            sheet,
+            source_styles,
+            target_styles,
+            source_theme=_part_bytes(source, "xl/theme/theme7.xml"),
+        )
+    with pytest.raises(ValueError, match="(?i)tema|theme"):
+        remap_source_styles(sheet, _part_bytes(source, "xl/styles.xml"), target_styles)
+
+    drawing_name = "xl/drawings/drawing7.xml"
+    drawing = _part_bytes(source, drawing_name).replace(
+        b"<xdr:spPr>", b'<xdr:spPr><a:rPr typeface="+mn-ea"/>', 1
+    )
+    unsupported = _rewrite_package(
+        source,
+        tmp_path / "unsupported-theme-token.xlsx",
+        {drawing_name: drawing},
+    )
+    with pytest.raises(ValueError, match="(?i)typeface|tema|theme"):
+        transplant_quotation(unsupported, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
+def test_drawing_theme_tokens_are_materialized_with_supported_transforms(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    drawing_name = "xl/drawings/drawing7.xml"
+    drawing = _part_bytes(source, drawing_name).replace(
+        b"<xdr:spPr>",
+        (
+            b'<xdr:spPr><a:solidFill><a:schemeClr val="accent1">'
+            b'<a:tint val="50000"/></a:schemeClr></a:solidFill>'
+            b'<a:latin typeface="+mn-lt"/>'
+        ),
+        1,
+    )
+    themed = _rewrite_package(
+        source,
+        tmp_path / "drawing-theme.xlsx",
+        {drawing_name: drawing},
+    )
+
+    addition = transplant_quotation(themed, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    assert addition is not None
+    output_drawing_name = next(
+        name for name in addition.parts if name.startswith("xl/drawings/") and name.endswith(".xml")
+    )
+    output_drawing = addition.parts[output_drawing_name]
+
+    assert b"schemeClr" not in output_drawing
+    assert b'+mn-lt' not in output_drawing
+    assert b'val="123456"' in output_drawing
+    assert b'typeface="Fixture Minor"' in output_drawing
+    assert b'<a:tint val="50000"' in output_drawing
+
+
+def test_transplant_never_replaces_official_theme(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+    assert addition is not None
+    assert "xl/theme/theme1.xml" not in addition.replacements
 
 
 def test_closure_allocation_is_deterministic_collision_free_and_rewrites_relative_targets(tmp_path):
@@ -451,7 +673,11 @@ def test_mc_ignorable_prefixes_survive_mutated_sheet_and_styles(tmp_path):
     _assert_ignorable_prefixes(addition.xml, ("x14ac", "xr"))
 
     merger = StyleTableMerger.from_xml(styles)
-    merger.merge_referenced_styles(_part_bytes(source, "xl/styles.xml"), {1})
+    merger.merge_referenced_styles(
+        _part_bytes(source, "xl/styles.xml"),
+        {1},
+        source_theme=_part_bytes(source, "xl/theme/theme7.xml"),
+    )
     _assert_ignorable_prefixes(merger.to_xml(), ("xr",))
 
 
@@ -693,6 +919,7 @@ def test_style_merger_rejects_invalid_references_and_duplicate_style_sections(tm
             bad_sheet,
             source_package.parts["xl/styles.xml"],
             XlsxPackage.read(OFFICIAL_TEMPLATE).parts["xl/styles.xml"],
+            source_theme=source_package.parts["xl/theme/theme7.xml"],
         )
     with pytest.raises(ValueError, match="(?i)sección.*duplicada"):
         StyleTableMerger.from_xml(duplicate_sections)
@@ -815,7 +1042,7 @@ def _quotation_signature(path: Path) -> tuple:
     for cell in root.findall(".//m:c", NS):
         style_id = int(cell.attrib.get("s", "0"))
         formula = cell.findtext("m:f", default=None, namespaces=NS)
-        value = _cell_semantic_value(cell, shared)
+        value = _cell_semantic_value(cell, shared, styles)
         cells.append((cell.attrib["r"], formula, value, _style_signature(styles, style_id)))
     rows = tuple(
         (
@@ -901,7 +1128,11 @@ def _relationship_graph_signature(parts: dict[str, bytes], start: str) -> tuple:
             if target.endswith((".png", ".bin")):
                 content = payload
             else:
-                content = _canonical(ET.fromstring(payload))
+                parsed = ET.fromstring(payload)
+                if parsed.tag == f"{{{MAIN}}}table" and "xl/styles.xml" in parts:
+                    content = _table_part_signature(payload, parts["xl/styles.xml"])
+                else:
+                    content = _canonical(parsed)
             rows.append(
                 (
                     attrs["Id"],
@@ -972,6 +1203,52 @@ def _style_num_fmt(styles_xml: bytes, style_id: int) -> str:
     return _num_fmt_code(root, int(xf.attrib.get("numFmtId", "0")))
 
 
+def _font_for_style(styles_xml: bytes, style_id: int) -> ET.Element:
+    root = ET.fromstring(styles_xml)
+    xf = root.findall("m:cellXfs/m:xf", NS)[style_id]
+    return root.findall("m:fonts/m:font", NS)[int(xf.attrib.get("fontId", "0"))]
+
+
+def _direct_dxf_attributes(table: ET.Element) -> list[tuple[str, int]]:
+    result = []
+    for element in table.iter():
+        for name, value in element.attrib.items():
+            if name.rsplit("}", 1)[-1].casefold().endswith("dxfid"):
+                result.append((name, int(value)))
+    return result
+
+
+def _styles_without_theme_refs(styles_xml: bytes) -> bytes:
+    return styles_xml.replace(
+        b'<color theme="1"/>', b'<color rgb="FF010203"/>', 1
+    ).replace(b'<scheme val="minor"/>', b"", 1)
+
+
+def _theme_font_semantics(
+    theme_xml: bytes,
+    theme_index: int,
+    tint: str,
+    scheme: str,
+) -> tuple[str, str]:
+    drawing = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    ns = {"a": drawing}
+    root = ET.fromstring(theme_xml)
+    order = (
+        "lt1", "dk1", "lt2", "dk2", "accent1", "accent2",
+        "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink",
+    )
+    slot = root.find(f"a:themeElements/a:clrScheme/a:{order[theme_index]}", ns)
+    value = list(slot)[0].attrib.get("lastClr") or list(slot)[0].attrib["val"]
+    tint_value = Decimal(tint)
+    channels = []
+    for offset in (0, 2, 4):
+        channel = Decimal(int(value[offset : offset + 2], 16))
+        adjusted = channel * (Decimal(1) - tint_value) + Decimal(255) * tint_value
+        channels.append(int(adjusted.quantize(Decimal("1"), rounding=ROUND_HALF_UP)))
+    font = root.find(f"a:themeElements/a:fontScheme/a:{scheme}Font/a:latin", ns)
+    return "FF" + "".join(f"{value:02X}" for value in channels), font.attrib["typeface"]
+
+
 def _num_fmt_code(root: ET.Element, num_fmt_id: int) -> str:
     for item in root.findall("m:numFmts/m:numFmt", NS):
         if int(item.attrib["numFmtId"]) == num_fmt_id:
@@ -1028,15 +1305,59 @@ def _canonical_without_num_fmt_id(element: ET.Element) -> tuple:
     return _canonical(clone)
 
 
-def _cell_semantic_value(cell: ET.Element, shared: tuple[ET.Element, ...]) -> tuple:
+def _cell_semantic_value(
+    cell: ET.Element,
+    shared: tuple[ET.Element, ...],
+    styles: bytes,
+) -> tuple:
     if cell.attrib.get("t") == "s":
         index = int(cell.findtext("m:v", namespaces=NS))
-        return "text", tuple(_canonical(child) for child in shared[index])
+        return "text", tuple(
+            _rich_text_node_signature(child, styles) for child in shared[index]
+        )
     if cell.attrib.get("t") == "inlineStr":
         inline = cell.find("m:is", NS)
         assert inline is not None
-        return "text", tuple(_canonical(child) for child in inline)
+        return "text", tuple(
+            _rich_text_node_signature(child, styles) for child in inline
+        )
     return cell.attrib.get("t", "n"), cell.findtext("m:v", default="", namespaces=NS)
+
+
+def _rich_text_node_signature(element: ET.Element, styles: bytes) -> tuple:
+    attributes: list[tuple[str, object]] = []
+    for name, value in element.attrib.items():
+        if element.tag == f"{{{MAIN}}}phoneticPr" and name == "fontId":
+            fonts = ET.fromstring(styles).findall("m:fonts/m:font", NS)
+            attributes.append(("font", _canonical(fonts[int(value)])))
+        else:
+            attributes.append((name, value))
+    return (
+        element.tag,
+        tuple(sorted(attributes, key=lambda item: item[0])),
+        element.text or "",
+        tuple(_rich_text_node_signature(child, styles) for child in element),
+    )
+
+
+def _table_part_signature(table_xml: bytes, styles_xml: bytes) -> tuple:
+    def visit(element: ET.Element) -> tuple:
+        attributes: list[tuple[str, object]] = []
+        for name, value in element.attrib.items():
+            if name.rsplit("}", 1)[-1].casefold().endswith("dxfid"):
+                attributes.append((name, _dxf_signature(styles_xml, int(value))))
+            elif element.tag == f"{{{MAIN}}}tableStyleInfo" and name == "name":
+                attributes.append((name, _table_style_signature(styles_xml, value)))
+            else:
+                attributes.append((name, value))
+        return (
+            element.tag,
+            tuple(sorted(attributes, key=lambda item: item[0])),
+            element.text or "",
+            tuple(visit(child) for child in element),
+        )
+
+    return visit(ET.fromstring(table_xml))
 
 
 def _shared_strings(parts: dict[str, bytes]) -> tuple[ET.Element, ...]:
