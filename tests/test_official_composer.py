@@ -8,7 +8,8 @@ import sys
 from xml.etree import ElementTree as ET
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image as OpenpyxlImage
 from PIL import Image
 
 
@@ -74,6 +75,114 @@ MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+
+
+def _write_engine_source(
+    path: Path,
+    products: tuple[dict[str, object], ...],
+    *,
+    category: str = "Sillas",
+    image_path: Path | None = None,
+) -> None:
+    workbook = Workbook()
+    quotation = workbook.active
+    quotation.title = "Quotation"
+    headers = {
+        1: "No.",
+        2: "Item",
+        4: "Description",
+        5: "Dimension",
+        7: "Qty",
+        10: "List Price",
+        12: "Supplier",
+        13: "Discount Percent",
+        14: "Original Currency",
+        15: "Original Unit Price",
+        16: "Frozen Exchange Rate",
+        17: "Source Reference",
+        18: "Price Mode",
+        19: "Auto Electrification",
+    }
+    for column, value in headers.items():
+        quotation.cell(7, column).value = value
+    quotation["A8"] = f"- {category}"
+    for offset, product in enumerate(products, start=9):
+        quotation.cell(offset, 1).value = offset - 8
+        quotation.cell(offset, 2).value = product["name"]
+        quotation.cell(offset, 4).value = product.get("description", "")
+        quotation.cell(offset, 5).value = product.get("dimension", "")
+        quotation.cell(offset, 7).value = product.get("quantity", 1)
+        quotation.cell(offset, 10).value = product.get("price", 0)
+        quotation.cell(offset, 12).value = product.get("provider", "")
+        quotation.cell(offset, 13).value = product.get("discount")
+        quotation.cell(offset, 14).value = product.get("currency", "")
+        quotation.cell(offset, 15).value = product.get("original_price")
+        quotation.cell(offset, 16).value = product.get("rate")
+        quotation.cell(offset, 17).value = product.get("reference", "")
+        quotation.cell(offset, 18).value = product.get("mode", "")
+        quotation.cell(offset, 19).value = product.get("auto")
+    if image_path is not None:
+        quotation.add_image(OpenpyxlImage(image_path), "B9")
+    workbook.save(path)
+    workbook.close()
+
+
+def _canonical_row(
+    *,
+    item_key: str,
+    section_id: str,
+    section_title: str,
+    origin: str,
+    source_row: int | None,
+    original_cost: str,
+    frozen_rate: str,
+    converted_cost: str,
+    quantity: str,
+    provider: str,
+    region: str,
+) -> QuotationDataRow:
+    return _with_canonical_hash(
+        QuotationDataRow(
+            item_key=item_key,
+            section_id=section_id,
+            section_title=section_title,
+            position=1,
+            origin=origin,
+            source_row=source_row,
+            original_currency="MXN",
+            original_cost=Decimal(original_cost),
+            frozen_rate=Decimal(frozen_rate),
+            converted_cost=Decimal(converted_cost),
+            quantity=Decimal(quantity),
+            provider=provider,
+            region=region,
+            source_hash="a" * 64,
+            upstream_row_hash="b" * 64 if origin == "imported" else "",
+            row_hash="",
+        )
+    )
+
+
+def _mixed_metadata(*, imported_only: bool) -> dict[str, object]:
+    return {
+        "catalog_price_mode": "mixed_catalog_converted",
+        "quote_currency": "MXN",
+        "descuento": 30,
+        "auto_electrification_rate": None,
+        "rate_summary": []
+        if imported_only
+        else [
+            {
+                "catalog": "tarkett",
+                "base_currency": "MXN",
+                "quote_currency": "MXN",
+                "exchange_rate": "1.000000",
+                "rate_source": "identity",
+                "rate_effective_date": "2026-07-22",
+                "rate_retrieved_at": "",
+            }
+        ],
+    }
 
 
 def _cell_formula(package: XlsxPackage, sheet_name: str, coordinate: str) -> str | None:
@@ -646,3 +755,412 @@ def test_active_engine_routes_through_official_composer_without_legacy_writers(
     package = XlsxPackage.read(output)
     assert package.sheet_state("Quotation_Data") == "veryHidden"
     assert package.sheet_part("Quotation")
+
+
+def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "workstation.xlsx"
+    _write_engine_source(
+        source,
+        (
+            {
+                "name": "Workstation 2 pax",
+                "description": "Estación para dos usuarios",
+                "dimension": "240 x 120 cm",
+                "quantity": 1,
+                "price": 1000,
+            },
+        ),
+        category="Workstations",
+    )
+    output = tmp_path / "workstation-official.xlsx"
+
+    generate_quote(source, output, {"cotizacion": "LUMBRO-E2E"}, OFFICIAL_TEMPLATE)
+
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        cotizacion = workbook["Cotizacion"]
+        expected_names = (
+            "Workstation 2 pax",
+            "LIDO.OP-INT",
+            "JUMP-1.5M",
+            "CAJA-FUS",
+        )
+        rows_by_name = {
+            name: [
+                row
+                for row in range(16, cotizacion.max_row + 1)
+                if cotizacion.cell(row, 1).value == name
+            ]
+            for name in expected_names
+        }
+        assert all(len(rows) == 1 for rows in rows_by_name.values())
+
+        visible_rows = tuple(rows_by_name[name][0] for name in expected_names)
+        mobiliti_rows = []
+        for row in visible_rows:
+            formula = cotizacion.cell(row, 6).value
+            assert isinstance(formula, str) and formula.startswith("=Mobiliti!X")
+            mobiliti_rows.append(int(formula.removeprefix("=Mobiliti!X")))
+            assert cotizacion.cell(row, 10).value == f"=E{row}*I{row}"
+        assert len(set(mobiliti_rows)) == len(expected_names)
+
+        total_row = next(
+            row
+            for row in range(max(visible_rows) + 1, cotizacion.max_row + 1)
+            if cotizacion.cell(row, 4).value == "TOTAL:"
+        )
+        subtotal_value = cotizacion.cell(total_row - 5, 8).value
+        subtotal_formula = getattr(subtotal_value, "text", subtotal_value)
+        assert subtotal_formula == (
+            f"=SUM(IFERROR(J{min(visible_rows)}:J{max(visible_rows)},0))"
+        )
+
+        audit = workbook["Quotation_Data"]
+        canonical = [
+            tuple(audit.cell(row, column).value for column in range(1, 14))
+            for row in range(2, audit.max_row + 1)
+        ]
+        assert len(canonical) == len(expected_names)
+        parent_key = str(canonical[0][0])
+        for code, row, mobiliti_row in zip(
+            expected_names[1:],
+            canonical[1:],
+            mobiliti_rows[1:],
+            strict=True,
+        ):
+            assert parent_key in str(row[0])
+            assert code in str(row[0])
+            assert row[1] == canonical[0][1]
+            assert workbook["Mobiliti"].cell(mobiliti_row, 10).value == pytest.approx(
+                float(row[9])
+            )
+    finally:
+        workbook.close()
+
+
+def test_active_engine_uses_authoritative_catalog_canonical_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "catalog-source.xlsx"
+    _write_engine_source(
+        source,
+        (
+            {
+                "name": "Silla catalogada",
+                "description": "Silla de catálogo",
+                "dimension": "60 x 60 cm",
+                "quantity": 2,
+                "price": 125.50,
+                "provider": "Tarkett",
+                "discount": 0,
+                "currency": "MXN",
+                "original_price": 125.50,
+                "rate": 1,
+                "reference": "catalog:tarkett:silla-1",
+                "mode": "net",
+                "auto": False,
+            },
+        ),
+    )
+    canonical = _canonical_row(
+        item_key="catalog:tarkett:silla-1",
+        section_id="catalog-section:chairs",
+        section_title="Sillas canónicas",
+        origin="catalog",
+        source_row=None,
+        original_cost="125.50",
+        frozen_rate="1",
+        converted_cost="125.50",
+        quantity="2",
+        provider="Tarkett",
+        region="tarkett",
+    )
+    output = tmp_path / "catalog-official.xlsx"
+
+    def legacy_validator_forbidden(*_args, **_kwargs):
+        raise AssertionError("el handoff canónico no depende del validador legacy")
+
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine._validate_mixed_catalog_metadata",
+        legacy_validator_forbidden,
+    )
+
+    generate_quote(
+        source,
+        output,
+        _mixed_metadata(imported_only=False),
+        OFFICIAL_TEMPLATE,
+        quotation_data_rows=(canonical,),
+    )
+
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        audit = workbook["Quotation_Data"]
+        assert audit["A2"].value == canonical.item_key
+        assert audit["B2"].value == canonical.section_id
+        assert audit["C2"].value == canonical.section_title
+        assert audit["P2"].value == canonical.row_hash
+        cotizacion = workbook["Cotizacion"]
+        assert any(
+            cotizacion.cell(row, 1).value == canonical.section_title
+            for row in range(16, cotizacion.max_row + 1)
+        )
+    finally:
+        workbook.close()
+
+
+def test_active_engine_uses_authoritative_imported_canonical_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "imported-source.xlsx"
+    _write_engine_source(
+        source,
+        (
+            {
+                "name": "Producto importado",
+                "description": "Línea importada",
+                "dimension": "pieza",
+                "quantity": 3,
+                "price": 200.25,
+                "provider": "Proveedor externo",
+                "discount": 0,
+                "currency": "MXN",
+                "original_price": 200.25,
+                "rate": 1,
+                "reference": "import:quote-77:9",
+                "mode": "imported",
+                "auto": False,
+            },
+        ),
+        category="Importados",
+    )
+    canonical = _canonical_row(
+        item_key="import:quote-77:9",
+        section_id="import-section:quote-77",
+        section_title="Importación auditada",
+        origin="imported",
+        source_row=9,
+        original_cost="200.25",
+        frozen_rate="1",
+        converted_cost="200.25",
+        quantity="3",
+        provider="Proveedor externo",
+        region="imported",
+    )
+    output = tmp_path / "imported-official.xlsx"
+
+    def legacy_validator_forbidden(*_args, **_kwargs):
+        raise AssertionError("el handoff imported no depende del validador legacy")
+
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine._validate_mixed_catalog_metadata",
+        legacy_validator_forbidden,
+    )
+
+    generate_quote(
+        source,
+        output,
+        _mixed_metadata(imported_only=True),
+        OFFICIAL_TEMPLATE,
+        quotation_data_rows=(canonical,),
+    )
+
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        audit = workbook["Quotation_Data"]
+        assert tuple(audit.cell(2, column).value for column in (1, 2, 3, 6, 16)) == (
+            canonical.item_key,
+            canonical.section_id,
+            canonical.section_title,
+            canonical.source_row,
+            canonical.row_hash,
+        )
+    finally:
+        workbook.close()
+
+
+def test_active_engine_rejects_nonempty_canonical_mismatch_without_output(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mismatch-source.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla", "quantity": 1, "price": 100},),
+    )
+    canonical = _canonical_row(
+        item_key="catalog:item-1",
+        section_id="catalog-section:1",
+        section_title="Sillas",
+        origin="catalog",
+        source_row=None,
+        original_cost="100",
+        frozen_rate="1",
+        converted_cost="100.00",
+        quantity="99",
+        provider="Sunon Inc",
+        region="sunon",
+    )
+    output = tmp_path / "must-not-exist.xlsx"
+
+    with pytest.raises(ValueError, match="canónic.*no coincide|canónica.*inconsistente"):
+        generate_quote(
+            source,
+            output,
+            {},
+            OFFICIAL_TEMPLATE,
+            quotation_data_rows=(canonical,),
+        )
+
+    assert not output.exists()
+
+
+def test_active_engine_explicit_empty_canonical_rows_use_compatible_fallback(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "empty-canonical-source.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla fallback", "quantity": 1, "price": 100},),
+    )
+    output = tmp_path / "empty-canonical-output.xlsx"
+
+    generate_quote(
+        source,
+        output,
+        {},
+        OFFICIAL_TEMPLATE,
+        quotation_data_rows=(),
+    )
+
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        assert workbook["Quotation_Data"]["A2"].value == "quotation:9"
+    finally:
+        workbook.close()
+
+
+def test_active_engine_omitted_original_keeps_legacy_visible_quotation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "omitted-original.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla visible", "quantity": 1, "price": 100},),
+    )
+    output = tmp_path / "omitted-original-output.xlsx"
+
+    generate_quote(source, output, {}, OFFICIAL_TEMPLATE)
+
+    package = XlsxPackage.read(output)
+    assert package.sheet_part("Quotation")
+
+
+def test_active_engine_explicit_none_omits_visible_quotation(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "none-original.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla sin original", "quantity": 1, "price": 100},),
+    )
+    output = tmp_path / "none-original-output.xlsx"
+
+    generate_quote(
+        source,
+        output,
+        {},
+        OFFICIAL_TEMPLATE,
+        original_quotation_path=None,
+    )
+
+    package = XlsxPackage.read(output)
+    with pytest.raises(KeyError):
+        package.sheet_part("Quotation")
+
+
+def test_active_engine_explicit_original_transplants_that_workbook(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "generated-source.xlsx"
+    original = tmp_path / "customer-original.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Producto generado", "quantity": 1, "price": 100},),
+    )
+    _write_engine_source(
+        original,
+        ({"name": "Producto original visible", "quantity": 7, "price": 999},),
+        category="Original cliente",
+    )
+    output = tmp_path / "explicit-original-output.xlsx"
+
+    generate_quote(
+        source,
+        output,
+        {},
+        OFFICIAL_TEMPLATE,
+        original_quotation_path=original,
+    )
+
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        assert workbook["Quotation"]["B9"].value == "Producto original visible"
+        assert any(
+            workbook["Cotizacion"].cell(row, 1).value == "Producto generado"
+            for row in range(16, workbook["Cotizacion"].max_row + 1)
+        )
+    finally:
+        workbook.close()
+
+
+def test_active_engine_embedded_source_image_reaches_cotizacion_anchor(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "source-product.png"
+    Image.new("RGBA", (32, 24), (20, 80, 160, 255)).save(image)
+    source = tmp_path / "source-with-image.xlsx"
+    _write_engine_source(
+        source,
+        ({"name": "Silla con imagen", "quantity": 1, "price": 100},),
+        image_path=image,
+    )
+    output = tmp_path / "output-with-product-image.xlsx"
+
+    generate_quote(
+        source,
+        output,
+        {},
+        OFFICIAL_TEMPLATE,
+        original_quotation_path=None,
+    )
+
+    package = XlsxPackage.read(output)
+    cotizacion = ET.fromstring(package.parts[package.sheet_part("Cotizacion")])
+    product_row = next(
+        int(row.attrib["r"])
+        for row in cotizacion.findall(f"{{{MAIN}}}sheetData/{{{MAIN}}}row")
+        if (
+            (cell := row.find(f"{{{MAIN}}}c[@r='A{row.attrib['r']}']"))
+            is not None
+            and cell.findtext(f"{{{MAIN}}}is/{{{MAIN}}}t")
+            == "Silla con imagen"
+        )
+    )
+    drawing_part, _drawing_rels_part = _cotizacion_drawing_parts(package)
+    drawing = ET.fromstring(package.parts[drawing_part])
+    product_anchors = [
+        anchor
+        for anchor in drawing.findall(f"{{{XDR}}}oneCellAnchor")
+        if anchor.findtext(f"{{{XDR}}}from/{{{XDR}}}row") == str(product_row - 1)
+        and anchor.findtext(f"{{{XDR}}}from/{{{XDR}}}col") == "1"
+    ]
+    assert len(product_anchors) == 1
+    assert any(
+        name.startswith("xl/media/quote_product_")
+        and package.parts[name].startswith(b"\x89PNG\r\n\x1a\n")
+        for name in package.parts
+    )

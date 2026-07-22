@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from copy import copy, deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
@@ -14,6 +14,7 @@ import posixpath
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import time
 from typing import Any, Mapping, Sequence
 from urllib.request import Request, urlopen
@@ -54,7 +55,12 @@ from .mobiliti_pricing import (
     lumbro_frozen_cost,
     write_official_currency_selector,
 )
-from .ooxml_package import XlsxPackage
+from .ooxml_package import (
+    XlsxPackage,
+    relationship_part_name,
+    relationship_type_uris,
+    resolve_internal_target,
+)
 from .ooxml_worksheet import (
     MobilitiCellWrite,
     MobilitiSheetMutation,
@@ -212,6 +218,10 @@ OFFICIAL_TEMPLATE_CONTRACT_PATH = (
     / "templates"
     / "formato-cotizacion-2026-oficial.contract.json"
 )
+_ARGUMENT_OMITTED = object()
+_XDR_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+_DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_IMAGE_CACHE_ROOT = Path(tempfile.gettempdir()) / "mobiliti_quote_image_cache"
 
 
 @dataclass(frozen=True)
@@ -248,6 +258,8 @@ class _OfficialPresentationLine:
     origin: str
     source_row: int | None
     upstream_row_hash: str
+    parent_item_key: str | None = None
+    image_path: Path | None = None
 
 
 def _sheet_name(name: str) -> str:
@@ -2970,11 +2982,128 @@ def _official_source_groups(items: Sequence[QuoteItem]) -> list[tuple[str, list[
     return groups
 
 
+def _related_package_part(
+    package: XlsxPackage,
+    owner: str,
+    relationship_id: str,
+    relationship_name: str,
+) -> str:
+    relationships_part = relationship_part_name(owner)
+    try:
+        root = ET.fromstring(package.parts[relationships_part])
+    except (KeyError, ET.ParseError) as error:
+        raise ValueError(f"Relaciones OOXML ausentes para {owner}") from error
+    matches = [
+        relationship
+        for relationship in root.findall(f"{{{_PKG_REL_NS}}}Relationship")
+        if relationship.attrib.get("Id") == relationship_id
+        and relationship.attrib.get("Type")
+        in relationship_type_uris(relationship_name)
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"Relación {relationship_name} OOXML inválida")
+    relationship = matches[0]
+    if relationship.attrib.get("TargetMode", "").casefold() == "external":
+        raise ValueError(f"TargetMode externo no permitido para {relationship_name}")
+    return resolve_internal_target(owner, relationship.attrib.get("Target", ""))
+
+
+def _source_product_image_payloads(
+    package: XlsxPackage,
+) -> dict[int, tuple[bytes, str]]:
+    try:
+        sheet_part = package.sheet_part("Quotation")
+    except KeyError:
+        return {}
+    sheet = ET.fromstring(package.parts[sheet_part])
+    drawings = sheet.findall(f"{{{_SHEET_NS}}}drawing")
+    if not drawings:
+        return {}
+    if len(drawings) != 1:
+        raise ValueError("Quotation contiene drawings ambiguos")
+    relationship_id = drawings[0].attrib.get(f"{{{_OFFICE_REL_NS}}}id", "")
+    drawing_part = _related_package_part(
+        package,
+        sheet_part,
+        relationship_id,
+        "drawing",
+    )
+    drawing = ET.fromstring(package.parts[drawing_part])
+    relationships_part = relationship_part_name(drawing_part)
+    try:
+        relationships = ET.fromstring(package.parts[relationships_part])
+    except (KeyError, ET.ParseError) as error:
+        raise ValueError("Relaciones del drawing Quotation inválidas") from error
+
+    media_by_id: dict[str, str] = {}
+    for relationship in relationships.findall(f"{{{_PKG_REL_NS}}}Relationship"):
+        if relationship.attrib.get("Type") not in relationship_type_uris("image"):
+            continue
+        if relationship.attrib.get("TargetMode", "").casefold() == "external":
+            raise ValueError("TargetMode externo no permitido para image")
+        relationship_id = relationship.attrib.get("Id", "")
+        if not relationship_id or relationship_id in media_by_id:
+            raise ValueError("Relación de imagen Quotation ambigua")
+        media_by_id[relationship_id] = resolve_internal_target(
+            drawing_part,
+            relationship.attrib.get("Target", ""),
+        )
+
+    images: dict[int, tuple[bytes, str]] = {}
+    for anchor in drawing:
+        blip = anchor.find(f".//{{{_DRAWING_NS}}}blip")
+        if blip is None:
+            continue
+        row_text = anchor.findtext(f"{{{_XDR_NS}}}from/{{{_XDR_NS}}}row")
+        relationship_id = blip.attrib.get(f"{{{_OFFICE_REL_NS}}}embed", "")
+        if row_text is None or not row_text.isdigit() or relationship_id not in media_by_id:
+            raise ValueError("Ancla de imagen Quotation inválida")
+        row = int(row_text) + 1
+        if row in images:
+            raise ValueError("Más de una imagen Quotation para la misma fila")
+        media_part = media_by_id[relationship_id]
+        payload = package.parts[media_part]
+        if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+            extension = ".png"
+        elif payload.startswith(b"\xff\xd8\xff"):
+            extension = ".jpeg"
+        else:
+            raise ValueError("Formato de imagen Quotation no permitido")
+        images[row] = (payload, extension)
+    return images
+
+
+def _cache_source_product_images(path: Path) -> dict[int, Path]:
+    normalized = _normalized_quotation_source(path)
+    package = (
+        XlsxPackage.from_bytes(normalized)
+        if isinstance(normalized, bytes)
+        else XlsxPackage.read(normalized)
+    )
+    payloads = _source_product_image_payloads(package)
+    if not payloads:
+        return {}
+    _IMAGE_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    result: dict[int, Path] = {}
+    for row, (payload, extension) in payloads.items():
+        digest = hashlib.sha256(payload).hexdigest()
+        target = _IMAGE_CACHE_ROOT / f"{digest}-row-{row}{extension}"
+        try:
+            with target.open("xb") as stream:
+                stream.write(payload)
+        except FileExistsError:
+            if target.read_bytes() != payload:
+                raise ValueError("Colisión en cache de imagen Quotation")
+        result[row] = target.resolve(strict=True)
+    return result
+
+
 def _official_presentation_lines(
     items: Sequence[QuoteItem],
     metadata: dict[str, Any],
     source_path: Path,
     lumbro_prices: Mapping[str, LumbroPriceRef],
+    image_paths: Mapping[int, Path],
 ) -> tuple[tuple[_OfficialPresentationLine, ...], tuple[SectionNeed, ...]]:
     product_items = [item for item in items if item.tipo == "producto"]
     category_dictionary = load_category_dictionary(
@@ -3037,6 +3166,7 @@ def _official_presentation_lines(
                 origin="imported" if imported else "quotation",
                 source_row=item.row if imported else None,
                 upstream_row_hash=upstream_hash,
+                image_path=image_paths.get(item.row),
             )
             lines.append(line)
 
@@ -3064,7 +3194,9 @@ def _official_presentation_lines(
                 ).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
                 lines.append(
                     _OfficialPresentationLine(
-                        item_key=f"lumbro:{item.row}:{accessory_index}:{code}",
+                        item_key=(
+                            f"{line.item_key}:lumbro:{accessory_index}:{code}"
+                        ),
                         section_id=section_id,
                         section_title=section_title,
                         item=None,
@@ -3085,6 +3217,7 @@ def _official_presentation_lines(
                         origin="lumbro",
                         source_row=None,
                         upstream_row_hash="",
+                        parent_item_key=line.item_key,
                     )
                 )
         needs.append(
@@ -3096,6 +3229,139 @@ def _official_presentation_lines(
         )
 
     return tuple(lines), tuple(needs)
+
+
+def _canonical_handoff_rows(
+    value: object,
+) -> tuple[QuotationDataRow, ...] | None:
+    if value is _ARGUMENT_OMITTED or value is None:
+        return None
+    if isinstance(value, (str, bytes, bytearray)) or not isinstance(value, Sequence):
+        raise TypeError("quotation_data_rows debe ser una secuencia canónica")
+    rows = tuple(value)
+    if not rows:
+        return None
+    # Serializar la hoja ejecuta la validación completa de tipo, orden y hashes.
+    build_quotation_data_sheet(rows)
+    return rows
+
+
+def _validate_authoritative_handoff_metadata(
+    items: Sequence[QuoteItem],
+    metadata: dict[str, Any],
+) -> None:
+    if not _uses_mixed_catalog_prices(metadata):
+        return
+    _official_quote_currency(metadata)
+    if not isinstance(metadata.get("rate_summary"), list):
+        raise ValueError("Resumen de tasas mixtas invalido")
+    products = [item for item in items if item.tipo == "producto"]
+    if not products:
+        raise ValueError("Carrito mixto sin productos")
+    for item in products:
+        mode = str(item.modo_precio or "").strip().lower()
+        if mode == "imported":
+            discount = _official_decimal(
+                item.descuento,
+                "Descuento mixto por linea",
+            )
+            if discount > Decimal("100"):
+                raise ValueError("Descuento mixto por linea invalido")
+            if item.electrificacion_automatica is not False:
+                raise ValueError("Electrificacion imported debe ser explícitamente false")
+            continue
+        _mixed_item_discount_fraction(item)
+        _item_auto_electrification(item, metadata)
+
+
+def _official_section_needs(
+    lines: Sequence[_OfficialPresentationLine],
+) -> tuple[SectionNeed, ...]:
+    needs: list[SectionNeed] = []
+    seen: set[str] = set()
+    current_id: str | None = None
+    current_title = ""
+    count = 0
+    for line in lines:
+        if line.section_id == current_id:
+            if line.section_title != current_title:
+                raise ValueError("Título de sección canónica inconsistente")
+            count += 1
+            continue
+        if current_id is not None:
+            needs.append(SectionNeed(current_id, current_title, count))
+        if line.section_id in seen:
+            raise ValueError("Sección canónica no contigua")
+        seen.add(line.section_id)
+        current_id = line.section_id
+        current_title = line.section_title
+        count = 1
+    if current_id is not None:
+        needs.append(SectionNeed(current_id, current_title, count))
+    return tuple(needs)
+
+
+def _bind_authoritative_canonical_rows(
+    lines: Sequence[_OfficialPresentationLine],
+    canonical_rows: Sequence[QuotationDataRow],
+) -> tuple[tuple[_OfficialPresentationLine, ...], tuple[SectionNeed, ...]]:
+    if len(lines) != len(canonical_rows):
+        raise ValueError("La cantidad canónica no coincide con la presentación")
+
+    bound: list[_OfficialPresentationLine] = []
+    identity_map: dict[str, str] = {}
+    for position, (line, canonical) in enumerate(
+        zip(lines, canonical_rows, strict=True),
+        start=1,
+    ):
+        expected_origin = line.origin
+        if expected_origin in {"imported", "lumbro"}:
+            origin_matches = canonical.origin == expected_origin
+        else:
+            origin_matches = canonical.origin not in {"imported", "lumbro"}
+        comparisons = {
+            "position": canonical.position == position,
+            "origin": origin_matches,
+            "source_row": canonical.source_row == line.source_row,
+            "original_currency": canonical.original_currency
+            == line.original_currency,
+            "original_cost": canonical.original_cost == line.original_cost,
+            "frozen_rate": canonical.frozen_rate == line.frozen_rate,
+            "converted_cost": canonical.converted_cost == line.converted_cost,
+            "quantity": canonical.quantity == line.quantity,
+            "provider": canonical.provider == line.provider,
+        }
+        mismatch = next(
+            (name for name, matches in comparisons.items() if not matches),
+            None,
+        )
+        if mismatch is not None:
+            raise ValueError(f"Fila canónica no coincide: {mismatch}")
+        identity_map[line.item_key] = canonical.item_key
+        bound.append(
+            replace(
+                line,
+                item_key=canonical.item_key,
+                section_id=canonical.section_id,
+                section_title=canonical.section_title,
+                region=canonical.region,
+                origin=canonical.origin,
+                upstream_row_hash=canonical.upstream_row_hash,
+            )
+        )
+
+    rebound = tuple(
+        replace(
+            line,
+            parent_item_key=(
+                identity_map[line.parent_item_key]
+                if line.parent_item_key is not None
+                else None
+            ),
+        )
+        for line in bound
+    )
+    return rebound, _official_section_needs(rebound)
 
 
 def _official_canonical_rows(
@@ -3215,26 +3481,30 @@ def _build_official_cotizacion(
     section_order: OrderedDict[str, tuple[str, list[CotizacionProduct]]] = OrderedDict()
     discount = Decimal(str(_discount_rate(metadata)))
     for line in lines:
-        if line.item is None:
-            continue
         title, products = section_order.setdefault(
             line.section_id,
             (line.section_title, []),
+        )
+        description = (
+            build_product_description(
+                line.item.nombre,
+                line.item.descripcion,
+                line.category,
+                language,
+            )
+            if line.item is not None
+            else line.description
         )
         products.append(
             CotizacionProduct(
                 item_key=line.item_key,
                 name=line.name,
-                description=build_product_description(
-                    line.item.nombre,
-                    line.item.descripcion,
-                    line.category,
-                    language,
-                ),
+                description=description,
                 dimensions=line.dimensions,
                 quantity=line.quantity,
                 mobiliti_row=target_by_key[line.item_key],
                 discount=discount,
+                image_path=line.image_path,
             )
         )
     sections = tuple(
@@ -3354,8 +3624,8 @@ def generate_quote(
     metadata: dict[str, Any] | None = None,
     template_path: str | Path | None = None,
     *,
-    original_quotation_path: str | Path | None = None,
-    quotation_data_rows: Sequence[QuotationDataRow] | None = None,
+    original_quotation_path: object = _ARGUMENT_OMITTED,
+    quotation_data_rows: object = _ARGUMENT_OMITTED,
 ) -> Path:
     metadata = dict(metadata or {})
     source_path = Path(source_path).resolve(strict=True)
@@ -3365,21 +3635,35 @@ def generate_quote(
     official_template = Path(template_path or OFFICIAL_TEMPLATE_PATH).resolve(strict=True)
 
     items, _column_map = read_items(source_path)
-    _validate_mixed_catalog_metadata(items, metadata)
+    handed_off_rows = _canonical_handoff_rows(quotation_data_rows)
+    if handed_off_rows is None:
+        _validate_mixed_catalog_metadata(items, metadata)
+    else:
+        _validate_authoritative_handoff_metadata(items, metadata)
     contract = load_template_contract(OFFICIAL_TEMPLATE_CONTRACT_PATH)
     base = XlsxPackage.read(official_template)
     lumbro_prices = _load_lumbro_prices(official_template)
+    if original_quotation_path is _ARGUMENT_OMITTED:
+        original_source: Path | None = source_path
+    elif original_quotation_path is None:
+        original_source = None
+    elif isinstance(original_quotation_path, (str, Path)):
+        original_source = Path(original_quotation_path).resolve(strict=True)
+    else:
+        raise TypeError("original_quotation_path debe ser Path, str o None")
+    image_paths = _cache_source_product_images(original_source or source_path)
     lines, needs = _official_presentation_lines(
         items,
         metadata,
         source_path,
         lumbro_prices,
+        image_paths,
     )
-    canonical_rows = (
-        tuple(quotation_data_rows)
-        if quotation_data_rows is not None
-        else _official_canonical_rows(lines, source_path)
-    )
+    if handed_off_rows is None:
+        canonical_rows = _official_canonical_rows(lines, source_path)
+    else:
+        lines, needs = _bind_authoritative_canonical_rows(lines, handed_off_rows)
+        canonical_rows = handed_off_rows
     mobiliti = _build_official_mobiliti(
         base,
         lines,
@@ -3388,12 +3672,11 @@ def generate_quote(
         metadata,
     )
     cotizacion = _build_official_cotizacion(base, lines, mobiliti, metadata)
-    original_source = (
-        Path(original_quotation_path).resolve(strict=True)
-        if original_quotation_path
-        else source_path
+    quotation = (
+        transplant_quotation(_normalized_quotation_source(original_source), base)
+        if original_source is not None
+        else None
     )
-    quotation = transplant_quotation(_normalized_quotation_source(original_source), base)
     compose_official_quote(
         ComposeRequest(
             template=official_template,
