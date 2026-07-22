@@ -144,12 +144,31 @@ def _preflight_payload(payload: object) -> "_Payload":
         raise ValueError("Quotation_Data excede el límite físico de filas XLSX")
     groups = payload.get("groups")
     sections = payload.get("sections")
-    if not isinstance(groups, list) or not isinstance(sections, list) or not sections:
+    if not _is_sequence(groups) or not _is_sequence(sections) or not sections:
         raise ValueError("Payload de Quotation_Data inválido")
+    imported = payload.get("imported_source")
+    imported_items: Sequence[object] = ()
+    declared_items = 0
+    declared_section_keys = 0
+    for group in groups:
+        if not isinstance(group, dict) or not _is_sequence(group.get("items")):
+            raise ValueError("Grupo de Quotation_Data inválido")
+        declared_items += len(group["items"])
+    if imported is not None:
+        if not isinstance(imported, dict) or not _is_sequence(imported.get("items")):
+            raise ValueError("Fuente importada de Quotation_Data inválida")
+        imported_items = imported["items"]
+        declared_items += len(imported_items)
+    for section in sections:
+        if not isinstance(section, dict) or not _is_sequence(section.get("item_keys")):
+            raise ValueError("Sección de Quotation_Data inválida")
+        declared_section_keys += len(section["item_keys"])
+    if declared_items + 1 > XLSX_MAX_ROWS or declared_section_keys + 1 > XLSX_MAX_ROWS:
+        raise ValueError("Quotation_Data excede el límite físico de filas XLSX")
+    if declared_items != item_count or declared_section_keys != item_count:
+        raise ValueError("Orden de Quotation_Data inconsistente")
     result: dict[str, tuple[dict, str, str, int | None, str]] = {}
     for group in groups:
-        if not isinstance(group, dict) or not isinstance(group.get("items"), list):
-            raise ValueError("Grupo de Quotation_Data inválido")
         source_hash = group.get("catalog_source_hash")
         _validate_hash(source_hash, "source_hash")
         catalog = group.get("catalog")
@@ -158,22 +177,26 @@ def _preflight_payload(payload: object) -> "_Payload":
             if not isinstance(line, dict) or line.get("catalog") != catalog:
                 raise ValueError("Línea de Quotation_Data inválida")
             _add_item(result, line.get("canonical_key"), (line, source_hash, catalog, None, ""))
-    imported = payload.get("imported_source")
     if imported is not None:
-        if not isinstance(imported, dict) or not isinstance(imported.get("items"), list):
-            raise ValueError("Fuente importada de Quotation_Data inválida")
-        for line in imported["items"]:
+        source_hash = imported.get("source_hash")
+        import_id = imported.get("import_id")
+        _validate_hash(source_hash, "source_hash")
+        _validate_import_id(import_id)
+        for line in imported_items:
             if not isinstance(line, dict) or line.get("kind") != "imported":
                 raise ValueError("Línea importada de Quotation_Data inválida")
             source_row = line.get("source_row")
             if type(source_row) is not int or source_row <= 0:
                 raise ValueError("source_row de Quotation_Data inválido")
-            _validate_hash(line.get("source_hash"), "source_hash")
+            if line.get("import_id") != import_id or line.get("source_hash") != source_hash:
+                raise ValueError("source_hash importado de Quotation_Data inconsistente")
             _validate_hash(line.get("row_hash"), "upstream_row_hash")
+            if line.get("canonical_key") != f"import:{import_id}:{source_row}":
+                raise ValueError("canonical_key importado de Quotation_Data inválido")
             _add_item(
                 result,
                 line.get("canonical_key"),
-                (line, line.get("source_hash"), "imported", source_row, line.get("row_hash")),
+                (line, source_hash, "imported", source_row, line.get("row_hash")),
             )
     normalized_sections: list[dict] = []
     seen_section_ids: set[str] = set()
@@ -184,7 +207,7 @@ def _preflight_payload(payload: object) -> "_Payload":
         section_id, title, keys = section["id"], section["title"], section["item_keys"]
         _validate_safe_text(section_id)
         _validate_safe_text(title)
-        if section_id in seen_section_ids or not isinstance(keys, list) or not keys:
+        if section_id in seen_section_ids or not _is_sequence(keys) or not keys:
             raise ValueError("Sección de Quotation_Data inválida")
         seen_section_ids.add(section_id)
         for key in keys:
@@ -252,7 +275,11 @@ def _stream_worksheet_xml(rows: Sequence[QuotationDataRow], row_count: int) -> b
     _write(output, f'<?xml version="1.0" encoding="utf-8"?><worksheet xmlns="{MAIN}"><dimension ref="A1:P{row_count + 1}"/><sheetData>')
     _write_xml_row(output, 1, QUOTATION_DATA_HEADERS)
     seen_keys: set[str] = set()
-    for position, row in enumerate(rows, start=1):
+    for position in range(1, row_count + 1):
+        try:
+            row = rows[position - 1]
+        except IndexError as error:
+            raise ValueError("Secuencia de Quotation_Data inconsistente") from error
         _validate_row_values(row)
         if row.position != position or row.item_key in seen_keys:
             raise ValueError("Orden de Quotation_Data inconsistente")
@@ -344,13 +371,15 @@ def _validate_safe_text(value: object, *, allow_empty: bool = False) -> None:
 
 
 def _inspection_text(value: str) -> str:
-    inspected = value.translate({ord(char): None for char in _INVISIBLE})
-    for _ in range(2):
+    inspected = value
+    for _ in range(8):
+        if len(inspected) > 10_000 or any(char in inspected for char in _INVISIBLE):
+            raise ValueError("Texto de Quotation_Data inseguro")
         decoded = unquote(inspected)
         if decoded == inspected:
-            break
+            return "".join(inspected.split())
         inspected = decoded
-    return inspected
+    raise ValueError("Texto de Quotation_Data inseguro")
 
 
 def _write_xml_row(output: BytesIO, row_number: int, values: Sequence[object]) -> None:
@@ -387,6 +416,15 @@ def _write(output: BytesIO, text: str) -> None:
 def _validate_hash(value: object, field_name: str) -> None:
     if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
         raise ValueError(f"{field_name} de Quotation_Data inválido")
+
+
+def _validate_import_id(value: object) -> None:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value) is None:
+        raise ValueError("import_id de Quotation_Data inválido")
+
+
+def _is_sequence(value: object) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
 
 
 def _is_xml_10_character(codepoint: int) -> bool:

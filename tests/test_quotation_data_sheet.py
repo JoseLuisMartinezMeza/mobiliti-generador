@@ -1,6 +1,7 @@
 from copy import deepcopy
 from collections.abc import Sequence
 from decimal import Decimal, ROUND_HALF_UP
+import builtins
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -279,7 +280,12 @@ def test_quotation_data_normalizes_negative_zero_and_accepts_source_row_one(tmp_
         }]},
     )
     line = payload["imported_source"]["items"][0]
-    line.update(source_row=1, original_unit_price="-0", unit_price="-0")
+    source_row_one_key = f"import:{IMPORT_ID}:1"
+    line.update(
+        source_row=1, canonical_key=source_row_one_key,
+        original_unit_price="-0", unit_price="-0",
+    )
+    payload["sections"][0]["item_keys"] = [source_row_one_key]
 
     row = quotation_data_rows(payload)[0]
 
@@ -295,3 +301,91 @@ def test_quotation_data_physical_limit_accepts_exact_count(monkeypatch, mixed_pa
     addition = build_quotation_data_sheet((row,))
 
     assert b'<dimension ref="A1:P2"' in addition.xml
+
+
+def test_quotation_data_rejects_imported_source_hash_and_key_mismatches(tmp_path):
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    manifest, _images = build_import_manifest(source.read_bytes(), IMPORT_ID, source.name)
+    item_key = f"import:{IMPORT_ID}:11"
+    payload = build_mixed_catalog_cart_payload(
+        [], catalogs=mixed_catalogs.__wrapped__(), rate_rows=rate_rows.__wrapped__(),
+        quote_currency="MXN", commercial_discount_percent="40",
+        presentation_sections=[{"id": "section-1", "title": "Recepcion", "item_keys": [item_key]}],
+        imported_source={"manifest": manifest, "source_currency": "USD", "items": [{
+            "kind": "imported", "import_id": IMPORT_ID, "source_row": 11,
+            "source_currency": "USD", "quantity": "1",
+            "overrides": {"name": "Alien Task Chair", "description": "Silla operativa", "dimension": "630 x 565 x 1000 mm", "unit_price": "82", "provider": "Sunon"},
+        }]},
+    )
+    payload["imported_source"]["source_hash"] = "f" * 64
+
+    with pytest.raises(ValueError, match="source_hash"):
+        quotation_data_rows(payload)
+
+    payload["imported_source"]["source_hash"] = manifest["source_hash"]
+    payload["imported_source"]["items"][0]["canonical_key"] = "import:spoof:11"
+    payload["sections"][0]["item_keys"] = ["import:spoof:11"]
+    with pytest.raises(ValueError, match="canonical_key"):
+        quotation_data_rows(payload)
+
+
+@pytest.mark.parametrize("title", (
+    "%25252568%25252574%25252574%25252570%25252573%2525253A%2525252F%2525252Finvalid.example",
+    "%25EF%25BB%25BFhttps%253A%252F%252Finvalid.example",
+    "   C:\\catalogo\\archivo.xlsx",
+))
+def test_quotation_data_rejects_nested_encoded_and_whitespace_obscured_text(title, mixed_payload):
+    mixed_payload["sections"][0]["title"] = title
+
+    with pytest.raises(ValueError, match="Texto de Quotation_Data inseguro"):
+        quotation_data_rows(mixed_payload)
+
+
+def test_quotation_data_sheet_uses_indexed_sequence_not_its_iterator(mixed_payload):
+    row = quotation_data_rows(mixed_payload)[0]
+
+    class OneRowSequence(Sequence):
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            if index == 0:
+                return row
+            raise IndexError(index)
+
+        def __iter__(self):
+            raise AssertionError("No debe usar el iterador libre")
+
+    assert b'<dimension ref="A1:P2"' in build_quotation_data_sheet(OneRowSequence()).xml
+
+
+def test_quotation_data_preflight_checks_declared_sequences_before_iteration(monkeypatch, mixed_payload):
+    class TooMany(Sequence):
+        def __len__(self):
+            return 3
+
+        def __getitem__(self, index):
+            raise AssertionError("No debe materializar")
+
+        def __iter__(self):
+            raise AssertionError("No debe iterar")
+
+    monkeypatch.setattr(quotation_sheets, "XLSX_MAX_ROWS", 2)
+    mixed_payload["groups"][0]["items"] = TooMany()
+    mixed_payload["item_count"] = 1
+
+    with pytest.raises(ValueError, match="límite físico"):
+        quotation_data_rows(mixed_payload)
+
+
+def test_quotation_data_does_not_import_mixed_catalog_at_use_time(monkeypatch, mixed_payload):
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name.endswith("mixed_catalog"):
+            raise AssertionError("quotation_sheets no debe importar mixed_catalog")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    assert quotation_data_rows(mixed_payload)[0].item_key
