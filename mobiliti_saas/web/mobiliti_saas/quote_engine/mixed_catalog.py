@@ -1046,6 +1046,10 @@ def create_mixed_catalog_quotation_workbook(
                 17: safe_excel_text("Source Reference"),
                 18: safe_excel_text("Price Mode"),
                 19: safe_excel_text("Auto Electrification"),
+                20: safe_excel_text("Canonical Key"),
+                21: safe_excel_text("Source Hash"),
+                22: safe_excel_text("Original Source Row"),
+                23: safe_excel_text("Upstream Row Hash"),
             },
         )
 
@@ -1130,6 +1134,12 @@ def create_mixed_catalog_quotation_workbook(
                 if not isinstance(auto_electrification, bool):
                     raise ValueError("Auto Electrification mixto debe ser booleano")
                 ws.cell(row, 19).value = auto_electrification
+                ws.cell(row, 20).value = safe_excel_text(item["canonical_key"])
+                ws.cell(row, 21).value = safe_excel_text(source_hash)
+                ws.cell(row, 22).value = item["source_row"] if imported else None
+                ws.cell(row, 23).value = (
+                    safe_excel_text(item["row_hash"]) if imported else None
+                )
                 row += 1
                 product_index += 1
 
@@ -1145,6 +1155,8 @@ def create_mixed_catalog_quotation_workbook(
             "S": 22,
         }.items():
             ws.column_dimensions[column].width = width
+        for column in ("T", "U", "V", "W"):
+            ws.column_dimensions[column].hidden = True
         wb.save(output)
     finally:
         try:

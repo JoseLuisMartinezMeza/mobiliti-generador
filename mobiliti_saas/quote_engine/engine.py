@@ -3308,12 +3308,24 @@ def _bind_authoritative_canonical_rows(
         zip(base_lines, canonical_rows, strict=True),
         start=1,
     ):
+        item = line.item
+        if item is None or not isinstance(item.canonical_key, str) or not item.canonical_key:
+            raise ValueError("Identidad técnica ausente: canonical_key")
+        if not isinstance(item.source_hash, str) or not item.source_hash:
+            raise ValueError("Identidad técnica ausente: source_hash")
         expected_origin = line.origin
         if expected_origin == "imported":
+            if type(item.source_row) is not int or item.source_row <= 0:
+                raise ValueError("Identidad técnica ausente: source_row")
+            if (
+                not isinstance(item.upstream_row_hash, str)
+                or not item.upstream_row_hash
+            ):
+                raise ValueError("Identidad técnica ausente: upstream_row_hash")
             origin_matches = canonical.origin == expected_origin
         else:
             source_reference = str(
-                line.item.referencia_fuente if line.item is not None else ""
+                item.referencia_fuente
             ).strip()
             referenced_origin = (
                 source_reference.partition(":")[0].strip().lower()
@@ -3326,6 +3338,8 @@ def _bind_authoritative_canonical_rows(
                 else canonical.origin != "imported"
             )
         comparisons = {
+            "item_key": canonical.item_key == item.canonical_key,
+            "source_hash": canonical.source_hash == item.source_hash,
             "position": canonical.position == position,
             "origin": origin_matches,
             "original_currency": canonical.original_currency
@@ -3336,6 +3350,11 @@ def _bind_authoritative_canonical_rows(
             "quantity": canonical.quantity == line.quantity,
             "provider": canonical.provider == line.provider,
         }
+        if expected_origin == "imported":
+            comparisons["source_row"] = canonical.source_row == item.source_row
+            comparisons["upstream_row_hash"] = (
+                canonical.upstream_row_hash == item.upstream_row_hash
+            )
         mismatch = next(
             (name for name, matches in comparisons.items() if not matches),
             None,

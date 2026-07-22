@@ -32,6 +32,10 @@ class QuoteItem:
     referencia_fuente: Any = ""
     modo_precio: Any = ""
     electrificacion_automatica: Any = None
+    canonical_key: Any = ""
+    source_hash: Any = ""
+    source_row: Any = None
+    upstream_row_hash: Any = ""
 
 
 def normalize_header(value: Any) -> str:
@@ -48,6 +52,14 @@ def _find_header_column(ws, terms: list[str], row: int = Q_HEADER_ROW) -> str | 
             continue
         tokens = set(header.split())
         if any(term in header or header in term or term in tokens for term in terms):
+            return get_column_letter(col)
+    return None
+
+
+def _find_exact_header_column(ws, terms: list[str], row: int = Q_HEADER_ROW) -> str | None:
+    expected = {normalize_header(term) for term in terms}
+    for col in range(1, ws.max_column + 1):
+        if normalize_header(ws.cell(row=row, column=col).value) in expected:
             return get_column_letter(col)
     return None
 
@@ -69,6 +81,12 @@ def detect_columns(ws) -> dict[str, str]:
         "modo_precio": ["price mode", "modo precio"],
         "electrificacion_automatica": ["auto electrification", "electrificacion automatica"],
     }
+    technical_keywords = {
+        "canonical_key": ["canonical key", "clave canonica"],
+        "source_hash": ["source hash", "hash fuente"],
+        "source_row": ["original source row", "fila fuente original"],
+        "upstream_row_hash": ["upstream row hash", "hash fila upstream"],
+    }
     column_map: dict[str, str] = {}
 
     vol_col = _find_header_column(ws, ["vol", "volumen", "volume"])
@@ -77,6 +95,10 @@ def detect_columns(ws) -> dict[str, str]:
 
     for key, terms in keywords.items():
         found = _find_header_column(ws, terms)
+        if found:
+            column_map[key] = found
+    for key, terms in technical_keywords.items():
+        found = _find_exact_header_column(ws, terms)
         if found:
             column_map[key] = found
 
@@ -154,6 +176,10 @@ def read_items(source_path: str | Path) -> tuple[list[QuoteItem], dict[str, str]
                     electrificacion_automatica=optional_value(
                         row, "electrificacion_automatica", None
                     ),
+                    canonical_key=optional_value(row, "canonical_key", ""),
+                    source_hash=optional_value(row, "source_hash", ""),
+                    source_row=optional_value(row, "source_row", None),
+                    upstream_row_hash=optional_value(row, "upstream_row_hash", ""),
                 )
             )
         elif (no_val is None or no_val == "") and item_name:

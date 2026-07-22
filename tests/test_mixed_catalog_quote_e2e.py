@@ -765,6 +765,270 @@ def test_authoritative_base_mismatch_fails_before_output(
     assert not output.exists()
 
 
+def _identical_offiho_payload_with_lumbro_parents() -> dict:
+    catalogs = authoritative_catalogs()
+    identical_items = [
+        OffihoCatalogItem(
+            inventory_key=inventory_key,
+            code="OFF-LIDO",
+            name="Estacion Lido 8PAX",
+            variant="Negro",
+            unit="PZA",
+            pieces_per_box=Decimal("1"),
+            available_quantity=Decimal("20"),
+            unit_price=Decimal("500"),
+            price_source="catalog",
+        )
+        for inventory_key in ("OFF-LIDO-A", "OFF-LIDO-B")
+    ]
+    catalogs["offiho"] = {
+        "source_hash": SOURCE_HASHES["offiho"],
+        "items": identical_items,
+        "by_inventory_key": {
+            item.inventory_key: item for item in identical_items
+        },
+    }
+    rows = [
+        {
+            "catalog": "offiho",
+            "inventory_key": item.inventory_key,
+            "quantity": "1",
+        }
+        for item in identical_items
+    ]
+    return build_mixed_catalog_cart_payload(
+        rows,
+        catalogs=catalogs,
+        rate_rows=rate_rows(),
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Identidad",
+            "item_keys": [mixed_cart_key(row) for row in rows],
+        }],
+        today=date.today(),
+    )
+
+
+def test_authoritative_identity_rejects_inverted_identical_lines_and_keeps_lumbro_parents(
+    monkeypatch,
+    tmp_path,
+):
+    _forbid_legacy_mobiliti_writers(monkeypatch)
+    payload = _identical_offiho_payload_with_lumbro_parents()
+    monkeypatch.setattr(
+        catalog_cart,
+        "_download_catalog_image",
+        lambda *_args, **_kwargs: None,
+    )
+    parser_source = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "identical-offiho-source.xlsx",
+        image_dir=tmp_path / "identical-offiho-images",
+    )
+    canonical_rows = quotation_data_rows(payload)
+    correct_output = tmp_path / "identical-offiho-correct.xlsx"
+
+    generate_quote(
+        parser_source,
+        correct_output,
+        _mixed_import_metadata(payload, "MXN"),
+        WORKER_TEMPLATE,
+        original_quotation_path=None,
+        quotation_data_rows=canonical_rows,
+    )
+
+    correct = load_workbook(correct_output, data_only=False)
+    try:
+        audit = correct["Quotation_Data"]
+        keys = [audit.cell(row, 1).value for row in range(2, audit.max_row + 1)]
+        first, second = (row.item_key for row in canonical_rows)
+        assert keys == [
+            first,
+            f"{first}:lumbro:1:LIDO.OP-INT",
+            f"{first}:lumbro:2:JUMP-1.5M",
+            f"{first}:lumbro:3:CAJA-FUS",
+            second,
+            f"{second}:lumbro:1:LIDO.OP-INT",
+            f"{second}:lumbro:2:JUMP-1.5M",
+            f"{second}:lumbro:3:CAJA-FUS",
+        ]
+    finally:
+        correct.close()
+
+    reordered = deepcopy(payload)
+    reordered["sections"][0]["item_keys"].reverse()
+    inverted_rows = quotation_data_rows(reordered)
+    rejected_output = tmp_path / "identical-offiho-inverted-must-not-exist.xlsx"
+
+    with pytest.raises(ValueError, match="item_key"):
+        generate_quote(
+            parser_source,
+            rejected_output,
+            _mixed_import_metadata(payload, "MXN"),
+            WORKER_TEMPLATE,
+            original_quotation_path=None,
+            quotation_data_rows=inverted_rows,
+        )
+
+    assert not rejected_output.exists()
+    parser_book = load_workbook(parser_source, data_only=False)
+    try:
+        quotation = parser_book["Quotation"]
+        assert tuple(quotation.cell(7, column).value for column in range(20, 24)) == (
+            "Canonical Key",
+            "Source Hash",
+            "Original Source Row",
+            "Upstream Row Hash",
+        )
+        assert all(
+            quotation.column_dimensions[column].hidden
+            for column in ("T", "U", "V", "W")
+        )
+    finally:
+        parser_book.close()
+
+
+@pytest.mark.parametrize(
+    ("technical_column", "replacement", "message"),
+    (
+        (20, None, "canonical_key"),
+        (21, "f" * 64, "source_hash"),
+    ),
+)
+def test_authoritative_handoff_rejects_missing_or_mismatched_parser_identity_before_output(
+    technical_column,
+    replacement,
+    message,
+    monkeypatch,
+    tmp_path,
+):
+    _forbid_legacy_mobiliti_writers(monkeypatch)
+    payload = _identical_offiho_payload_with_lumbro_parents()
+    monkeypatch.setattr(
+        catalog_cart,
+        "_download_catalog_image",
+        lambda *_args, **_kwargs: None,
+    )
+    parser_source = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "missing-identity-source.xlsx",
+        image_dir=tmp_path / "missing-identity-images",
+    )
+    parser_book = load_workbook(parser_source, data_only=False)
+    try:
+        quotation = parser_book["Quotation"]
+        first_product_row = next(
+            row
+            for row in range(8, quotation.max_row + 1)
+            if isinstance(quotation.cell(row, 1).value, (int, float))
+        )
+        quotation.cell(first_product_row, technical_column).value = replacement
+        parser_book.save(parser_source)
+    finally:
+        parser_book.close()
+    output = tmp_path / "missing-identity-must-not-exist.xlsx"
+
+    with pytest.raises(ValueError, match=message):
+        generate_quote(
+            parser_source,
+            output,
+            _mixed_import_metadata(payload, "MXN"),
+            WORKER_TEMPLATE,
+            original_quotation_path=None,
+            quotation_data_rows=quotation_data_rows(payload),
+        )
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("technical_column", "replacement", "message"),
+    (
+        (22, 9, "source_row"),
+        (23, "f" * 64, "upstream_row_hash"),
+    ),
+)
+def test_authoritative_imported_identity_mismatch_fails_before_output(
+    technical_column,
+    replacement,
+    message,
+    monkeypatch,
+    tmp_path,
+):
+    _forbid_legacy_mobiliti_writers(monkeypatch)
+    imported_source = write_import_fixture(tmp_path / "identity-import-source.xlsx")
+    manifest, _images = build_import_manifest(
+        imported_source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=imported_source.name,
+    )
+    imported_key = f"import:{manifest['import_id']}:11"
+    payload = build_mixed_catalog_cart_payload(
+        [],
+        catalogs={},
+        rate_rows=rate_rows(),
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Importados",
+            "item_keys": [imported_key],
+        }],
+        imported_source={
+            "manifest": manifest,
+            "items": [{
+                "kind": "imported",
+                "import_id": manifest["import_id"],
+                "source_row": 11,
+                "source_currency": "USD",
+                "quantity": "2",
+                "overrides": {
+                    "name": "Alien Task Chair identidad",
+                    "description": "Silla operativa importada",
+                    "dimension": "630 x 565 x 1000 mm",
+                    "unit_price": "82.00",
+                    "provider": "Sunon importado",
+                },
+            }],
+            "source_currency": "USD",
+        },
+        today=date.today(),
+    )
+    parser_source = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / f"imported-identity-{technical_column}.xlsx",
+        image_dir=tmp_path / f"imported-identity-{technical_column}-images",
+        imported_source_path=imported_source,
+    )
+    parser_book = load_workbook(parser_source, data_only=False)
+    try:
+        quotation = parser_book["Quotation"]
+        product_row = next(
+            row
+            for row in range(8, quotation.max_row + 1)
+            if isinstance(quotation.cell(row, 1).value, (int, float))
+        )
+        quotation.cell(product_row, technical_column).value = replacement
+        parser_book.save(parser_source)
+    finally:
+        parser_book.close()
+    output = tmp_path / f"imported-identity-{technical_column}-must-not-exist.xlsx"
+
+    with pytest.raises(ValueError, match=message):
+        generate_quote(
+            parser_source,
+            output,
+            _mixed_import_metadata(payload, "MXN"),
+            WORKER_TEMPLATE,
+            original_quotation_path=imported_source,
+            quotation_data_rows=quotation_data_rows(payload),
+        )
+
+    assert not output.exists()
+
+
 def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_summary(
     monkeypatch,
     tmp_path,
