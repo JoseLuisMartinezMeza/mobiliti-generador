@@ -19,11 +19,13 @@ from openpyxl.styles import Font
 from .catalog_cart import (
     MAX_EXCEL_CELL_TEXT_LENGTH,
     _set_column_widths,
+    _trusted_dev_catalog_asset_path,
     catalog_quotation_item_text,
     write_catalog_quotation_headers,
     write_catalog_quotation_item,
 )
 from .offiho_catalog import build_offiho_cart_payload
+from .quotation_import import build_import_manifest, normalize_imported_items
 from .supplier_catalog import (
     MAX_ATTRIBUTES_DEPTH,
     MAX_ATTRIBUTES_JSON_BYTES,
@@ -63,6 +65,8 @@ MAX_MIXED_URL = 2_048
 MAX_MIXED_WARNINGS = 50
 MAX_MIXED_IDENTITY = 1_000
 MAX_MIXED_OPTIONS_PER_LINE = 200
+MAX_MIXED_SECTIONS = 32
+MAX_MIXED_SECTION_TITLE = 120
 MIXED_ALLOWED_FIELDS = {
     "tarkett": frozenset({"catalog", "code", "quantity"}),
     "offiho": frozenset({"catalog", "inventory_key", "quantity"}),
@@ -87,6 +91,23 @@ MIXED_GROUP_FIELDS = frozenset({
     "catalog", "catalog_source_hash", "base_currency", "quote_currency", "exchange_rate",
     "rate_source", "rate_effective_date", "rate_retrieved_at", "items",
 })
+MIXED_IMPORTED_SOURCE_FIELDS = frozenset({
+    "import_id", "source_hash", "original_filename", "source_currency", "items",
+})
+MIXED_IMPORTED_SOURCE_WITH_PATH_FIELDS = MIXED_IMPORTED_SOURCE_FIELDS | {"source_path"}
+MIXED_IMPORTED_SOURCE_WITH_STORAGE_FIELDS = MIXED_IMPORTED_SOURCE_FIELDS | {
+    "storage_path", "storage_provider",
+}
+MIXED_IMPORTED_STORAGE_PROVIDERS = frozenset(
+    {"supabase", "r2", "cloudflare-r2", "cloudflare"}
+)
+MIXED_IMPORTED_LINE_FIELDS = frozenset({
+    "kind", "canonical_key", "import_id", "source_row", "category", "name", "description",
+    "dimension", "provider", "quantity", "original_unit_price", "original_currency",
+    "unit_price", "frozen_exchange_rate", "discount_percent", "source_hash", "row_hash",
+    "source_reference",
+})
+MIXED_SECTION_FIELDS = frozenset({"id", "title", "item_keys"})
 AUTO_ELECTRIFICATION_RATE_FIELDS = (
     "base_currency", "quote_currency", "exchange_rate", "rate_source", "rate_effective_date", "rate_retrieved_at",
 )
@@ -173,16 +194,112 @@ def mixed_cart_key(raw: dict[str, Any]) -> str:
     return f"{catalog}:{json.dumps(identity, ensure_ascii=False, separators=(',', ':'))}"
 
 
-def _group_browser_rows(raw_items: list[dict[str, object]]) -> dict[str, list[dict[str, Any]]]:
-    groups: dict[str, list[dict[str, Any]]] = {}
+def _ordered_browser_rows(raw_items: list[dict[str, object]]) -> list[dict[str, Any]]:
+    normalized = preflight_mixed_catalog_items(raw_items)
     seen: set[str] = set()
-    for raw in preflight_mixed_catalog_items(raw_items):
+    for raw in normalized:
         key = mixed_cart_key(raw)
         if key in seen:
             raise ValueError(f"Clave mixta duplicada: {key}")
         seen.add(key)
+    return normalized
+
+
+def _group_browser_rows(
+    normalized_items: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for raw in normalized_items:
         groups.setdefault(str(raw["catalog"]), []).append(raw)
     return groups
+
+
+def _normalize_presentation_sections(
+    raw_sections: object,
+    ordered_keys: list[str],
+) -> list[dict[str, Any]]:
+    if raw_sections is None:
+        return [{
+            "id": "section-1",
+            "title": "Recepción",
+            "item_keys": ordered_keys,
+        }]
+    if (
+        not isinstance(raw_sections, list)
+        or not 1 <= len(raw_sections) <= MAX_MIXED_SECTIONS
+    ):
+        raise ValueError("Secciones mixtas invalidas")
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    flattened: list[str] = []
+    for raw in raw_sections:
+        if not isinstance(raw, dict) or set(raw) != MIXED_SECTION_FIELDS:
+            raise ValueError("Secciones mixtas invalidas")
+        section_id = _identity_text(raw.get("id"), "section_id", limit=64)
+        if not re.fullmatch(r"section-[1-9]\d*", section_id) or section_id in seen_ids:
+            raise ValueError("Secciones mixtas invalidas")
+        seen_ids.add(section_id)
+        title = _identity_text(
+            raw.get("title"),
+            "section_title",
+            limit=MAX_MIXED_SECTION_TITLE,
+        )
+        item_keys = raw.get("item_keys")
+        if not isinstance(item_keys, list) or not item_keys:
+            raise ValueError("Secciones mixtas invalidas")
+        cleaned_keys = [
+            _identity_text(value, "section_item_key", limit=MAX_MIXED_TEXT)
+            for value in item_keys
+        ]
+        flattened.extend(cleaned_keys)
+        normalized.append({
+            "id": section_id,
+            "title": title,
+            "item_keys": cleaned_keys,
+        })
+    if len(flattened) != len(ordered_keys) or set(flattened) != set(ordered_keys):
+        raise ValueError("Secciones mixtas invalidas")
+    return normalized
+
+
+def _normalize_imported_source(
+    imported_source: object,
+    *,
+    quote_currency: str,
+    rate_rows: list[dict],
+    discount: Decimal,
+) -> dict[str, Any] | None:
+    if imported_source is None:
+        return None
+    if not isinstance(imported_source, dict) or set(imported_source) != {
+        "manifest", "items", "source_currency",
+    }:
+        raise ValueError("Fuente importada invalida")
+    manifest = imported_source["manifest"]
+    items = normalize_imported_items(
+        imported_source["items"],
+        manifest,
+        source_currency=imported_source["source_currency"],
+        quote_currency=quote_currency,
+        rate_rows=rate_rows,
+        discount_percent=str(discount),
+    )
+    items = [
+        {"canonical_key": item["key"], **{key: value for key, value in item.items() if key != "key"}}
+        for item in items
+    ]
+    currencies = {item["original_currency"] for item in items}
+    return {
+        "import_id": manifest["import_id"],
+        "source_hash": manifest["source_hash"],
+        "original_filename": manifest["original_filename"],
+        "source_currency": (
+            imported_source["source_currency"]
+            or (next(iter(currencies)) if len(currencies) == 1 else None)
+        ),
+        "items": items,
+    }
 
 
 def _commercial_discount_percent(value: object) -> Decimal:
@@ -267,7 +384,13 @@ def _common_line(raw: dict[str, Any], *, catalog: str, rate: dict[str, str], dis
     return line
 
 
-def _supplier_line(raw: dict[str, Any], browser: dict[str, Any], *, catalog: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _supplier_line(
+    raw: dict[str, Any],
+    browser: dict[str, Any],
+    *,
+    catalog: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
     availability = str(raw["availability_type"])
     stock = _six(raw["stock"]) if availability == "stocked" else None
     quantity = _six(raw["quantity"])
@@ -296,14 +419,43 @@ def _supplier_line(raw: dict[str, Any], browser: dict[str, Any], *, catalog: str
     return line
 
 
-def build_mixed_catalog_cart_payload(raw_items: list[dict[str, object]], *, catalogs: dict[str, dict], rate_rows: list[dict], quote_currency: str, commercial_discount_percent: object, today: date | None = None) -> dict:
+def build_mixed_catalog_cart_payload(
+    raw_items: list[dict[str, object]],
+    *,
+    catalogs: dict[str, dict],
+    rate_rows: list[dict],
+    quote_currency: str,
+    commercial_discount_percent: object,
+    presentation_sections: object = None,
+    imported_source: object = None,
+    today: date | None = None,
+) -> dict:
     if not isinstance(quote_currency, str) or quote_currency not in MIXED_QUOTE_CURRENCIES:
         raise ValueError("Grupos mixtos invalidos")
     if not isinstance(catalogs, dict):
         raise ValueError("Catalogos mixtos invalidos")
     discount = _commercial_discount_percent(commercial_discount_percent)
     effective_today = today or date.today()
-    rows_by_catalog = _group_browser_rows(raw_items)
+    if not isinstance(raw_items, list):
+        raise ValueError("El carrito mixto debe contener entre 1 y 500 filas")
+    ordered_rows = _ordered_browser_rows(raw_items) if raw_items else []
+    normalized_import = _normalize_imported_source(
+        imported_source,
+        quote_currency=quote_currency,
+        rate_rows=rate_rows,
+        discount=discount,
+    )
+    if not ordered_rows and normalized_import is None:
+        raise ValueError("El carrito mixto debe contener entre 1 y 500 filas")
+    imported_items = [] if normalized_import is None else normalized_import["items"]
+    if len(ordered_rows) + len(imported_items) > MAX_MIXED_CATALOG_LINES:
+        raise ValueError("El carrito mixto debe contener entre 1 y 500 filas")
+    rows_by_catalog = _group_browser_rows(ordered_rows)
+    normalized_sections = _normalize_presentation_sections(
+        presentation_sections,
+        [mixed_cart_key(row) for row in ordered_rows]
+        + [item["canonical_key"] for item in imported_items],
+    )
     normalized_groups: list[dict[str, Any]] = []
     for catalog in MIXED_CATALOG_ORDER:
         rows = rows_by_catalog.get(catalog)
@@ -333,7 +485,15 @@ def build_mixed_catalog_cart_payload(raw_items: list[dict[str, object]], *, cata
                 if "moneda base" in str(exc).casefold():
                     raise ValueError(f"Moneda base mixta invalida: {catalog}") from exc
                 raise
-            items = [_supplier_line(line, row, catalog=catalog, payload=source) for line, row in zip(source["items"], rows, strict=True)]
+            items = [
+                _supplier_line(
+                    line,
+                    row,
+                    catalog=catalog,
+                    payload=source,
+                )
+                for line, row in zip(source["items"], rows, strict=True)
+            ]
             rate = {field: source[field] for field in AUTO_ELECTRIFICATION_RATE_FIELDS}
         if rate["base_currency"] != MIXED_EXPECTED_BASE_CURRENCY[catalog]:
             raise ValueError(f"Moneda base mixta invalida: {catalog}")
@@ -349,7 +509,9 @@ def build_mixed_catalog_cart_payload(raw_items: list[dict[str, object]], *, cata
     payload = {
         "source_type": MIXED_CATALOG_CART_SOURCE_TYPE, "quote_currency": quote_currency,
         "created_at": datetime.now(timezone.utc).isoformat(), "groups": normalized_groups,
-        "item_count": sum(len(group["items"]) for group in normalized_groups),
+        "imported_source": normalized_import,
+        "sections": normalized_sections,
+        "item_count": sum(len(group["items"]) for group in normalized_groups) + len(imported_items),
         "auto_electrification_rate": eligible[0] if eligible else None,
         "rate_summary": [{key: group[key] for key in ("catalog", *AUTO_ELECTRIFICATION_RATE_FIELDS)} for group in normalized_groups],
     }
@@ -403,6 +565,8 @@ def _https_url(value: object, field: str) -> str:
         port = parsed.port
     except ValueError as exc:
         raise ValueError(f"{field} mixto invalido") from exc
+    if field == "image_url" and _trusted_dev_catalog_asset_path(text) is not None:
+        return text
     if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username is not None or parsed.password is not None or port not in (None, 443):
         raise ValueError(f"{field} mixto invalido")
     return text
@@ -511,8 +675,99 @@ def _validate_reservation(line: dict[str, Any], catalog: str) -> None:
             _require_warning(line["warnings"], "Existencia insuficiente; verificar disponibilidad.", "Reserva")
 
 
+def _validate_imported_payload_source(value: object, quote_currency: str) -> tuple[dict | None, set[str]]:
+    if value is None:
+        return None, set()
+    if not isinstance(value, dict) or set(value) not in {
+        MIXED_IMPORTED_SOURCE_FIELDS,
+        MIXED_IMPORTED_SOURCE_WITH_PATH_FIELDS,
+        MIXED_IMPORTED_SOURCE_WITH_STORAGE_FIELDS,
+    }:
+        raise ValueError("Fuente importada invalida")
+    import_id = _identity_text(value["import_id"], "import_id", limit=36)
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", import_id):
+        raise ValueError("Fuente importada invalida")
+    source_hash = value["source_hash"]
+    if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+        raise ValueError("Fuente importada invalida")
+    filename = _bounded(value["original_filename"], "original_filename", required=True, limit=255)
+    if Path(filename).name != filename or "\\" in filename:
+        raise ValueError("Fuente importada invalida")
+    source_currency = value["source_currency"]
+    if source_currency is not None and source_currency not in MIXED_QUOTE_CURRENCIES:
+        raise ValueError("Fuente importada invalida")
+    source_path = value.get("storage_path", value.get("source_path"))
+    if source_path is not None and (
+        not isinstance(source_path, str)
+        or not re.fullmatch(
+            r"users/[1-9]\d*/jobs/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/import-source\.xlsx",
+            source_path,
+        )
+    ):
+        raise ValueError("Fuente importada invalida")
+    storage_provider = value.get("storage_provider")
+    if storage_provider is not None and storage_provider not in MIXED_IMPORTED_STORAGE_PROVIDERS:
+        raise ValueError("Fuente importada invalida")
+    items = value["items"]
+    if not isinstance(items, list) or not 1 <= len(items) <= MAX_MIXED_CATALOG_LINES:
+        raise ValueError("Fuente importada invalida")
+    seen: set[str] = set()
+    currencies: set[str] = set()
+    for line in items:
+        if not isinstance(line, dict) or set(line) != MIXED_IMPORTED_LINE_FIELDS:
+            raise ValueError("Linea importada invalida")
+        row = line["source_row"]
+        key = line["canonical_key"]
+        if (
+            line["kind"] != "imported"
+            or line["import_id"] != import_id
+            or type(row) is not int
+            or row <= 7
+            or key != f"import:{import_id}:{row}"
+            or key in seen
+            or line["source_hash"] != source_hash
+            or not isinstance(line["row_hash"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", line["row_hash"])
+        ):
+            raise ValueError("Linea importada invalida")
+        seen.add(key)
+        for field, required, limit in (
+            ("category", False, MAX_MIXED_TEXT), ("name", True, MAX_MIXED_TEXT),
+            ("description", False, 10_000), ("dimension", False, MAX_MIXED_TEXT),
+            ("provider", True, MAX_MIXED_TEXT), ("source_reference", True, MAX_MIXED_TEXT),
+        ):
+            _bounded(line[field], field, required=required, limit=limit)
+        if line["original_currency"] not in MIXED_QUOTE_CURRENCIES:
+            raise ValueError("Linea importada invalida")
+        currencies.add(line["original_currency"])
+        quantity = _decimal_text(line["quantity"], "Cantidad", positive=True, maximum=Decimal("1000000"))
+        original = _decimal_text(line["original_unit_price"], "Precio original", nonnegative=True, places=6)
+        unit = _decimal_text(line["unit_price"], "Precio", nonnegative=True, places=2)
+        rate = _decimal_text(line["frozen_exchange_rate"], "Tasa congelada", positive=True, places=6)
+        discount = _decimal_text(line["discount_percent"], "Descuento", nonnegative=True, places=6)
+        if (
+            quantity <= 0
+            or discount > 100
+            or unit != (original * rate).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+            or (line["original_currency"] == quote_currency and rate != Decimal("1.000000"))
+        ):
+            raise ValueError("Linea importada invalida")
+        expected_reference = f"{filename}#Quotation!{row}"
+        if line["source_reference"] != expected_reference:
+            raise ValueError("Linea importada invalida")
+        if any(
+            len(safe_excel_text(line[field])) > MAX_EXCEL_CELL_TEXT_LENGTH
+            for field in ("name", "description", "dimension", "provider", "source_reference")
+        ):
+            raise ValueError("Linea importada invalida")
+    expected_source_currency = next(iter(currencies)) if len(currencies) == 1 else None
+    if source_currency != expected_source_currency:
+        raise ValueError("Fuente importada invalida")
+    return value, seen
+
+
 def _validate_mixed_catalog_payload(payload: object) -> dict:
-    if not isinstance(payload, dict) or set(payload) != {"source_type", "quote_currency", "created_at", "groups", "item_count", "auto_electrification_rate", "rate_summary"}:
+    if not isinstance(payload, dict) or set(payload) != {"source_type", "quote_currency", "created_at", "groups", "imported_source", "sections", "item_count", "auto_electrification_rate", "rate_summary"}:
         raise ValueError("Grupos mixtos invalidos")
     try:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -521,11 +776,13 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
     if len(encoded) > MAX_MIXED_PAYLOAD_BYTES or payload["source_type"] != MIXED_CATALOG_CART_SOURCE_TYPE or not isinstance(payload["quote_currency"], str) or payload["quote_currency"] not in MIXED_QUOTE_CURRENCIES:
         raise ValueError("Grupos mixtos invalidos")
     _iso_timestamp(payload["created_at"], "created_at")
+    imported_source, seen_keys = _validate_imported_payload_source(
+        payload["imported_source"], payload["quote_currency"]
+    )
     groups = payload["groups"]
-    if not isinstance(groups, list) or not 1 <= len(groups) <= len(MIXED_CATALOG_ORDER):
+    if not isinstance(groups, list) or len(groups) > len(MIXED_CATALOG_ORDER) or (not groups and imported_source is None):
         raise ValueError("Grupos mixtos invalidos")
-    seen_keys: set[str] = set()
-    total = 0
+    total = 0 if imported_source is None else len(imported_source["items"])
     seen_catalogs: list[str] = []
     eligible: list[dict[str, str]] = []
     product_index = 1
@@ -636,6 +893,32 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
                 eligible.append({field: group[field] for field in AUTO_ELECTRIFICATION_RATE_FIELDS})
     if type(payload["item_count"]) is not int or payload["item_count"] != total:
         raise ValueError("Conteo mixto inconsistente")
+    sections = payload["sections"]
+    if not isinstance(sections, list) or not 1 <= len(sections) <= MAX_MIXED_SECTIONS:
+        raise ValueError("Secciones mixtas invalidas")
+    section_ids: set[str] = set()
+    flattened_keys: list[str] = []
+    for section in sections:
+        if not isinstance(section, dict) or set(section) != MIXED_SECTION_FIELDS:
+            raise ValueError("Secciones mixtas invalidas")
+        section_id = _identity_text(section.get("id"), "section_id", limit=64)
+        if not re.fullmatch(r"section-[1-9]\d*", section_id) or section_id in section_ids:
+            raise ValueError("Secciones mixtas invalidas")
+        section_ids.add(section_id)
+        _identity_text(
+            section.get("title"),
+            "section_title",
+            limit=MAX_MIXED_SECTION_TITLE,
+        )
+        item_keys = section.get("item_keys")
+        if not isinstance(item_keys, list) or not item_keys:
+            raise ValueError("Secciones mixtas invalidas")
+        flattened_keys.extend(
+            _identity_text(value, "section_item_key", limit=MAX_MIXED_TEXT)
+            for value in item_keys
+        )
+    if len(flattened_keys) != total or set(flattened_keys) != seen_keys:
+        raise ValueError("Secciones mixtas invalidas")
     expected_summary = [{key: group[key] for key in ("catalog", *AUTO_ELECTRIFICATION_RATE_FIELDS)} for group in groups]
     if payload["rate_summary"] != expected_summary:
         raise ValueError("Resumen de tasas mixtas inconsistente")
@@ -687,8 +970,56 @@ def create_mixed_catalog_quotation_workbook(
     output_path: str | Path,
     *,
     image_dir: str | Path | None = None,
+    imported_source_path: str | Path | bytes | None = None,
 ) -> Path:
     payload = validate_mixed_catalog_payload(payload)
+    imported_source = payload.get("imported_source")
+    imported_images: dict[int, tuple[bytes, str]] = {}
+    if imported_source is not None:
+        if imported_source_path is None:
+            raise ValueError("Fuente importada requerida")
+        if isinstance(imported_source_path, bytes):
+            imported_source_bytes = imported_source_path
+        else:
+            imported_source_bytes = Path(imported_source_path).read_bytes()
+        if hashlib.sha256(imported_source_bytes).hexdigest() != imported_source["source_hash"]:
+            raise ValueError("La fuente importada cambio despues de validarse")
+        authoritative_manifest, imported_images = build_import_manifest(
+            imported_source_bytes,
+            import_id=imported_source["import_id"],
+            original_filename=imported_source["original_filename"],
+        )
+        if (
+            authoritative_manifest["import_id"] != imported_source["import_id"]
+            or authoritative_manifest["source_hash"] != imported_source["source_hash"]
+        ):
+            raise ValueError("La fuente importada no corresponde al manifiesto")
+        authoritative_rows = {
+            item["source_row"]: item
+            for item in authoritative_manifest["items"]
+        }
+        imported_lines = imported_source["items"]
+        if {
+            line["import_id"] for line in imported_lines
+        } != {authoritative_manifest["import_id"]}:
+            raise ValueError("La fuente importada contiene mas de un import_id")
+        for line in imported_lines:
+            authoritative = authoritative_rows.get(line["source_row"])
+            if authoritative is None or any(
+                line[field] != authoritative[manifest_field]
+                for field, manifest_field in (
+                    ("canonical_key", "key"),
+                    ("category", "category"),
+                    ("row_hash", "row_hash"),
+                    ("source_reference", "source_reference"),
+                )
+            ):
+                raise ValueError("La fila importada no corresponde a la fuente")
+            explicit_currency = authoritative.get("source_currency")
+            if explicit_currency and line["original_currency"] != explicit_currency:
+                raise ValueError("La fila importada no corresponde a la fuente")
+    elif imported_source_path is not None:
+        raise ValueError("Fuente importada inesperada")
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_context = None
@@ -720,41 +1051,85 @@ def create_mixed_catalog_quotation_workbook(
 
         row = 8
         product_index = 1
-        for group in payload["groups"]:
+        items_by_key = {
+            item["canonical_key"]: item
+            for item in [
+                *(item for group in payload["groups"] for item in group["items"]),
+                *((imported_source or {}).get("items") or []),
+            ]
+        }
+        for section in payload["sections"]:
             ws.cell(row, 1).value = "- " + safe_excel_text(
-                MIXED_CATALOG_LABELS[group["catalog"]]
+                section["title"]
             )
             ws.cell(row, 1).font = Font(bold=True)
             row += 1
-            for item in group["items"]:
+            for item_key in section["item_keys"]:
+                item = items_by_key[item_key]
+                imported = item.get("kind") == "imported"
+                if imported:
+                    writer_item = {
+                        **item,
+                        "attributes": {"dimensions": item["dimension"]},
+                        "image_url": "",
+                        "product_url": "",
+                        "unit": "",
+                    }
+                    source_type = "imported_quotation"
+                    source_hash = item["source_hash"]
+                    local_image_data = imported_images.get(item["source_row"])
+                    image_file_key = None
+                else:
+                    writer_item = item
+                    source_type = MIXED_GROUP_SOURCE_TYPES[item["catalog"]]
+                    source_hash = next(
+                        group["catalog_source_hash"]
+                        for group in payload["groups"]
+                        if group["catalog"] == item["catalog"]
+                    )
+                    local_image_data = None
+                    image_file_key = (
+                        f"{item['catalog']}-{row}-"
+                        f"{hashlib.sha256(item['canonical_key'].encode('utf-8')).hexdigest()[:16]}"
+                    )
                 write_catalog_quotation_item(
                     ws,
                     row=row,
                     index=product_index,
-                    item=item,
-                    source_type=MIXED_GROUP_SOURCE_TYPES[group["catalog"]],
+                    item=writer_item,
+                    source_type=source_type,
                     images_root=images_root,
                     text_transform=safe_excel_text,
-                    image_file_key=(
-                        f"{group['catalog']}-{row}-"
-                        f"{hashlib.sha256(item['canonical_key'].encode('utf-8')).hexdigest()[:16]}"
-                    ),
+                    image_file_key=image_file_key,
+                    local_image_data=local_image_data,
                     extra_description_parts=(
                         f"Fuente: {item['source_reference']}",
-                        f"Hash fuente: {group['catalog_source_hash']}",
+                        f"Hash fuente: {source_hash}",
+                        *(
+                            (f"Hash fila: {item['row_hash']}",)
+                            if imported
+                            else ()
+                        ),
                     ),
                 )
-                ws.cell(row, 12).value = safe_excel_text(item["supplier"])
+                ws.cell(row, 12).value = safe_excel_text(
+                    item["provider"] if imported else item["supplier"]
+                )
                 ws.cell(row, 13).value = float(Decimal(item["discount_percent"]))
                 ws.cell(row, 13).number_format = "0.000000"
                 ws.cell(row, 14).value = safe_excel_text(item["original_currency"])
                 ws.cell(row, 15).value = float(Decimal(item["original_unit_price"]))
                 ws.cell(row, 16).value = float(Decimal(item["frozen_exchange_rate"]))
                 ws.cell(row, 17).value = safe_excel_text(item["source_reference"])
-                ws.cell(row, 18).value = safe_excel_text(item["price_mode"])
-                if not isinstance(item["auto_electrification"], bool):
+                ws.cell(row, 18).value = safe_excel_text(
+                    "imported" if imported else item["price_mode"]
+                )
+                auto_electrification = (
+                    False if imported else item["auto_electrification"]
+                )
+                if not isinstance(auto_electrification, bool):
                     raise ValueError("Auto Electrification mixto debe ser booleano")
-                ws.cell(row, 19).value = item["auto_electrification"]
+                ws.cell(row, 19).value = auto_electrification
                 row += 1
                 product_index += 1
 

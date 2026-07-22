@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable
+import hashlib
 import ipaddress
 import os
 import re
@@ -59,6 +60,67 @@ OFFICIAL_IMAGE_HOSTS = {
         }
     ),
 }
+DEV_CATALOG_ASSET_OBJECT_RE = re.compile(
+    r"^[0-9a-f]{64}\.(?:png|jpg|jpeg|webp)$"
+)
+
+
+def _trusted_dev_catalog_asset_path(url: str) -> Path | None:
+    if os.environ.get("MOBILITI_DEV_MODE", "").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }:
+        return None
+    try:
+        parsed = urlsplit(str(url or "").strip())
+        base = urlsplit(
+            os.environ.get(
+                "MOBILITI_DEV_PUBLIC_BASE_URL", "http://127.0.0.1:8000"
+            ).rstrip("/")
+        )
+        parsed_port = parsed.port
+        base_port = base.port
+    except (UnicodeError, ValueError):
+        return None
+    host = (parsed.hostname or "").lower().rstrip(".")
+    base_host = (base.hostname or "").lower().rstrip(".")
+    if (
+        base.scheme.lower() != "http"
+        or base_host not in {"127.0.0.1", "localhost", "::1"}
+        or base.username is not None
+        or base.password is not None
+        or base.query
+        or base.fragment
+        or parsed.scheme.lower() != base.scheme.lower()
+        or host != base_host
+        or parsed_port != base_port
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    prefix = f"{base.path.rstrip('/')}/dev/catalog-assets/"
+    if not parsed.path.startswith(prefix):
+        return None
+    object_name = parsed.path[len(prefix):]
+    if not DEV_CATALOG_ASSET_OBJECT_RE.fullmatch(object_name):
+        return None
+    project_root = next(
+        (
+            parent
+            for parent in Path(__file__).resolve().parents
+            if (parent / ".git").exists()
+        ),
+        Path.cwd(),
+    )
+    default_store = project_root / ".mobiliti_dev_store"
+    asset_root = Path(
+        os.environ.get("MOBILITI_DEV_STORE_DIR", str(default_store))
+    ).resolve() / "catalog-assets"
+    source = (asset_root / object_name).resolve()
+    if source.parent != asset_root.resolve() or not source.is_file():
+        return None
+    return source
 
 
 def create_catalog_quotation_workbook(
@@ -152,6 +214,8 @@ def write_catalog_quotation_item(
     text_transform: Callable[[object], str],
     image_file_key: str | None = None,
     extra_description_parts: tuple[str, ...] = (),
+    local_image_path: str | Path | None = None,
+    local_image_data: tuple[bytes, str] | None = None,
 ) -> None:
     code = str(item.get("code") or item.get("sku") or "").strip()
     name = str(item.get("name", "")).strip()
@@ -171,7 +235,9 @@ def write_catalog_quotation_item(
     ws.cell(row, 2).value = text_transform(name)
     ws.cell(row, 4).value = text_transform(description)
     ws.cell(row, 5).value = text_transform(
-        dimensions if source_type == "supplier_cart" and dimensions else unit
+        dimensions
+        if source_type in {"supplier_cart", "imported_quotation"} and dimensions
+        else unit
     )
     ws.cell(row, 7).value = _excel_number(quantity)
     ws.cell(row, 10).value = _excel_number(_decimal(item.get("unit_price", 0)))
@@ -179,15 +245,20 @@ def write_catalog_quotation_item(
     if warning:
         ws.cell(row, 4).fill = PatternFill("solid", fgColor=WARNING_FILL)
     ws.row_dimensions[row].height = 72
-    _add_catalog_image(
-        ws,
-        row,
-        item.get("image_url"),
-        images_root,
-        code,
-        source_type,
-        destination_key=image_file_key,
-    )
+    if local_image_data is not None:
+        _add_local_catalog_image(ws, row, local_image_data)
+    elif local_image_path is not None:
+        _add_local_catalog_image(ws, row, local_image_path)
+    else:
+        _add_catalog_image(
+            ws,
+            row,
+            item.get("image_url"),
+            images_root,
+            code,
+            source_type,
+            destination_key=image_file_key,
+        )
 
 
 def catalog_quotation_item_text(
@@ -203,7 +274,7 @@ def catalog_quotation_item_text(
     url = str(item.get("product_url", "") or "").strip()
     if source_type == "supplier_cart":
         quantity_precision = 6 if _is_square_meter_unit(unit) else 0
-    elif source_type == "tarkett_cart":
+    elif source_type in {"tarkett_cart", "imported_quotation"}:
         quantity_precision = 6
     else:
         quantity_precision = 3
@@ -410,8 +481,36 @@ def _add_catalog_image(
             cache[cache_key] = image_path
     if not image_path:
         return
+    _anchor_catalog_image(ws, row, str(image_path))
+
+
+def _add_local_catalog_image(
+    ws,
+    row: int,
+    source: str | Path | tuple[bytes, str],
+) -> None:
     try:
-        image = XlsxImage(str(image_path))
+        if isinstance(source, tuple):
+            data, content_type = source
+            if (
+                not isinstance(data, bytes)
+                or not data
+                or len(data) > MAX_IMAGE_BYTES
+                or not isinstance(content_type, str)
+            ):
+                return
+            _validated_catalog_image_suffix(data, content_type)
+            stream = BytesIO(data)
+            _anchor_catalog_image(ws, row, stream)
+            return
+        _anchor_catalog_image(ws, row, str(Path(source)))
+    except Exception:
+        return
+
+
+def _anchor_catalog_image(ws, row: int, source: Any) -> None:
+    try:
+        image = XlsxImage(source)
         if image.width and image.height:
             scale = min(90 / image.width, 66 / image.height)
             image.width = int(image.width * scale)
@@ -442,6 +541,29 @@ def _download_catalog_image(
 ) -> Path | None:
     clean_url = str(url or "").strip()
     try:
+        local_source = _trusted_dev_catalog_asset_path(clean_url)
+        if local_source is not None:
+            with local_source.open("rb") as source:
+                data = source.read(MAX_IMAGE_BYTES + 1)
+            if (
+                not data
+                or len(data) > MAX_IMAGE_BYTES
+                or hashlib.sha256(data).hexdigest() != local_source.stem
+            ):
+                return None
+            content_type = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".webp": "image/webp",
+            }.get(local_source.suffix.lower(), "")
+            suffix = _validated_catalog_image_suffix(data, content_type)
+            safe_key = re.sub(
+                r"[^A-Za-z0-9_-]+", "_", destination_key or code or "producto"
+            )
+            destination = image_dir / f"{safe_key}{suffix}"
+            destination.write_bytes(data)
+            return destination
         allowed_hosts = _allowed_image_hosts(source_type)
         if not allowed_hosts:
             return None

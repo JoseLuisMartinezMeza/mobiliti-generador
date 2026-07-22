@@ -36,6 +36,8 @@ MAX_ZIP_COMPRESSION_RATIO = 200
 SIX_PLACES = Decimal("0.000001")
 TWO_PLACES = Decimal("0.01")
 Q_HEADER_ROW = 7
+WIRE_QUANTITY_PATTERN = re.compile(r"^(?:0|[1-9][0-9]{0,6})(?:\.[0-9]{1,6})?$")
+WIRE_PRICE_PATTERN = re.compile(r"^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,6})?$")
 
 MANIFEST_FIELDS = {
     "schema_version", "import_id", "source_hash", "original_filename", "provider",
@@ -141,7 +143,13 @@ def normalize_imported_items(
                 payload_currency or fallback_currency,
                 "Moneda de origen requerida",
             )
-        quantity = _quantity(raw["quantity"])
+        quantity = _wire_decimal(
+            raw["quantity"],
+            "Cantidad importada invalida",
+            pattern=WIRE_QUANTITY_PATTERN,
+            minimum=Decimal("0.000001"),
+            maximum=MAX_QUANTITY,
+        )
         original_price = _decimal(
             overrides["unit_price"],
             "Precio importado invalido",
@@ -226,7 +234,7 @@ def validate_import_manifest(manifest: dict) -> dict:
 def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, str]]:
     source = _source_bytes(source_bytes)
     try:
-        workbook = load_workbook(BytesIO(source), data_only=True)
+        workbook = load_workbook(BytesIO(source), data_only=False)
     except Exception as exc:
         raise ValueError("El archivo .xlsx es invalido") from exc
     try:
@@ -338,16 +346,21 @@ def safe_filename(value: object) -> str:
 
 def _manifest_item(item: dict, import_id: str, filename: str) -> dict:
     row = item["row"]
-    name = _text(item["nombre"], "Nombre")
-    description = _text(item["descripcion"], "Descripcion", allow_empty=True, maximum=MAX_DESCRIPTION_LENGTH)
-    dimension = _text(item["dimension"], "Dimension", allow_empty=True)
+    name = _workbook_text(item["nombre"], "Nombre")
+    description = _workbook_text(
+        item["descripcion"], "Descripcion", allow_empty=True,
+        maximum=MAX_DESCRIPTION_LENGTH,
+    )
+    dimension = _workbook_text(
+        item["dimension"], "Dimension", allow_empty=True, allow_none=True
+    )
     quantity = _quantity(item["cantidad"])
     unit_price = _decimal(item["precio"], "Precio unitario invalido", minimum=Decimal(0))
     currency = _currency(item.get("moneda_original"), "Moneda de origen invalida", allow_none=True)
     row_data = {
         "key": f"import:{import_id}:{row}",
         "source_row": row,
-        "category": _text(item.get("categoria", ""), "Categoria", allow_empty=True),
+        "category": _workbook_text(item.get("categoria", ""), "Categoria", allow_empty=True),
         "name": name,
         "description": description,
         "dimension": dimension,
@@ -367,7 +380,7 @@ def _manifest_sections(items: list[dict], import_id: str) -> list[dict]:
         if item["tipo"] == "categoria":
             current = {
                 "id": f"import-section-{len(sections) + 1}",
-                "title": _text(item["nombre"], "Categoria"),
+                "title": _workbook_text(item["nombre"], "Categoria"),
                 "item_keys": [],
             }
             sections.append(current)
@@ -467,7 +480,13 @@ def _import_overrides(value: object) -> dict[str, str]:
         "name": _text(value["name"], "Nombre"),
         "description": _text(value["description"], "Descripcion", allow_empty=True, maximum=MAX_DESCRIPTION_LENGTH),
         "dimension": _text(value["dimension"], "Dimension", allow_empty=True),
-        "unit_price": _plain_decimal(_decimal(value["unit_price"], "Precio importado invalido", minimum=Decimal(0))),
+        "unit_price": _plain_decimal(_wire_decimal(
+            value["unit_price"],
+            "Precio importado invalido",
+            pattern=WIRE_PRICE_PATTERN,
+            minimum=Decimal(0),
+            maximum=MAX_MONEY,
+        )),
         "provider": _text(value["provider"], "Proveedor"),
     }
 
@@ -490,11 +509,16 @@ def _conversion_rate(base_currency: str, quote_currency: str, rate_rows: object)
 
 def _provider_from_workbook_bytes(source_bytes: bytes) -> str:
     try:
-        workbook = load_workbook(BytesIO(_source_bytes(source_bytes)), data_only=True, read_only=True)
+        workbook = load_workbook(BytesIO(_source_bytes(source_bytes)), data_only=False, read_only=True)
         try:
             if "Quotation" not in workbook.sheetnames:
                 raise ValueError("El archivo no contiene hoja Quotation")
-            return _text(workbook["Quotation"]["A1"].value, "Proveedor", allow_empty=True)
+            return _workbook_text(
+                workbook["Quotation"]["A1"].value,
+                "Proveedor",
+                allow_empty=True,
+                allow_none=True,
+            )
         finally:
             workbook.close()
     except ValueError:
@@ -663,6 +687,25 @@ def _quantity(value: object) -> Decimal:
     return _decimal(value, "Cantidad importada invalida", minimum=Decimal("0.000001"), maximum=MAX_QUANTITY)
 
 
+def _wire_decimal(
+    value: object,
+    error: str,
+    *,
+    pattern: re.Pattern[str],
+    minimum: Decimal,
+    maximum: Decimal,
+) -> Decimal:
+    if not isinstance(value, str):
+        raise ValueError(error)
+    text = value
+    if not pattern.fullmatch(text):
+        raise ValueError(error)
+    number = Decimal(text)
+    if number < minimum or number > maximum:
+        raise ValueError(error)
+    return number
+
+
 def _decimal(value: object, error: str, *, minimum: Decimal, maximum: Decimal = MAX_MONEY) -> Decimal:
     if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
         raise ValueError(error)
@@ -687,6 +730,21 @@ def _text(value: object, error: str, *, allow_empty: bool = False, maximum: int 
     if not text and not allow_empty:
         raise ValueError(error)
     return text
+
+
+def _workbook_text(
+    value: object,
+    error: str,
+    *,
+    allow_empty: bool = False,
+    allow_none: bool = False,
+    maximum: int = MAX_TEXT_LENGTH,
+) -> str:
+    if value is None and allow_none:
+        value = ""
+    if isinstance(value, str):
+        value = re.sub(r"[\t\r\n]+", " ", value)
+    return _text(value, error, allow_empty=allow_empty, maximum=maximum)
 
 
 def _contains_control(value: str) -> bool:
