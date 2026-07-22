@@ -8,7 +8,7 @@ ENV QUOTE_ENGINE=python
 ENV WORKER_POLL_SECONDS=10
 ENV WORKER_STALE_MINUTES=30
 ENV MAX_QUOTE_OUTPUT_MB=100
-ENV TEMPLATE_PATH="/app/templates/Formato Cotizacion 2026 GDL.xlsx"
+ENV TEMPLATE_PATH="/app/templates/Formato Cotizacion 2026 Oficial.xlsx"
 
 WORKDIR /app
 

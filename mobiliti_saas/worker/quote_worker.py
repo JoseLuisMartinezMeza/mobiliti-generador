@@ -609,15 +609,16 @@ def _resolve_project_root() -> Path:
 
 
 def _default_template() -> Path:
-    root = _resolve_project_root()
-    candidates = [
-        root / "Formato Cotización 2026 GDL (1).xlsx",
-        root / "Formato Cotizacion 2026 GDL (1).xlsx",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
+    template = (
+        PROJECT_ROOT
+        / "mobiliti_saas"
+        / "worker"
+        / "templates"
+        / "Formato Cotizacion 2026 Oficial.xlsx"
+    )
+    if not template.is_file():
+        raise FileNotFoundError(f"Plantilla oficial no disponible: {template}")
+    return template
 
 
 def _template_path() -> str:
