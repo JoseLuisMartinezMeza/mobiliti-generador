@@ -20,6 +20,12 @@ class SectionNeed:
     title: str
     item_count: int
 
+    def __post_init__(self) -> None:
+        if type(self.item_count) is not int:
+            raise TypeError("La cantidad de productos debe ser un entero")
+        if self.item_count < 0:
+            raise ValueError("La cantidad de productos no puede ser negativa")
+
 
 @dataclass(frozen=True)
 class SectionLayout:
@@ -96,6 +102,12 @@ def plan_mobiliti_layout(needs: Sequence[SectionNeed]) -> MobilitiRowMap:
     """Calcula un layout sin topes comerciales; solo respeta XLSX físico."""
 
     visible_count = max(BASE_SECTION_COUNT, len(needs))
+    minimum_total_row = BASE_FIRST_SECTION_ROW + visible_count * (
+        BASE_PRODUCT_CAPACITY + 2
+    )
+    if minimum_total_row + RESERVED_ROWS_AFTER_TOTAL > XLSX_MAX_ROWS:
+        raise ValueError("La cotizacion excede la capacidad física de XLSX")
+
     cursor = BASE_FIRST_SECTION_ROW
     sections: list[SectionLayout] = []
 
@@ -105,12 +117,12 @@ def plan_mobiliti_layout(needs: Sequence[SectionNeed]) -> MobilitiRowMap:
             if index < len(needs)
             else SectionNeed(f"unused-{index}", "NOMBRE", 0)
         )
-        if need.item_count < 0:
-            raise ValueError("La cantidad de productos no puede ser negativa")
-
         capacity = max(BASE_PRODUCT_CAPACITY, need.item_count)
         product_start = cursor + 1
         subtotal_row = product_start + capacity
+        next_cursor = subtotal_row + 1
+        if next_cursor + RESERVED_ROWS_AFTER_TOTAL > XLSX_MAX_ROWS:
+            raise ValueError("La cotizacion excede la capacidad física de XLSX")
         sections.append(
             SectionLayout(
                 id=need.id,
@@ -122,7 +134,7 @@ def plan_mobiliti_layout(needs: Sequence[SectionNeed]) -> MobilitiRowMap:
                 subtotal_row=subtotal_row,
             )
         )
-        cursor = subtotal_row + 1
+        cursor = next_cursor
 
     total_row = cursor
     if total_row + RESERVED_ROWS_AFTER_TOTAL > XLSX_MAX_ROWS:
