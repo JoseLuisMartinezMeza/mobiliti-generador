@@ -695,6 +695,25 @@ def test_typed_editor_setters_are_strict_and_idempotent():
     assert text.attrib["{http://www.w3.org/XML/1998/namespace}space"] == "preserve"
 
 
+def test_typed_editor_batch_is_atomic_when_a_destination_cell_is_absent():
+    editor, _row_map = _official_editor_and_row_map()
+    row = editor.require_row(8)
+    k8 = row.find(f"{{{MAIN}}}c[@r='K8']")
+    assert k8 is not None
+    row.remove(k8)
+    before = editor.to_xml()
+
+    with pytest.raises(ValueError, match="K8"):
+        editor.set_typed_values(
+            (
+                MobilitiCellWrite("K4", "boolean", False),
+                MobilitiCellWrite("K8", "text", "Guadalajara"),
+            )
+        )
+
+    assert editor.to_xml() == before
+
+
 @pytest.mark.parametrize(
     ("method", "coordinate", "value", "message"),
     [

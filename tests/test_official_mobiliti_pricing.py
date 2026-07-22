@@ -10,6 +10,7 @@ from openpyxl.formula.tokenizer import Tokenizer
 
 from mobiliti_saas.quote_engine.mobiliti_layout import SectionNeed, plan_mobiliti_layout
 from mobiliti_saas.quote_engine.mobiliti_pricing import (
+    PricingRowBinding,
     build_mobiliti_pricing_writes,
     lumbro_frozen_cost,
     write_official_currency_selector,
@@ -77,15 +78,17 @@ def _formula_signature(cell: ET.Element) -> tuple[tuple[str, str, str], ...]:
 def _row(
     key: str,
     *,
+    section_id: str = "section-1",
+    position: int = 1,
     original: object = Decimal("100.000000"),
     rate: object = Decimal("18.500000"),
     converted: object = Decimal("1850.00"),
 ) -> QuotationDataRow:
     return QuotationDataRow(
         item_key=key,
-        section_id="section-1",
+        section_id=section_id,
         section_title="SILLAS",
-        position=1,
+        position=position,
         origin="catalog",
         source_row=None,
         original_currency="USD",
@@ -98,6 +101,21 @@ def _row(
         source_hash="a" * 64,
         upstream_row_hash="",
         row_hash="b" * 64,
+    )
+
+
+def _binding(
+    key: str,
+    target_row: int,
+    *,
+    section_id: str = "section-1",
+    position: int = 1,
+) -> PricingRowBinding:
+    return PricingRowBinding(
+        item_key=key,
+        section_id=section_id,
+        position=position,
+        target_row=target_row,
     )
 
 
@@ -114,7 +132,11 @@ def test_frozen_cost_is_written_once_and_official_pricing_formulas_survive(
 ):
     row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
     rows = [_row("item-1", original=Decimal(original), rate=Decimal(rate), converted=expected)]
-    writes = build_mobiliti_pricing_writes(rows, row_map)
+    writes = build_mobiliti_pricing_writes(
+        rows,
+        row_map,
+        bindings=(_binding("item-1", 14),),
+    )
 
     assert writes == (MobilitiCellWrite("J14", "number", expected),)
     mutation = build_mobiliti_sheet(
@@ -137,7 +159,7 @@ def test_frozen_cost_is_written_once_and_official_pricing_formulas_survive(
     )
     assert ET.tostring(_cell(output, "K6")) == ET.tostring(_cell(official, "K6"))
 
-    # La fila amarilla sin producto conserva las fÃ³rmulas oficiales y no recibe costo.
+    # La fila amarilla sin producto conserva las fórmulas oficiales y no recibe costo.
     assert _cell(output, "J15").find(f"{{{MAIN}}}v") is None
     assert _cell(output, "W15").find(f"{{{MAIN}}}f") is not None
     assert _cell(output, "X15").find(f"{{{MAIN}}}f") is not None
@@ -146,19 +168,40 @@ def test_frozen_cost_is_written_once_and_official_pricing_formulas_survive(
 def test_cost_writes_follow_every_item_row_in_exact_order_without_duplicates():
     needs = [SectionNeed("first", "PRIMERA", 2), SectionNeed("second", "SEGUNDA", 1)]
     row_map = plan_mobiliti_layout(needs)
+    item_rows = row_map.item_rows
     rows = [
-        _row("a", original=Decimal("1"), rate=Decimal("1"), converted=Decimal("1.00")),
-        replace(
-            _row("b", original=Decimal("2"), rate=Decimal("1"), converted=Decimal("2.00")),
-            position=2,
+        _row(
+            "a",
+            section_id="first",
+            position=1,
+            original=Decimal("1"),
+            rate=Decimal("1"),
+            converted=Decimal("1.00"),
         ),
-        replace(
-            _row("c", original=Decimal("3"), rate=Decimal("1"), converted=Decimal("3.00")),
+        _row(
+            "b",
+            section_id="first",
+            position=2,
+            original=Decimal("2"),
+            rate=Decimal("1"),
+            converted=Decimal("2.00"),
+        ),
+        _row(
+            "c",
+            section_id="second",
             position=3,
+            original=Decimal("3"),
+            rate=Decimal("1"),
+            converted=Decimal("3.00"),
         ),
     ]
+    bindings = (
+        _binding("a", item_rows[0], section_id="first", position=1),
+        _binding("b", item_rows[1], section_id="first", position=2),
+        _binding("c", item_rows[2], section_id="second", position=3),
+    )
 
-    writes = build_mobiliti_pricing_writes(rows, row_map)
+    writes = build_mobiliti_pricing_writes(rows, row_map, bindings=bindings)
 
     assert tuple(write.coordinate for write in writes) == tuple(
         f"J{row}" for row in row_map.item_rows
@@ -175,20 +218,83 @@ def test_cost_writes_follow_every_item_row_in_exact_order_without_duplicates():
 def test_cost_writes_reject_row_count_mismatch_instead_of_truncating(delta):
     row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 2)])
     rows = [
-        _row(f"item-{index}", original=Decimal("1"), rate=Decimal("1"), converted=Decimal("1.00"))
+        _row(
+            f"item-{index}",
+            position=index + 1,
+            original=Decimal("1"),
+            rate=Decimal("1"),
+            converted=Decimal("1.00"),
+        )
         for index in range(2 + delta)
     ]
+    bindings = tuple(
+        _binding(f"item-{index}", target_row, position=index + 1)
+        for index, target_row in enumerate(row_map.item_rows)
+    )
 
     with pytest.raises(ValueError, match="cantidad.*filas Mobiliti"):
-        build_mobiliti_pricing_writes(rows, row_map)
+        build_mobiliti_pricing_writes(rows, row_map, bindings=bindings)
 
 
 def test_cost_writes_reject_duplicate_canonical_keys():
     row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 2)])
     rows = [_row("duplicate"), replace(_row("duplicate"), position=2)]
+    bindings = tuple(
+        _binding("duplicate", target_row, position=index)
+        for index, target_row in enumerate(row_map.item_rows, start=1)
+    )
 
     with pytest.raises(ValueError, match="duplicad"):
+        build_mobiliti_pricing_writes(rows, row_map, bindings=bindings)
+
+
+def test_cost_writes_reject_swapped_items_even_when_positions_are_rewritten_validly():
+    row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 2)])
+    rows = [
+        _row(
+            "item-b",
+            position=1,
+            original=Decimal("2"),
+            rate=Decimal("1"),
+            converted=Decimal("2.00"),
+        ),
+        _row(
+            "item-a",
+            position=2,
+            original=Decimal("1"),
+            rate=Decimal("1"),
+            converted=Decimal("1.00"),
+        ),
+    ]
+    bindings = (
+        _binding("item-a", row_map.item_rows[0], position=1),
+        _binding("item-b", row_map.item_rows[1], position=2),
+    )
+
+    with pytest.raises(ValueError, match="[Ii]dentidad.*item_key"):
+        build_mobiliti_pricing_writes(rows, row_map, bindings=bindings)
+
+
+def test_cost_writes_require_independent_bindings_and_validate_target_identity():
+    row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
+    rows = [_row("item-a")]
+
+    with pytest.raises(TypeError, match="bindings"):
         build_mobiliti_pricing_writes(rows, row_map)
+    binding = _binding("item-a", 14)
+    tampered = (
+        (replace(binding, item_key="item-b"), "item_key"),
+        (replace(binding, section_id="other"), "section_id"),
+        (replace(binding, position=2), "position"),
+        (replace(binding, target_row=15), "target_row"),
+    )
+    for changed_binding, message in tampered:
+        with pytest.raises(ValueError, match=message):
+            build_mobiliti_pricing_writes(
+                rows,
+                row_map,
+                bindings=(changed_binding,),
+            )
 
 
 def test_cost_writes_reject_converted_cost_mismatch_without_reconverting_it():
@@ -198,6 +304,7 @@ def test_cost_writes_reject_converted_cost_mismatch_without_reconverting_it():
         build_mobiliti_pricing_writes(
             [_row("item-1", converted=Decimal("1849.99"))],
             row_map,
+            bindings=(_binding("item-1", 14),),
         )
 
 
@@ -223,7 +330,11 @@ def test_cost_writes_reject_invalid_numeric_contract(field, value, message):
     row = replace(_row("item-1"), **{field: value})
 
     with pytest.raises((TypeError, ValueError), match=message):
-        build_mobiliti_pricing_writes([row], row_map)
+        build_mobiliti_pricing_writes(
+            [row],
+            row_map,
+            bindings=(_binding("item-1", 14),),
+        )
 
 
 def test_lumbro_accessory_is_a_frozen_decimal_and_never_a_k6_formula():
@@ -241,12 +352,18 @@ def test_lumbro_missing_or_ambiguous_price_fails_closed(ambiguous):
         lumbro_frozen_cost(ambiguous, Decimal("1"))
 
 
-def test_lumbro_missing_price_requires_explicit_zero_contract():
-    assert lumbro_frozen_cost(
-        None,
-        Decimal("1"),
-        missing_price_is_zero=True,
-    ) == Decimal("0.00")
+def test_lumbro_none_always_fails_and_decimal_zero_is_the_only_zero_contract():
+    with pytest.raises((TypeError, ValueError), match="Lumbro"):
+        lumbro_frozen_cost(None, Decimal("1"))
+
+    assert lumbro_frozen_cost(Decimal("0"), Decimal("1")) == Decimal("0.00")
+
+    with pytest.raises(TypeError, match="missing_price_is_zero"):
+        lumbro_frozen_cost(
+            None,
+            Decimal("1"),
+            missing_price_is_zero=True,
+        )
 
 
 @pytest.mark.parametrize("currency", ["", "mxn", "GBP", None, True])
@@ -270,6 +387,65 @@ def test_currency_selector_rejects_unsafe_or_oversized_k8_text(delivery_place):
 
     with pytest.raises((TypeError, ValueError), match="K8"):
         write_official_currency_selector(editor, "MXN", delivery_place)
+
+
+@pytest.mark.parametrize(
+    "invisible",
+    [
+        pytest.param("\ufeff=WEBSERVICE()", id="bom"),
+        pytest.param("\u200b+1", id="zero-width-space"),
+        pytest.param("\u2060@SUM", id="word-joiner"),
+    ],
+)
+def test_currency_selector_rejects_invisible_formula_prefixes(invisible):
+    editor = WorksheetEditor.from_xml(_official_xml())
+
+    with pytest.raises(ValueError, match="K8.*invisible"):
+        write_official_currency_selector(editor, "MXN", invisible)
+
+
+def test_currency_selector_rechecks_k8_limit_after_formula_neutralization():
+    editor = WorksheetEditor.from_xml(_official_xml())
+    before = editor.to_xml()
+    maximum_length_formula = "=" + ("x" * 32_766)
+
+    with pytest.raises(ValueError, match="K8.*32767"):
+        write_official_currency_selector(editor, "MXN", maximum_length_formula)
+
+    assert editor.to_xml() == before
+
+
+def test_currency_selector_is_atomic_when_k8_destination_is_absent():
+    editor = WorksheetEditor.from_xml(_official_xml())
+    row = editor.require_row(8)
+    k8 = row.find(f"{{{MAIN}}}c[@r='K8']")
+    assert k8 is not None
+    row.remove(k8)
+    before = editor.to_xml()
+
+    with pytest.raises(ValueError, match="K8"):
+        write_official_currency_selector(editor, "MXN", "Guadalajara")
+
+    assert editor.to_xml() == before
+
+
+def test_task7_sources_are_strict_utf8_without_mojibake():
+    paths = (
+        ROOT / "mobiliti_saas" / "quote_engine" / "mobiliti_pricing.py",
+        ROOT / "mobiliti_saas" / "quote_engine" / "ooxml_worksheet.py",
+        ROOT / "tests" / "test_official_mobiliti_pricing.py",
+        ROOT / "tests" / "test_mobiliti_ooxml_expansion.py",
+    )
+    decoded = tuple(
+        path.read_bytes().decode("utf-8", errors="strict") for path in paths
+    )
+
+    assert "num\u00e9ricas" in decoded[0]
+    assert not any(
+        marker in source
+        for source in decoded
+        for marker in ("\u00c3", "\u00c2", "\u00e2\u20ac")
+    )
 
 
 @pytest.mark.parametrize(

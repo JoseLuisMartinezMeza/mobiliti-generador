@@ -1,12 +1,13 @@
-"""Entradas numÃ©ricas de precios para la hoja oficial ``Mobiliti``.
+"""Entradas numéricas de precios para la hoja oficial ``Mobiliti``.
 
-Este mÃ³dulo no convierte costos canÃ³nicos por segunda vez. El producto entre
-precio original y tipo congelado se calcula Ãºnicamente para comprobar el
+Este módulo no convierte costos canónicos por segunda vez. El producto entre
+precio original y tipo congelado se calcula únicamente para comprobar el
 invariante; la celda ``J`` recibe siempre ``QuotationDataRow.converted_cost``.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 import unicodedata
 from typing import Sequence
@@ -21,41 +22,91 @@ MAX_NUMERIC_SCALE = 6
 MAX_NUMERIC_INTEGRAL_DIGITS = 12
 MAX_EXCEL_CELL_TEXT_LENGTH = 32_767
 QUOTE_CURRENCIES = frozenset(("MXN", "USD", "EUR"))
+UNSAFE_INVISIBLE_TEXT = frozenset("\ufeff\u200b\u200c\u200d\u2060")
+
+
+@dataclass(frozen=True)
+class PricingRowBinding:
+    """Identidad autoritativa esperada para una fila destino de ``Mobiliti``."""
+
+    item_key: str
+    section_id: str
+    position: int
+    target_row: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.item_key, str) or not self.item_key:
+            raise ValueError("item_key de binding de precio inválido")
+        if not isinstance(self.section_id, str) or not self.section_id:
+            raise ValueError("section_id de binding de precio inválido")
+        if type(self.position) is not int or self.position < 1:
+            raise ValueError("position de binding de precio inválida")
+        if type(self.target_row) is not int or self.target_row < 1:
+            raise ValueError("target_row de binding de precio inválida")
 
 
 def build_mobiliti_pricing_writes(
     rows: Sequence[QuotationDataRow],
     row_map: MobilitiRowMap,
+    *,
+    bindings: Sequence[PricingRowBinding],
 ) -> tuple[MobilitiCellWrite, ...]:
-    """Mapea cada costo canÃ³nico, una sola vez y en orden, a ``Mobiliti!J``."""
+    """Mapea cada costo canónico validando una identidad externa obligatoria."""
 
     if isinstance(rows, (str, bytes, bytearray)) or not isinstance(rows, Sequence):
-        raise TypeError("Las filas canÃ³nicas de precios deben ser una secuencia")
+        raise TypeError("Las filas canónicas de precios deben ser una secuencia")
     if not isinstance(row_map, MobilitiRowMap):
-        raise TypeError("El mapa de filas Mobiliti es invÃ¡lido")
+        raise TypeError("El mapa de filas Mobiliti es inválido")
+    if isinstance(bindings, (str, bytes, bytearray)) or not isinstance(
+        bindings, Sequence
+    ):
+        raise TypeError("Los bindings autoritativos de precios deben ser una secuencia")
 
-    item_rows = row_map.item_rows
-    if len(rows) != len(item_rows):
+    layout_identities = _layout_identities(row_map)
+    item_rows = tuple(target_row for _section_id, target_row in layout_identities)
+    if len(rows) != len(item_rows) or len(bindings) != len(item_rows):
         raise ValueError(
-            "La cantidad de costos canÃ³nicos no coincide con las filas Mobiliti"
+            "La cantidad de costos canónicos, bindings y filas Mobiliti no coincide"
         )
     if len(item_rows) != len(set(item_rows)):
         raise ValueError("El mapa contiene filas Mobiliti duplicadas")
 
     seen_keys: set[str] = set()
+    seen_binding_identities: set[tuple[str, str, int]] = set()
     writes: list[MobilitiCellWrite] = []
-    for position, (canonical, target_row) in enumerate(
-        zip(rows, item_rows, strict=True), start=1
+    for position, (canonical, binding, layout_identity) in enumerate(
+        zip(rows, bindings, layout_identities, strict=True), start=1
     ):
         if not isinstance(canonical, QuotationDataRow):
-            raise TypeError("Fila canÃ³nica de precio invÃ¡lida")
+            raise TypeError("Fila canónica de precio inválida")
+        if not isinstance(binding, PricingRowBinding):
+            raise TypeError("Binding autoritativo de precio inválido")
+        expected_section_id, target_row = layout_identity
+        if binding.target_row != target_row:
+            raise ValueError("Identidad de precio inconsistente: target_row")
+        if binding.section_id != expected_section_id:
+            raise ValueError("Identidad de precio inconsistente: section_id del layout")
+        if binding.position != position:
+            raise ValueError("Identidad de precio inconsistente: position del binding")
+        binding_identity = (
+            binding.item_key,
+            binding.section_id,
+            binding.target_row,
+        )
+        if binding_identity in seen_binding_identities:
+            raise ValueError("Identidad de binding de precio duplicada")
+        seen_binding_identities.add(binding_identity)
         if canonical.position != position:
-            raise ValueError("Orden de costos canÃ³nicos inconsistente")
+            raise ValueError("Identidad de precio inconsistente: position canónica")
         if not isinstance(canonical.item_key, str) or not canonical.item_key:
-            raise ValueError("Clave canÃ³nica de precio invÃ¡lida")
+            raise ValueError("Clave canónica de precio inválida")
         if canonical.item_key in seen_keys:
-            raise ValueError("Clave canÃ³nica de precio duplicada")
+            raise ValueError("Clave canónica de precio duplicada")
         seen_keys.add(canonical.item_key)
+        if canonical.item_key != binding.item_key:
+            raise ValueError("Identidad de precio inconsistente: item_key")
+        if canonical.section_id != binding.section_id:
+            raise ValueError("Identidad de precio inconsistente: section_id canónico")
 
         original = _numeric_18_6(
             canonical.original_cost,
@@ -75,32 +126,23 @@ def build_mobiliti_pricing_writes(
         expected = _converted_cost(original, rate)
         _numeric_18_6(expected, "converted_cost", positive=False)
         if converted != expected:
-            raise ValueError("Costo convertido canÃ³nico inconsistente")
+            raise ValueError("Costo convertido canónico inconsistente")
 
-        # No se usa ``expected`` como salida: converted_cost ya estÃ¡ congelado.
+        # No se usa ``expected`` como salida: converted_cost ya está congelado.
         writes.append(MobilitiCellWrite(f"J{target_row}", "number", converted))
 
     return tuple(writes)
 
 
 def lumbro_frozen_cost(
-    original_mxn: Decimal | None,
+    original_mxn: Decimal,
     frozen_rate: Decimal,
-    *,
-    missing_price_is_zero: bool = False,
 ) -> Decimal:
-    """Congela en Python un accesorio Lumbro; nunca produce una fÃ³rmula Excel.
+    """Congela en Python un accesorio Lumbro; nunca produce una fórmula Excel.
 
-    La ausencia de precio falla cerrada. El llamador puede declarar de manera
-    explÃ­cita que su contrato representa esa ausencia como cero.
+    La ausencia o ambigüedad siempre falla cerrada. Un cero legítimo se expresa
+    únicamente como ``Decimal("0")``.
     """
-
-    if type(missing_price_is_zero) is not bool:
-        raise TypeError("El contrato de precio cero Lumbro debe ser booleano")
-    if original_mxn is None:
-        if not missing_price_is_zero:
-            raise ValueError("Precio Lumbro ausente")
-        original_mxn = Decimal("0")
 
     original = _numeric_18_6(original_mxn, "precio Lumbro", positive=False)
     rate = _numeric_18_6(frozen_rate, "tipo congelado Lumbro", positive=True)
@@ -117,16 +159,33 @@ def write_official_currency_selector(
     """Escribe exclusivamente el selector oficial ``K4`` y el texto ``K8``."""
 
     if not isinstance(editor, WorksheetEditor):
-        raise TypeError("Editor Mobiliti invÃ¡lido")
+        raise TypeError("Editor Mobiliti inválido")
     if not isinstance(quote_currency, str):
-        raise TypeError("Moneda de cotizacion invÃ¡lida")
+        raise TypeError("Moneda de cotización inválida")
     if quote_currency not in QUOTE_CURRENCIES:
-        raise ValueError("Moneda de cotizacion invÃ¡lida")
+        raise ValueError("Moneda de cotización inválida")
     safe_place = _safe_k8_text(delivery_place)
 
-    # Toda la validaciÃ³n ocurre antes de la primera mutaciÃ³n.
-    editor.set_boolean("K4", quote_currency != "MXN")
-    editor.set_inline_string("K8", safe_place)
+    editor.set_typed_values(
+        (
+            MobilitiCellWrite("K4", "boolean", quote_currency != "MXN"),
+            MobilitiCellWrite("K8", "text", safe_place),
+        )
+    )
+
+
+def _layout_identities(row_map: MobilitiRowMap) -> tuple[tuple[str, int], ...]:
+    identities = tuple(
+        (section.id, target_row)
+        for section in row_map.sections
+        for target_row in range(
+            section.product_start,
+            section.product_start + section.item_count,
+        )
+    )
+    if tuple(target_row for _section_id, target_row in identities) != row_map.item_rows:
+        raise ValueError("Identidad de filas Mobiliti inconsistente")
+    return identities
 
 
 def _numeric_18_6(
@@ -167,13 +226,15 @@ def _converted_cost(original: Decimal, rate: Decimal) -> Decimal:
 def _safe_k8_text(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError("K8 requiere texto")
-    if any(not _is_xml_10_character(ord(character)) for character in value):
-        raise ValueError("K8 contiene caracteres invÃ¡lidos para XML 1.0")
     text = unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
+    if any(character in UNSAFE_INVISIBLE_TEXT for character in text):
+        raise ValueError("K8 contiene caracteres invisibles inseguros")
     if text.lstrip()[:1] in {"=", "+", "-", "@"}:
         text = "'" + text
+    if any(not _is_xml_10_character(ord(character)) for character in text):
+        raise ValueError("K8 contiene caracteres inválidos para XML 1.0")
     if len(text) > MAX_EXCEL_CELL_TEXT_LENGTH:
-        raise ValueError("K8 excede el lÃ­mite de 32767 caracteres de Excel")
+        raise ValueError("K8 excede el límite de 32767 caracteres de Excel")
     return text
 
 

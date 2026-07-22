@@ -240,27 +240,54 @@ class WorksheetEditor:
     def set_boolean(self, coordinate: str, value: bool) -> None:
         """Escribe un booleano en una fila existente con coordenada A1 estricta."""
 
-        row, normalized = self._typed_write_target(coordinate)
-        _set_cell_value(row, normalized, "boolean", value)
+        self.set_typed_values((MobilitiCellWrite(coordinate, "boolean", value),))
 
     def set_inline_string(self, coordinate: str, value: str) -> None:
         """Escribe un ``inlineStr`` XML 1.0 acotado en una fila existente."""
 
-        row, normalized = self._typed_write_target(coordinate)
-        _set_cell_value(row, normalized, "text", value)
+        self.set_typed_values((MobilitiCellWrite(coordinate, "text", value),))
+
+    def set_typed_values(self, writes: Sequence[MobilitiCellWrite]) -> None:
+        """Prevalida y aplica atómicamente escrituras tipadas a celdas existentes."""
+
+        if isinstance(writes, (str, bytes, bytearray)) or not isinstance(
+            writes, Sequence
+        ):
+            raise TypeError("Las escrituras tipadas Mobiliti deben ser una secuencia")
+        prepared: list[tuple[ET.Element, MobilitiCellWrite]] = []
+        seen: set[str] = set()
+        for write in writes:
+            if not isinstance(write, MobilitiCellWrite):
+                raise TypeError("Escritura tipada Mobiliti inválida")
+            row, normalized = self._typed_write_target(write.coordinate)
+            if normalized in seen:
+                raise ValueError(f"Escritura tipada Mobiliti duplicada: {normalized}")
+            seen.add(normalized)
+            _validate_write_value(write.kind, write.value)
+            prepared.append((row, write))
+        for row, write in prepared:
+            _set_cell_value(
+                row,
+                write.coordinate,
+                write.kind,
+                write.value,
+            )
 
     def _typed_write_target(self, coordinate: str) -> tuple[ET.Element, str]:
         if not isinstance(coordinate, str) or re.fullmatch(
             r"[A-Z]{1,3}[1-9][0-9]*", coordinate
         ) is None:
-            raise ValueError(f"Coordenada Mobiliti invÃ¡lida: {coordinate!r}")
+            raise ValueError(f"Coordenada Mobiliti inválida: {coordinate!r}")
         match = _CELL_REFERENCE.fullmatch(coordinate)
         assert match is not None
         column = column_index_from_string(match.group("column"))
         row_number = int(match.group("row"))
         if column > XLSX_MAX_COLUMN or row_number > XLSX_MAX_ROW:
             raise ValueError(f"Coordenada Mobiliti fuera de XLSX: {coordinate}")
-        return self.require_row(row_number), coordinate
+        row = self.require_row(row_number)
+        if _find_cell(row, column) is None:
+            raise ValueError(f"Celda destino Mobiliti ausente: {coordinate}")
+        return row, coordinate
 
 
 def capture_official_mobiliti_block(
