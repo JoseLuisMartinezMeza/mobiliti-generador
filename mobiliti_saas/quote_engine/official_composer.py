@@ -38,6 +38,7 @@ from .ooxml_package import (
     PackageMutation,
     XlsxPackage,
     assert_packages_preserved,
+    relationship_owner,
     relationship_part_name,
     relationship_type_uris,
     part_name_has_ascii_prefix,
@@ -60,9 +61,19 @@ PKG_REL = PACKAGE_RELATIONSHIPS
 CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
 XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 DRAWING = "http://schemas.openxmlformats.org/drawingml/2006/main"
+CHART = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 XML = "http://www.w3.org/XML/1998/namespace"
 WORKSHEET_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+)
+TABLE_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
+)
+CHART_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+)
+RELATIONSHIPS_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-package.relationships+xml"
 )
 PNG_CONTENT_TYPE = "image/png"
 JPEG_CONTENT_TYPE = "image/jpeg"
@@ -98,6 +109,58 @@ _DANGEROUS_IMPORTED_FUNCTIONS = frozenset(
         "WEBSERVICE",
     }
 )
+_FORMULA_PART_CONTENT_TYPES = {
+    "worksheet": WORKSHEET_CONTENT_TYPE,
+    "table": TABLE_CONTENT_TYPE,
+    "chart": CHART_CONTENT_TYPE,
+}
+_FORMULA_PART_KIND_BY_CONTENT_TYPE = {
+    content_type: kind
+    for kind, content_type in _FORMULA_PART_CONTENT_TYPES.items()
+}
+_FORMULA_PART_ROOTS = {
+    "worksheet": f"{{{MAIN}}}worksheet",
+    "table": f"{{{MAIN}}}table",
+    "chart": f"{{{CHART}}}chartSpace",
+}
+_FORMULA_RELATIONSHIP_KIND_BY_TYPE = {
+    relationship_type: kind
+    for kind in ("table", "chart")
+    for relationship_type in relationship_type_uris(kind)
+}
+_FORMULA_ELEMENT_PATHS = {
+    "worksheet": (
+        ("cell", f".//{{{MAIN}}}c/{{{MAIN}}}f", True),
+        (
+            "dataValidation/formula1",
+            f".//{{{MAIN}}}dataValidation/{{{MAIN}}}formula1",
+            False,
+        ),
+        (
+            "dataValidation/formula2",
+            f".//{{{MAIN}}}dataValidation/{{{MAIN}}}formula2",
+            False,
+        ),
+        (
+            "conditionalFormatting/formula",
+            f".//{{{MAIN}}}cfRule/{{{MAIN}}}formula",
+            False,
+        ),
+    ),
+    "table": (
+        (
+            "calculatedColumnFormula",
+            f".//{{{MAIN}}}calculatedColumnFormula",
+            False,
+        ),
+        (
+            "totalsRowFormula",
+            f".//{{{MAIN}}}totalsRowFormula",
+            False,
+        ),
+    ),
+    "chart": (("range", f".//{{{CHART}}}f", False),),
+}
 
 for prefix, namespace in (
     ("", MAIN),
@@ -1321,22 +1384,30 @@ def _validate_imported_formula_surfaces(
     sheet_additions: Sequence[SheetAddition],
 ) -> None:
     for addition in sheet_additions:
-        for part, payload in _imported_worksheet_payloads(addition):
+        for part, payload, kind in _imported_formula_xml_payloads(addition):
             try:
                 root = ET.fromstring(payload)
             except ET.ParseError as error:
                 raise ValueError(f"XML importado inválido: {part}") from error
-            if root.tag != f"{{{MAIN}}}worksheet":
-                raise ValueError(f"Raíz de worksheet importado inválida: {part}")
-            for index, formula in enumerate(root.findall(f".//{{{MAIN}}}f"), start=1):
-                if not (formula.text or ""):
-                    if formula.attrib.get("t") == "shared" and formula.attrib.get("si", "").isdigit():
-                        continue
-                    raise ValueError("Fórmula importada no permitida: fórmula vacía")
-                _validate_imported_formula(
-                    formula.text or "",
-                    f"{addition.name}:{part}:f{index}",
-                )
+            if root.tag != _FORMULA_PART_ROOTS[kind]:
+                raise ValueError(f"Raíz XML de {kind} importado inválida: {part}")
+            for surface, path, allow_empty_shared in _FORMULA_ELEMENT_PATHS[kind]:
+                for index, formula in enumerate(root.findall(path), start=1):
+                    text = formula.text or ""
+                    if not text:
+                        if (
+                            allow_empty_shared
+                            and formula.attrib.get("t") == "shared"
+                            and formula.attrib.get("si", "").isdigit()
+                        ):
+                            continue
+                        raise ValueError(
+                            "Fórmula importada no permitida: fórmula vacía"
+                        )
+                    _validate_imported_formula(
+                        text,
+                        f"{addition.name}:{part}:{surface}:{index}",
+                    )
         for defined_name in addition.defined_names:
             _validate_imported_formula(
                 defined_name.text,
@@ -1344,38 +1415,81 @@ def _validate_imported_formula_surfaces(
             )
 
 
-def _imported_worksheet_payloads(
+def _imported_formula_xml_payloads(
     addition: SheetAddition,
-) -> tuple[tuple[str, bytes], ...]:
-    """Selecciona worksheets por contrato OPC, nunca por nombre o extensión."""
+) -> tuple[tuple[str, bytes, str], ...]:
+    """Selecciona XML con fórmulas por ContentType y relaciones OPC exactas."""
 
     if addition.relationship_type not in relationship_type_uris("worksheet"):
         raise ValueError(f"Relación de worksheet importado inválida: {addition.name}")
+    payloads = {**addition.parts, **addition.replacements}
+    content_types = {
+        **addition.content_types,
+        **addition.replacement_content_types,
+    }
     if addition.sheet_part is None:
-        selected: list[tuple[str, bytes]] = [
-            (f"<hoja:{addition.name}>", addition.xml)
+        selected: list[tuple[str, bytes, str]] = [
+            (f"<hoja:{addition.name}>", addition.xml, "worksheet")
         ]
     else:
-        main_content_type = addition.content_types.get(addition.sheet_part)
+        main_content_type = content_types.get(addition.sheet_part)
         if main_content_type != WORKSHEET_CONTENT_TYPE:
             raise ValueError(
                 f"Content type de worksheet importado inválido: {addition.sheet_part}"
             )
-        selected = []
+        selected = [(addition.sheet_part, addition.xml, "worksheet")]
 
-    # `SheetAddition` exige cobertura exacta de ContentType. En Quotation esa
-    # cobertura proviene de la clausura de relaciones ya validada durante el
-    # transplante. Una parte worksheet se reconoce por ese perfil canónico,
-    # incluso si su nombre o extensión intentan disfrazarla.
-    for payloads, content_types in (
-        (addition.parts, addition.content_types),
-        (addition.replacements, addition.replacement_content_types),
-    ):
-        selected.extend(
-            (part, payload)
-            for part, payload in payloads.items()
-            if content_types[part] == WORKSHEET_CONTENT_TYPE
-        )
+    related_formula_parts: dict[str, str] = {}
+    for rels_part in sorted(payloads):
+        if content_types[rels_part] != RELATIONSHIPS_CONTENT_TYPE:
+            continue
+        try:
+            relationships = ET.fromstring(payloads[rels_part])
+        except ET.ParseError as error:
+            raise ValueError(
+                f"Relaciones importadas inválidas: {rels_part}"
+            ) from error
+        if relationships.tag != f"{{{PKG_REL}}}Relationships":
+            raise ValueError(f"Raíz de relaciones importada inválida: {rels_part}")
+        owner = relationship_owner(rels_part)
+        for relationship in relationships:
+            if relationship.tag != f"{{{PKG_REL}}}Relationship":
+                raise ValueError(f"Relación importada inválida: {rels_part}")
+            kind = _FORMULA_RELATIONSHIP_KIND_BY_TYPE.get(
+                relationship.attrib.get("Type", "")
+            )
+            if kind is None:
+                continue
+            if owner is None:
+                raise ValueError(f"Relación de fórmula sin propietario: {rels_part}")
+            target_mode = relationship.attrib.get("TargetMode", "").casefold()
+            if target_mode not in {"", "internal"}:
+                raise ValueError(f"Relación de fórmula externa: {rels_part}")
+            target = resolve_internal_target(
+                owner,
+                relationship.attrib.get("Target", ""),
+            )
+            if target not in payloads:
+                raise ValueError(f"Clausura de fórmula incompleta: {target}")
+            previous = related_formula_parts.setdefault(target, kind)
+            if previous != kind:
+                raise ValueError(f"Perfil de fórmula ambiguo: {target}")
+
+    for part, kind in related_formula_parts.items():
+        if content_types[part] != _FORMULA_PART_CONTENT_TYPES[kind]:
+            raise ValueError(f"Content type de fórmula inconsistente: {part}")
+
+    for part in sorted(payloads):
+        kind = _FORMULA_PART_KIND_BY_CONTENT_TYPE.get(content_types[part])
+        if kind is None or part == addition.sheet_part:
+            continue
+        if kind != "worksheet":
+            related_kind = related_formula_parts.get(part)
+            if related_kind is None:
+                raise ValueError(f"Parte de fórmula sin relación: {part}")
+            if related_kind != kind:
+                raise ValueError(f"Content type de fórmula inconsistente: {part}")
+        selected.append((part, payloads[part], kind))
     return tuple(selected)
 
 
@@ -1389,13 +1503,25 @@ def _validate_imported_formula(formula: str, context: str) -> None:
         raise ValueError(f"Fórmula importada no permitida: {context}") from error
     if "".join(item.value for item in items) != body:
         raise ValueError(f"Fórmula importada no permitida: {context}")
-    for item in items:
+    for position, item in enumerate(items):
+        function_name: str | None = None
         if item.type == Token.FUNC and item.subtype == Token.OPEN:
-            function_name = item.value[:-1].strip().upper()
-            for prefix in ("_XLFN.", "_XLWS."):
-                if function_name.startswith(prefix):
-                    function_name = function_name[len(prefix) :]
-            if function_name in _DANGEROUS_IMPORTED_FUNCTIONS:
+            function_name = item.value[:-1]
+        elif item.type == Token.PAREN and item.subtype == Token.OPEN:
+            previous = position - 1
+            while previous >= 0 and items[previous].type == Token.WSPACE:
+                previous -= 1
+            if (
+                previous >= 0
+                and items[previous].type == Token.OPERAND
+                and items[previous].subtype == Token.RANGE
+            ):
+                function_name = items[previous].value
+        if function_name is not None:
+            normalized_name = function_name.strip().upper()
+            while normalized_name.startswith(("_XLFN.", "_XLWS.")):
+                normalized_name = normalized_name.split(".", 1)[1]
+            if normalized_name in _DANGEROUS_IMPORTED_FUNCTIONS:
                 raise ValueError(f"Fórmula importada no permitida: {context}")
         if item.type == Token.OPERAND and item.subtype == Token.RANGE:
             value = item.value

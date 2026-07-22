@@ -88,6 +88,7 @@ MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+CHART = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 
 
 def _write_engine_source(
@@ -1618,6 +1619,153 @@ def _imported_formula_addition(
     )
 
 
+def _worksheet_formula_surface_addition(
+    surface: str,
+    formula: str,
+) -> SheetAddition:
+    addition = _imported_formula_addition("SUM(A2:A3)")
+    assert addition.sheet_part is not None
+    worksheet = ET.fromstring(addition.xml)
+    if surface in {"data_validation", "data_validation_2"}:
+        validations = ET.SubElement(
+            worksheet,
+            f"{{{MAIN}}}dataValidations",
+            {"count": "1"},
+        )
+        validation = ET.SubElement(
+            validations,
+            f"{{{MAIN}}}dataValidation",
+            {"sqref": "A1"},
+        )
+        tag = "formula2" if surface == "data_validation_2" else "formula1"
+        ET.SubElement(validation, f"{{{MAIN}}}{tag}").text = formula
+    elif surface == "conditional_formatting":
+        formatting = ET.SubElement(
+            worksheet,
+            f"{{{MAIN}}}conditionalFormatting",
+            {"sqref": "A1"},
+        )
+        rule = ET.SubElement(
+            formatting,
+            f"{{{MAIN}}}cfRule",
+            {"type": "expression", "priority": "1"},
+        )
+        ET.SubElement(rule, f"{{{MAIN}}}formula").text = formula
+    else:
+        raise AssertionError(f"Superficie worksheet desconocida: {surface}")
+    payload = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+    return replace(
+        addition,
+        xml=payload,
+        parts={addition.sheet_part: payload},
+    )
+
+
+def _related_formula_surface_addition(
+    surface: str,
+    formula: str,
+) -> SheetAddition:
+    addition = _imported_formula_addition("SUM(A2:A3)")
+    assert addition.sheet_part is not None
+    sheet_rels_part = relationship_part_name(addition.sheet_part)
+    sheet_rels = ET.Element(f"{{{PACKAGE_REL}}}Relationships")
+    parts = dict(addition.parts)
+    content_types = dict(addition.content_types)
+
+    if surface in {"table", "table_totals"}:
+        target_part = "xl/tables/quotation_security_table.xml"
+        ET.SubElement(
+            sheet_rels,
+            f"{{{PACKAGE_REL}}}Relationship",
+            {
+                "Id": "rIdFormulaSurface",
+                "Type": f"{OFFICE_REL}/table",
+                "Target": "../tables/quotation_security_table.xml",
+            },
+        )
+        table = ET.Element(
+            f"{{{MAIN}}}table",
+            {"id": "1", "name": "SecurityTable", "displayName": "SecurityTable"},
+        )
+        columns = ET.SubElement(table, f"{{{MAIN}}}tableColumns", {"count": "1"})
+        column = ET.SubElement(
+            columns,
+            f"{{{MAIN}}}tableColumn",
+            {"id": "1", "name": "Amount"},
+        )
+        formula_tag = (
+            "totalsRowFormula"
+            if surface == "table_totals"
+            else "calculatedColumnFormula"
+        )
+        ET.SubElement(column, f"{{{MAIN}}}{formula_tag}").text = formula
+        parts[target_part] = ET.tostring(table, encoding="utf-8", xml_declaration=True)
+        content_types[target_part] = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
+        )
+    elif surface == "chart":
+        drawing_part = "xl/drawings/quotation_security_drawing.xml"
+        drawing_rels_part = relationship_part_name(drawing_part)
+        target_part = "xl/charts/quotation_security_chart.xml"
+        ET.SubElement(
+            sheet_rels,
+            f"{{{PACKAGE_REL}}}Relationship",
+            {
+                "Id": "rIdFormulaSurfaceDrawing",
+                "Type": f"{OFFICE_REL}/drawing",
+                "Target": "../drawings/quotation_security_drawing.xml",
+            },
+        )
+        drawing_rels = ET.Element(f"{{{PACKAGE_REL}}}Relationships")
+        ET.SubElement(
+            drawing_rels,
+            f"{{{PACKAGE_REL}}}Relationship",
+            {
+                "Id": "rIdFormulaSurfaceChart",
+                "Type": f"{OFFICE_REL}/chart",
+                "Target": "../charts/quotation_security_chart.xml",
+            },
+        )
+        chart = ET.Element(f"{{{CHART}}}chartSpace")
+        chart_node = ET.SubElement(chart, f"{{{CHART}}}chart")
+        plot = ET.SubElement(chart_node, f"{{{CHART}}}plotArea")
+        series = ET.SubElement(plot, f"{{{CHART}}}ser")
+        reference = ET.SubElement(series, f"{{{CHART}}}numRef")
+        ET.SubElement(reference, f"{{{CHART}}}f").text = formula
+        parts[drawing_part] = ET.tostring(
+            ET.Element(f"{{{XDR}}}wsDr"),
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        parts[drawing_rels_part] = ET.tostring(
+            drawing_rels,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        parts[target_part] = ET.tostring(chart, encoding="utf-8", xml_declaration=True)
+        content_types[drawing_part] = (
+            "application/vnd.openxmlformats-officedocument.drawing+xml"
+        )
+        content_types[drawing_rels_part] = (
+            "application/vnd.openxmlformats-package.relationships+xml"
+        )
+        content_types[target_part] = (
+            "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+        )
+    else:
+        raise AssertionError(f"Superficie relacionada desconocida: {surface}")
+
+    parts[sheet_rels_part] = ET.tostring(
+        sheet_rels,
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    content_types[sheet_rels_part] = (
+        "application/vnd.openxmlformats-package.relationships+xml"
+    )
+    return replace(addition, parts=parts, content_types=content_types)
+
+
 @pytest.mark.parametrize(
     "formula",
     (
@@ -1636,6 +1784,118 @@ def test_composer_rejects_active_or_external_imported_formulas(
 
     with pytest.raises(ValueError, match="Fórmula importada no permitida"):
         build_allowlisted_mutation(XlsxPackage.read(OFFICIAL_TEMPLATE), request)
+
+
+@pytest.mark.parametrize(
+    "formula",
+    (
+        "WEBSERVICE (A1)",
+        "_xlfn.WEBSERVICE (A1)",
+        "_xlws.RTD (A1)",
+    ),
+)
+def test_imported_formula_rejects_spaced_and_prefixed_dangerous_functions(
+    formula: str,
+) -> None:
+    with pytest.raises(ValueError, match="F.rmula importada no permitida"):
+        official_composer_module._validate_imported_formula(
+            formula,
+            "token-sequence-test",
+        )
+
+
+@pytest.mark.parametrize(
+    "formula",
+    (
+        "SUM (A1:A2)",
+        "(A1+A2)",
+        "IF (A1, SUM (A1:A2), 0)",
+    ),
+)
+def test_imported_formula_keeps_safe_whitespace_and_grouping(formula: str) -> None:
+    official_composer_module._validate_imported_formula(
+        formula,
+        "safe-token-sequence-test",
+    )
+
+
+@pytest.mark.parametrize(
+    ("surface", "formula"),
+    (
+        ("data_validation", "EXEC (A1)"),
+        ("data_validation_2", "[evil.xlsx]Sheet1!A1"),
+        ("conditional_formatting", "[evil.xlsx]Sheet1!A1"),
+    ),
+)
+def test_imported_worksheet_formula_surfaces_reject_dangerous_or_external(
+    surface: str,
+    formula: str,
+) -> None:
+    addition = _worksheet_formula_surface_addition(surface, formula)
+
+    with pytest.raises(ValueError, match="F.rmula importada no permitida"):
+        official_composer_module._validate_imported_formula_surfaces((addition,))
+
+
+@pytest.mark.parametrize(
+    ("surface", "formula"),
+    (
+        ("table", "_xlfn.CALL (A1)"),
+        ("table", "[evil.xlsx]Sheet1!A1"),
+        ("table_totals", "[evil.xlsx]Sheet1!A1"),
+        ("chart", "_xlws.RTD (A1)"),
+        ("chart", "[evil.xlsx]Sheet1!$A$1:$A$2"),
+    ),
+)
+def test_imported_related_formula_surfaces_reject_dangerous_or_external(
+    surface: str,
+    formula: str,
+) -> None:
+    addition = _related_formula_surface_addition(surface, formula)
+
+    with pytest.raises(ValueError, match="F.rmula importada no permitida"):
+        official_composer_module._validate_imported_formula_surfaces((addition,))
+
+
+@pytest.mark.parametrize(
+    "addition",
+    (
+        _worksheet_formula_surface_addition(
+            "data_validation",
+            "SUM (A1:A2)",
+        ),
+        _related_formula_surface_addition(
+            "table",
+            "SUM([Amount])",
+        ),
+    ),
+    ids=("internal-data-validation", "internal-table-formula"),
+)
+def test_imported_extended_formula_surfaces_keep_safe_internal_formula(
+    addition: SheetAddition,
+) -> None:
+    before = dict(addition.parts)
+
+    official_composer_module._validate_imported_formula_surfaces((addition,))
+
+    assert dict(addition.parts) == before
+
+
+def test_imported_formula_surfaces_ignore_homonymous_foreign_namespace() -> None:
+    addition = _imported_formula_addition("SUM(A1:A2)")
+    assert addition.sheet_part is not None
+    worksheet = ET.fromstring(addition.xml)
+    ET.SubElement(worksheet, "{urn:mobiliti:not-a-formula-surface}formula").text = (
+        "EXEC (A1)"
+    )
+    payload = ET.tostring(worksheet, encoding="utf-8", xml_declaration=True)
+    addition = replace(
+        addition,
+        xml=payload,
+        parts={addition.sheet_part: payload},
+    )
+
+    official_composer_module._validate_imported_formula_surfaces((addition,))
 
 
 def test_composer_rejects_active_imported_defined_name_formula(tmp_path: Path) -> None:
