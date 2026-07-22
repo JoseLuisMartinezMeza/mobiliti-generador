@@ -4,15 +4,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
+from io import BytesIO
 import ntpath
 from pathlib import Path
 import posixpath
+import re
 from typing import AbstractSet, Mapping
 from xml.etree import ElementTree
 import zipfile
 
 
 PACKAGE_RELATIONSHIPS = "http://schemas.openxmlformats.org/package/2006/relationships"
+OFFICE_DOCUMENT_RELATIONSHIPS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+)
+SPREADSHEETML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
+_SAFE_ALLOCATION_PREFIX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
+_SAFE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,10}\Z")
+_PROTECTED_ALLOCATION_PREFIXES = ("xl/externalLinks/", "xl/richData/")
 
 
 @dataclass(frozen=True)
@@ -42,7 +52,7 @@ class PackageAudit:
 class XlsxPackage:
     """Representación en memoria de un ZIP OOXML previamente auditado."""
 
-    path: Path
+    path: Path | None
     infos: Mapping[str, zipfile.ZipInfo]
     parts: Mapping[str, bytes]
     archive_names: tuple[str, ...] = ()
@@ -53,13 +63,32 @@ class XlsxPackage:
 
         path = Path(path)
         with zipfile.ZipFile(path, "r") as archive:
-            entries = archive.infolist()
-            names = tuple(item.filename for item in entries)
-            infos = {item.filename: item for item in entries}
-            parts = {item.filename: archive.read(item) for item in entries}
-        package = cls(path=path, infos=infos, parts=parts, archive_names=names)
+            package = cls._from_archive(archive, path)
         package.audit()
         return package
+
+    @classmethod
+    def from_bytes(cls, content: bytes) -> "XlsxPackage":
+        """Lee bytes XLSX sin crear ni modificar archivos temporales."""
+
+        if not isinstance(content, bytes):
+            raise TypeError("El paquete XLSX debe recibirse como bytes")
+        with zipfile.ZipFile(BytesIO(content), "r") as archive:
+            package = cls._from_archive(archive, None)
+        package.audit()
+        return package
+
+    @classmethod
+    def _from_archive(
+        cls,
+        archive: zipfile.ZipFile,
+        path: Path | None,
+    ) -> "XlsxPackage":
+        entries = archive.infolist()
+        names = tuple(item.filename for item in entries)
+        infos = {item.filename: item for item in entries}
+        parts = {item.filename: archive.read(item) for item in entries}
+        return cls(path=path, infos=infos, parts=parts, archive_names=names)
 
     def hashes(self, exclude: AbstractSet[str] | None = None) -> dict[str, str]:
         """Calcula SHA-256 por parte, excepto las partes explícitamente excluidas."""
@@ -109,6 +138,240 @@ class XlsxPackage:
                     raise ValueError(
                         f"Relacion OOXML sin destino: {rels_name} -> {resolved}"
                     )
+
+    def sheet_part(self, name: str) -> str:
+        """Resuelve una hoja por workbook relationships, nunca por sheetN."""
+
+        matches = [row for row in self._sheet_rows() if row[0] == name]
+        if not matches:
+            raise KeyError(name)
+        if len(matches) != 1:
+            raise ValueError(f"Hoja OOXML duplicada: {name}")
+        return matches[0][3]
+
+    def sheet_state(self, name: str) -> str:
+        """Devuelve el estado real declarado por workbook.xml."""
+
+        matches = [row for row in self._sheet_rows() if row[0] == name]
+        if not matches:
+            raise KeyError(name)
+        if len(matches) != 1:
+            raise ValueError(f"Hoja OOXML duplicada: {name}")
+        return matches[0][1]
+
+    def sheet_index(self, name: str) -> int:
+        """Devuelve el índice workbook local de una hoja única."""
+
+        matches = [row for row in self._sheet_rows() if row[0] == name]
+        if not matches:
+            raise KeyError(name)
+        if len(matches) != 1:
+            raise ValueError(f"Hoja OOXML duplicada: {name}")
+        return matches[0][2]
+
+    def workbook_related_part(self, relationship_name: str) -> str | None:
+        """Resuelve una relación única del workbook por su sufijo de tipo."""
+
+        rels_name = "xl/_rels/workbook.xml.rels"
+        if rels_name not in self.parts:
+            raise ValueError("Relaciones del workbook ausentes")
+        relationships = _parse_relationships(rels_name, self.parts[rels_name])
+        expected_suffix = "/" + relationship_name
+        matches = [
+            relationship
+            for relationship in relationships
+            if relationship.get("Type", "").endswith(expected_suffix)
+            and relationship.get("TargetMode", "").casefold() != "external"
+        ]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise ValueError(f"Relación workbook duplicada: {relationship_name}")
+        return _resolve_internal_target("xl/workbook.xml", matches[0]["Target"])
+
+    def shared_strings(self) -> tuple[bytes, ...]:
+        """Devuelve cada CT_Rst completo para no aplanar rich text."""
+
+        part = self.workbook_related_part("sharedStrings")
+        if part is None:
+            return ()
+        if part not in self.parts:
+            raise ValueError("Shared strings sin destino")
+        try:
+            root = ElementTree.fromstring(self.parts[part])
+        except ElementTree.ParseError as error:
+            raise ValueError("Shared strings OOXML inválidos") from error
+        if root.tag != f"{{{SPREADSHEETML}}}sst" or any(
+            child.tag != f"{{{SPREADSHEETML}}}si" for child in root
+        ):
+            raise ValueError("Shared strings OOXML inválidos")
+        return tuple(ElementTree.tostring(child, encoding="utf-8") for child in root)
+
+    def relationship_closure(self, start_part: str) -> Mapping[str, bytes]:
+        """Calcula la clausura OPC transitiva y rechaza ciclos."""
+
+        _validate_part_name(start_part)
+        if start_part not in self.parts:
+            raise ValueError(f"Parte OOXML inexistente: {start_part}")
+        result: dict[str, bytes] = {}
+        visited: set[str] = set()
+        visiting: set[str] = set()
+
+        def visit(part_name: str) -> None:
+            if part_name in visiting:
+                raise ValueError(f"Ciclo de relaciones OOXML: {part_name}")
+            if part_name in visited:
+                return
+            if part_name not in self.parts:
+                raise ValueError(f"Relacion OOXML sin destino: {part_name}")
+            visiting.add(part_name)
+            result[part_name] = bytes(self.parts[part_name])
+            rels_name = relationship_part_name(part_name)
+            if rels_name in self.parts:
+                result[rels_name] = bytes(self.parts[rels_name])
+                for relationship in _parse_relationships(
+                    rels_name, self.parts[rels_name]
+                ):
+                    if relationship.get("TargetMode", "").casefold() == "external":
+                        continue
+                    target = _resolve_internal_target(
+                        part_name, relationship["Target"]
+                    )
+                    visit(target)
+            visiting.remove(part_name)
+            visited.add(part_name)
+
+        visit(start_part)
+        return result
+
+    def allocate_closure(
+        self,
+        closure: Mapping[str, bytes],
+        *,
+        prefix: str,
+    ) -> dict[str, str]:
+        """Asigna nombres deterministas sin colisiones a una clausura OPC."""
+
+        if not isinstance(prefix, str) or _SAFE_ALLOCATION_PREFIX.fullmatch(prefix) is None:
+            raise ValueError("Prefijo de asignación OOXML inválido")
+        closure_names = set(closure)
+        for name in closure_names:
+            _validate_part_name(name)
+        owner_parts = sorted(
+            name for name in closure_names if not name.endswith(".rels")
+        )
+        for rels_name in (name for name in closure_names if name.endswith(".rels")):
+            owner = _relationship_owner(rels_name)
+            if owner is None or owner not in closure_names:
+                raise ValueError(f"Clausura OOXML sin propietario: {rels_name}")
+
+        allocated: dict[str, str] = {}
+        occupied = set(self.parts)
+        generated: set[str] = set()
+        sequence = 1
+        for source_name in owner_parts:
+            directory, filename = posixpath.split(source_name)
+            extension = posixpath.splitext(filename)[1]
+            if _SAFE_EXTENSION.fullmatch(extension) is None:
+                raise ValueError(f"Extensión OOXML inválida: {source_name}")
+            if source_name.startswith(_PROTECTED_ALLOCATION_PREFIXES):
+                raise ValueError(f"Prefijo OOXML protegido: {source_name}")
+            source_rels = relationship_part_name(source_name)
+            while True:
+                candidate = posixpath.join(
+                    directory, f"{prefix}{sequence}{extension}"
+                )
+                candidate_rels = relationship_part_name(candidate)
+                sequence += 1
+                conflicts = {candidate}
+                if source_rels in closure_names:
+                    conflicts.add(candidate_rels)
+                if not conflicts & (occupied | generated):
+                    break
+            allocated[source_name] = candidate
+            generated.add(candidate)
+            if source_rels in closure_names:
+                allocated[source_rels] = candidate_rels
+                generated.add(candidate_rels)
+        if set(allocated) != closure_names:
+            raise ValueError("Asignación OOXML incompleta")
+        return allocated
+
+    def content_types_for(self, parts: AbstractSet[str]) -> dict[str, str]:
+        """Resuelve content types efectivos para partes concretas."""
+
+        defaults, overrides = _parse_content_types(self.parts.get("[Content_Types].xml"))
+        result: dict[str, str] = {}
+        for name in parts:
+            _validate_part_name(name)
+            content_type = overrides.get(name)
+            if content_type is None:
+                extension = posixpath.splitext(name)[1].lstrip(".").casefold()
+                content_type = defaults.get(extension)
+            if not content_type:
+                raise ValueError(f"Content type OOXML ausente: {name}")
+            result[name] = content_type
+        return result
+
+    def _sheet_rows(self) -> list[tuple[str, str, int, str]]:
+        if "xl/workbook.xml" not in self.parts:
+            raise ValueError("Workbook OOXML ausente")
+        try:
+            workbook = ElementTree.fromstring(self.parts["xl/workbook.xml"])
+        except ElementTree.ParseError as error:
+            raise ValueError("Workbook OOXML inválido") from error
+        if workbook.tag != f"{{{SPREADSHEETML}}}workbook":
+            raise ValueError("Workbook OOXML inválido")
+        sheet_containers = workbook.findall(f"{{{SPREADSHEETML}}}sheets")
+        if len(sheet_containers) != 1:
+            raise ValueError("Colección de hojas OOXML inválida")
+        rels_name = "xl/_rels/workbook.xml.rels"
+        if rels_name not in self.parts:
+            raise ValueError("Relaciones del workbook ausentes")
+        relationships = {
+            item["Id"]: item
+            for item in _parse_relationships(rels_name, self.parts[rels_name])
+        }
+        result: list[tuple[str, str, int, str]] = []
+        used_sheet_ids: set[int] = set()
+        used_relationship_ids: set[str] = set()
+        for index, sheet in enumerate(sheet_containers[0]):
+            if sheet.tag != f"{{{SPREADSHEETML}}}sheet":
+                raise ValueError("Colección de hojas OOXML inválida")
+            name = sheet.get("name")
+            relationship_id = sheet.get(
+                f"{{{OFFICE_DOCUMENT_RELATIONSHIPS}}}id"
+            )
+            sheet_id_raw = sheet.get("sheetId", "")
+            state = sheet.get("state", "visible")
+            if not name or not relationship_id or state not in {
+                "visible", "hidden", "veryHidden"
+            }:
+                raise ValueError("Hoja OOXML inválida")
+            if re.fullmatch(r"[1-9][0-9]*", sheet_id_raw) is None:
+                raise ValueError(f"sheetId OOXML inválido: {name}")
+            sheet_id = int(sheet_id_raw)
+            if sheet_id in used_sheet_ids:
+                raise ValueError(f"sheetId OOXML duplicado: {sheet_id}")
+            if relationship_id in used_relationship_ids:
+                raise ValueError(
+                    f"Relación de hoja OOXML reutilizada: {relationship_id}"
+                )
+            used_sheet_ids.add(sheet_id)
+            used_relationship_ids.add(relationship_id)
+            relationship = relationships.get(relationship_id)
+            if relationship is None or not relationship.get("Type", "").endswith(
+                "/worksheet"
+            ):
+                raise ValueError(f"Relación de hoja OOXML inválida: {name}")
+            target = _resolve_internal_target(
+                "xl/workbook.xml", relationship["Target"]
+            )
+            result.append((name, state, index, target))
+        duplicates = _duplicates(tuple(row[0].casefold() for row in result))
+        if duplicates:
+            raise ValueError(f"Hoja OOXML duplicada: {sorted(duplicates)}")
+        return result
 
     def write_new(self, output: Path, mutation: PackageMutation) -> None:
         """Escribe un paquete nuevo preservando las partes no modificadas."""
@@ -161,6 +424,64 @@ def assert_package_preserved(
         changed_parts=frozenset(changed),
         protected_hashes=before.hashes(exclude=allowed_parts),
     )
+
+
+def relationship_part_name(owner: str) -> str:
+    """Devuelve la ruta OPC de relaciones de una parte propietaria."""
+
+    _validate_part_name(owner)
+    directory, filename = posixpath.split(owner)
+    return posixpath.join(directory, "_rels", filename + ".rels")
+
+
+def rewrite_relationship_targets(
+    closure: Mapping[str, bytes],
+    allocation: Mapping[str, str],
+) -> dict[str, bytes]:
+    """Reubica una clausura y reescribe targets relativos desde cada owner."""
+
+    if set(closure) != set(allocation):
+        raise ValueError("Asignación OOXML incompleta")
+    rewritten: dict[str, bytes] = {}
+    for source_name, content in closure.items():
+        target_name = allocation[source_name]
+        _validate_part_name(target_name)
+        if not source_name.endswith(".rels"):
+            rewritten[target_name] = bytes(content)
+            continue
+        source_owner = _relationship_owner(source_name)
+        target_owner = _relationship_owner(target_name)
+        if source_owner is None or target_owner is None:
+            raise ValueError(f"Clausura OOXML sin propietario: {source_name}")
+        if allocation.get(source_owner) != target_owner:
+            raise ValueError(f"Asignación de relaciones inconsistente: {source_name}")
+        try:
+            root = ElementTree.fromstring(content)
+        except ElementTree.ParseError as error:
+            raise ValueError(f"Relaciones OOXML invalidas: {source_name}") from error
+        relationships = _parse_relationships(source_name, content)
+        for element, relationship in zip(list(root), relationships, strict=True):
+            if relationship.get("TargetMode", "").casefold() == "external":
+                continue
+            original_target = relationship["Target"]
+            target_path, separator, fragment = original_target.partition("#")
+            resolved = _resolve_internal_target(source_owner, target_path)
+            allocated_target = allocation.get(resolved)
+            if allocated_target is None:
+                raise ValueError(f"Asignación OOXML sin destino: {resolved}")
+            relative = posixpath.relpath(
+                allocated_target,
+                posixpath.dirname(target_owner),
+            )
+            element.attrib["Target"] = relative + (
+                separator + fragment if separator else ""
+            )
+        rewritten[target_name] = ElementTree.tostring(
+            root, encoding="utf-8", xml_declaration=True
+        )
+    if len(rewritten) != len(closure):
+        raise ValueError("Asignación OOXML colisionada")
+    return rewritten
 
 
 def _duplicates(values: tuple[str, ...]) -> set[str]:
@@ -234,3 +555,38 @@ def _validate_relationship_target(target: str) -> None:
         raise ValueError(f"Ruta absoluta OOXML: {target}")
     if "\\" in target or ":" in target:
         raise ValueError(f"Ruta OOXML invalida: {target}")
+
+
+def _parse_content_types(
+    content: bytes | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    if content is None:
+        raise ValueError("Content types OOXML ausentes")
+    try:
+        root = ElementTree.fromstring(content)
+    except ElementTree.ParseError as error:
+        raise ValueError("Content types OOXML inválidos") from error
+    if root.tag != f"{{{CONTENT_TYPES}}}Types":
+        raise ValueError("Content types OOXML inválidos")
+    defaults: dict[str, str] = {}
+    overrides: dict[str, str] = {}
+    for child in root:
+        if child.tag == f"{{{CONTENT_TYPES}}}Default":
+            extension = child.get("Extension", "").casefold()
+            content_type = child.get("ContentType", "")
+            if not extension or not content_type or extension in defaults:
+                raise ValueError("Content type OOXML duplicado o inválido")
+            defaults[extension] = content_type
+        elif child.tag == f"{{{CONTENT_TYPES}}}Override":
+            part_name = child.get("PartName", "")
+            content_type = child.get("ContentType", "")
+            if not part_name.startswith("/") or not content_type:
+                raise ValueError("Content type OOXML inválido")
+            normalized = part_name[1:]
+            _validate_part_name(normalized)
+            if normalized in overrides:
+                raise ValueError("Content type OOXML duplicado o inválido")
+            overrides[normalized] = content_type
+        else:
+            raise ValueError("Content types OOXML inválidos")
+    return defaults, overrides
