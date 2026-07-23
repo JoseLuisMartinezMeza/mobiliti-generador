@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Archive, Copy, FolderOpen, Loader2, RotateCcw } from "lucide-react";
+import { createProjectLoadGuard, createProjectOperationId } from "./projectWorkspace";
 
 function formatDate(value) {
   if (!value) return "Sin fecha";
@@ -9,10 +10,6 @@ function formatDate(value) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date);
-}
-
-function operationId() {
-  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
 }
 
 function ProjectCard({ project, activeProjectId, busyProjectId, onOpenProject, onDuplicate, onStatusChange }) {
@@ -55,42 +52,66 @@ export default function ProjectsView({ request, onOpenProject, activeProjectId }
   const [loading, setLoading] = useState(true);
   const [busyProjectId, setBusyProjectId] = useState("");
   const [error, setError] = useState("");
+  const abortControllerRef = useRef(null);
+  const loadGuardRef = useRef(null);
+
+  function canUpdate() {
+    return loadGuardRef.current?.isMounted() || false;
+  }
 
   const loadProjects = useCallback(async () => {
-    setLoading(true);
-    setError("");
+    const guard = loadGuardRef.current;
+    if (!guard) return;
+    const epoch = guard.begin();
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    if (guard.canApply(epoch)) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const [active, archived] = await Promise.all([
-        request("/projects?status=active"),
-        request("/projects?status=archived"),
+        request("/projects?status=active", { signal: controller.signal }),
+        request("/projects?status=archived", { signal: controller.signal }),
       ]);
+      if (!guard.canApply(epoch)) return;
       setActiveProjects(active.projects || []);
       setArchivedProjects(archived.projects || []);
     } catch (failure) {
+      if (!guard.canApply(epoch)) return;
       setError(failure.message || "No se pudieron cargar los proyectos.");
     } finally {
-      setLoading(false);
+      if (guard.canApply(epoch)) setLoading(false);
     }
   }, [request]);
 
   useEffect(() => {
+    const guard = createProjectLoadGuard();
+    loadGuardRef.current = guard;
     loadProjects();
+    return () => {
+      abortControllerRef.current?.abort();
+      guard.dispose();
+    };
   }, [loadProjects]);
 
   async function duplicate(project) {
+    if (!canUpdate()) return;
     setBusyProjectId(project.id);
     setError("");
     try {
       await request(`/projects/${project.id}/duplicate`, { method: "POST" });
       await loadProjects();
     } catch (failure) {
-      setError(failure.message || "No se pudo duplicar el proyecto.");
+      if (canUpdate()) setError(failure.message || "No se pudo duplicar el proyecto.");
     } finally {
-      setBusyProjectId("");
+      if (canUpdate()) setBusyProjectId("");
     }
   }
 
   async function changeStatus(project, action) {
+    if (!canUpdate()) return;
     setBusyProjectId(project.id);
     setError("");
     try {
@@ -98,14 +119,14 @@ export default function ProjectsView({ request, onOpenProject, activeProjectId }
         method: "POST",
         body: JSON.stringify({
           expected_revision: project.revision,
-          operation_id: operationId(),
+          operation_id: createProjectOperationId(),
         }),
       });
       await loadProjects();
     } catch (failure) {
-      setError(failure.message || "No se pudo actualizar el proyecto.");
+      if (canUpdate()) setError(failure.message || "No se pudo actualizar el proyecto.");
     } finally {
-      setBusyProjectId("");
+      if (canUpdate()) setBusyProjectId("");
     }
   }
 

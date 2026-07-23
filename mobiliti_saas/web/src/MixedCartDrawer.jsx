@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ImageOff, ShoppingCart, Trash2, X } from "lucide-react";
+import { FolderKanban, ImageOff, Trash2, X } from "lucide-react";
 import {
   DEFAULT_MIXED_SECTION_CONCEPTS,
   groupMixedCartLines,
@@ -332,7 +332,7 @@ export default function MixedCartDrawer({
         <button
           className="mixed-cart-overlay"
           type="button"
-          aria-label="Cerrar carrito"
+          aria-label="Cerrar proyecto"
           disabled={busy}
           onClick={onClose}
         />
@@ -342,13 +342,13 @@ export default function MixedCartDrawer({
         role="dialog"
         aria-modal="true"
         aria-hidden={!open}
-        aria-label="Carrito de todos los catalogos"
+        aria-label="Proyecto de todos los catalogos"
         tabIndex="-1"
         ref={drawerRef}
       >
         <div className="mixed-cart-title">
-          <div><ShoppingCart size={22} /><h2>Carrito</h2><span>{lines.length}</span></div>
-          <button type="button" onClick={onClose} aria-label="Cerrar carrito" disabled={busy}>
+          <div><FolderKanban size={22} /><h2>Proyecto</h2><span>{lines.length}</span></div>
+          <button type="button" onClick={onClose} aria-label="Cerrar proyecto" disabled={busy}>
             <X size={20} />
           </button>
         </div>
@@ -357,7 +357,7 @@ export default function MixedCartDrawer({
           <p className="mixed-cart-empty">Selecciona productos de cualquiera de los siete catalogos.</p>
         ) : null}
         <p className="sr-only" aria-live="polite">
-          {visibleSections.length} sección(es) en el carrito.
+          {visibleSections.length} sección(es) en el proyecto.
         </p>
         <div className="mixed-cart-lines">
           {visibleSections.map((section, sectionIndex) => {

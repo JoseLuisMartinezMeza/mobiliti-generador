@@ -249,9 +249,9 @@ def test_kundesign_fallback_link_is_disclosed_as_general_catalog():
     )
     assert not re.search(r"disabled\s*=\s*\{[^}]*is_out_of_stock", component, re.DOTALL)
 
-    assert "<ShoppingCart" in component
-    assert 'aria-label="Abrir carrito"' in visible_text
-    assert 'title="Abrir carrito"' in visible_text
+    assert "<FolderKanban" in component
+    assert 'aria-label="Abrir proyecto"' in visible_text
+    assert 'title="Abrir proyecto"' in visible_text
     assert "onOpenCart" in component
     assert "cartLineCount" in component
     assert "supplier-cart-drawer" not in component

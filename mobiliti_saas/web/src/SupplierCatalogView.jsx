@@ -4,12 +4,12 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  FolderKanban,
   ImageOff,
   PackageSearch,
   Plus,
   RefreshCw,
   Search,
-  ShoppingCart
 } from "lucide-react";
 import { createMixedCartLine } from "./mixedCart.js";
 
@@ -480,11 +480,11 @@ export default function SupplierCatalogView({
           <button
             className="supplier-cart-toggle"
             type="button"
-            aria-label="Abrir carrito"
-            title="Abrir carrito"
+            aria-label="Abrir proyecto"
+            title="Abrir proyecto"
             onClick={onOpenCart}
           >
-            <ShoppingCart size={19} />
+            <FolderKanban size={19} />
             <span>{cartLineCount}</span>
           </button>
         </div>

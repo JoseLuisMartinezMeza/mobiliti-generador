@@ -868,7 +868,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory,
                 disabled={busy || !importProvider.trim() || (previewNeedsSourceCurrency(importPreview) && !(importPreview.source_currency || importCurrency))}
                 onClick={confirmImport}
               >
-                Confirmar importacion al carrito
+                Confirmar importacion al proyecto
               </button>
             </section>
           ) : null}
@@ -876,7 +876,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory,
           <div className="actions-row">
             <button className="secondary-action" type="button" disabled={busy} onClick={previewImport}>
               {busy ? <Loader2 className="spin" size={18} /> : <UploadCloud size={18} />}
-              Previsualizar e importar al carrito
+              Previsualizar e importar al proyecto
             </button>
             <button className="primary-action" disabled={busy}>
               {busy ? <Loader2 className="spin" size={18} /> : <FileSpreadsheet size={18} />}
@@ -2074,7 +2074,7 @@ function createMixedQuoteController({
       if (submissionEpoch !== mixedQuoteSessionEpochRef.current || !finalJob) return;
       setJobs((current) => [finalJob, ...current.filter((job) => job.id !== finalJob.id)]);
       if (finalJob.status === "failed") {
-        setError(finalJob.error_message || "La cotizacion fallo; el carrito se conservo para reintentar.");
+        setError(finalJob.error_message || "La cotizacion fallo; el proyecto se conservo para reintentar.");
         setNotice("");
         setOpen(true);
         return;
