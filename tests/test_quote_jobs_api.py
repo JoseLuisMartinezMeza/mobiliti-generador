@@ -878,7 +878,11 @@ def test_mixed_quote_validates_and_copies_imported_source_without_reserving_it(
     assert payload["imported_source"]["source_path"] == source_copy_path
     assert payload["imported_source"]["source_hash"] == manifest["source_hash"]
     assert payload["imported_source"]["items"][0]["canonical_key"] == f"import:{JOB_A_UUID}:11"
-    assert payload["sections"] == body["sections"]
+    assert payload["sections"] == [{
+        "id": "section-1",
+        "title": "Recepcion",
+        "line_ids": ["legacy-1", "legacy-import-1"],
+    }]
     metadata = state["jobs"][0]["metadata"]
     assert metadata["import_source_path"] == source_copy_path
     assert metadata["import_item_count"] == 1
@@ -949,7 +953,7 @@ def test_mixed_quote_allows_imported_only_and_omitted_manifest_rows(
     assert len(payload["imported_source"]["items"]) == 1
     assert payload["sections"] == [{
         "id": "section-1", "title": "Recepción",
-        "item_keys": [f"import:{JOB_A_UUID}:11"],
+        "line_ids": ["legacy-import-1"],
     }]
     assert state["reserved_groups"] == [[]]
 
@@ -1420,7 +1424,18 @@ def test_mixed_quote_creates_one_authoritative_job_upload_queue_and_wake(monkeyp
     payload = json.loads(state["uploads"][0]["content"])
     assert payload["source_type"] == "mixed_catalog_cart"
     assert payload["item_count"] == 3
-    assert payload["sections"] == body["sections"]
+    assert payload["sections"] == [
+        {
+            "id": "section-1",
+            "title": "Recepción",
+            "line_ids": ["legacy-1", "legacy-2"],
+        },
+        {
+            "id": "section-2",
+            "title": "Privados",
+            "line_ids": ["legacy-3"],
+        },
+    ]
     assert {group["catalog"] for group in payload["groups"]} == {"tarkett", "sonara", "alma"}
     assert payload["groups"][0]["items"][0]["unit_price"] == "472.63"
     assert response.json()["job"]["id"] == state["jobs"][0]["id"]
