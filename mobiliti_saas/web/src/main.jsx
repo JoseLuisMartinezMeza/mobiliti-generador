@@ -2173,6 +2173,43 @@ function projectStateWithImportDraft(baseState, pendingImportDraft) {
   };
 }
 
+function saveProjectSnapshot({
+  request,
+  snapshot,
+  expectedRevision,
+  operationId,
+  adoptionRef,
+  onSaved,
+  onAdoptionConfirmed,
+}) {
+  const adoption = adoptionRef.current;
+  if (adoption?.projectId === snapshot.id) {
+    adoptionRef.current = {...adoption, operationId};
+  }
+  return request(`/projects/${snapshot.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: snapshot.name,
+      payload: snapshot.payload,
+      expected_revision: expectedRevision,
+      operation_id: operationId,
+    }),
+  }).then((data) => {
+    const saved = data?.project;
+    if (!saved?.id || saved.id !== snapshot.id) {
+      throw new Error("Respuesta de guardado de Proyecto inválida");
+    }
+    onSaved(saved);
+    const confirmedAdoption = adoptionRef.current;
+    if (confirmedAdoption?.projectId === saved.id
+        && confirmedAdoption.operationId === operationId) {
+      adoptionRef.current = null;
+      onAdoptionConfirmed(confirmedAdoption.draft);
+    }
+    return saved;
+  });
+}
+
 function App() {
   const [session, setSession] = useState(() => {
     try {
@@ -2193,6 +2230,7 @@ function App() {
   const [projectLoadState, setProjectLoadState] = useState({status: "idle", message: ""});
   const [projectChangeVersion, setProjectChangeVersion] = useState(0);
   const projectLoadEpochRef = useRef(0);
+  const pendingImportAdoptionRef = useRef(null);
   const [mixedCart, setMixedCart] = useState([]);
   const mixedCartRef = useRef([]);
   const [mixedCartSections, setMixedCartSections] = useState(
@@ -2238,29 +2276,28 @@ function App() {
       payload: serializeProject(editorProject),
     } : null
   ), [editorProject]);
-  const saveActiveProject = React.useCallback(async (
+  const saveActiveProject = React.useCallback((
     snapshot,
     expectedRevision,
     operationId,
-  ) => {
-    const data = await request(`/projects/${activeProject.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        name: snapshot.name,
-        payload: snapshot.payload,
-        expected_revision: expectedRevision,
-        operation_id: operationId,
-      }),
-    });
-    const saved = data?.project;
-    if (!saved?.id) throw new Error("Respuesta de guardado de Proyecto invÃ¡lida");
-    setActiveProject((current) => current?.id === saved.id
-      ? {...current, name: saved.name, revision: saved.revision}
-      : current);
-    return saved;
-  }, [activeProject?.id, request]);
+  ) => saveProjectSnapshot({
+    request,
+    snapshot,
+    expectedRevision,
+    operationId,
+    adoptionRef: pendingImportAdoptionRef,
+    onSaved: (saved) => {
+      setActiveProject((current) => current?.id === saved.id
+        ? {...current, name: saved.name, revision: saved.revision}
+        : current);
+    },
+    onAdoptionConfirmed: (draft) => {
+      setPendingImportDraft((current) => current === draft ? null : current);
+    },
+  }), [request]);
   const projectAutosave = useProjectAutosave({
     project: projectSaveSnapshot,
+    projectKey: activeProject?.id || "",
     revision: activeProject?.revision || 0,
     changeVersion: projectChangeVersion,
     saveProject: saveActiveProject,
@@ -2341,6 +2378,7 @@ function App() {
       setActiveProjectId("");
       setActiveProject(null);
       setPendingImportDraft(null);
+      pendingImportAdoptionRef.current = null;
       setProjectChangeVersion(0);
       setView("cotizaciones");
       setSessionNotice(AUTH_EXPIRED_MESSAGE);
@@ -2378,6 +2416,7 @@ function App() {
     setActiveProjectId("");
     setActiveProject(null);
     setPendingImportDraft(null);
+    pendingImportAdoptionRef.current = null;
     setProjectChangeVersion(0);
   }
 
@@ -2425,6 +2464,7 @@ function App() {
       options,
       controller: mixedQuoteController,
       onBlocked: () => {
+        pendingImportAdoptionRef.current = null;
         setPendingImportDraft({preview, options});
         setMixedQuoteError(
           "Crea o abre un Proyecto desde Proyectos. El borrador importado se conservarÃ¡.",
@@ -2481,6 +2521,7 @@ function App() {
       name: created.name,
       revision: created.revision,
     });
+    pendingImportAdoptionRef.current = null;
     setPendingImportDraft(null);
     setProjectChangeVersion(0);
     setProjectLoadState({status: "ready", message: ""});
@@ -2510,7 +2551,16 @@ function App() {
       if (projectLoadEpochRef.current !== loadEpoch) return;
       if (!data?.project?.payload) throw new Error("Respuesta de Proyecto invÃ¡lida");
       const hydrated = hydrateProject(data.project.payload);
-      const adopted = projectStateWithImportDraft(hydrated, pendingImportDraft);
+      const adoptionDraft = pendingImportDraft;
+      const adopted = projectStateWithImportDraft(hydrated, adoptionDraft);
+      pendingImportAdoptionRef.current = null;
+      if (adoptionDraft) {
+        pendingImportAdoptionRef.current = {
+          projectId: data.project.id,
+          operationId: "",
+          draft: adoptionDraft,
+        };
+      }
       mixedCartRef.current = adopted.lines;
       mixedCartSectionsRef.current = adopted.sections;
       setMixedCart(adopted.lines);
@@ -2521,8 +2571,7 @@ function App() {
         name: data.project.name,
         revision: data.project.revision,
       });
-      setPendingImportDraft(null);
-      setProjectChangeVersion(pendingImportDraft ? 1 : 0);
+      setProjectChangeVersion(adoptionDraft ? 1 : 0);
       setProjectLoadState({status: "ready", message: ""});
     } catch (failure) {
       if (projectLoadEpochRef.current !== loadEpoch) return;

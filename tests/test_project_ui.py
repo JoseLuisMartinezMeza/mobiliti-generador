@@ -199,7 +199,7 @@ def test_app_opens_hydrates_and_autosaves_the_same_project_state():
     assert "hydrateProject(data.project.payload)" in source
     assert "<ProjectEditor" in source
     assert "useProjectAutosave" in source
-    assert 'request(`/projects/${activeProject.id}`' in source
+    assert 'request(`/projects/${snapshot.id}`' in source
     assert 'method: "PATCH"' in source
     assert "expected_revision: expectedRevision" in source
     assert "operation_id: operationId" in source
@@ -241,6 +241,21 @@ def test_blocked_import_is_parked_and_routes_to_projects():
     assert "setPendingImportDraft({preview, options})" in import_flow
     assert 'setView("proyectos")' in import_flow
     assert "El borrador importado se conservar" in import_flow
+
+
+def test_existing_project_adoption_retains_draft_until_confirmed_autosave():
+    main = MAIN.read_text(encoding="utf-8")
+    autosave_start = main.index("const projectAutosave = useProjectAutosave({")
+    autosave_end = main.index("});", autosave_start)
+    autosave_call = main[autosave_start:autosave_end]
+    assert 'projectKey: activeProject?.id || ""' in autosave_call
+
+    open_start = main.index("async function openProject(projectId)")
+    open_end = main.index("function updateActiveProject", open_start)
+    open_flow = main[open_start:open_end]
+    assert "pendingImportAdoptionRef.current = {" in open_flow
+    assert "projectId: data.project.id" in open_flow
+    assert "setPendingImportDraft(null)" not in open_flow
 
 
 def test_new_project_flow_posts_backend_valid_payload_then_opens_created_project():

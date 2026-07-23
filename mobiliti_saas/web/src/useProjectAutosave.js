@@ -6,8 +6,24 @@ import {
   scheduleAutosave,
 } from "./projectAutosave.js";
 
+export function synchronizeAutosaveProject(current, {
+  projectKey,
+  revision,
+  changeVersion,
+}) {
+  const projectChanged = current.projectKey !== projectKey;
+  if (!projectChanged && changeVersion > 0) return current;
+  return {
+    projectKey,
+    revision,
+    operationId: "",
+    dirtyVersion: 0,
+  };
+}
+
 export function useProjectAutosave({
   project,
+  projectKey,
   revision,
   changeVersion,
   saveProject,
@@ -17,18 +33,31 @@ export function useProjectAutosave({
   const operationRef = useRef("");
   const revisionRef = useRef(revision);
   const dirtyVersionRef = useRef(0);
+  const projectKeyRef = useRef(projectKey);
   const saveProjectRef = useRef(saveProject);
 
   saveProjectRef.current = saveProject;
 
   useEffect(() => {
-    if (changeVersion > 0) return;
+    const current = {
+      projectKey: projectKeyRef.current,
+      revision: revisionRef.current,
+      operationId: operationRef.current,
+      dirtyVersion: dirtyVersionRef.current,
+    };
+    const synchronized = synchronizeAutosaveProject(current, {
+      projectKey,
+      revision,
+      changeVersion,
+    });
+    if (synchronized === current) return;
 
-    operationRef.current = "";
-    revisionRef.current = revision;
-    dirtyVersionRef.current = 0;
+    projectKeyRef.current = synchronized.projectKey;
+    operationRef.current = synchronized.operationId;
+    revisionRef.current = synchronized.revision;
+    dirtyVersionRef.current = synchronized.dirtyVersion;
     dispatch({type: "loaded", revision});
-  }, [changeVersion, revision]);
+  }, [changeVersion, projectKey, revision]);
 
   useEffect(() => {
     if (!enabled || !project || changeVersion <= 0) return undefined;
@@ -56,7 +85,7 @@ export function useProjectAutosave({
         }
       },
     });
-  }, [changeVersion, enabled]);
+  }, [changeVersion, enabled, projectKey]);
 
   return state;
 }

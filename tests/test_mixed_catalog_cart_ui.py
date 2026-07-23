@@ -1530,6 +1530,141 @@ def test_pending_import_draft_is_adopted_without_mutating_the_local_state():
     }
 
 
+def test_confirmed_adoption_save_clears_only_its_pending_import_draft():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("saveProjectSnapshot",),
+        r"""
+      const draft = {preview: {import_id: "draft-b"}};
+      const adoptionRef = {
+        current: {projectId: "project-b", operationId: "", draft},
+      };
+      const confirmed = [];
+      const saved = await saveProjectSnapshot({
+        request: async (path, options) => ({
+          project: {
+            id: "project-b",
+            name: "Proyecto B",
+            revision: 8,
+            requestPath: path,
+            requestBody: JSON.parse(options.body),
+          },
+        }),
+        snapshot: {id: "project-b", name: "Proyecto B", payload: {schema_version: 1}},
+        expectedRevision: 7,
+        operationId: "operation-b",
+        adoptionRef,
+        onSaved() {},
+        onAdoptionConfirmed(value) { confirmed.push(value); },
+      });
+      console.log(JSON.stringify({
+        savedId: saved.id,
+        requestPath: saved.requestPath,
+        expectedRevision: saved.requestBody.expected_revision,
+        markerCleared: adoptionRef.current === null,
+        confirmedOwnDraft: confirmed[0] === draft,
+      }));
+        """,
+    )
+    assert result == {
+        "savedId": "project-b",
+        "requestPath": "/projects/project-b",
+        "expectedRevision": 7,
+        "markerCleared": True,
+        "confirmedOwnDraft": True,
+    }
+
+
+def test_failed_or_conflicted_adoption_save_retains_the_pending_import_marker():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("saveProjectSnapshot",),
+        r"""
+      const attempt = async (kind) => {
+        const draft = {preview: {import_id: kind}};
+        const adoptionRef = {
+          current: {projectId: "project-b", operationId: "", draft},
+        };
+        const error = Object.assign(new Error(kind), kind === "conflict"
+          ? {status: 409, project: {id: "project-b", revision: 8}}
+          : {});
+        let confirmed = 0;
+        try {
+          await saveProjectSnapshot({
+            request: async () => { throw error; },
+            snapshot: {id: "project-b", name: "Proyecto B", payload: {}},
+            expectedRevision: 7,
+            operationId: `operation-${kind}`,
+            adoptionRef,
+            onSaved() {},
+            onAdoptionConfirmed() { confirmed += 1; },
+          });
+        } catch {}
+        return {
+          retained: adoptionRef.current?.draft === draft,
+          operationId: adoptionRef.current?.operationId,
+          confirmed,
+        };
+      };
+      console.log(JSON.stringify({
+        network: await attempt("network"),
+        conflict: await attempt("conflict"),
+      }));
+        """,
+    )
+    assert result == {
+        "network": {
+            "retained": True,
+            "operationId": "operation-network",
+            "confirmed": 0,
+        },
+        "conflict": {
+            "retained": True,
+            "operationId": "operation-conflict",
+            "confirmed": 0,
+        },
+    }
+
+
+def test_stale_prior_project_save_cannot_clear_current_project_import_draft():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("saveProjectSnapshot",),
+        r"""
+      const draftB = {preview: {import_id: "draft-b"}};
+      const adoptionRef = {
+        current: {projectId: "project-b", operationId: "", draft: draftB},
+      };
+      const paths = [];
+      let confirmed = 0;
+      await saveProjectSnapshot({
+        request: async (path) => {
+          paths.push(path);
+          return {project: {id: "project-a", name: "Proyecto A", revision: 4}};
+        },
+        snapshot: {id: "project-a", name: "Proyecto A", payload: {}},
+        expectedRevision: 3,
+        operationId: "stale-operation-a",
+        adoptionRef,
+        onSaved() {},
+        onAdoptionConfirmed() { confirmed += 1; },
+      });
+      console.log(JSON.stringify({
+        paths,
+        retainedCurrentDraft: adoptionRef.current?.draft === draftB,
+        markerOperation: adoptionRef.current?.operationId,
+        confirmed,
+      }));
+        """,
+    )
+    assert result == {
+        "paths": ["/projects/project-a"],
+        "retainedCurrentDraft": True,
+        "markerOperation": "",
+        "confirmed": 0,
+    }
+
+
 def test_reimporting_same_preview_changes_editor_revision_and_resets_canonical_model():
     result = run_ui_helper_js(
         "mobiliti_saas/web/src/main.jsx",

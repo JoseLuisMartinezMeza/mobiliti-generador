@@ -10,6 +10,7 @@ AUTOSAVE_MODULE = Path(
 HOOK_MODULE = Path(
     "mobiliti_saas/web/src/useProjectAutosave.js"
 ).resolve()
+HOOK_URL = HOOK_MODULE.as_uri()
 
 
 def test_autosave_never_claims_saved_before_server_confirmation():
@@ -187,3 +188,67 @@ def test_autosave_hook_does_not_persist_or_save_loaded_projects():
     assert "structuredClone(project)" in source
     forbidden = ("localStorage", "sessionStorage", "indexedDB")
     assert not any(name in source for name in forbidden)
+
+
+def test_project_switch_synchronizes_loaded_revision_before_dirty_save():
+    result = run_js(f"""
+      const {{synchronizeAutosaveProject}} = await import({json.dumps(HOOK_URL)});
+      const previous = {{
+        projectKey: "project-a",
+        revision: 3,
+        operationId: "old-operation",
+        dirtyVersion: 4,
+      }};
+      const switched = synchronizeAutosaveProject(previous, {{
+        projectKey: "project-b",
+        revision: 7,
+        changeVersion: 1,
+      }});
+      console.log(JSON.stringify({{
+        projectKey: switched.projectKey,
+        expectedRevision: switched.revision,
+        operationId: switched.operationId,
+        dirtyVersion: switched.dirtyVersion,
+      }}));
+    """)
+    assert result == {
+        "projectKey": "project-b",
+        "expectedRevision": 7,
+        "operationId": "",
+        "dirtyVersion": 0,
+    }
+
+
+def test_same_dirty_project_does_not_reset_in_flight_revision_or_operation():
+    result = run_js(f"""
+      const {{synchronizeAutosaveProject}} = await import({json.dumps(HOOK_URL)});
+      const inFlight = {{
+        projectKey: "project-b",
+        revision: 7,
+        operationId: "operation-b",
+        dirtyVersion: 2,
+      }};
+      const synchronized = synchronizeAutosaveProject(inFlight, {{
+        projectKey: "project-b",
+        revision: 8,
+        changeVersion: 2,
+      }});
+      console.log(JSON.stringify({{
+        sameObject: synchronized === inFlight,
+        revision: synchronized.revision,
+        operationId: synchronized.operationId,
+        dirtyVersion: synchronized.dirtyVersion,
+      }}));
+    """)
+    assert result == {
+        "sameObject": True,
+        "revision": 7,
+        "operationId": "operation-b",
+        "dirtyVersion": 2,
+    }
+
+
+def test_autosave_hook_uses_explicit_project_identity():
+    source = HOOK_MODULE.read_text(encoding="utf-8")
+    assert "projectKey" in source
+    assert "synchronizeAutosaveProject" in source

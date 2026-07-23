@@ -144,3 +144,44 @@ python -m pytest tests/test_project_ui.py tests/test_project_model_ui.py tests/t
 npm.cmd --prefix mobiliti_saas/web run build
 vite build: PASS
 ```
+
+## Remediacion de la revision final
+
+Fecha: 2026-07-23
+
+Se corrigio el ultimo hallazgo Important de
+`.superpowers/sdd/project-editor-task-5-final-review.md`:
+
+- `useProjectAutosave` recibe una identidad explicita de Proyecto. Al cambiar de
+  Proyecto sincroniza la revision cargada antes de programar un cambio sucio, por lo
+  que el primer PATCH de un Proyecto en revision 7 usa `expected_revision: 7`.
+- Una actualizacion del mismo Proyecto con cambios pendientes no reinicia la revision
+  ni la operacion en vuelo.
+- El PATCH usa el ID del snapshot, no una clausura del Proyecto activo, y una respuesta
+  vieja de otro Proyecto no puede confirmar ni limpiar la adopcion actual.
+- La importacion adoptada en un Proyecto existente permanece pendiente durante fallos
+  de red y conflictos 409. Solo se limpia al confirmar el PATCH identificado que la
+  contiene. La creacion sigue limpiandola unicamente despues del POST exitoso.
+
+Evidencia RED:
+
+```text
+python -m pytest tests/test_project_autosave_ui.py -k "project_switch_synchronizes or same_dirty_project or explicit_project_identity" -q
+3 failed: faltaban identidad y sincronizacion explicitas
+
+python -m pytest tests/test_mixed_catalog_cart_ui.py -k "confirmed_adoption_save or failed_or_conflicted_adoption or stale_prior_project_save" -q
+3 failed: faltaba el coordinador de persistencia de adopcion
+
+python -m pytest tests/test_project_ui.py -k "existing_project_adoption_retains" -q
+1 failed: el borrador se limpiaba antes del PATCH
+```
+
+Verificacion final:
+
+```text
+python -m pytest tests/test_project_autosave_ui.py tests/test_project_ui.py tests/test_project_model_ui.py tests/test_mixed_catalog_cart_ui.py tests/test_project_api.py -q
+131 passed in 24.85s
+
+npm.cmd --prefix mobiliti_saas/web run build
+vite build: PASS (1712 modules transformed)
+```
