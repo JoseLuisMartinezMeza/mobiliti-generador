@@ -87,6 +87,7 @@ JPEG_CONTENT_TYPE = "image/jpeg"
 MAX_CELL_TEXT = 32_767
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 40_000_000
+MAX_EXCEL_FORMULA_LENGTH = 8_192
 XLSX_MAX_ROWS = 1_048_576
 CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW = 16
 CANONICAL_COTIZACION_FIRST_PRODUCT_ROW = 17
@@ -257,17 +258,31 @@ class CotizacionFormulaContract:
         ):
             raise TypeError("Términos de precio Cotizacion inválidos")
 
-        parts: list[str] = []
+        parts = ["="]
+        formula_length = 1
         expected_f_tokens: list[tuple[str, str, str]] = []
         for index, term in enumerate(price_terms):
             if index:
+                formula_length = _append_bounded_formula(
+                    parts,
+                    "+",
+                    formula_length,
+                )
                 expected_f_tokens.append((Token.OP_IN, "", "+"))
             reference = f"Mobiliti!X{term.mobiliti_row}"
-            expression = reference
+            formula_length = _append_bounded_formula(
+                parts,
+                reference,
+                formula_length,
+            )
             expected_f_tokens.append((Token.OPERAND, Token.RANGE, reference))
             if term.numerator != 1:
                 numerator = _excel_decimal(term.numerator)
-                expression += f"*{numerator}"
+                formula_length = _append_bounded_formula(
+                    parts,
+                    f"*{numerator}",
+                    formula_length,
+                )
                 expected_f_tokens.extend(
                     (
                         (Token.OP_IN, "", "*"),
@@ -276,17 +291,19 @@ class CotizacionFormulaContract:
                 )
             if term.denominator != 1:
                 denominator = _excel_decimal(term.denominator)
-                expression += f"/{denominator}"
+                formula_length = _append_bounded_formula(
+                    parts,
+                    f"/{denominator}",
+                    formula_length,
+                )
                 expected_f_tokens.extend(
                     (
                         (Token.OP_IN, "", "/"),
                         (Token.OPERAND, Token.NUMBER, denominator),
                     )
                 )
-            parts.append(expression)
-
         formulas = {
-            "F": "=" + "+".join(parts),
+            "F": "".join(parts),
             "I": f"=F{target_row}-H{target_row}",
         }
         _validate_formula_token_contract(
@@ -1533,6 +1550,20 @@ def _validate_formula_token_contract(
         raise ValueError("Fórmula del contrato F/I fuera de contrato")
 
 
+def _append_bounded_formula(
+    parts: list[str],
+    fragment: str,
+    current_length: int,
+) -> int:
+    """Agrega un fragmento sin materializar una fórmula mayor al límite XLSX."""
+
+    next_length = current_length + len(fragment)
+    if next_length > MAX_EXCEL_FORMULA_LENGTH:
+        raise ValueError("Fórmula Cotizacion excede 8,192 caracteres")
+    parts.append(fragment)
+    return next_length
+
+
 def _validate_imported_formula_surfaces(
     sheet_additions: Sequence[SheetAddition],
 ) -> None:
@@ -1647,7 +1678,11 @@ def _imported_formula_xml_payloads(
 
 
 def _validate_imported_formula(formula: str, context: str) -> None:
-    if not isinstance(formula, str) or not formula or len(formula) > 8192:
+    if (
+        not isinstance(formula, str)
+        or not formula
+        or len(formula) > MAX_EXCEL_FORMULA_LENGTH
+    ):
         raise ValueError(f"Fórmula importada no permitida: {context}")
     body = formula[1:] if formula.startswith("=") else formula
     try:
@@ -3082,12 +3117,42 @@ def _excel_decimal(value: Decimal) -> str:
 
     if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
         raise ValueError("Constante decimal de fórmula inválida")
-    text = format(value, "f")
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
-    if not text or text == "0":
+    sign, raw_digits, raw_exponent = value.as_tuple()
+    if sign or not isinstance(raw_exponent, int):
         raise ValueError("Constante decimal de fórmula inválida")
-    return text
+
+    digits = raw_digits
+    exponent = raw_exponent
+    removable_zeros = 0
+    if exponent < 0:
+        for digit in reversed(digits):
+            if digit != 0 or removable_zeros >= -exponent:
+                break
+            removable_zeros += 1
+    if removable_zeros:
+        digits = digits[:-removable_zeros]
+        exponent += removable_zeros
+
+    digit_count = len(digits)
+    if exponent >= 0:
+        literal_length = digit_count + exponent
+    else:
+        decimal_position = digit_count + exponent
+        literal_length = (
+            digit_count + 1
+            if decimal_position > 0
+            else 2 - decimal_position + digit_count
+        )
+    if literal_length > MAX_EXCEL_FORMULA_LENGTH:
+        raise ValueError("El literal decimal Excel excede 8,192 caracteres")
+
+    digit_text = "".join(str(digit) for digit in digits)
+    if exponent >= 0:
+        return digit_text + ("0" * exponent)
+    decimal_position = digit_count + exponent
+    if decimal_position > 0:
+        return f"{digit_text[:decimal_position]}.{digit_text[decimal_position:]}"
+    return "0." + ("0" * -decimal_position) + digit_text
 
 
 def _is_xml_character(codepoint: int) -> bool:

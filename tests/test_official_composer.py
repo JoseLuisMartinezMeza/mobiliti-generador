@@ -2559,6 +2559,84 @@ def test_composed_product_formula_serializes_decimal_factors_without_rounding() 
     assert formulas["F"] == "=Mobiliti!X14*2.5/0.125"
 
 
+def test_composed_product_formula_accepts_exact_excel_length_boundary() -> None:
+    numerator = Decimal((0, (1,), 8177))
+
+    formulas = official_composer_module.CotizacionFormulaContract().product_formulas(
+        price_terms=(CotizacionPriceTerm(14, numerator),),
+        target_row=17,
+    )
+
+    assert len(formulas["F"]) == 8192
+
+
+def test_composed_product_formula_rejects_above_excel_length_boundary() -> None:
+    numerator = Decimal((0, (1,), 8178))
+
+    with pytest.raises(ValueError, match="excede.*8,192"):
+        official_composer_module.CotizacionFormulaContract().product_formulas(
+            price_terms=(CotizacionPriceTerm(14, numerator),),
+            target_row=17,
+        )
+
+
+def test_composed_product_formula_rejects_592_terms_before_writing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terms = tuple(CotizacionPriceTerm(row) for row in range(14, 14 + 592))
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
+    formulas_written: list[str] = []
+    original_set_formula = official_composer_module._set_formula
+
+    def recording_set_formula(*args: object, **kwargs: object) -> None:
+        formula = args[2] if len(args) >= 3 else kwargs["formula"]
+        assert isinstance(formula, str)
+        formulas_written.append(formula)
+        original_set_formula(*args, **kwargs)
+
+    monkeypatch.setattr(
+        official_composer_module,
+        "_set_formula",
+        recording_set_formula,
+    )
+    product = CotizacionProduct(
+        item_key="oversized-composition",
+        name="Composición grande",
+        description="",
+        dimensions="",
+        quantity=Decimal("1"),
+        mobiliti_row=14,
+        price_terms=terms,
+    )
+
+    with pytest.raises(ValueError, match="excede.*8,192"):
+        CotizacionSheetEditor(source).compose(
+            metadata=CotizacionMetadata(),
+            sections=(
+                CotizacionSection(
+                    title="Proyecto",
+                    products=(product,),
+                ),
+            ),
+        )
+    assert formulas_written == []
+
+
+@pytest.mark.parametrize("value", (Decimal("1E+9000"), Decimal("1E-9000")))
+def test_excel_decimal_rejects_unrepresentable_exponent_without_formatting(
+    value: Decimal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_format(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("No debe materializar el decimal antes de acotarlo")
+
+    monkeypatch.setattr(official_composer_module, "format", forbidden_format, raising=False)
+
+    with pytest.raises(ValueError, match="literal.*excede.*8,192"):
+        official_composer_module._excel_decimal(value)
+
+
 def test_composed_product_formula_rejects_tokens_outside_declared_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
