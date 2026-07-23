@@ -218,21 +218,80 @@ class CotizacionMetadata:
 
 
 @dataclass(frozen=True)
+class CotizacionPriceTerm:
+    """Término racional que enlaza un precio visible con ``Mobiliti!X``."""
+
+    mobiliti_row: int
+    numerator: Decimal = Decimal("1")
+    denominator: Decimal = Decimal("1")
+
+    def __post_init__(self) -> None:
+        if type(self.mobiliti_row) is not int or not (
+            1 <= self.mobiliti_row <= XLSX_MAX_ROWS
+        ):
+            raise ValueError("Fila Mobiliti del término inválida")
+        numerator = _decimal(self.numerator, "numerador")
+        denominator = _decimal(self.denominator, "denominador")
+        if numerator <= 0 or denominator <= 0:
+            raise ValueError("Factor de precio compuesto inválido")
+        object.__setattr__(self, "numerator", numerator)
+        object.__setattr__(self, "denominator", denominator)
+
+
+@dataclass(frozen=True)
 class CotizacionFormulaContract:
     """Contrato tipado para enlazar F con Mobiliti y conservar la fórmula I."""
 
-    def product_formulas(self, *, mobiliti_row: int, target_row: int) -> dict[str, str]:
-        if type(mobiliti_row) is not int or not 1 <= mobiliti_row <= XLSX_MAX_ROWS:
-            raise ValueError("Fila Mobiliti del contrato F/I inválida")
+    def product_formulas(
+        self,
+        *,
+        target_row: int,
+        price_terms: tuple[CotizacionPriceTerm, ...],
+    ) -> dict[str, str]:
         if type(target_row) is not int or not 1 <= target_row <= XLSX_MAX_ROWS:
             raise ValueError("Fila Cotizacion del contrato F/I inválida")
+        if (
+            not isinstance(price_terms, tuple)
+            or not price_terms
+            or not all(isinstance(term, CotizacionPriceTerm) for term in price_terms)
+        ):
+            raise TypeError("Términos de precio Cotizacion inválidos")
+
+        parts: list[str] = []
+        expected_f_tokens: list[tuple[str, str, str]] = []
+        for index, term in enumerate(price_terms):
+            if index:
+                expected_f_tokens.append((Token.OP_IN, "", "+"))
+            reference = f"Mobiliti!X{term.mobiliti_row}"
+            expression = reference
+            expected_f_tokens.append((Token.OPERAND, Token.RANGE, reference))
+            if term.numerator != 1:
+                numerator = _excel_decimal(term.numerator)
+                expression += f"*{numerator}"
+                expected_f_tokens.extend(
+                    (
+                        (Token.OP_IN, "", "*"),
+                        (Token.OPERAND, Token.NUMBER, numerator),
+                    )
+                )
+            if term.denominator != 1:
+                denominator = _excel_decimal(term.denominator)
+                expression += f"/{denominator}"
+                expected_f_tokens.extend(
+                    (
+                        (Token.OP_IN, "", "/"),
+                        (Token.OPERAND, Token.NUMBER, denominator),
+                    )
+                )
+            parts.append(expression)
+
         formulas = {
-            "F": f"=Mobiliti!X{mobiliti_row}",
+            "F": "=" + "+".join(parts),
             "I": f"=F{target_row}-H{target_row}",
         }
         _validate_formula_token_contract(
             formulas["F"],
-            ((Token.OPERAND, Token.RANGE, f"Mobiliti!X{mobiliti_row}"),),
+            tuple(expected_f_tokens),
         )
         _validate_formula_token_contract(
             formulas["I"],
@@ -259,6 +318,7 @@ class CotizacionProduct:
     image_path: Path | None = None
     image_content: bytes | None = None
     image_content_type: str | None = None
+    price_terms: tuple[CotizacionPriceTerm, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_text(self.item_key)
@@ -273,8 +333,17 @@ class CotizacionProduct:
             raise ValueError("El descuento de Cotizacion debe estar entre 0 y 1")
         if type(self.mobiliti_row) is not int or not 1 <= self.mobiliti_row <= XLSX_MAX_ROWS:
             raise ValueError("Fila Mobiliti de Cotizacion inválida")
+        if not isinstance(self.price_terms, tuple) or not all(
+            isinstance(term, CotizacionPriceTerm) for term in self.price_terms
+        ):
+            raise TypeError("Términos de precio Cotizacion inválidos")
+        price_terms = self.price_terms or (CotizacionPriceTerm(self.mobiliti_row),)
+        mobiliti_rows = tuple(term.mobiliti_row for term in price_terms)
+        if len(mobiliti_rows) != len(set(mobiliti_rows)):
+            raise ValueError("Fila Mobiliti duplicada en precio compuesto")
         object.__setattr__(self, "quantity", quantity)
         object.__setattr__(self, "discount", discount)
+        object.__setattr__(self, "price_terms", price_terms)
         if self.image_path is not None:
             object.__setattr__(self, "image_path", Path(self.image_path))
         if self.image_content is not None:
@@ -514,7 +583,7 @@ class CotizacionSheetEditor:
                 _set_inline_string(row, f"D{target_row}", product.dimensions)
                 _set_number(row, f"E{target_row}", product.quantity)
                 contract_formulas = formula_contract.product_formulas(
-                    mobiliti_row=product.mobiliti_row,
+                    price_terms=product.price_terms,
                     target_row=target_row,
                 )
                 _set_formula(row, f"F{target_row}", contract_formulas["F"])
@@ -3006,6 +3075,19 @@ def _decimal(value: object, field_name: str) -> Decimal:
     if not result.is_finite():
         raise ValueError(f"{field_name} no finito")
     return result
+
+
+def _excel_decimal(value: Decimal) -> str:
+    """Serializa un decimal exacto como constante numérica estable de Excel."""
+
+    if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+        raise ValueError("Constante decimal de fórmula inválida")
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if not text or text == "0":
+        raise ValueError("Constante decimal de fórmula inválida")
+    return text
 
 
 def _is_xml_character(codepoint: int) -> bool:

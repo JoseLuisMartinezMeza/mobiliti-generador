@@ -49,6 +49,7 @@ from mobiliti_saas.quote_engine.mobiliti_pricing import (  # noqa: E402
 from mobiliti_saas.quote_engine.official_composer import (  # noqa: E402
     ComposeRequest,
     CotizacionMetadata,
+    CotizacionPriceTerm,
     CotizacionProduct,
     CotizacionProductImage,
     CotizacionSection,
@@ -119,6 +120,10 @@ def _write_engine_source(
         17: "Source Reference",
         18: "Price Mode",
         19: "Auto Electrification",
+        20: "Canonical Key",
+        21: "Source Hash",
+        22: "Original Source Row",
+        23: "Upstream Row Hash",
     }
     for column, value in headers.items():
         quotation.cell(7, column).value = value
@@ -139,6 +144,22 @@ def _write_engine_source(
         quotation.cell(offset, 17).value = product.get("reference", "")
         quotation.cell(offset, 18).value = product.get("mode", "")
         quotation.cell(offset, 19).value = product.get("auto")
+        quotation.cell(offset, 20).value = product.get(
+            "canonical_key",
+            product.get("reference", ""),
+        )
+        quotation.cell(offset, 21).value = product.get(
+            "source_hash",
+            "a" * 64 if product.get("reference") else "",
+        )
+        quotation.cell(offset, 22).value = product.get(
+            "source_row",
+            offset if product.get("mode") == "imported" else None,
+        )
+        quotation.cell(offset, 23).value = product.get(
+            "upstream_row_hash",
+            "b" * 64 if product.get("mode") == "imported" else "",
+        )
     if image_path is not None:
         quotation.add_image(OpenpyxlImage(image_path), "B9")
     workbook.save(path)
@@ -184,6 +205,7 @@ def _canonical_row(
 def _mixed_metadata(*, imported_only: bool) -> dict[str, object]:
     return {
         "catalog_price_mode": "mixed_catalog_converted",
+        "catalog_source_hashes": {} if imported_only else {"tarkett": "a" * 64},
         "quote_currency": "MXN",
         "descuento": 30,
         "auto_electrification_rate": None,
@@ -624,8 +646,8 @@ def test_composer_preserves_static_drawing_and_adds_safe_product_png(
     assert result_drawing == base_drawing
     base_root = ET.fromstring(base.parts[base_drawing])
     result_root = ET.fromstring(result.parts[result_drawing])
-    assert len(list(base_root)) == 8
-    assert len(list(result_root)) == 6  # 5 estáticas + 1 producto nuevo.
+    assert len(list(base_root)) == 5
+    assert len(list(result_root)) == len(list(base_root)) + 1
     product_anchor = result_root.findall(f"{{{XDR}}}oneCellAnchor")[-1]
     assert product_anchor.findtext(f"{{{XDR}}}from/{{{XDR}}}row") == str(
         request.cotizacion.product_rows[0] - 1
@@ -1009,7 +1031,7 @@ def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
             for row in range(max(visible_rows) + 1, cotizacion.max_row + 1)
             if cotizacion.cell(row, 4).value == "TOTAL:"
         )
-        subtotal_value = cotizacion.cell(total_row - 5, 8).value
+        subtotal_value = cotizacion.cell(total_row - 4, 8).value
         subtotal_formula = getattr(subtotal_value, "text", subtotal_value)
         assert subtotal_formula == (
             f"=SUM(IFERROR(J{min(visible_rows)}:J{max(visible_rows)},0))"
@@ -1067,7 +1089,7 @@ def test_active_engine_uses_authoritative_catalog_canonical_identity(
         item_key="catalog:tarkett:silla-1",
         section_id="catalog-section:chairs",
         section_title="Sillas canónicas",
-        origin="catalog",
+        origin="tarkett",
         source_row=None,
         original_cost="125.50",
         frozen_rate="1",
@@ -1187,13 +1209,20 @@ def test_active_engine_rejects_nonempty_canonical_mismatch_without_output(
     source = tmp_path / "mismatch-source.xlsx"
     _write_engine_source(
         source,
-        ({"name": "Silla", "quantity": 1, "price": 100},),
+        (
+            {
+                "name": "Silla",
+                "quantity": 1,
+                "price": 100,
+                "reference": "catalog:sunon:item-1",
+            },
+        ),
     )
     canonical = _canonical_row(
         item_key="catalog:item-1",
         section_id="catalog-section:1",
         section_title="Sillas",
-        origin="catalog",
+        origin="sunon",
         source_row=None,
         original_cost="100",
         frozen_rate="1",
@@ -1208,7 +1237,7 @@ def test_active_engine_rejects_nonempty_canonical_mismatch_without_output(
         generate_quote(
             source,
             output,
-            {},
+            {"catalog_source_hashes": {"sunon": "a" * 64}},
             OFFICIAL_TEMPLATE,
             quotation_data_rows=(canonical,),
         )
@@ -1475,7 +1504,7 @@ def test_composer_rejects_any_change_outside_the_exact_sheet_allowlist(
         root = ET.fromstring(request.cotizacion.xml)
         product_row = request.cotizacion.product_rows[0]
         if surface == "cotizacion_terms":
-            terms_row = 28 + request.cotizacion.terms_row_delta
+            terms_row = 29 + request.cotizacion.terms_row_delta
             term = _cell(root, f"A{terms_row}")
             value = term.find(f"{{{MAIN}}}v")
             assert value is not None
@@ -1690,11 +1719,11 @@ def test_estrategia_subtotal_translation_only_changes_range_tokens() -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     part = base.sheet_part("Estrategia Comercial ")
     root = ET.fromstring(base.parts[part])
-    formula = _cell(root, "B63").find(f"{{{MAIN}}}f")
+    formula = _cell(root, "D59").find(f"{{{MAIN}}}f")
     assert formula is not None
     formula.text = (
-        'IF("Cotizacion!H19"="literal",0,'
-        'IF(B61=0,C61,B61*Cotizacion!H19))'
+        'IF("Cotizacion!H25"="literal",0,'
+        'IF(B61=0,C61,B61*Cotizacion!H25))'
     )
     row_map = plan_mobiliti_layout([SectionNeed("large", "Large", 100)])
 
@@ -1705,9 +1734,9 @@ def test_estrategia_subtotal_translation_only_changes_range_tokens() -> None:
             30,
         )
     )
-    result = _cell(translated, "B63").findtext(f"{{{MAIN}}}f")
-    assert '"Cotizacion!H19"' in result
-    assert "B61*Cotizacion!H25" in result
+    result = _cell(translated, "D59").findtext(f"{{{MAIN}}}f")
+    assert '"Cotizacion!H25"' in result
+    assert "B61*Cotizacion!H30" in result
 
 
 def test_composed_zip_bytes_ignore_output_name_image_name_and_image_mtime(
@@ -2481,13 +2510,110 @@ def test_cotizacion_declares_audited_formula_contract_for_official_f_i() -> None
     assert _cell(source, "I17").findtext(f"{{{MAIN}}}f") == "F17-H17"
 
     contract = official_composer_module.CotizacionFormulaContract()
-    formulas = contract.product_formulas(mobiliti_row=14, target_row=17)
+    product = CotizacionProduct(
+        item_key="legacy-price-term",
+        name="Silla",
+        description="",
+        dimensions="",
+        quantity=Decimal("1"),
+        mobiliti_row=14,
+    )
+    formulas = contract.product_formulas(
+        price_terms=product.price_terms,
+        target_row=17,
+    )
 
     assert formulas == {
         "F": "=Mobiliti!X14",
         "I": "=F17-H17",
     }
     assert all("#REF!" not in formula for formula in formulas.values())
+
+
+def test_composed_product_formula_uses_exact_mobiliti_terms() -> None:
+    terms = (
+        CotizacionPriceTerm(14, Decimal("1"), Decimal("1")),
+        CotizacionPriceTerm(15, Decimal("2"), Decimal("1")),
+        CotizacionPriceTerm(16, Decimal("3"), Decimal("10")),
+    )
+
+    formulas = official_composer_module.CotizacionFormulaContract().product_formulas(
+        price_terms=terms,
+        target_row=17,
+    )
+
+    assert formulas == {
+        "F": "=Mobiliti!X14+Mobiliti!X15*2+Mobiliti!X16*3/10",
+        "I": "=F17-H17",
+    }
+
+
+def test_composed_product_formula_serializes_decimal_factors_without_rounding() -> None:
+    formulas = official_composer_module.CotizacionFormulaContract().product_formulas(
+        price_terms=(
+            CotizacionPriceTerm(14, Decimal("2.5000"), Decimal("0.1250")),
+        ),
+        target_row=17,
+    )
+
+    assert formulas["F"] == "=Mobiliti!X14*2.5/0.125"
+
+
+def test_composed_product_formula_rejects_tokens_outside_declared_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        official_composer_module,
+        "_excel_decimal",
+        lambda _value: "2+Mobiliti!X99",
+    )
+
+    with pytest.raises(ValueError, match="fuera de contrato"):
+        official_composer_module.CotizacionFormulaContract().product_formulas(
+            price_terms=(CotizacionPriceTerm(14, Decimal("2")),),
+            target_row=17,
+        )
+
+
+def test_composed_product_rejects_duplicate_mobiliti_rows() -> None:
+    with pytest.raises(ValueError, match="duplicada"):
+        CotizacionProduct(
+            item_key="duplicate-price-term",
+            name="Silla",
+            description="",
+            dimensions="",
+            quantity=Decimal("1"),
+            mobiliti_row=14,
+            price_terms=(
+                CotizacionPriceTerm(14),
+                CotizacionPriceTerm(14, Decimal("2")),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("numerator", "denominator"),
+    (
+        (Decimal("0"), Decimal("1")),
+        (Decimal("-1"), Decimal("1")),
+        (Decimal("1"), Decimal("0")),
+        (Decimal("1"), Decimal("-1")),
+    ),
+)
+def test_cotizacion_price_term_requires_positive_factors(
+    numerator: Decimal,
+    denominator: Decimal,
+) -> None:
+    with pytest.raises(ValueError, match="Factor de precio compuesto"):
+        CotizacionPriceTerm(14, numerator, denominator)
+
+
+@pytest.mark.parametrize("mobiliti_row", (0, 1_048_577, True))
+def test_cotizacion_price_term_requires_valid_xlsx_row(
+    mobiliti_row: object,
+) -> None:
+    with pytest.raises(ValueError, match="Fila Mobiliti del término"):
+        CotizacionPriceTerm(mobiliti_row)  # type: ignore[arg-type]
 
 
 def test_cotizacion_translation_preserves_reference_like_formula_literals() -> None:
