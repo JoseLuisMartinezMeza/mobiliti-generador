@@ -45,7 +45,7 @@ from .ai_image_provider import (
     image_provider_failure_is_fatal,
     normalize_image_provider,
 )
-from .image_processing import improve_image_map
+from .image_processing import compose_product_montage, improve_image_map
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .mobiliti_layout import SectionNeed, plan_mobiliti_layout
 from .mobiliti_pricing import (
@@ -70,6 +70,7 @@ from .ooxml_worksheet import (
 from .official_composer import (
     ComposeRequest,
     CotizacionMetadata,
+    CotizacionPriceTerm,
     CotizacionProduct,
     CotizacionSection,
     CotizacionSheetEditor,
@@ -2814,12 +2815,47 @@ def _build_official_mobiliti(
     return MobilitiSheetMutation(editor.to_xml(), mutation.row_map)
 
 
-def _build_official_cotizacion(
-    base: XlsxPackage,
+def _official_cotizacion_description(
+    line: _OfficialPresentationLine,
+    language: str,
+) -> str:
+    return (
+        build_product_description(
+            line.item.nombre,
+            line.item.descripcion,
+            line.category,
+            language,
+        )
+        if line.item is not None
+        else line.description
+    )
+
+
+def _legacy_cotizacion_product(
+    line: _OfficialPresentationLine,
+    target_row: int,
+    *,
+    language: str,
+    discount: Decimal,
+) -> CotizacionProduct:
+    return CotizacionProduct(
+        item_key=line.item_key,
+        name=line.name,
+        description=_official_cotizacion_description(line, language),
+        dimensions=line.dimensions,
+        quantity=line.quantity,
+        mobiliti_row=target_row,
+        discount=discount,
+        image_content=line.image_content,
+        image_content_type=line.image_content_type,
+    )
+
+
+def _legacy_cotizacion_sections(
     lines: Sequence[_OfficialPresentationLine],
     mobiliti: MobilitiSheetMutation,
     metadata: dict[str, Any],
-):
+) -> tuple[CotizacionSection, ...]:
     target_by_key = {
         line.item_key: target_row
         for line, target_row in zip(lines, mobiliti.row_map.item_rows, strict=True)
@@ -2834,33 +2870,256 @@ def _build_official_cotizacion(
             line.section_id,
             (line.section_title, []),
         )
-        description = (
-            build_product_description(
-                line.item.nombre,
-                line.item.descripcion,
-                line.category,
-                language,
-            )
-            if line.item is not None
-            else line.description
-        )
         products.append(
-            CotizacionProduct(
-                item_key=line.item_key,
-                name=line.name,
-                description=description,
-                dimensions=line.dimensions,
-                quantity=line.quantity,
-                mobiliti_row=target_by_key[line.item_key],
+            _legacy_cotizacion_product(
+                line,
+                target_by_key[line.item_key],
+                language=language,
                 discount=discount,
-                image_content=line.image_content,
-                image_content_type=line.image_content_type,
             )
         )
-    sections = tuple(
+    return tuple(
         CotizacionSection(title=title, products=tuple(products))
         for title, products in section_order.values()
     )
+
+
+def _project_context_lines(context: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    payload = context.get("normalized_project_payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError("Contexto de Proyecto sin payload congelado")
+    raw_lines = payload.get("lines")
+    if not isinstance(raw_lines, list) or not raw_lines:
+        raise ValueError("Contexto de Proyecto sin líneas congeladas")
+    result: dict[str, Mapping[str, Any]] = {}
+    for raw_line in raw_lines:
+        if not isinstance(raw_line, Mapping):
+            raise ValueError("Línea congelada de Proyecto inválida")
+        line_id = raw_line.get("line_id")
+        if not isinstance(line_id, str) or not line_id:
+            raise ValueError("Identidad de línea congelada inválida")
+        if line_id in result:
+            raise ValueError("Identidad de línea congelada repetida")
+        result[line_id] = raw_line
+    return result
+
+
+def _project_cotizacion_sections(
+    lines: Sequence[_OfficialPresentationLine],
+    mobiliti: MobilitiSheetMutation,
+    metadata: dict[str, Any],
+) -> tuple[CotizacionSection, ...]:
+    context = metadata.get("project_context")
+    if context is None:
+        return _legacy_cotizacion_sections(lines, mobiliti, metadata)
+    if not isinstance(context, Mapping):
+        raise ValueError("Contexto de Proyecto inválido")
+    compositions = context.get("compositions")
+    if not isinstance(compositions, list) or not compositions:
+        raise ValueError("Contexto de Proyecto sin composiciones")
+    if len(lines) != len(mobiliti.row_map.item_rows):
+        raise ValueError("Presentación de Proyecto inconsistente")
+
+    by_key: dict[str, _OfficialPresentationLine] = {}
+    target_by_key: dict[str, int] = {}
+    for line, target_row in zip(lines, mobiliti.row_map.item_rows, strict=True):
+        if line.item_key in by_key:
+            raise ValueError("Identidad física de Proyecto repetida")
+        by_key[line.item_key] = line
+        target_by_key[line.item_key] = target_row
+
+    base_by_key = {
+        line.item_key: line for line in lines if line.parent_item_key is None
+    }
+    frozen_by_key = _project_context_lines(context)
+    unknown_frozen = set(frozen_by_key) - set(base_by_key)
+    if unknown_frozen:
+        raise ValueError("Línea congelada de Proyecto ausente")
+    unexpected_physical = set(base_by_key) - set(frozen_by_key)
+    if unexpected_physical:
+        raise ValueError("Línea física sin contexto de Proyecto")
+
+    language = normalize_description_language(
+        metadata.get(
+            "description_language",
+            metadata.get("idioma_descripcion", "es"),
+        )
+    )
+    discount = Decimal(str(_discount_rate(metadata)))
+    consumed: set[str] = set()
+    consumed_lumbro: set[str] = set()
+    accessories_by_parent: dict[str, list[_OfficialPresentationLine]] = {}
+    for line in lines:
+        if line.parent_item_key is None:
+            continue
+        if (
+            line.origin != "lumbro"
+            or not isinstance(line.parent_item_key, str)
+            or line.parent_item_key not in base_by_key
+        ):
+            raise ValueError("Accesorio Lumbro sin padre de Proyecto")
+        parent = base_by_key[line.parent_item_key]
+        if line.section_id != parent.section_id:
+            raise ValueError("Accesorio Lumbro en sección incorrecta")
+        accessories_by_parent.setdefault(line.parent_item_key, []).append(line)
+
+    section_order: OrderedDict[str, tuple[str, list[CotizacionProduct]]] = OrderedDict()
+    for raw_composition in compositions:
+        if not isinstance(raw_composition, Mapping):
+            raise ValueError("Composición de Proyecto inválida")
+        principal_id = raw_composition.get("principal_line_id")
+        section_id = raw_composition.get("section_id")
+        component_ids = raw_composition.get("component_line_ids")
+        raw_terms = raw_composition.get("price_terms")
+        if (
+            not isinstance(principal_id, str)
+            or not isinstance(section_id, str)
+            or not isinstance(component_ids, list)
+            or not component_ids
+            or not isinstance(raw_terms, list)
+        ):
+            raise ValueError("Composición de Proyecto incompleta")
+        if component_ids[0] != principal_id:
+            raise ValueError("Principal de composición ausente")
+        if len(component_ids) != len(raw_terms):
+            raise ValueError("Términos de precio de Proyecto incompletos")
+        if any(
+            not isinstance(component_id, str) or not component_id
+            for component_id in component_ids
+        ):
+            raise ValueError("Línea de Proyecto desconocida en composición")
+        if len(component_ids) != len(set(component_ids)):
+            raise ValueError("Línea de Proyecto repetida en composición")
+        if any(line_id in consumed for line_id in component_ids):
+            raise ValueError("Línea de Proyecto repetida entre composiciones")
+
+        missing = next(
+            (
+                line_id
+                for line_id in component_ids
+                if line_id not in base_by_key
+            ),
+            None,
+        )
+        if missing is not None:
+            raise ValueError("Línea de Proyecto desconocida en composición")
+        principal = base_by_key[principal_id]
+        frozen_principal = frozen_by_key[principal_id]
+        if (
+            principal.section_id != section_id
+            or frozen_principal.get("role") != "principal"
+            or frozen_principal.get("section_id") != section_id
+            or frozen_principal.get("parent_line_id") is not None
+        ):
+            raise ValueError("Principal de Proyecto en sección incorrecta")
+
+        components = [base_by_key[line_id] for line_id in component_ids]
+        for component_id, component in zip(component_ids[1:], components[1:]):
+            frozen_component = frozen_by_key[component_id]
+            if (
+                component.section_id != section_id
+                or frozen_component.get("role") != "complement"
+                or frozen_component.get("section_id") is not None
+                or frozen_component.get("parent_line_id") != principal_id
+            ):
+                raise ValueError("Complemento de Proyecto en sección incorrecta")
+
+        price_terms: list[CotizacionPriceTerm] = []
+        for component_id, raw_term in zip(component_ids, raw_terms, strict=True):
+            if (
+                not isinstance(raw_term, Mapping)
+                or raw_term.get("line_id") != component_id
+            ):
+                raise ValueError("Términos de precio de Proyecto incompletos")
+            try:
+                price_terms.append(
+                    CotizacionPriceTerm(
+                        target_by_key[component_id],
+                        Decimal(str(raw_term.get("numerator"))),
+                        Decimal(str(raw_term.get("denominator"))),
+                    )
+                )
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise ValueError("Término de precio de Proyecto inválido") from exc
+
+        descriptions = [
+            _official_cotizacion_description(component, language)
+            for component in components
+        ]
+        description = safe_excel_text(
+            "\n".join(
+                [
+                    descriptions[0],
+                    *(
+                        f"+ {child_description}"
+                        for child_description in descriptions[1:]
+                        if child_description
+                    ),
+                ]
+            )
+        )
+        montage = compose_product_montage(
+            principal.image_content,
+            [
+                component.image_content
+                for component in components[1:]
+                if component.image_content is not None
+            ],
+        )
+        _title, products = section_order.setdefault(
+            section_id,
+            (principal.section_title, []),
+        )
+        products.append(
+            CotizacionProduct(
+                item_key=principal_id,
+                name=principal.name,
+                description=description,
+                dimensions=principal.dimensions,
+                quantity=principal.quantity,
+                mobiliti_row=target_by_key[principal_id],
+                discount=discount,
+                image_content=montage,
+                image_content_type="image/png" if montage is not None else None,
+                price_terms=tuple(price_terms),
+            )
+        )
+        consumed.update(component_ids)
+
+        for component_id in component_ids:
+            for accessory in accessories_by_parent.get(component_id, ()):
+                products.append(
+                    _legacy_cotizacion_product(
+                        accessory,
+                        target_by_key[accessory.item_key],
+                        language=language,
+                        discount=discount,
+                    )
+                )
+                consumed_lumbro.add(accessory.item_key)
+
+    unconsumed = set(base_by_key) - consumed
+    if unconsumed:
+        raise ValueError("Línea congelada de Proyecto sin consumir")
+    all_lumbro = {
+        line.item_key for line in lines if line.parent_item_key is not None
+    }
+    if all_lumbro != consumed_lumbro:
+        raise ValueError("Accesorio Lumbro de Proyecto sin consumir")
+
+    return tuple(
+        CotizacionSection(title=title, products=tuple(products))
+        for title, products in section_order.values()
+    )
+
+
+def _build_official_cotizacion(
+    base: XlsxPackage,
+    lines: Sequence[_OfficialPresentationLine],
+    mobiliti: MobilitiSheetMutation,
+    metadata: dict[str, Any],
+):
+    sections = _project_cotizacion_sections(lines, mobiliti, metadata)
     return CotizacionSheetEditor.from_xml(
         base.parts[base.sheet_part("Cotizacion")]
     ).compose(

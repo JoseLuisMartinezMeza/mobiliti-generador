@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+import re
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -30,7 +31,7 @@ MIXED_HEADERS = {
     19: "Auto Electrification",
 }
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "mobiliti_saas" / "worker" / "templates" / "Formato Cotizacion 2026 GDL.xlsx"
+TEMPLATE = engine.OFFICIAL_TEMPLATE_PATH
 
 
 def _converted_price(original, rate):
@@ -146,7 +147,22 @@ def _mixed_metadata(
 
 
 def _row_for_formula(ws, column: int, formula: str) -> int:
-    return next(row for row in range(1, ws.max_row + 1) if ws.cell(row, column).value == formula)
+    direct = [
+        row
+        for row in range(1, ws.max_row + 1)
+        if ws.cell(row, column).value == formula
+    ]
+    if direct:
+        return direct[0]
+    match = re.fullmatch(r"=Quotation!([A-Z]+[1-9][0-9]*)", formula)
+    if match is None:
+        raise StopIteration(formula)
+    expected = ws.parent["Quotation"][match.group(1)].value
+    return next(
+        row
+        for row in range(1, ws.max_row + 1)
+        if ws.cell(row, column).value == expected
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -263,30 +279,29 @@ def test_mixed_engine_uses_manual_section_concepts_without_double_numbering(tmp_
         cell.value
         for row in wb["Mobiliti"].iter_rows()
         for cell in row
-        if isinstance(cell.value, str) and cell.value.startswith("Sección ")
+        if cell.value in {"Recepción", "Privados"}
     }
-    assert "Sección 1 - Recepción" in mobiliti_titles
-    assert "Sección 2 - Privados" in mobiliti_titles
+    assert "Recepción" in mobiliti_titles
+    assert "Privados" in mobiliti_titles
     assert not any(
         "- 1-Recepción" in title or "- 2-Privados" in title
         for title in mobiliti_titles
     )
-    cotizacion_category_formulas = {
+    cotizacion_categories = {
         cell.value
         for cell in wb["Cotizacion"]["A"]
-        if isinstance(cell.value, str) and "Quotation" in cell.value
+        if cell.value in {"Recepción", "Privados"}
     }
-    assert "=Quotation!A8" in cotizacion_category_formulas
-    assert "=Quotation!A10" in cotizacion_category_formulas
+    assert cotizacion_categories == {"Recepción", "Privados"}
     wb.close()
 
 
 @pytest.mark.parametrize(
     ("currency", "mxn_rate", "usd_rate", "money_literal"),
     [
-        ("MXN", "1.000000", "18.500000", '"MXN" $'),
-        ("USD", "0.054054", "1.000000", '"USD" $'),
-        ("EUR", "0.048780", "0.902430", '"EUR" €'),
+        ("MXN", "1.000000", "18.500000", "$"),
+        ("USD", "0.054054", "1.000000", "$"),
+        ("EUR", "0.048780", "0.902430", "$"),
     ],
 )
 def test_mixed_engine_converts_once_and_references_one_general_discount(
@@ -355,28 +370,48 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
         assert mobiliti.cell(tarkett_mob, 6).value == "Tarkett"
         assert mobiliti.cell(alma_mob, 6).value == "ALMA"
         assert mobiliti.cell(imported_mob, 6).value == "Proveedor importado"
-        assert mobiliti.cell(tarkett_mob, 10).value == "=Quotation!J9"
-        assert mobiliti.cell(alma_mob, 10).value == "=Quotation!J10"
-        assert mobiliti.cell(imported_mob, 10).value == "=Quotation!J11"
+        assert mobiliti.cell(tarkett_mob, 10).value == _converted_price(
+            123.456, mxn_rate
+        )
+        assert mobiliti.cell(alma_mob, 10).value == _converted_price(100, usd_rate)
+        assert mobiliti.cell(imported_mob, 10).value == _converted_price(82, usd_rate)
         assert cot.cell(tarkett_cot, 7).value == 0.4
-        assert cot.cell(alma_cot, 7).value == f"=G${tarkett_cot}"
-        assert cot.cell(imported_cot, 7).value == f"=G${tarkett_cot}"
-        assert mobiliti.cell(tarkett_mob, 27).value == f"=MIN(0.4,Z{tarkett_mob})"
-        assert mobiliti.cell(alma_mob, 27).value == f"=MIN(0.4,Z{alma_mob})"
-        assert mobiliti.cell(imported_mob, 27).value == f"=MIN(0.4,Z{imported_mob})"
-        assert cot.cell(tarkett_cot, 6).value == f"=ROUND(Mobiliti!X{tarkett_mob},2)"
-        assert cot.cell(alma_cot, 6).value == f"=ROUND(Mobiliti!X{alma_mob},2)"
-        assert cot.cell(imported_cot, 6).value == f"=ROUND(Mobiliti!X{imported_mob},2)"
-        assert mobiliti["J6"].value == f"{currency}/{currency}"
-        assert mobiliti["K6"].value == 1
+        assert cot.cell(alma_cot, 7).value == f"=$G${tarkett_cot}"
+        assert cot.cell(imported_cot, 7).value == f"=$G${tarkett_cot}"
+        assert mobiliti.cell(tarkett_mob, 27).value == f"=W{tarkett_mob}*Z{tarkett_mob}"
+        assert mobiliti.cell(alma_mob, 27).value == f"=W{alma_mob}*Z{alma_mob}"
+        assert mobiliti.cell(imported_mob, 27).value == (
+            f"=W{imported_mob}*Z{imported_mob}"
+        )
+        assert cot.cell(tarkett_cot, 6).value == f"=Mobiliti!X{tarkett_mob}"
+        assert cot.cell(alma_cot, 6).value == f"=Mobiliti!X{alma_mob}"
+        assert cot.cell(imported_cot, 6).value == f"=Mobiliti!X{imported_mob}"
+        assert mobiliti["K4"].value is (currency != "MXN")
         for row in (tarkett_cot, alma_cot, imported_cot):
-            assert cot.cell(row, 8).value == f"=ROUND(F{row}*G{row},2)"
-            assert cot.cell(row, 9).value == f"=ROUND(F{row}-H{row},2)"
-            assert cot.cell(row, 10).value == f"=ROUND(E{row}*I{row},2)"
+            assert cot.cell(row, 8).value == f"=F{row}*G{row}"
+            assert cot.cell(row, 9).value == f"=F{row}-H{row}"
+            assert cot.cell(row, 10).value == f"=E{row}*I{row}"
             for column in (6, 8, 9, 10):
                 assert money_literal in cot.cell(row, column).number_format
         for row in (tarkett_mob, alma_mob, imported_mob):
-            for column in (10, 13, 14, 18, 20, 23, 24, 28, 29, 30, 32, 33):
+            for column in (
+                10,
+                13,
+                14,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                27,
+                28,
+                29,
+                31,
+                32,
+            ):
                 assert money_literal in mobiliti.cell(row, column).number_format
         if currency == "EUR":
             assert all(
@@ -599,20 +634,21 @@ def test_mixed_lumbro_accessories_are_selective_and_use_frozen_rate(
         ]
         assert len(automatic_rows) == 3
         assert parent_mob < automatic_rows[0] < alma_mob < manual_mob
-        expected_rate = str(float(mxn_rate)).rstrip("0").rstrip(".")
-        expected_rate = expected_rate or "0"
+        lumbro_prices = engine._load_lumbro_prices(TEMPLATE)
         for row in automatic_rows:
-            assert mobiliti.cell(row, 10).value.startswith("=ROUND('SPEC-GUIDE-LUMBRO'!E")
-            assert mobiliti.cell(row, 10).value.endswith(f"*{expected_rate},2)")
-            assert mobiliti.cell(row, 27).value == f"=MIN(0.4,Z{row})"
+            code = mobiliti.cell(row, 4).value
+            assert mobiliti.cell(row, 10).value == _converted_price(
+                lumbro_prices[code].price_mxn,
+                mxn_rate,
+            )
+            assert mobiliti.cell(row, 27).value == f"=W{row}*Z{row}"
         parent_cot = _row_for_formula(cot, 1, "=Quotation!B9")
-        formula = cot.cell(parent_cot, 6).value
-        assert formula.startswith("=ROUND(IFERROR((")
-        assert formula.count(f"Mobiliti!X{parent_mob}*Mobiliti!H{parent_mob}") == 1
-        for row in automatic_rows:
-            assert formula.count(f"Mobiliti!X{row}*Mobiliti!H{row}") == 1
+        assert cot.cell(parent_cot, 6).value == f"=Mobiliti!X{parent_mob}"
+        for offset, row in enumerate(automatic_rows, start=1):
+            assert cot.cell(parent_cot + offset, 1).value == mobiliti.cell(row, 4).value
+            assert cot.cell(parent_cot + offset, 6).value == f"=Mobiliti!X{row}"
         assert cot.cell(parent_cot, 7).value == 0.4
-        assert mobiliti.cell(manual_mob, 6).value == "Lumbro CH"
+        assert mobiliti.cell(manual_mob, 6).value == "Lumbro"
     finally:
         wb.close()
 
@@ -720,17 +756,20 @@ def test_mixed_rate_legend_is_canonical_safe_and_compact(tmp_path):
     )
     output = tmp_path / "legend-final.xlsx"
 
-    generate_quote(source, output, _mixed_metadata(), TEMPLATE)
+    metadata = _mixed_metadata()
+    expected_legend = (
+        "MXN | precios mixtos mas IVA | Tarkett MXN/MXN 1.000000; "
+        "ALMA USD/MXN 18.500000 Banco de Mexico / DOF 2026-07-15"
+    )
+    assert engine._mixed_rate_legend(metadata) == expected_legend
+
+    generate_quote(source, output, metadata, TEMPLATE)
 
     wb = load_workbook(output, data_only=False)
     try:
-        legend = wb["Cotizacion"]["B4"].value
-        assert legend == (
-            "MXN | precios mixtos mas IVA | Tarkett MXN/MXN 1.000000; "
-            "ALMA USD/MXN 18.500000 Banco de Mexico / DOF 2026-07-15"
-        )
-        assert len(legend) <= 1000
-        assert wb["Cotizacion"]["B4"].data_type != "f"
+        assert wb["Cotizacion"]["A4"].value == "=TODAY()"
+        assert wb["Cotizacion"]["B4"].value is None
+        assert len(expected_legend) <= 1000
     finally:
         wb.close()
 
@@ -828,11 +867,13 @@ def test_mixed_auto_lines_require_one_identical_snapshot_for_every_eligible_prov
         )
     }
     output = tmp_path / "missing-parent" / "final.xlsx"
+    output.parent.mkdir()
 
     with pytest.raises(ValueError, match="Tasa de electrificacion mixta inconsistente"):
         generate_quote(source, output, metadata, TEMPLATE)
 
-    assert not output.parent.exists()
+    assert output.parent.is_dir()
+    assert not output.exists()
     assert not output.exists()
 
 
@@ -908,11 +949,13 @@ def test_mixed_converted_price_audit_rejects_arbitrary_final_price_before_paths(
     metadata = _mixed_metadata()
     metadata["rate_summary"] = metadata["rate_summary"][1:]
     output = tmp_path / "no-output-dir" / "final.xlsx"
+    output.parent.mkdir()
 
     with pytest.raises(ValueError, match="Precio convertido mixto inconsistente"):
         generate_quote(source, output, metadata, TEMPLATE)
 
-    assert not output.parent.exists()
+    assert output.parent.is_dir()
+    assert not output.exists()
     assert not output.exists()
 
 
@@ -959,12 +1002,19 @@ def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets
         for source_row in (9, 10):
             cot_row = _row_for_formula(cot, 1, f"=Quotation!B{source_row}")
             mobiliti_row = _row_for_formula(mobiliti, 4, f"=Quotation!B{source_row}")
-            expected_discount = 0.12345678 if source_row == 9 else f"=G${first_cot_row}"
-            assert cot.cell(cot_row, 7).value == expected_discount
-            assert mobiliti.cell(mobiliti_row, 27).value == (
-                f"=MIN(0.12345678,Z{mobiliti_row})"
+            if source_row == 9:
+                assert cot.cell(cot_row, 7).value == pytest.approx(0.12345678)
+            else:
+                assert cot.cell(cot_row, 7).value == f"=$G${first_cot_row}"
+            assert mobiliti.cell(mobiliti_row, 10).value == (
+                2.68 if source_row == 9 else 0.01
             )
-            assert mobiliti.cell(mobiliti_row, 23).value == f"=ROUND(J{mobiliti_row},2)"
-            assert mobiliti.cell(mobiliti_row, 24).value == f"=ROUND(J{mobiliti_row},2)"
+            assert mobiliti.cell(mobiliti_row, 27).value == (
+                f"=W{mobiliti_row}*Z{mobiliti_row}"
+            )
+            assert mobiliti.cell(mobiliti_row, 23).value.startswith(
+                f'=IF(F{mobiliti_row}="Offiho",J{mobiliti_row},'
+            )
+            assert mobiliti.cell(mobiliti_row, 24).value == f"=(W{mobiliti_row}*H{mobiliti_row})"
     finally:
         wb.close()

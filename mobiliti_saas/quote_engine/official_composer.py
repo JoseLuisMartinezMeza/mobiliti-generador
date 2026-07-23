@@ -1213,6 +1213,43 @@ def _validate_exact_mobiliti_surface(
     _assert_exact_worksheet(editor.root, candidate, "Mobiliti")
 
 
+_COTIZACION_POSITIVE_DECIMAL = (
+    r"(?:[1-9][0-9]*(?:\.[0-9]*[1-9])?|0\.[0-9]*[1-9])"
+)
+_COTIZACION_PRICE_TERM = re.compile(
+    rf"Mobiliti!X(?P<row>[1-9][0-9]*)"
+    rf"(?:\*(?P<numerator>{_COTIZACION_POSITIVE_DECIMAL}))?"
+    rf"(?:/(?P<denominator>{_COTIZACION_POSITIVE_DECIMAL}))?"
+)
+
+
+def _cotizacion_price_terms_from_formula(
+    formula: str,
+) -> tuple[CotizacionPriceTerm, ...]:
+    if not isinstance(formula, str) or not formula:
+        raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
+    terms: list[CotizacionPriceTerm] = []
+    for raw_term in formula.split("+"):
+        match = _COTIZACION_PRICE_TERM.fullmatch(raw_term)
+        if match is None:
+            raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
+        terms.append(
+            CotizacionPriceTerm(
+                int(match.group("row")),
+                Decimal(match.group("numerator") or "1"),
+                Decimal(match.group("denominator") or "1"),
+            )
+        )
+    result = tuple(terms)
+    expected = CotizacionFormulaContract().product_formulas(
+        target_row=1,
+        price_terms=result,
+    )["F"][1:]
+    if formula != expected:
+        raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
+    return result
+
+
 def _validate_exact_cotizacion_surface(
     base: XlsxPackage,
     mutation: CotizacionSheetMutation,
@@ -1224,7 +1261,7 @@ def _validate_exact_cotizacion_surface(
     if (
         not product_rows
         or tuple(sorted(set(product_rows))) != product_rows
-        or len(product_rows) != len(row_map.item_rows)
+        or len(product_rows) > len(row_map.item_rows)
     ):
         raise ValueError("Cotizacion no cumple el contrato exacto de filas de producto")
     if mutation.terms_row_delta != mutation.total_row - CANONICAL_COTIZACION_TOTAL_ROW:
@@ -1294,9 +1331,11 @@ def _validate_exact_cotizacion_surface(
         )
         match = re.fullmatch(r"Mobiliti!X([1-9][0-9]*)", formula)
         if match is None:
-            raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
-        mobiliti_row = int(match.group(1))
-        mobiliti_rows.append(mobiliti_row)
+            price_terms = _cotizacion_price_terms_from_formula(formula)
+        else:
+            price_terms = (CotizacionPriceTerm(int(match.group(1))),)
+        mobiliti_row = price_terms[0].mobiliti_row
+        mobiliti_rows.extend(term.mobiliti_row for term in price_terms)
         current_products.append(
             CotizacionProduct(
                 item_key=f"contract-{product_sequence}",
@@ -1315,12 +1354,16 @@ def _validate_exact_cotizacion_surface(
                 quantity=quantity,
                 mobiliti_row=mobiliti_row,
                 discount=first_discount,
+                price_terms=price_terms,
             )
         )
     if current_title is None or not current_products:
         raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
     sections.append(CotizacionSection(current_title, tuple(current_products)))
-    if tuple(mobiliti_rows) != row_map.item_rows:
+    if (
+        len(mobiliti_rows) != len(set(mobiliti_rows))
+        or set(mobiliti_rows) != set(row_map.item_rows)
+    ):
         raise ValueError("Cotizacion no cumple el contrato exacto de filas Mobiliti")
 
     expected = CotizacionSheetEditor.from_xml(
