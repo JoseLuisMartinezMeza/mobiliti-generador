@@ -87,7 +87,14 @@ def test_catalog_search_requires_authentication_subscription_and_valid_query(mon
         "base_option_id": "",
         "add_on_option_ids": [],
     }
-    assert response.json()["items"][0]["snapshot"]["availability"] == "6 semanas"
+    assert response.json()["items"][0]["snapshot"] == {
+        "name": "Olive II Chair",
+        "code": "OLIVE-II",
+        "image_url": "https://assets.example/olive.png",
+        "availability": "Fabricación por confirmar",
+        "configuration": "",
+        "warnings": ["Fabricación por confirmar"],
+    }
 
     monkeypatch.setattr(index, "_require_active_subscription", lambda _usuario_id: (_ for _ in ()).throw(RuntimeError("down")))
     assert client.get("/catalogs/search?q=olive", headers=_auth_headers(7)).status_code == 503

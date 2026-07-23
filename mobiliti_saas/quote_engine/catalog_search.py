@@ -56,12 +56,19 @@ def _availability_label(raw: dict) -> str:
     if raw.get("is_out_of_stock") is True or _non_positive(raw.get("available_quantity")) or _non_positive(raw.get("stock")):
         return "Agotado"
     availability_type = _text(raw.get("availability_type"))
-    lead_time = _text(raw.get("lead_time"))
     if availability_type == "made_to_order":
-        return lead_time or "Fabricación sobre pedido"
+        return "Fabricación por confirmar"
     if availability_type == "stocked" or raw.get("available_quantity") is not None or raw.get("stock") is not None:
         return "Disponible"
-    return lead_time or "Disponibilidad por confirmar"
+    return "Disponibilidad por confirmar"
+
+
+def _availability_warnings(availability: str) -> list[str]:
+    return {
+        "Agotado": ["Producto agotado"],
+        "Fabricación por confirmar": ["Fabricación por confirmar"],
+        "Disponibilidad por confirmar": ["Disponibilidad por confirmar"],
+    }.get(availability, [])
 
 
 def _page_value(value: object, field: str, minimum: int, maximum: int | None = None) -> int:
@@ -106,6 +113,7 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
     if not official_code:
         return None
     name = _text(raw.get("name")) or official_code
+    availability = _availability_label(raw)
     return {
         "catalog": catalog,
         "official_code": official_code,
@@ -114,8 +122,9 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
             "name": name,
             "code": official_code,
             "image_url": _text(raw.get("image_url")),
-            "availability": _availability_label(raw),
+            "availability": availability,
             "configuration": "",
+            "warnings": _availability_warnings(availability),
         },
     }
 
