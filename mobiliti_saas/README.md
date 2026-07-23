@@ -211,6 +211,27 @@ solo en historial como referencia antigua.
 | `/cotizaciones` | GET | Token | Lista historial web |
 | `/cotizaciones/{id}` | GET | Token | Estado de una cotizacion |
 | `/cotizaciones/{id}/download` | GET | Token | URL firmada de descarga |
+| `/projects` | POST, GET | Token | Crea o lista los Proyectos persistentes del usuario |
+| `/projects/{id}` | GET, PATCH | Token | Consulta o actualiza un Proyecto propio |
+| `/projects/{id}/archive` | POST | Token | Archiva un Proyecto sin eliminarlo |
+| `/projects/{id}/restore` | POST | Token | Restaura un Proyecto archivado |
+| `/projects/{id}/imports/{job_id}` | POST | Token | Promueve una Quotation importada y sus imagenes a recursos durables del Proyecto |
+| `/catalogs/search` | GET | Token | Busca en el catalogo unificado para el selector web |
+
+## Proyectos persistentes
+
+Los Proyectos se guardan por usuario mediante `/projects`; las rutas de detalle
+solo devuelven recursos que pertenecen al usuario autenticado. Las actualizaciones
+usan revision optimista: cada `PATCH /projects/{id}`, archivado o restauracion
+requiere la revision esperada y devuelve conflicto si otro cambio ya la actualizo.
+
+`POST /projects/{id}/archive` archiva el Proyecto sin eliminacion permanente, y
+`GET /projects` permite consultar por separado los estados activos o archivados.
+`GET /catalogs/search` alimenta el selector unificado. Al importar una Quotation,
+`POST /projects/{id}/imports/{job_id}` promueve su fuente e imagenes a recursos
+durables, privados y asociados al Proyecto del usuario.
+
+Esta fase no cambia todavia el motor XLSX.
 
 ### Crear usuario cliente
 

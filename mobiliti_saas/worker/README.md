@@ -8,6 +8,21 @@ en Linux/Windows/macOS y es la ruta preparada para Docker/cloud.
 El generador antiguo `xlwings` queda archivado en `versiones historial` como
 referencia historica. No es ruta productiva.
 
+## Proyectos persistentes
+
+La API web guarda los Proyectos por usuario mediante `/projects`; las rutas de
+detalle solo exponen recursos del usuario autenticado. Las actualizaciones usan
+revision optimista: `PATCH /projects/{id}`, el archivado y la restauracion
+requieren la revision esperada y responden con conflicto ante una version vieja.
+
+`POST /projects/{id}/archive` archiva sin eliminacion permanente, mientras que
+`GET /projects` lista los Proyectos activos o archivados. `GET /catalogs/search`
+alimenta el selector unificado. Al importar una Quotation,
+`POST /projects/{id}/imports/{job_id}` promueve su fuente e imagenes a recursos
+durables, privados y asociados al Proyecto del usuario.
+
+Esta fase no cambia todavia el motor XLSX.
+
 Variables requeridas:
 
 ```powershell

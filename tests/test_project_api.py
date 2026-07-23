@@ -31,6 +31,21 @@ def _project_client(monkeypatch):
     return TestClient(index.app)
 
 
+@pytest.fixture
+def persistent_project_client(monkeypatch, tmp_path):
+    """Cliente API con el store DEV real, compartido entre sesiones."""
+    monkeypatch.setattr(index, "JWT_SECRET_KEY", "project-api-test-secret")
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "DEV_STORE_DIR", tmp_path)
+    monkeypatch.setattr(
+        index,
+        "db_get_usuario_by_id",
+        lambda user_id: {"id": int(user_id), "activo": True, "es_admin": False},
+    )
+    monkeypatch.setattr(index, "_require_active_subscription", lambda _user_id: None)
+    return TestClient(index.app)
+
+
 def _created_project(monkeypatch):
     client = _project_client(monkeypatch)
     response = client.post(
@@ -40,6 +55,30 @@ def _created_project(monkeypatch):
     )
     assert response.status_code == 201, response.json()
     return client, response.json()["project"]
+
+
+def test_project_survives_new_client_session_and_preserves_ownership(persistent_project_client, tmp_path):
+    payload = valid_project_payload()
+    created_response = persistent_project_client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Persistente", "payload": payload},
+    )
+    assert created_response.status_code == 201, created_response.json()
+    created = created_response.json()["project"]
+    assert (tmp_path / "db.json").is_file()
+
+    second = TestClient(index.app)
+    reopened = second.get(f"/projects/{created['id']}", headers=_auth_headers(7))
+
+    assert reopened.status_code == 200, reopened.json()
+    assert reopened.json()["project"]["payload"] == payload
+    assert [project["id"] for project in second.get(
+        "/projects", headers=_auth_headers(7)
+    ).json()["projects"]] == [created["id"]]
+    assert second.get(
+        f"/projects/{created['id']}", headers=_auth_headers(8)
+    ).status_code == 404
 
 
 def test_catalog_search_requires_authentication_subscription_and_valid_query(monkeypatch):
