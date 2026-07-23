@@ -227,10 +227,11 @@ def test_catalog_add_requires_active_project_and_projects_view_creates_one():
     assert 'request("/projects", {' in projects
     assert 'method: "POST"' in projects
     assert "payload: serializeProject(" in projects
-    assert "onActivateProject(created)" in projects
+    assert "onActivateProject(created, submittedAdoption)" in projects
     assert "creatingRef.current" in projects
     assert "activateCreatedProject" in main
-    assert "projectDraft={projectDraftForCreation}" in main
+    assert "projectDraft={creationPlan.projectState}" in main
+    assert "projectAdoptionDraft={creationPlan.submittedAdoption}" in main
     assert "onActivateProject={activateCreatedProject}" in main
 
 
@@ -262,9 +263,13 @@ def test_existing_project_adoption_retains_draft_until_confirmed_autosave():
 
 def test_new_project_draft_distinguishes_active_project_from_orphan_state():
     main = MAIN.read_text(encoding="utf-8")
-    assert "projectDraftForNewProject({" in main
+    assert "projectCreationPlan({" in main
     assert "activeProject," in main
     assert "emptyState:" in main
+    assert "projectDraft={creationPlan.projectState}" in main
+    assert "projectAdoptionDraft={creationPlan.submittedAdoption}" in main
+    assert "function activateCreatedProject(created, submittedAdoption)" in main
+    assert "pendingDraftAfterConfirmedCreation(current, submittedAdoption)" in main
 
 
 def test_project_switch_commits_identity_only_after_target_is_hydrated():
@@ -361,6 +366,110 @@ def test_new_project_flow_posts_backend_valid_payload_then_opens_created_project
     assert result["activated"][0]["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     assert result["activated"][0]["payload"] == body["payload"]
     assert result["created"]["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def test_new_project_passes_submitted_adoption_only_after_success():
+    projects_url = PROJECTS_VIEW.resolve().as_uri()
+    vite_url = Path("mobiliti_saas/web/node_modules/vite/dist/node/index.js").resolve().as_uri()
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=f"""
+          import {{createServer}} from {json.dumps(vite_url)};
+          const server = await createServer({{
+            root: "mobiliti_saas/web",
+            server: {{middlewareMode: true}},
+            appType: "custom",
+          }});
+          const module = await server.ssrLoadModule({json.dumps(projects_url)});
+          const model = await server.ssrLoadModule("/src/mixedCart.js");
+          const submittedAdoption = {{preview: {{import_id: "submitted"}}}};
+          const activated = [];
+          await module.createNewProject(
+            async (path, options) => {{
+              const body = JSON.parse(options.body);
+              return {{project: {{
+                id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                name: body.name,
+                revision: 0,
+                payload: body.payload,
+              }}}};
+            }},
+            (project, adoption) => activated.push({{
+              projectId: project.id,
+              ownAdoption: adoption === submittedAdoption,
+            }}),
+            {{
+              quoteFields: {{proyecto: "", cliente: "", correo: "", telefono: "",
+                direccion: "", razon_social: "", quote_currency: "MXN", descuento: "40"}},
+              sections: model.createInitialMixedCartSections(),
+              lines: [],
+            }},
+            {{current: false}},
+            submittedAdoption,
+          );
+          await server.close();
+          console.log(JSON.stringify({{activated}}));
+        """,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "activated": [{
+            "projectId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            "ownAdoption": True,
+        }],
+    }
+
+
+def test_failed_new_project_request_does_not_confirm_submitted_adoption():
+    projects_url = PROJECTS_VIEW.resolve().as_uri()
+    vite_url = Path("mobiliti_saas/web/node_modules/vite/dist/node/index.js").resolve().as_uri()
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=f"""
+          import {{createServer}} from {json.dumps(vite_url)};
+          const server = await createServer({{
+            root: "mobiliti_saas/web",
+            server: {{middlewareMode: true}},
+            appType: "custom",
+          }});
+          const module = await server.ssrLoadModule({json.dumps(projects_url)});
+          const submittedAdoption = {{preview: {{import_id: "submitted"}}}};
+          const activated = [];
+          const inFlight = {{current: false}};
+          let message = "";
+          try {{
+            await module.createNewProject(
+              async () => {{ throw new Error("network"); }},
+              (project, adoption) => activated.push({{project, adoption}}),
+              null,
+              inFlight,
+              submittedAdoption,
+            );
+          }} catch (error) {{
+            message = error.message;
+          }}
+          await server.close();
+          console.log(JSON.stringify({{
+            message,
+            activations: activated.length,
+            inFlight: inFlight.current,
+          }}));
+        """,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "message": "network",
+        "activations": 0,
+        "inFlight": False,
+    }
 
 
 def test_new_project_flow_guards_duplicate_clicks_while_post_is_in_flight():

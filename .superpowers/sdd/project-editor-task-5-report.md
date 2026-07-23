@@ -89,6 +89,42 @@ npm.cmd --prefix mobiliti_saas/web run build
 vite build: PASS (1712 modules transformed)
 ```
 
+## Remediacion de la revision de cierre
+
+Fecha: 2026-07-23
+
+Se corrigio el ultimo hallazgo Important de
+`.superpowers/sdd/project-editor-task-5-closure-review.md`:
+
+- La creacion usa una base vacia canonica cuando hay Proyecto activo y nunca copia sus
+  lineas. Si existe una importacion pendiente, se aplica explicitamente sobre esa base
+  vacia y solo la importacion forma parte del POST.
+- El plan de creacion transporta por separado `projectState` y `submittedAdoption`.
+  `ProjectsView` entrega esa identidad a la activacion unicamente tras confirmar el POST.
+- La activacion limpia el borrador solo si sigue siendo exactamente el que se envio.
+  Un fallo conserva el borrador, una creacion sin adopcion no lo limpia y una respuesta
+  atrasada no puede borrar un borrador mas nuevo.
+
+Evidencia RED:
+
+```text
+python -m pytest tests/test_mixed_catalog_cart_ui.py -k "new_project_from_active or new_project_without_active or active_project_pending_import_creation or confirmed_creation_clears" -q
+4 failed: faltaban plan explicito e identidad de adopcion enviada
+
+python -m pytest tests/test_project_ui.py -k "draft_distinguishes or passes_submitted_adoption or failed_new_project_request" -q
+2 failed, 1 passed: faltaba propagar la adopcion confirmada; el fallo ya evitaba activar
+```
+
+Verificacion final:
+
+```text
+python -m pytest tests/test_project_autosave_ui.py tests/test_project_ui.py tests/test_project_model_ui.py tests/test_mixed_catalog_cart_ui.py tests/test_project_api.py -q
+143 passed in 30.48s
+
+npm.cmd --prefix mobiliti_saas/web run build
+vite build: PASS (1712 modules transformed)
+```
+
 ## Remediacion de la revision de aprobacion
 
 Fecha: 2026-07-23

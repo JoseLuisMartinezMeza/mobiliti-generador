@@ -2175,16 +2175,30 @@ function projectStateWithImportDraft(baseState, pendingImportDraft) {
   };
 }
 
-function projectDraftForNewProject({
+function projectCreationPlan({
   activeProject,
   pendingImportDraft,
   localState,
   emptyState,
 }) {
-  const hasRecoverableOrphan = !activeProject
-    && (localState.lines.length > 0 || Boolean(pendingImportDraft));
-  if (!hasRecoverableOrphan) return emptyState;
-  return projectStateWithImportDraft(localState, pendingImportDraft);
+  const baseState = activeProject ? emptyState : localState;
+  if (pendingImportDraft) {
+    return {
+      projectState: projectStateWithImportDraft(baseState, pendingImportDraft),
+      submittedAdoption: pendingImportDraft,
+    };
+  }
+  const hasRecoverableOrphan = !activeProject && localState.lines.length > 0;
+  return {
+    projectState: hasRecoverableOrphan ? localState : emptyState,
+    submittedAdoption: null,
+  };
+}
+
+function pendingDraftAfterConfirmedCreation(currentDraft, submittedAdoption) {
+  return submittedAdoption && currentDraft === submittedAdoption
+    ? null
+    : currentDraft;
 }
 
 function loadProjectSnapshot({
@@ -2312,7 +2326,7 @@ function App() {
       lines: mixedCart,
     } : null
   ), [activeProject, mixedCart, mixedCartSections, mixedQuote]);
-  const projectDraftForCreation = useMemo(() => projectDraftForNewProject({
+  const creationPlan = useMemo(() => projectCreationPlan({
     activeProject,
     pendingImportDraft,
     localState: {
@@ -2606,7 +2620,7 @@ function App() {
     setMixedCartOpen(true);
   }
 
-  function activateCreatedProject(created) {
+  function activateCreatedProject(created, submittedAdoption) {
     const hydrated = hydrateProject(created.payload);
     projectLoadEpochRef.current += 1;
     mixedCartRef.current = hydrated.lines;
@@ -2621,8 +2635,12 @@ function App() {
       revision: created.revision,
       loadKey: projectLoadEpochRef.current,
     });
-    pendingImportAdoptionRef.current = null;
-    setPendingImportDraft(null);
+    if (pendingImportAdoptionRef.current?.draft === submittedAdoption) {
+      pendingImportAdoptionRef.current = null;
+    }
+    setPendingImportDraft((current) => (
+      pendingDraftAfterConfirmedCreation(current, submittedAdoption)
+    ));
     setProjectChangeVersion(0);
     setProjectLoadState({status: "ready", message: ""});
     setMixedQuoteError("");
@@ -2767,7 +2785,8 @@ function App() {
           request={request}
           onOpenProject={openProject}
           onActivateProject={activateCreatedProject}
-          projectDraft={projectDraftForCreation}
+          projectDraft={creationPlan.projectState}
+          projectAdoptionDraft={creationPlan.submittedAdoption}
           activeProjectId={activeProjectId}
         />
       )

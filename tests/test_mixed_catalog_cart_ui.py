@@ -38,6 +38,7 @@ EXPORTS = (
     "createImportedCartBundle",
     "replaceImportedCartBundle",
     "updateImportedCartLine",
+    "serializeProject",
 )
 
 
@@ -1533,7 +1534,7 @@ def test_pending_import_draft_is_adopted_without_mutating_the_local_state():
 def test_new_project_from_active_project_uses_canonical_empty_state():
     result = run_ui_helper_js(
         "mobiliti_saas/web/src/main.jsx",
-        ("projectDraftForNewProject", "projectStateWithImportDraft"),
+        ("projectCreationPlan", "projectStateWithImportDraft"),
         r"""
       const line = createMixedCartLine({
         catalog: "alma",
@@ -1551,7 +1552,7 @@ def test_new_project_from_active_project_uses_canonical_empty_state():
         sections: createInitialMixedCartSections(),
         lines: [],
       };
-      const selected = projectDraftForNewProject({
+      const plan = projectCreationPlan({
         activeProject: {id: "project-active"},
         pendingImportDraft: null,
         localState: {
@@ -1561,10 +1562,12 @@ def test_new_project_from_active_project_uses_canonical_empty_state():
         },
         emptyState,
       });
+      const selected = plan.projectState;
       console.log(JSON.stringify({
         isCanonicalEmpty: selected === emptyState,
         project: selected.quoteFields.proyecto,
         lines: selected.lines.length,
+        submittedAdoption: plan.submittedAdoption,
       }));
         """,
     )
@@ -1572,13 +1575,14 @@ def test_new_project_from_active_project_uses_canonical_empty_state():
         "isCanonicalEmpty": True,
         "project": "",
         "lines": 0,
+        "submittedAdoption": None,
     }
 
 
 def test_new_project_without_active_project_adopts_pending_import():
     result = run_ui_helper_js(
         "mobiliti_saas/web/src/main.jsx",
-        ("projectDraftForNewProject", "projectStateWithImportDraft"),
+        ("projectCreationPlan", "projectStateWithImportDraft"),
         r"""
       const importId = "11111111-1111-4111-8111-111111111111";
       const emptyState = {
@@ -1608,17 +1612,19 @@ def test_new_project_without_active_project_adopts_pending_import():
           quoteForm: {proyecto: "Borrador recuperado", template: "no-persistir.xlsx"},
         },
       };
-      const selected = projectDraftForNewProject({
+      const plan = projectCreationPlan({
         activeProject: null,
         pendingImportDraft,
         localState: emptyState,
         emptyState,
       });
+      const selected = plan.projectState;
       console.log(JSON.stringify({
         project: selected.quoteFields.proyecto,
         quoteKeys: Object.keys(selected.quoteFields).sort(),
         lines: selected.lines.length,
         name: selected.lines[0].snapshot.name,
+        submittedOwnDraft: plan.submittedAdoption === pendingImportDraft,
       }));
         """,
     )
@@ -1636,6 +1642,98 @@ def test_new_project_without_active_project_adopts_pending_import():
         ],
         "lines": 1,
         "name": "Importado",
+        "submittedOwnDraft": True,
+    }
+
+
+def test_active_project_pending_import_creation_excludes_active_lines():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("projectCreationPlan", "projectStateWithImportDraft"),
+        r"""
+      const activeLine = createMixedCartLine({
+        catalog: "alma",
+        identity: {internal_id: "alma:active", base_option_id: "", add_on_option_ids: []},
+        quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+        snapshot: {name: "Linea activa", code: "ACT-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+      });
+      const importId = "22222222-2222-4222-8222-222222222222";
+      const pendingImportDraft = {
+        preview: {
+          import_id: importId,
+          original_filename: "Pendiente.xlsx",
+          provider: "Proveedor pendiente",
+          source_currency: "USD",
+          sections: [{id: "source", title: "Importados", item_keys: [`import:${importId}:4`]}],
+          items: [{
+            key: `import:${importId}:4`, source_row: 4, name: "Solo pendiente",
+            official_code: "IMP-4",
+            description: "", dimension: "", quantity: "1", unit_price: "25",
+            source_currency: "USD", image_url: "",
+          }],
+        },
+        options: {
+          sourceCurrency: "USD",
+          provider: "Proveedor pendiente",
+          quoteForm: {proyecto: "Adopcion pendiente"},
+        },
+      };
+      const emptyState = {
+        quoteFields: {
+          proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+          razon_social: "", quote_currency: "MXN", descuento: "40",
+        },
+        sections: createInitialMixedCartSections(),
+        lines: [],
+      };
+      const plan = projectCreationPlan({
+        activeProject: {id: "project-conflict"},
+        pendingImportDraft,
+        localState: {
+          quoteFields: {...emptyState.quoteFields, proyecto: "Proyecto activo"},
+          sections: createInitialMixedCartSections(),
+          lines: [activeLine],
+        },
+        emptyState,
+      });
+      const postPayload = serializeProject(plan.projectState);
+      console.log(JSON.stringify({
+        submittedOwnDraft: plan.submittedAdoption === pendingImportDraft,
+        postLineNames: postPayload.lines.map(line => line.display_cache.name),
+        postHasActiveLine: postPayload.lines.some(line =>
+          line.display_cache.name === activeLine.snapshot.name),
+        postProject: postPayload.quote_fields.proyecto,
+      }));
+        """,
+    )
+    assert result == {
+        "submittedOwnDraft": True,
+        "postLineNames": ["Solo pendiente"],
+        "postHasActiveLine": False,
+        "postProject": "Adopcion pendiente",
+    }
+
+
+def test_confirmed_creation_clears_only_the_submitted_pending_draft():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("pendingDraftAfterConfirmedCreation",),
+        r"""
+      const submitted = {preview: {import_id: "submitted"}};
+      const newer = {preview: {import_id: "newer"}};
+      console.log(JSON.stringify({
+        matchingCleared: pendingDraftAfterConfirmedCreation(submitted, submitted) === null,
+        newerRetained: pendingDraftAfterConfirmedCreation(newer, submitted) === newer,
+        unsubmittedRetained: pendingDraftAfterConfirmedCreation(newer, null) === newer,
+      }));
+        """,
+    )
+    assert result == {
+        "matchingCleared": True,
+        "newerRetained": True,
+        "unsubmittedRetained": True,
     }
 
 

@@ -19,6 +19,7 @@ export async function createNewProject(
   onActivateProject,
   projectState = null,
   inFlightRef = {current: false},
+  submittedAdoption = null,
 ) {
   if (inFlightRef.current) return null;
   inFlightRef.current = true;
@@ -37,7 +38,7 @@ export async function createNewProject(
     });
     const created = data?.project;
     if (!created?.id || !created?.payload) throw new Error("Respuesta de Proyecto invÃ¡lida");
-    onActivateProject(created);
+    onActivateProject(created, submittedAdoption);
     return created;
   } finally {
     inFlightRef.current = false;
@@ -93,6 +94,7 @@ export default function ProjectsView({
   onOpenProject,
   onActivateProject,
   projectDraft,
+  projectAdoptionDraft,
   activeProjectId,
 }) {
   const [activeProjects, setActiveProjects] = useState([]);
@@ -185,7 +187,13 @@ export default function ProjectsView({
     setCreating(true);
     setError("");
     try {
-      await createNewProject(request, onActivateProject, projectDraft, creatingRef);
+      await createNewProject(
+        request,
+        onActivateProject,
+        projectDraft,
+        creatingRef,
+        projectAdoptionDraft,
+      );
     } catch (failure) {
       if (canUpdate()) setError(failure.message || "No se pudo crear el Proyecto.");
     } finally {
