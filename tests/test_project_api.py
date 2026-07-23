@@ -42,6 +42,57 @@ def _created_project(monkeypatch):
     return client, response.json()["project"]
 
 
+def test_catalog_search_requires_authentication_subscription_and_valid_query(monkeypatch):
+    client = _project_client(monkeypatch)
+    calls = []
+
+    def snapshots(usuario_id, supplier):
+        calls.append((usuario_id, supplier))
+        return {
+            "sunon": {"items": [{
+                "internal_id": "sunon:olive",
+                "sku": "OLIVE-II",
+                "name": "Olive II Chair",
+                "image_url": "https://assets.example/olive.png",
+                "availability_type": "made_to_order",
+                "lead_time": "6 semanas",
+            }]}
+        }
+
+    monkeypatch.setattr(index, "_catalog_search_snapshots", snapshots, raising=False)
+
+    assert client.get("/catalogs/search?q=olive").status_code == 401
+    for params in (
+        {"q": "olive", "supplier": "cliente"},
+        {"q": "olive\x01"},
+        {"q": "x" * 161},
+        {"q": "olive", "offset": "true"},
+        {"q": "olive", "offset": "-1"},
+        {"q": "olive", "limit": "true"},
+        {"q": "olive", "limit": "0"},
+        {"q": "olive", "limit": "51"},
+    ):
+        assert client.get("/catalogs/search", params=params, headers=_auth_headers(7)).status_code == 400
+    assert calls == []
+
+    response = client.get(
+        "/catalogs/search",
+        params={"q": "OLÍVE", "supplier": "sunon", "offset": "0", "limit": "1"},
+        headers=_auth_headers(7),
+    )
+    assert response.status_code == 200, response.json()
+    assert calls == [(7, "sunon")]
+    assert response.json()["items"][0]["identity"] == {
+        "internal_id": "sunon:olive",
+        "base_option_id": "",
+        "add_on_option_ids": [],
+    }
+    assert response.json()["items"][0]["snapshot"]["availability"] == "6 semanas"
+
+    monkeypatch.setattr(index, "_require_active_subscription", lambda _usuario_id: (_ for _ in ()).throw(RuntimeError("down")))
+    assert client.get("/catalogs/search?q=olive", headers=_auth_headers(7)).status_code == 503
+
+
 def test_project_routes_are_user_scoped_and_archive_without_delete(monkeypatch):
     client, project = _created_project(monkeypatch)
 

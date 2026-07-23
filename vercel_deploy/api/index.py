@@ -70,6 +70,7 @@ from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
     validate_quote_size,
     validate_mixed_catalog_payload,
 )
+from mobiliti_saas.quote_engine.catalog_search import search_catalog_products  # noqa: E402
 from mobiliti_saas.quote_engine.project_model import (  # noqa: E402
     ASSET_KEY,
     normalize_project_payload,
@@ -2785,6 +2786,27 @@ def _supplier_catalog_response(supplier: str, usuario_id: int) -> dict:
     }
 
 
+def _catalog_search_snapshots(usuario_id: int, supplier: str | None) -> dict:
+    suppliers = (supplier,) if supplier is not None else MIXED_CATALOG_ORDER
+    snapshots = {}
+    for catalog in suppliers:
+        if catalog == "tarkett":
+            snapshots[catalog] = _tarkett_catalog_response(usuario_id)
+        elif catalog == "offiho":
+            snapshots[catalog] = _offiho_catalog_response(usuario_id)
+        else:
+            snapshots[catalog] = _supplier_catalog_response(catalog, usuario_id)
+    return snapshots
+
+
+def _catalog_search_integer(value: object, field: str, minimum: int, maximum: int | None = None) -> int:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value):
+        raise ValueError(f"{field} invalido")
+    parsed = int(value)
+    if parsed < minimum or (maximum is not None and parsed > maximum):
+        raise ValueError(f"{field} invalido")
+    return parsed
+
 def _catalog_reservation_request_lines(cart_payload: dict) -> list[dict]:
     rows = []
     for line in cart_payload.get("items", []):
@@ -4587,6 +4609,35 @@ def supplier_exchange_rates(base_currency: str = "USD", current_user: dict = Dep
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="Tipos de cambio no disponibles") from exc
 
+
+@app.get("/catalogs/search")
+def catalog_search(
+    q: str = "",
+    supplier: str | None = None,
+    offset: str = "0",
+    limit: str = "20",
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        parsed_offset = _catalog_search_integer(offset, "offset", 0)
+        parsed_limit = _catalog_search_integer(limit, "limit", 1, 50)
+        # Valida todos los controles antes de abrir un catalogo publicado.
+        search_catalog_products(
+            {}, query=q, supplier=supplier, offset=parsed_offset, limit=parsed_limit,
+        )
+        clean_supplier = supplier.strip().lower() if supplier is not None else None
+        _require_active_subscription(current_user["id"])
+        snapshots = _catalog_search_snapshots(current_user["id"], clean_supplier)
+        return search_catalog_products(
+            snapshots, query=q, supplier=clean_supplier,
+            offset=parsed_offset, limit=parsed_limit,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Catalogos publicados no disponibles") from exc
 
 @app.get("/catalogs/{supplier}")
 def supplier_catalog(supplier: str, current_user: dict = Depends(get_current_user)):
