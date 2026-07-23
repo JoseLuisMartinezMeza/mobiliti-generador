@@ -70,7 +70,11 @@ from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
     validate_quote_size,
     validate_mixed_catalog_payload,
 )
-from mobiliti_saas.quote_engine.project_model import project_summary  # noqa: E402
+from mobiliti_saas.quote_engine.project_model import (  # noqa: E402
+    ASSET_KEY,
+    normalize_project_payload,
+    project_summary,
+)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -4038,6 +4042,224 @@ def require_worker_secret(x_mobiliti_rest_secret: str = Header(None)):
     ):
         return True
     raise HTTPException(status_code=403, detail="Credencial interna requerida")
+
+
+_PROJECT_MUTATION_FIELDS = frozenset({
+    "name", "payload", "expected_revision", "operation_id",
+})
+_PROJECT_STATUS_FIELDS = frozenset({"expected_revision", "operation_id"})
+
+
+def _project_uuid(value: object) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="ID de Proyecto invalido")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="ID de Proyecto invalido") from None
+    if parsed.version != 4 or str(parsed) != value.lower():
+        raise HTTPException(status_code=400, detail="ID de Proyecto invalido")
+    return str(parsed)
+
+
+def _project_name(value: object) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="Nombre de Proyecto invalido")
+    name = value.strip()
+    if (
+        not name
+        or len(name) > 200
+        or any(ord(char) < 32 or ord(char) == 127 for char in name)
+        or any(unicodedata.category(char) in {"Cf", "Cs"} for char in name)
+    ):
+        raise HTTPException(status_code=400, detail="Nombre de Proyecto invalido")
+    return name
+
+
+def _project_expected_revision(value: object) -> int:
+    if type(value) is not int or value < 0:
+        raise HTTPException(status_code=400, detail="expected_revision invalido")
+    return value
+
+
+def _project_operation_id(value: object) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="operation_id invalido")
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="operation_id invalido") from None
+    if parsed.version != 4 or str(parsed) != value.lower():
+        raise HTTPException(status_code=400, detail="operation_id invalido")
+    return str(parsed)
+
+
+def _project_unexpected_fields(body: dict, allowed: frozenset[str]) -> None:
+    unexpected = set(body) - allowed
+    if unexpected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Campo de Proyecto no permitido: {min(unexpected)}",
+        )
+
+
+def _project_payload(value: object) -> dict:
+    try:
+        return normalize_project_payload(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+def _project_asset_keys(payload: dict) -> set[str]:
+    return {
+        asset_key
+        for line in payload["lines"]
+        for field in ("image_asset_key", "source_asset_key")
+        if isinstance(line.get(field), str)
+        if (asset_key := line[field])
+    }
+
+
+def _validate_project_asset_ownership(
+    payload: dict,
+    usuario_id: int,
+    *,
+    project_id: str | None = None,
+    inherited_asset_keys: set[str] | None = None,
+) -> None:
+    """Acepta solo activos del usuario y evita inyectar activos de otro Proyecto."""
+    inherited_asset_keys = inherited_asset_keys or set()
+    for asset_key in _project_asset_keys(payload):
+        match = ASSET_KEY.fullmatch(asset_key)
+        if match is None or int(match.group(1)) != int(usuario_id):
+            raise HTTPException(status_code=400, detail="Activo de Proyecto no permitido")
+        if (
+            project_id is not None
+            and match.group(2) != project_id
+            and asset_key not in inherited_asset_keys
+        ):
+            raise HTTPException(status_code=400, detail="Activo de Proyecto no permitido")
+
+
+def _project_conflict(project: dict) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={"code": "project_revision_conflict", "project": project},
+    )
+
+
+def _project_for_current_user(project_id: str, usuario_id: int) -> dict:
+    project = db_get_project(project_id, usuario_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    return project
+
+
+@app.post("/projects", status_code=201)
+def projects_create(body: dict, current_user: dict = Depends(get_current_user)):
+    _require_active_subscription(current_user["id"])
+    _project_unexpected_fields(body, frozenset({"name", "payload"}))
+    name = _project_name(body.get("name"))
+    payload = _project_payload(body.get("payload"))
+    # El contrato no entrega un UUID antes de crear; por ello en este borde solo
+    # se aceptan rutas del usuario. Las actualizaciones restringen además el UUID.
+    _validate_project_asset_ownership(payload, current_user["id"])
+    return {"project": db_create_project(current_user["id"], name, payload)}
+
+
+@app.get("/projects")
+def projects_list(status: str = "active", current_user: dict = Depends(get_current_user)):
+    if status not in {"active", "archived"}:
+        raise HTTPException(status_code=400, detail="Estado de Proyecto invalido")
+    return {"projects": db_list_projects(current_user["id"], status)}
+
+
+@app.get("/projects/{project_id}")
+def projects_get(project_id: str, current_user: dict = Depends(get_current_user)):
+    return {"project": _project_for_current_user(
+        _project_uuid(project_id), current_user["id"]
+    )}
+
+
+@app.patch("/projects/{project_id}")
+def projects_patch(project_id: str, body: dict, current_user: dict = Depends(get_current_user)):
+    _require_active_subscription(current_user["id"])
+    _project_unexpected_fields(body, _PROJECT_MUTATION_FIELDS)
+    project_id = _project_uuid(project_id)
+    current = _project_for_current_user(project_id, current_user["id"])
+    expected_revision = _project_expected_revision(body.get("expected_revision"))
+    operation_id = _project_operation_id(body.get("operation_id"))
+    if current["revision"] != expected_revision and current.get("last_operation_id") != operation_id:
+        _project_conflict(current)
+    name = _project_name(body.get("name"))
+    payload = _project_payload(body.get("payload"))
+    _validate_project_asset_ownership(
+        payload,
+        current_user["id"],
+        project_id=project_id,
+        inherited_asset_keys=_project_asset_keys(current["payload"]),
+    )
+    saved = db_save_project(
+        project_id, current_user["id"], name, payload,
+        expected_revision=expected_revision, operation_id=operation_id,
+    )
+    if saved:
+        return {"project": saved}
+    _project_conflict(_project_for_current_user(project_id, current_user["id"]))
+
+
+def _projects_set_status(
+    project_id: str,
+    body: dict,
+    current_user: dict,
+    status: str,
+) -> dict:
+    _require_active_subscription(current_user["id"])
+    _project_unexpected_fields(body, _PROJECT_STATUS_FIELDS)
+    project_id = _project_uuid(project_id)
+    current = _project_for_current_user(project_id, current_user["id"])
+    expected_revision = _project_expected_revision(body.get("expected_revision"))
+    operation_id = _project_operation_id(body.get("operation_id"))
+    if current["revision"] != expected_revision and current.get("last_operation_id") != operation_id:
+        _project_conflict(current)
+    changed = db_set_project_status(
+        project_id, current_user["id"], status,
+        expected_revision=expected_revision, operation_id=operation_id,
+    )
+    if changed:
+        return {"project": changed}
+    _project_conflict(_project_for_current_user(project_id, current_user["id"]))
+
+
+@app.post("/projects/{project_id}/archive")
+def projects_archive(project_id: str, body: dict, current_user: dict = Depends(get_current_user)):
+    return _projects_set_status(project_id, body, current_user, "archived")
+
+
+@app.post("/projects/{project_id}/restore")
+def projects_restore(project_id: str, body: dict, current_user: dict = Depends(get_current_user)):
+    return _projects_set_status(project_id, body, current_user, "active")
+
+
+@app.post("/projects/{project_id}/duplicate", status_code=201)
+def projects_duplicate(
+    project_id: str,
+    body: dict | None = None,
+    current_user: dict = Depends(get_current_user),
+):
+    _require_active_subscription(current_user["id"])
+    _project_unexpected_fields(body or {}, frozenset())
+    project_id = _project_uuid(project_id)
+    current = _project_for_current_user(project_id, current_user["id"])
+    payload = _project_payload(deepcopy(current["payload"]))
+    # El duplicado conserva referencias inmutables del Proyecto de origen; el
+    # prefijo del usuario mantiene el aislamiento sin reescribir objetos.
+    _validate_project_asset_ownership(payload, current_user["id"])
+    return {
+        "project": db_create_project(
+            current_user["id"], f"{current['name']} (copia)", deepcopy(payload)
+        )
+    }
 
 
 # ─── Health Check ─────────────────────────────────────────────

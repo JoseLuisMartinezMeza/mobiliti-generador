@@ -1,9 +1,141 @@
 from copy import deepcopy
 
 import pytest
+from fastapi.testclient import TestClient
 
 from mobiliti_saas.web.api import index
 from project_fixtures import valid_project_payload
+
+
+def _auth_headers(user_id=7):
+    token = index.create_access_token({"sub": str(user_id), "email": "cliente@example.com"})
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _project_client(monkeypatch):
+    state = {"projects": []}
+    monkeypatch.setattr(index, "JWT_SECRET_KEY", "project-api-test-secret")
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "_dev_load", lambda: deepcopy(state))
+    monkeypatch.setattr(
+        index,
+        "_dev_save",
+        lambda data: (state.clear(), state.update(deepcopy(data))),
+    )
+    monkeypatch.setattr(
+        index,
+        "db_get_usuario_by_id",
+        lambda user_id: {"id": int(user_id), "activo": True, "es_admin": False},
+    )
+    monkeypatch.setattr(index, "_require_active_subscription", lambda _user_id: None)
+    return TestClient(index.app)
+
+
+def _created_project(monkeypatch):
+    client = _project_client(monkeypatch)
+    response = client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Oficinas", "payload": valid_project_payload()},
+    )
+    assert response.status_code == 201, response.json()
+    return client, response.json()["project"]
+
+
+def test_project_routes_are_user_scoped_and_archive_without_delete(monkeypatch):
+    client, project = _created_project(monkeypatch)
+
+    listed = client.get("/projects", headers=_auth_headers(7))
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()["projects"]] == [project["id"]]
+    assert client.get("/projects", headers=_auth_headers(8)).json()["projects"] == []
+    assert client.get(f"/projects/{project['id']}", headers=_auth_headers(8)).status_code == 404
+
+    archived = client.post(
+        f"/projects/{project['id']}/archive",
+        headers=_auth_headers(7),
+        json={
+            "expected_revision": project["revision"],
+            "operation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+    )
+    assert archived.status_code == 200
+    assert archived.json()["project"]["status"] == "archived"
+
+    restored = client.post(
+        f"/projects/{project['id']}/restore",
+        headers=_auth_headers(7),
+        json={
+            "expected_revision": archived.json()["project"]["revision"],
+            "operation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        },
+    )
+    assert restored.status_code == 200
+    duplicate = client.post(
+        f"/projects/{project['id']}/duplicate",
+        headers=_auth_headers(7),
+        json={},
+    )
+    assert duplicate.status_code == 201
+    copied = duplicate.json()["project"]
+    assert copied["id"] != project["id"]
+    assert copied["name"] == "Oficinas (copia)"
+    assert copied["status"] == "active"
+    assert copied["revision"] == 0
+    assert copied["payload"] == project["payload"]
+    assert all("DELETE" not in route.methods for route in index.app.routes if route.path.startswith("/projects"))
+
+
+def test_project_patch_returns_current_revision_on_conflict_and_rejects_invalid_contract(monkeypatch):
+    client, project = _created_project(monkeypatch)
+    response = client.patch(
+        f"/projects/{project['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": "Cambio",
+            "payload": valid_project_payload(),
+            "expected_revision": 99,
+            "operation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "project_revision_conflict"
+    assert response.json()["detail"]["project"]["revision"] == 0
+
+    assert client.get("/projects?status=deleted", headers=_auth_headers(7)).status_code == 400
+    assert client.get("/projects/not-a-uuid", headers=_auth_headers(7)).status_code == 400
+    assert client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Oficinas", "payload": valid_project_payload(), "extra": True},
+    ).status_code == 400
+
+
+def test_project_patch_updates_only_owned_project(monkeypatch):
+    client, project = _created_project(monkeypatch)
+    updated = client.patch(
+        f"/projects/{project['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": "Oficinas GDL",
+            "payload": valid_project_payload(),
+            "expected_revision": 0,
+            "operation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["project"]["name"] == "Oficinas GDL"
+    assert updated.json()["project"]["revision"] == 1
+    assert client.patch(
+        f"/projects/{project['id']}",
+        headers=_auth_headers(8),
+        json={
+            "name": "Ajeno",
+            "payload": valid_project_payload(),
+            "expected_revision": 1,
+            "operation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        },
+    ).status_code == 404
 
 
 def test_dev_project_save_is_revision_safe_and_idempotent(monkeypatch):
