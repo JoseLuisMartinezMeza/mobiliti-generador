@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
+from io import BytesIO
 from typing import Any
 from pathlib import Path
 import hashlib
 import math
 import os
+import warnings
 
 from PIL import Image, ImageChops, ImageFilter
 
@@ -45,6 +47,126 @@ class ImageProcessingOptions:
 
 
 MAX_WORKING_IMAGE_EDGE = 1800
+MONTAGE_SIZE = (1200, 900)
+MAX_MONTAGE_IMAGES = 9
+MAX_MONTAGE_SOURCE_BYTES = 8 * 1024 * 1024
+MAX_MONTAGE_BYTES = 8 * 1024 * 1024
+# Debe conservar el mismo límite de descompresión que el compositor oficial.
+MAX_MONTAGE_IMAGE_PIXELS = 40_000_000
+
+
+def compose_product_montage(
+    principal: bytes | None,
+    complements: list[bytes],
+) -> bytes | None:
+    """Compone una imagen principal y miniaturas en un PNG acotado."""
+
+    sources = ([principal] if principal is not None else []) + list(complements)
+    if not sources:
+        return None
+    if len(sources) > MAX_MONTAGE_IMAGES:
+        raise ValueError("La composición excede el máximo de imágenes")
+
+    canvas = Image.new("RGB", MONTAGE_SIZE, "white")
+    main_box = (40, 40, 880, 860) if len(sources) > 1 else (40, 40, 1160, 860)
+    main = _decode_bounded_montage_image(sources[0])
+    try:
+        _paste_contained(canvas, main, main_box)
+    finally:
+        main.close()
+    if len(sources) > 1:
+        available = 820 // (len(sources) - 1)
+        for index, source in enumerate(sources[1:]):
+            top = 40 + index * available
+            image = _decode_bounded_montage_image(source)
+            try:
+                _paste_contained(
+                    canvas,
+                    image,
+                    (920, top, 1160, top + available - 12),
+                )
+            finally:
+                image.close()
+
+    output = BytesIO()
+    canvas.save(output, "PNG", optimize=True)
+    payload = output.getvalue()
+    if len(payload) > MAX_MONTAGE_BYTES:
+        raise ValueError("La composición de imágenes excede el límite")
+    return payload
+
+
+def _decode_bounded_montage_image(content: bytes) -> Image.Image:
+    invalid_size = (
+        not isinstance(content, bytes)
+        or not content
+        or len(content) > MAX_MONTAGE_SOURCE_BYTES
+    )
+    if invalid_size:
+        raise ValueError("Tamaño de imagen de composición inválido")
+    if not (
+        content.startswith(b"\x89PNG\r\n\x1a\n")
+        or content.startswith(b"\xff\xd8\xff")
+    ):
+        raise ValueError("Formato de imagen de composición no permitido")
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(content)) as image:
+                if image.format not in {"PNG", "JPEG"}:
+                    raise ValueError("Formato de imagen de composición no permitido")
+                width, height = image.size
+                if (
+                    width <= 0
+                    or height <= 0
+                    or width * height > MAX_MONTAGE_IMAGE_PIXELS
+                ):
+                    raise ValueError("Dimensiones de imagen de composición inválidas")
+                if (
+                    getattr(image, "is_animated", False)
+                    or getattr(image, "n_frames", 1) != 1
+                ):
+                    raise ValueError("La imagen de composición no puede ser animada")
+                image.verify()
+
+            with Image.open(BytesIO(content)) as image:
+                image.load()
+                return image.convert("RGBA").copy()
+    except ValueError:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        raise ValueError("Dimensiones de imagen de composición inválidas") from error
+    except Exception as error:
+        raise ValueError("Imagen de composición inválida") from error
+
+
+def _paste_contained(
+    canvas: Image.Image,
+    image: Image.Image,
+    box: tuple[int, int, int, int],
+) -> None:
+    left, top, right, bottom = box
+    box_width = right - left
+    box_height = bottom - top
+    if box_width <= 0 or box_height <= 0:
+        raise ValueError("Área de imagen de composición inválida")
+
+    scale = min(1.0, box_width / image.width, box_height / image.height)
+    size = (
+        max(1, round(image.width * scale)),
+        max(1, round(image.height * scale)),
+    )
+    contained = (
+        image
+        if size == image.size
+        else image.resize(size, Image.Resampling.LANCZOS)
+    )
+    target = (
+        left + (box_width - contained.width) // 2,
+        top + (box_height - contained.height) // 2,
+    )
+    canvas.paste(contained.convert("RGB"), target, contained.getchannel("A"))
 
 
 def improve_product_image(
