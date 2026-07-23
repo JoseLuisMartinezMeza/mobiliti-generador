@@ -34,6 +34,7 @@ import CatalogAdminPanel from "./CatalogAdminPanel";
 import MixedCartDrawer from "./MixedCartDrawer";
 import ProjectEditor from "./ProjectEditor";
 import ProjectsView from "./ProjectsView";
+import {projectMixedQuoteLines} from "./projectWorkspace.js";
 import {useProjectAutosave} from "./useProjectAutosave.js";
 import {
   closeMixedCartSection,
@@ -2341,6 +2342,12 @@ function App() {
   };
 
   function addMixedCartLine(line) {
+    if (!activeProject?.id) {
+      setMixedQuoteError("Crea o abre un Proyecto antes de agregar productos.");
+      setMixedCartOpen(false);
+      setView("proyectos");
+      return false;
+    }
     return mixedQuoteController.add(line);
   }
 
@@ -2397,6 +2404,16 @@ function App() {
   }
 
   async function openProject(projectId) {
+    if (!activeProject && mixedCartRef.current.length) {
+      setMixedQuoteError(
+        "Los productos sin Proyecto se conservaron. Termina su flujo antes de abrir otro Proyecto.",
+      );
+      return;
+    }
+    if (activeProject && activeProject.id !== projectId && projectAutosave.status !== "saved") {
+      setMixedQuoteError("Espera a que los cambios pendientes terminen de guardarse.");
+      return;
+    }
     const loadEpoch = projectLoadEpochRef.current + 1;
     projectLoadEpochRef.current = loadEpoch;
     setActiveProjectId(projectId);
@@ -2445,12 +2462,7 @@ function App() {
     if (projectAutosave.status !== "saved") {
       throw new Error("Espera a que el Proyecto termine de guardarse.");
     }
-    const parentById = new Map(project.lines.map((line) => [line.lineId, line]));
-    const quoteLines = project.lines.map((line) => (
-      line.role === "complement"
-        ? {...line, sectionId: parentById.get(line.parentLineId)?.sectionId}
-        : line
-    ));
+    const quoteLines = projectMixedQuoteLines(project.lines);
     const preparedRequest = createMixedQuoteRequestSnapshot(
       project.quoteFields,
       project.sections,
@@ -2458,7 +2470,7 @@ function App() {
     );
     return mixedQuoteController.submit(
       {preventDefault() {}},
-      quoteLines,
+      project.lines,
       preparedRequest,
       {preserveProject: true, propagateFailure: true},
     );

@@ -1,6 +1,36 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Archive, Copy, FolderOpen, Loader2, RotateCcw } from "lucide-react";
+import { Archive, Copy, FolderOpen, Loader2, Plus, RotateCcw } from "lucide-react";
+import {createInitialMixedCartSections, serializeProject} from "./mixedCart.js";
 import { createProjectLoadGuard, createProjectOperationId } from "./projectWorkspace";
+
+const EMPTY_PROJECT_QUOTE_FIELDS = Object.freeze({
+  proyecto: "",
+  cliente: "",
+  correo: "",
+  telefono: "",
+  direccion: "",
+  razon_social: "",
+  quote_currency: "MXN",
+  descuento: "40",
+});
+
+export async function createNewProject(request, onOpenProject) {
+  const data = await request("/projects", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "Nuevo Proyecto",
+      payload: serializeProject({
+        quoteFields: {...EMPTY_PROJECT_QUOTE_FIELDS},
+        sections: createInitialMixedCartSections(),
+        lines: [],
+      }),
+    }),
+  });
+  const created = data?.project;
+  if (!created?.id) throw new Error("Respuesta de Proyecto invÃ¡lida");
+  onOpenProject(created.id);
+  return created;
+}
 
 function formatDate(value) {
   if (!value) return "Sin fecha";
@@ -50,6 +80,7 @@ export default function ProjectsView({ request, onOpenProject, activeProjectId }
   const [activeProjects, setActiveProjects] = useState([]);
   const [archivedProjects, setArchivedProjects] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
   const [busyProjectId, setBusyProjectId] = useState("");
   const [error, setError] = useState("");
   const abortControllerRef = useRef(null);
@@ -130,6 +161,19 @@ export default function ProjectsView({ request, onOpenProject, activeProjectId }
     }
   }
 
+  async function createProject() {
+    if (!canUpdate() || creating) return;
+    setCreating(true);
+    setError("");
+    try {
+      await createNewProject(request, onOpenProject);
+    } catch (failure) {
+      if (canUpdate()) setError(failure.message || "No se pudo crear el Proyecto.");
+    } finally {
+      if (canUpdate()) setCreating(false);
+    }
+  }
+
   return (
     <section className="projects-workspace" aria-labelledby="projects-heading">
       <div className="projects-heading">
@@ -137,9 +181,14 @@ export default function ProjectsView({ request, onOpenProject, activeProjectId }
           <h2 id="projects-heading">Proyectos</h2>
           <p>Abre, duplica o archiva los proyectos de tu espacio de trabajo.</p>
         </div>
-        <button className="ghost-action" type="button" onClick={loadProjects} disabled={loading}>
-          {loading ? <Loader2 className="spin" size={16} /> : null} Actualizar
-        </button>
+        <div className="projects-heading-actions">
+          <button className="primary-action" type="button" onClick={createProject} disabled={creating}>
+            {creating ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Nuevo Proyecto
+          </button>
+          <button className="ghost-action" type="button" onClick={loadProjects} disabled={loading}>
+            {loading ? <Loader2 className="spin" size={16} /> : null} Actualizar
+          </button>
+        </div>
       </div>
 
       {error ? <p className="error-line" role="alert">{error}</p> : null}

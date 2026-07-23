@@ -3,6 +3,11 @@ import {ImageOff, Trash2} from "lucide-react";
 
 import ImportedCartLineFields from "./ImportedCartLineFields";
 import {createImportedLineDraft} from "./importedCartLineDraft.js";
+import {catalogLabel} from "./productPicker.js";
+import {
+  createProjectPickerTarget,
+  multiplyProjectQuantity,
+} from "./projectWorkspace.js";
 import {
   DEFAULT_MIXED_SECTION_CONCEPTS,
   MAX_MIXED_CART_SECTIONS,
@@ -36,14 +41,6 @@ const CUSTOMER_FIELDS = Object.freeze([
   ["RazÃ³n social *", "razon_social", "text"],
 ]);
 
-const DEFAULT_QUANTITY_RULES = Object.freeze({
-  min: "1",
-  step: "1",
-  maxDecimals: 0,
-  max: "1000000",
-  integer: true,
-});
-
 const AUTOSAVE_COPY = Object.freeze({
   saving: "Guardando",
   saved: "Guardado",
@@ -76,27 +73,6 @@ function normalizeProjectPositions(sections, lines) {
   });
 }
 
-function pickerTarget(selection, referenceLine = null) {
-  const snapshot = selection.snapshot || {};
-  return {
-    catalog: selection.catalog,
-    identity: selection.identity,
-    officialCode: selection.official_code,
-    provider: selection.provider,
-    quantity: referenceLine?.quantity || "1",
-    quantityRules: referenceLine?.quantityRules || DEFAULT_QUANTITY_RULES,
-    snapshot: {
-      name: snapshot.name || selection.official_code,
-      code: selection.official_code,
-      image_url: snapshot.image_url || "",
-      unit: referenceLine?.snapshot?.unit || "PZA",
-      availability: snapshot.availability || "",
-      configuration: snapshot.configuration || "",
-      warnings: snapshot.warnings || [],
-    },
-  };
-}
-
 function projectImpact(lines, line) {
   const selector = {
     provider: line.provider || line.catalog,
@@ -122,6 +98,25 @@ function projectImpact(lines, line) {
       !projectMatchKey(candidate.provider || candidate.catalog, candidate.officialCode)
     )).length,
   };
+}
+
+function presentationProvider(line) {
+  return line.kind === "imported"
+    ? line.edits?.provider || line.provider
+    : catalogLabel(line.catalog);
+}
+
+function ProjectImage({url, alt, icon = false}) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => setFailed(false), [url]);
+
+  if (!url || failed) {
+    return icon
+      ? <span className="project-image-fallback"><ImageOff size={28} /> Sin imagen</span>
+      : <span>Sin imagen</span>;
+  }
+  return <img src={url} alt={alt} onError={() => setFailed(true)} />;
 }
 
 function QuantityEditor({line, disabled, onCommit}) {
@@ -193,13 +188,11 @@ function ComplementCard({
   return (
     <article className="project-complement">
       <div className="project-complement-image">
-        {child.snapshot.image_url
-          ? <img src={child.snapshot.image_url} alt={child.snapshot.name} />
-          : <span>Sin imagen</span>}
+        <ProjectImage url={child.snapshot.image_url} alt={child.snapshot.name} />
       </div>
       <div className="project-complement-copy">
         <strong>+ {child.snapshot.name}</strong>
-        <small>{child.officialCode} Â· {child.provider || child.catalog}</small>
+        <small>{child.officialCode} Â· {presentationProvider(child)}</small>
         <ImportedFields
           line={child}
           disabled={disabled}
@@ -244,6 +237,7 @@ export default function ProjectEditor({
 }) {
   const [activeTab, setActiveTab] = useState("products");
   const [picker, setPicker] = useState(null);
+  const [pendingComplement, setPendingComplement] = useState(null);
   const [error, setError] = useState("");
   const [generating, setGenerating] = useState(false);
   const lines = project?.lines || [];
@@ -257,6 +251,20 @@ export default function ProjectEditor({
     () => groupMixedCartLines(sections, principals),
     [sections, principals],
   );
+  const pendingComplementImpact = useMemo(() => {
+    if (!pendingComplement?.quantityMode) return "Selecciona un modo para calcular el impacto.";
+    if (pendingComplement.quantityMode === "fixed_project") {
+      return `${pendingComplement.quantity} unidad(es) en todo el Proyecto.`;
+    }
+    try {
+      return `${multiplyProjectQuantity(
+        pendingComplement.parentQuantity,
+        pendingComplement.quantity,
+      )} unidad(es) total(es) para ${pendingComplement.parentQuantity} unidad(es) del principal.`;
+    } catch {
+      return "Corrige la cantidad para calcular el impacto.";
+    }
+  }, [pendingComplement]);
   const disabled = generating || autosave?.status === "conflict";
 
   function commit(next) {
@@ -289,7 +297,7 @@ export default function ProjectEditor({
     if (!picker) return;
     try {
       const {mode, line} = picker;
-      const target = pickerTarget(selection, line?.lineId ? line : null);
+      const target = createProjectPickerTarget(selection);
       if (mode === "add") {
         const incoming = createMixedCartLine({
           ...target,
@@ -298,7 +306,17 @@ export default function ProjectEditor({
         });
         commitLines(upsertMixedCartLine(lines, incoming));
       } else if (mode === "complement") {
-        commitLines(addProjectComplement(lines, line.lineId, target, "per_parent_unit"));
+        setPendingComplement({
+          parentLineId: line.lineId,
+          parentName: line.snapshot.name,
+          parentQuantity: line.quantity,
+          target,
+          quantity: target.quantity,
+          quantityMode: "",
+          error: "",
+        });
+        setPicker(null);
+        return;
       } else if (mode === "replace-one") {
         const children = line.role === "principal" ? projectComplements(lines, line.lineId) : [];
         if (!confirmRemoval(children)) return;
@@ -317,6 +335,32 @@ export default function ProjectEditor({
       setPicker(null);
     } catch (failure) {
       setError(failure.message || "No se pudo actualizar el producto.");
+    }
+  }
+
+  function confirmPendingComplement() {
+    if (!pendingComplement) return;
+    if (!pendingComplement.quantityMode) {
+      setPendingComplement((current) => ({
+        ...current,
+        error: "Elige cÃ³mo se calcularÃ¡ la cantidad.",
+      }));
+      return;
+    }
+    try {
+      const quantity = validateLineQuantity(pendingComplement.target, pendingComplement.quantity);
+      commitLines(addProjectComplement(
+        lines,
+        pendingComplement.parentLineId,
+        {...pendingComplement.target, quantity},
+        pendingComplement.quantityMode,
+      ));
+      setPendingComplement(null);
+    } catch (failure) {
+      setPendingComplement((current) => ({
+        ...current,
+        error: failure.message || "Cantidad invÃ¡lida.",
+      }));
     }
   }
 
@@ -472,13 +516,15 @@ export default function ProjectEditor({
                       <article className="project-principal" key={line.lineId}>
                         <div className="project-principal-main">
                           <div className="project-line-image">
-                            {line.snapshot.image_url
-                              ? <img src={line.snapshot.image_url} alt={line.snapshot.name} />
-                              : <ImageOff size={28} aria-label="Sin imagen" />}
+                            <ProjectImage
+                              url={line.snapshot.image_url}
+                              alt={line.snapshot.name}
+                              icon
+                            />
                           </div>
                           <div className="project-line-copy">
                             <strong>{line.snapshot.name}</strong>
-                            <small>{line.officialCode} Â· {line.provider || line.catalog}</small>
+                            <small>{line.officialCode} Â· {presentationProvider(line)}</small>
                             {line.snapshot.configuration ? <span>{line.snapshot.configuration}</span> : null}
                             <ImportedFields
                               line={line}
@@ -639,6 +685,78 @@ export default function ProjectEditor({
           </label>
         </form>
       )}
+
+      {pendingComplement ? (
+        <div className="project-picker-backdrop" role="presentation">
+          <section
+            className="project-complement-config"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="project-complement-config-title"
+          >
+            <header>
+              <div>
+                <span>Complemento para {pendingComplement.parentName}</span>
+                <h2 id="project-complement-config-title">
+                  Configurar {pendingComplement.target.snapshot.name}
+                </h2>
+              </div>
+            </header>
+            <label>
+              <span>Modo de cantidad</span>
+              <select
+                value={pendingComplement.quantityMode}
+                onChange={(event) => setPendingComplement((current) => ({
+                  ...current,
+                  quantityMode: event.target.value,
+                  error: "",
+                }))}
+              >
+                <option value="">Selecciona un modo</option>
+                <option value="per_parent_unit">Por unidad del principal</option>
+                <option value="fixed_project">Cantidad fija del Proyecto</option>
+              </select>
+            </label>
+            <label>
+              <span>Cantidad del complemento</span>
+              <input
+                inputMode="decimal"
+                value={pendingComplement.quantity}
+                aria-invalid={Boolean(pendingComplement.error)}
+                onChange={(event) => setPendingComplement((current) => ({
+                  ...current,
+                  quantity: event.target.value,
+                  error: "",
+                }))}
+              />
+              <small>Este producto del selector usa cantidad entera, mÃ­nimo 1 e incremento 1.</small>
+            </label>
+            <div className="project-complement-impact">
+              <strong>Impacto</strong>
+              <span>{pendingComplementImpact}</span>
+            </div>
+            {pendingComplement.error ? (
+              <p className="error-line" role="alert">{pendingComplement.error}</p>
+            ) : null}
+            <footer>
+              <button
+                type="button"
+                className="ghost-action"
+                onClick={() => setPendingComplement(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="primary-action"
+                onClick={confirmPendingComplement}
+              >
+                Confirmar complemento
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       <ProductPickerDialog
         open={Boolean(picker)}

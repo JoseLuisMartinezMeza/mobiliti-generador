@@ -653,6 +653,8 @@ export default function MixedCartDrawer({
     };
   }, [open, busy, onClose]);
 
+  if (!open) return null;
+
   const principalCount = lines.filter((line) => line.role !== "complement").length;
   const complementCount = lines.length - principalCount;
   const occupiedSections = new Set(

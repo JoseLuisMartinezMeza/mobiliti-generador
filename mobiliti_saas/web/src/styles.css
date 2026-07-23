@@ -3628,6 +3628,82 @@ textarea:focus {
   min-height: 46px;
 }
 
+.projects-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.projects-heading-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.project-image-fallback {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-complement-config {
+  display: grid;
+  gap: 16px;
+  width: min(92vw, 560px);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 22px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgb(15 23 42 / 26%);
+}
+
+.project-complement-config header span,
+.project-complement-config label small {
+  color: var(--muted);
+}
+
+.project-complement-config header h2 {
+  margin: 4px 0 0;
+}
+
+.project-complement-config label {
+  display: grid;
+  gap: 7px;
+}
+
+.project-complement-config input,
+.project-complement-config select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: #fff;
+}
+
+.project-complement-impact {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid #c9ddd7;
+  border-radius: 7px;
+  color: #245f52;
+  background: #f2faf7;
+}
+
+.project-complement-config footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
 .project-editor-loading {
   padding: 28px;
 }
@@ -3650,6 +3726,16 @@ textarea:focus {
 
   .project-editor-header > button {
     width: 100%;
+  }
+
+  .projects-heading-actions,
+  .project-complement-config footer {
+    width: 100%;
+  }
+
+  .projects-heading-actions button,
+  .project-complement-config footer button {
+    flex: 1;
   }
 
   .project-complements {

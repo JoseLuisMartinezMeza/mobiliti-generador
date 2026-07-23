@@ -2,6 +2,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from mobiliti_saas.quote_engine.project_model import normalize_project_payload
+
 
 PROJECTS_VIEW = Path("mobiliti_saas/web/src/ProjectsView.jsx")
 MAIN = Path("mobiliti_saas/web/src/main.jsx")
@@ -62,6 +64,135 @@ def test_project_editor_renders_direct_complements_and_quantity_modes():
     assert '<option value="fixed_project">Cantidad fija</option>' in source
 
 
+def test_picker_target_uses_own_safe_quantity_and_canonical_catalog_provider():
+    result = run_workspace(r"""
+      const principal = {
+        quantity: "5",
+        quantityRules: {min: "0.5", step: "0.5", maxDecimals: 1, max: "100"},
+      };
+      const selection = {
+        catalog: "cr-global",
+        provider: "CR Global",
+        official_code: "CR-1",
+        identity: {internal_id: "cr:1", base_option_id: "", add_on_option_ids: []},
+        snapshot: {name: "Silla CR", image_url: "", availability: "", configuration: "", warnings: []},
+      };
+      const target = workspace.createProjectPickerTarget(selection, principal);
+      console.log(JSON.stringify({
+        provider: target.provider,
+        quantity: target.quantity,
+        rules: target.quantityRules,
+      }));
+    """)
+    assert result == {
+        "provider": "cr-global",
+        "quantity": "1",
+        "rules": {
+            "min": "1", "step": "1", "maxDecimals": 0,
+            "max": "1000000", "integer": True,
+        },
+    }
+
+
+def test_cr_global_picker_target_matches_before_and_after_project_round_trip():
+    model_url = Path("mobiliti_saas/web/src/mixedCart.js").resolve().as_uri()
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=f"""
+          import * as workspace from {json.dumps(WORKSPACE_MODULE)};
+          import * as model from {json.dumps(model_url)};
+          const target = workspace.createProjectPickerTarget({{
+            catalog: "cr-global", provider: "CR Global", official_code: "CR-1",
+            identity: {{internal_id: "cr:1", base_option_id: "", add_on_option_ids: []}},
+            snapshot: {{name: "Silla CR", image_url: "", availability: "",
+              configuration: "", warnings: []}},
+          }});
+          const line = model.createMixedCartLine({{...target, sectionId: "section-1"}});
+          const selector = {{provider: "cr-global", officialCode: "CR-1"}};
+          const state = {{
+            quoteFields: {{proyecto: "", cliente: "", correo: "", telefono: "",
+              direccion: "", razon_social: "", quote_currency: "MXN", descuento: "40"}},
+            sections: [{{id: "section-1", concept: "RecepciÃ³n"}}],
+            lines: [line],
+          }};
+          const reopened = model.hydrateProject(model.serializeProject(state)).lines[0];
+          console.log(JSON.stringify({{
+            beforeProvider: line.provider,
+            afterProvider: reopened.provider,
+            beforeMatches: model.projectLineMatches(line, selector),
+            afterMatches: model.projectLineMatches(reopened, selector),
+          }}));
+        """,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "beforeProvider": "cr-global",
+        "afterProvider": "cr-global",
+        "beforeMatches": True,
+        "afterMatches": True,
+    }
+
+
+def test_complement_selection_waits_for_explicit_mode_quantity_and_confirmation():
+    source = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
+    assert "pendingComplement" in source
+    assert "setPendingComplement" in source
+    assert "Confirmar complemento" in source
+    assert "Impacto" in source
+    assert "validateLineQuantity(pendingComplement.target" in source
+    complement_branch = source[source.index('mode === "complement"'):source.index('mode === "replace-one"')]
+    assert "commitLines(" not in complement_branch
+    assert "addProjectComplement(" not in complement_branch
+
+
+def test_project_quote_projection_uses_decimal_safe_modes_without_double_multiplication():
+    result = run_workspace(r"""
+      const parent = {
+        key: "parent", lineId: "parent", role: "principal", sectionId: "section-1",
+        quantity: "2.5",
+      };
+      const perUnit = {
+        key: "per", lineId: "per", role: "complement", parentLineId: "parent",
+        sectionId: null, quantity: "0.4", quantityMode: "per_parent_unit",
+      };
+      const fixed = {
+        key: "fixed", lineId: "fixed", role: "complement", parentLineId: "parent",
+        sectionId: null, quantity: "0.4", quantityMode: "fixed_project",
+      };
+      const original = [parent, perUnit, fixed];
+      const first = workspace.projectMixedQuoteLines(original);
+      const second = workspace.projectMixedQuoteLines(first);
+      console.log(JSON.stringify({
+        first: first.map((line) => ({id: line.lineId, quantity: line.quantity, sectionId: line.sectionId})),
+        second: second.map((line) => ({id: line.lineId, quantity: line.quantity, sectionId: line.sectionId})),
+        original: original.map((line) => ({id: line.lineId, quantity: line.quantity, sectionId: line.sectionId})),
+        fractional: workspace.multiplyProjectQuantity("1.25", "0.08"),
+      }));
+    """)
+    assert result == {
+        "first": [
+            {"id": "parent", "quantity": "2.5", "sectionId": "section-1"},
+            {"id": "per", "quantity": "1", "sectionId": "section-1"},
+            {"id": "fixed", "quantity": "0.4", "sectionId": "section-1"},
+        ],
+        "second": [
+            {"id": "parent", "quantity": "2.5", "sectionId": "section-1"},
+            {"id": "per", "quantity": "1", "sectionId": "section-1"},
+            {"id": "fixed", "quantity": "0.4", "sectionId": "section-1"},
+        ],
+        "original": [
+            {"id": "parent", "quantity": "2.5", "sectionId": "section-1"},
+            {"id": "per", "quantity": "0.4", "sectionId": None},
+            {"id": "fixed", "quantity": "0.4", "sectionId": None},
+        ],
+        "fractional": "0.1",
+    }
+
+
 def test_app_opens_hydrates_and_autosaves_the_same_project_state():
     source = MAIN.read_text(encoding="utf-8")
     assert 'request(`/projects/${projectId}`' in source
@@ -82,6 +213,72 @@ def test_quick_panel_migration_keeps_project_errors_visible_in_app_shell():
     assert 'role="alert"' in source
 
 
+def test_catalog_add_requires_active_project_and_projects_view_creates_one():
+    main = MAIN.read_text(encoding="utf-8")
+    projects = PROJECTS_VIEW.read_text(encoding="utf-8")
+    assert "if (!activeProject?.id)" in main
+    assert "Crea o abre un Proyecto antes de agregar productos." in main
+    assert 'setView("proyectos")' in main
+    assert "mixedQuoteController.add(line)" in main
+    assert "mixedCartRef.current.length" in main
+    assert "Los productos sin Proyecto se conservaron" in main
+    assert "Nuevo Proyecto" in projects
+    assert 'request("/projects", {' in projects
+    assert 'method: "POST"' in projects
+    assert "payload: serializeProject(" in projects
+    assert "onOpenProject(created.id)" in projects
+
+
+def test_new_project_flow_posts_backend_valid_payload_then_opens_created_project():
+    projects_url = PROJECTS_VIEW.resolve().as_uri()
+    vite_url = Path("mobiliti_saas/web/node_modules/vite/dist/node/index.js").resolve().as_uri()
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=f"""
+          import {{createServer}} from {json.dumps(vite_url)};
+          const server = await createServer({{
+            root: "mobiliti_saas/web",
+            server: {{middlewareMode: true}},
+            appType: "custom",
+          }});
+          const module = await server.ssrLoadModule({json.dumps(projects_url)});
+          const calls = [];
+          const opened = [];
+          const created = await module.createNewProject(
+            async (path, options) => {{
+              calls.push({{path, options}});
+              return {{project: {{id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}}}};
+            }},
+            (id) => opened.push(id),
+          );
+          await server.close();
+          console.log(JSON.stringify({{calls, opened, created}}));
+        """,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["calls"][0]["path"] == "/projects"
+    assert result["calls"][0]["options"]["method"] == "POST"
+    body = json.loads(result["calls"][0]["options"]["body"])
+    assert body["name"] == "Nuevo Proyecto"
+    assert normalize_project_payload(body["payload"]) == body["payload"]
+    assert result["opened"] == ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]
+    assert result["created"]["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def test_closed_quick_panel_is_unmounted_and_editor_images_have_fallback():
+    drawer = DRAWER.read_text(encoding="utf-8")
+    editor = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
+    default_export = drawer[drawer.index("export default function MixedCartDrawer"):]
+    assert "if (!open) return null;" in default_export
+    assert "onError" in editor
+    assert "Sin imagen" in editor
+
+
 def test_project_editor_layout_has_principal_complement_and_mobile_styles():
     styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
     for selector in (
@@ -89,8 +286,11 @@ def test_project_editor_layout_has_principal_complement_and_mobile_styles():
         ".project-editor-tabs",
         ".project-principal",
         ".project-complement",
+        ".project-complement-config",
         ".project-autosave-status",
+        ".project-image-fallback",
         ".project-quick-summary",
+        ".projects-heading-actions",
     ):
         assert selector in styles
     mobile = styles[styles.rfind("@media (max-width: 720px)"):]

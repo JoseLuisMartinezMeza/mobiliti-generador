@@ -30,3 +30,88 @@ export function createProjectLoadGuard() {
     },
   };
 }
+
+export const SAFE_PICKER_QUANTITY_RULES = Object.freeze({
+  min: "1",
+  step: "1",
+  maxDecimals: 0,
+  max: "1000000",
+  integer: true,
+});
+
+/**
+ * Catalog search intentionally omits commercial quantity rules. A product that
+ * only exists in the picker therefore starts with this conservative integer
+ * contract; it never inherits rules or quantity from the line being edited.
+ */
+export function createProjectPickerTarget(selection) {
+  if (!selection?.catalog || !selection?.official_code || !selection?.identity) {
+    throw new Error("SelecciÃ³n de catÃ¡logo invÃ¡lida");
+  }
+  const snapshot = selection.snapshot || {};
+  return {
+    catalog: selection.catalog,
+    identity: structuredClone(selection.identity),
+    officialCode: selection.official_code,
+    provider: selection.catalog,
+    quantity: "1",
+    quantityRules: {...SAFE_PICKER_QUANTITY_RULES},
+    snapshot: {
+      name: snapshot.name || selection.official_code,
+      code: selection.official_code,
+      image_url: snapshot.image_url || "",
+      unit: "PZA",
+      availability: snapshot.availability || "",
+      configuration: snapshot.configuration || "",
+      warnings: [...(snapshot.warnings || [])],
+    },
+  };
+}
+
+function decimalParts(value) {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)) {
+    throw new Error("Cantidad decimal invÃ¡lida");
+  }
+  const [integer, fraction = ""] = value.split(".");
+  return {
+    coefficient: BigInt(`${integer}${fraction}`),
+    scale: fraction.length,
+  };
+}
+
+export function multiplyProjectQuantity(left, right) {
+  const first = decimalParts(left);
+  const second = decimalParts(right);
+  const coefficient = (first.coefficient * second.coefficient).toString();
+  const scale = first.scale + second.scale;
+  if (!scale) return coefficient;
+  const padded = coefficient.padStart(scale + 1, "0");
+  const split = padded.length - scale;
+  const normalized = `${padded.slice(0, split)}.${padded.slice(split)}`
+    .replace(/\.?0+$/, "");
+  return normalized || "0";
+}
+
+export function projectMixedQuoteLines(lines) {
+  if (!Array.isArray(lines)) throw new Error("LÃ­neas de Proyecto invÃ¡lidas");
+  const parentById = new Map(lines.map((line) => [line.lineId, line]));
+  return lines.map((line) => {
+    if (line.role !== "complement") return {...line};
+    const parent = parentById.get(line.parentLineId);
+    if (!parent || parent.role !== "principal") {
+      throw new Error("Padre de complemento invÃ¡lido");
+    }
+    if (line._projectQuantityProjected === true) {
+      return {...line, sectionId: parent.sectionId};
+    }
+    const quantity = line.quantityMode === "per_parent_unit"
+      ? multiplyProjectQuantity(parent.quantity, line.quantity)
+      : line.quantity;
+    return {
+      ...line,
+      sectionId: parent.sectionId,
+      quantity,
+      _projectQuantityProjected: true,
+    };
+  });
+}
