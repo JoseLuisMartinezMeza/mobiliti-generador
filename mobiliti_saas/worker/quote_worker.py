@@ -1110,6 +1110,14 @@ def _prepare_generator_input(
                 raise RuntimeError(f"Filas canonicas de cotizacion invalidas: {exc}") from exc
             if not canonical_rows or len(canonical_rows) != payload["item_count"]:
                 raise RuntimeError("Carrito mixto sin filas canonicas completas")
+            project_context = deepcopy(payload.get("project_context"))
+            if project_context is not None:
+                metadata["project_context"] = project_context
+                metadata["project_id"] = project_context["project_id"]
+                metadata["project_revision"] = project_context["project_revision"]
+                metadata["project_payload_hash"] = project_context[
+                    "project_payload_hash"
+                ]
             if payload["imported_source"] is not None:
                 if client is None:
                     raise RuntimeError("Cliente de storage requerido para fuente importada")

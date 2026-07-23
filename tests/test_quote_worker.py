@@ -5,6 +5,7 @@ import hashlib
 import json
 import threading
 import time
+from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -18,9 +19,14 @@ import quote_worker
 import online_quote_generator
 import render_web_worker
 from mobiliti_saas.quote_engine.mixed_catalog import build_mixed_catalog_cart_payload
+from mobiliti_saas.quote_engine.project_quote import project_context
 from mobiliti_saas.quote_engine.quotation_import import build_import_manifest
 from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
+from project_fixtures import valid_project_payload
 from quotation_import_fixtures import write_import_fixture
+
+
+PROJECT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 
 def _write_minimal_parser_xlsx(path):
@@ -588,6 +594,7 @@ def _valid_mixed_worker_payload():
         "rate_retrieved_at": "2026-07-19T20:00:00Z",
     }
     line = {
+        "line_id": "legacy-1",
         "canonical_key": "tarkett:T-1",
         "catalog": "tarkett",
         "supplier": "Tarkett",
@@ -649,7 +656,7 @@ def _valid_mixed_worker_payload():
             {
                 "id": "section-1",
                 "title": "Recepción",
-                "item_keys": ["tarkett:T-1"],
+                "line_ids": ["legacy-1"],
             }
         ],
         "rate_summary": [rate],
@@ -661,7 +668,101 @@ def _valid_mixed_worker_payload():
             "rate_effective_date": "2026-07-19",
             "rate_retrieved_at": "2026-07-19T20:00:00Z",
         },
+        "project_context": None,
     }
+
+
+def _project_mixed_worker_payload(*, include_complement=False):
+    payload = _valid_mixed_worker_payload()
+    project = valid_project_payload()
+    if not include_complement:
+        project["lines"] = project["lines"][:1]
+    principal_id = project["lines"][0]["line_id"]
+    payload["groups"][0]["items"][0]["line_id"] = principal_id
+    payload["sections"] = [{
+        "id": "section-1",
+        "title": "Recepción",
+        "line_ids": [principal_id],
+    }]
+    payload["project_context"] = project_context(project, PROJECT_ID, 3)
+    return payload
+
+
+def test_worker_passes_validated_project_context_to_official_engine(monkeypatch):
+    client = FakeClient()
+    client.claim_input_path = "users/7/jobs/job-1/input.json"
+    payload = _project_mixed_worker_payload()
+    client.input_content = json.dumps(payload).encode("utf-8")
+    seen = {}
+
+    def fake_convert(_source, output, converted_payload):
+        converted_payload["project_context"]["compositions"].clear()
+        _write_minimal_parser_xlsx(output)
+
+    def fake_generator(job, _input_path, output_path):
+        seen["metadata"] = deepcopy(job["metadata"])
+        output_path.write_bytes(b"output")
+
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        fake_convert,
+    )
+    monkeypatch.setattr(quote_worker, "_run_generator", fake_generator)
+
+    quote_worker.process_job(client, {
+        "id": "job-1",
+        "usuario_id": 7,
+        "input_path": client.claim_input_path,
+        "metadata": {
+            "source_type": "mixed_catalog_cart",
+            "input_extension": ".json",
+            "project_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "project_revision": 99,
+            "project_payload_hash": "0" * 64,
+        },
+    })
+
+    expected = payload["project_context"]
+    assert seen["metadata"]["project_context"] == expected
+    assert seen["metadata"]["project_context"] is not expected
+    assert seen["metadata"]["project_id"] == expected["project_id"]
+    assert seen["metadata"]["project_revision"] == expected["project_revision"]
+    assert seen["metadata"]["project_payload_hash"] == expected["project_payload_hash"]
+
+
+def test_worker_rejects_project_component_absent_from_resolved_mixed_payload(
+    monkeypatch,
+    tmp_path,
+):
+    payload = _project_mixed_worker_payload(include_complement=True)
+    source = tmp_path / "project-missing-component.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_mixed_catalog_cart_to_quotation",
+        lambda *_args: pytest.fail("converter should not run"),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Contexto de Proyecto invalido",
+    ):
+        quote_worker._prepare_generator_input(
+            {
+                "id": "job-project",
+                "usuario_id": 7,
+                "input_path": "users/7/jobs/job-project/input.json",
+                "metadata": {
+                    "source_type": "mixed_catalog_cart",
+                    "input_extension": ".json",
+                    "project_id": PROJECT_ID,
+                    "project_revision": 3,
+                },
+            },
+            source,
+            tmp_path,
+        )
 
 
 def _valid_imported_worker_payload(tmp_path):
@@ -974,7 +1075,7 @@ def test_prepared_generator_input_catalog_only_uses_none_and_all_canonical_rows(
     assert len(prepared.quotation_data) == payload["item_count"] == 1
     row = prepared.quotation_data[0]
     assert (row.item_key, row.section_id, row.section_title, row.position) == (
-        "tarkett:T-1",
+        "legacy-1",
         "section-1",
         "Recepción",
         1,
@@ -1083,7 +1184,7 @@ def test_worker_passes_original_import_and_all_canonical_rows_to_generator(
     assert captured["original_hash"] == payload["imported_source"]["source_hash"]
     rows = captured["rows"]
     assert len(rows) == payload["item_count"] == 2
-    assert [row.item_key for row in rows] == payload["sections"][0]["item_keys"]
+    assert [row.item_key for row in rows] == payload["sections"][0]["line_ids"]
     assert [(row.section_id, row.section_title, row.position) for row in rows] == [
         ("section-1", "Recepción", 1),
         ("section-1", "Recepción", 2),
@@ -1261,7 +1362,7 @@ def test_worker_converter_rejects_imported_row_remap_without_leaving_output(tmp_
         ),
         row_hash=authoritative_row_9["row_hash"],
     )
-    payload["sections"][0]["item_keys"] = [remapped_key]
+    payload["sections"][0]["line_ids"] = [imported_line["line_id"]]
     local_input = tmp_path / "input.json"
     local_input.write_text(json.dumps(payload), encoding="utf-8")
 

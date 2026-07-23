@@ -23,6 +23,13 @@ durables, privados y asociados al Proyecto del usuario.
 
 Esta fase no cambia todavia el motor XLSX.
 
+Al cotizar una revision guardada, el JSON descargado por el worker es la
+autoridad inmutable. Despues de validar el payload mixto, el worker entrega al
+generador oficial una copia profunda de `project_context` junto con
+`project_id`, `project_revision` y `project_payload_hash`. No consulta el
+Proyecto actual, no reconstruye su composicion y no recalcula las tasas de
+cambio congeladas durante este handoff.
+
 Variables requeridas:
 
 ```powershell
