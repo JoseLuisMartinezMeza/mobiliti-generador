@@ -3305,6 +3305,7 @@ def generate_quote(
             quotation=quotation,
             quotation_data=build_quotation_data_sheet(canonical_rows),
             contract=contract,
+            project_composition=metadata.get("project_context") is not None,
         )
     )
     return output_path

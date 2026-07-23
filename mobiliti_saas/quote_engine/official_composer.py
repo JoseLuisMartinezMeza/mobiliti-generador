@@ -475,6 +475,7 @@ class ComposeRequest:
     quotation: SheetAddition | None
     quotation_data: SheetAddition
     contract: TemplateContract
+    project_composition: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "template", Path(self.template))
@@ -491,6 +492,8 @@ class ComposeRequest:
             raise ValueError("La adición obligatoria debe ser Quotation_Data")
         if not isinstance(self.contract, TemplateContract):
             raise TypeError("Contrato oficial inválido")
+        if type(self.project_composition) is not bool:
+            raise TypeError("Señal de composición de Proyecto inválida")
 
     def with_output(self, output: Path) -> "ComposeRequest":
         return ComposeRequest(
@@ -501,6 +504,7 @@ class ComposeRequest:
             quotation=self.quotation,
             quotation_data=self.quotation_data,
             contract=self.contract,
+            project_composition=self.project_composition,
         )
 
 
@@ -1159,6 +1163,7 @@ def _validate_declared_sheet_surfaces(
         base,
         request.cotizacion,
         request.mobiliti.row_map,
+        project_composition=request.project_composition,
     )
 
 
@@ -1254,14 +1259,23 @@ def _validate_exact_cotizacion_surface(
     base: XlsxPackage,
     mutation: CotizacionSheetMutation,
     row_map: MobilitiRowMap,
+    *,
+    project_composition: bool = False,
 ) -> None:
+    if type(project_composition) is not bool:
+        raise TypeError("Señal de composición de Proyecto inválida")
     candidate = _worksheet_root(mutation.xml, "Cotizacion")
     _validate_exact_inline_strings(candidate, "Cotizacion")
     product_rows = mutation.product_rows
+    product_count_invalid = (
+        len(product_rows) > len(row_map.item_rows)
+        if project_composition
+        else len(product_rows) != len(row_map.item_rows)
+    )
     if (
         not product_rows
         or tuple(sorted(set(product_rows))) != product_rows
-        or len(product_rows) > len(row_map.item_rows)
+        or product_count_invalid
     ):
         raise ValueError("Cotizacion no cumple el contrato exacto de filas de producto")
     if mutation.terms_row_delta != mutation.total_row - CANONICAL_COTIZACION_TOTAL_ROW:
@@ -1360,10 +1374,14 @@ def _validate_exact_cotizacion_surface(
     if current_title is None or not current_products:
         raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
     sections.append(CotizacionSection(current_title, tuple(current_products)))
-    if (
-        len(mobiliti_rows) != len(set(mobiliti_rows))
-        or set(mobiliti_rows) != set(row_map.item_rows)
-    ):
+    if project_composition:
+        mobiliti_contract_invalid = (
+            len(mobiliti_rows) != len(set(mobiliti_rows))
+            or set(mobiliti_rows) != set(row_map.item_rows)
+        )
+    else:
+        mobiliti_contract_invalid = tuple(mobiliti_rows) != row_map.item_rows
+    if mobiliti_contract_invalid:
         raise ValueError("Cotizacion no cumple el contrato exacto de filas Mobiliti")
 
     expected = CotizacionSheetEditor.from_xml(

@@ -13,7 +13,16 @@ from mobiliti_saas.quote_engine.mixed_catalog import (
     create_mixed_catalog_quotation_workbook,
 )
 from mobiliti_saas.quote_engine.mobiliti_layout import SectionNeed, plan_mobiliti_layout
+from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage
 from mobiliti_saas.quote_engine.ooxml_worksheet import MobilitiSheetMutation
+from mobiliti_saas.quote_engine.official_composer import (
+    CotizacionMetadata,
+    CotizacionPriceTerm,
+    CotizacionProduct,
+    CotizacionSection,
+    CotizacionSheetEditor,
+    _validate_exact_cotizacion_surface,
+)
 from mobiliti_saas.quote_engine.project_quote import project_context
 from mobiliti_saas.quote_engine.quotation_sheets import quotation_data_rows
 
@@ -522,6 +531,56 @@ def test_project_projection_distinguishes_catalog_lumbro_from_auto_accessory():
     ]
     assert [term.mobiliti_row for term in products[0].price_terms] == [14, 16, 17]
     assert [term.mobiliti_row for term in products[1].price_terms] == [15]
+
+
+def test_exact_auditor_requires_explicit_project_signal_for_grouped_rows():
+    base = XlsxPackage.read(engine.OFFICIAL_TEMPLATE_PATH)
+    row_map = plan_mobiliti_layout(
+        (SectionNeed("section-1", "Recepción", 2),)
+    )
+    grouped = CotizacionSheetEditor.from_xml(
+        base.parts[base.sheet_part("Cotizacion")]
+    ).compose(
+        metadata=CotizacionMetadata(
+            quotation_number="PROJECT-AUDIT",
+            project="Proyecto",
+            client="Cliente",
+            email="cliente@example.com",
+            phone="33",
+            address="Guadalajara",
+            business_name="Cliente SA",
+        ),
+        sections=(
+            CotizacionSection(
+                title="Recepción",
+                products=(
+                    CotizacionProduct(
+                        item_key=PRINCIPAL_ID,
+                        name="MAIN-1",
+                        description="Principal\n+ Complemento",
+                        dimensions="600 x 600 mm",
+                        quantity=Decimal("10"),
+                        mobiliti_row=14,
+                        discount=Decimal("0.4"),
+                        price_terms=(
+                            CotizacionPriceTerm(14),
+                            CotizacionPriceTerm(15),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="filas de producto"):
+        _validate_exact_cotizacion_surface(base, grouped, row_map)
+
+    _validate_exact_cotizacion_surface(
+        base,
+        grouped,
+        row_map,
+        project_composition=True,
+    )
 
 
 @pytest.mark.parametrize(
