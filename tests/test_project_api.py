@@ -138,6 +138,54 @@ def test_project_patch_updates_only_owned_project(monkeypatch):
     ).status_code == 404
 
 
+def test_project_name_http_boundary_matches_schema_and_rejects_long_duplicate(monkeypatch):
+    client = _project_client(monkeypatch)
+    accepted_name = "P" * 120
+    rejected_name = "P" * 121
+    created = client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": accepted_name, "payload": valid_project_payload()},
+    )
+    assert created.status_code == 201
+    project = created.json()["project"]
+    assert client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": rejected_name, "payload": valid_project_payload()},
+    ).status_code == 400
+
+    updated = client.patch(
+        f"/projects/{project['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": accepted_name,
+            "payload": valid_project_payload(),
+            "expected_revision": project["revision"],
+            "operation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        },
+    )
+    assert updated.status_code == 200
+    assert client.patch(
+        f"/projects/{project['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": rejected_name,
+            "payload": valid_project_payload(),
+            "expected_revision": updated.json()["project"]["revision"],
+            "operation_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        },
+    ).status_code == 400
+
+    duplicated = client.post(
+        f"/projects/{project['id']}/duplicate",
+        headers=_auth_headers(7),
+        json={},
+    )
+    assert duplicated.status_code == 400
+    assert len(client.get("/projects", headers=_auth_headers(7)).json()["projects"]) == 1
+
+
 def test_dev_project_save_is_revision_safe_and_idempotent(monkeypatch):
     state = {"projects": []}
     monkeypatch.setattr(index, "DEV_MODE", True)

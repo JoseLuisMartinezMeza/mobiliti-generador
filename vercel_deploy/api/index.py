@@ -4068,7 +4068,7 @@ def _project_name(value: object) -> str:
     name = value.strip()
     if (
         not name
-        or len(name) > 200
+        or len(name) > 120
         or any(ord(char) < 32 or ord(char) == 127 for char in name)
         or any(unicodedata.category(char) in {"Cf", "Cs"} for char in name)
     ):
@@ -4251,13 +4251,14 @@ def projects_duplicate(
     _project_unexpected_fields(body or {}, frozenset())
     project_id = _project_uuid(project_id)
     current = _project_for_current_user(project_id, current_user["id"])
+    duplicate_name = _project_name(f"{current['name']} (copia)")
     payload = _project_payload(deepcopy(current["payload"]))
     # El duplicado conserva referencias inmutables del Proyecto de origen; el
     # prefijo del usuario mantiene el aislamiento sin reescribir objetos.
     _validate_project_asset_ownership(payload, current_user["id"])
     return {
         "project": db_create_project(
-            current_user["id"], f"{current['name']} (copia)", deepcopy(payload)
+            current_user["id"], duplicate_name, deepcopy(payload)
         )
     }
 
