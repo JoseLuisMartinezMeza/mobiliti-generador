@@ -70,6 +70,7 @@ from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
     validate_quote_size,
     validate_mixed_catalog_payload,
 )
+from mobiliti_saas.quote_engine.project_model import project_summary  # noqa: E402
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -282,6 +283,7 @@ def _dev_load() -> dict:
             }
         ],
         "quote_jobs": [],
+        "projects": [],
         "tarkett_reservations": [],
         "offiho_reservations": [],
         "catalog_reservations": [],
@@ -828,6 +830,256 @@ def db_update_suscripcion(suscripcion_id, updates):
         return _pg_update("saas_suscripciones", "id", suscripcion_id, updates)
     rows = _supabase_req("PATCH", f"/saas_suscripciones?id=eq.{suscripcion_id}", json_data=updates)
     return rows[0] if rows else {}
+
+
+_PROJECT_ROW_FIELDS = (
+    "id", "usuario_id", "name", "status", "revision", "schema_version",
+    "payload", "last_operation_id", "created_at", "updated_at", "archived_at",
+)
+
+
+def _project_result(row: dict | None) -> dict | None:
+    if row is None:
+        return None
+    result = {field: deepcopy(row.get(field)) for field in _PROJECT_ROW_FIELDS}
+    result["summary"] = project_summary(result["payload"])
+    return result
+
+
+def _project_retry_or_conflict(project_id: str, usuario_id: int, operation_id: str) -> dict:
+    current = db_get_project(project_id, usuario_id)
+    if current and current["last_operation_id"] == operation_id:
+        return _project_result(current)
+    return {}
+
+
+def db_create_project(usuario_id: int, name: str, payload: dict) -> dict:
+    now = _iso(datetime.now(timezone.utc))
+    data = {
+        "id": str(uuid.uuid4()),
+        "usuario_id": int(usuario_id),
+        "name": name,
+        "status": "active",
+        "revision": 0,
+        "schema_version": deepcopy(payload["schema_version"]),
+        "payload": deepcopy(payload),
+        "last_operation_id": None,
+        "created_at": now,
+        "updated_at": now,
+        "archived_at": None,
+    }
+    if DEV_MODE:
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            store = _dev_load()
+            store.setdefault("projects", []).append(deepcopy(data))
+            _dev_save(store)
+            return _project_result(data)
+    if _use_postgres():
+        row = _pg_write(
+            """
+            INSERT INTO saas_projects
+                (id, usuario_id, name, status, revision, schema_version, payload,
+                 last_operation_id, created_at, updated_at, archived_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            tuple(data[field] for field in _PROJECT_ROW_FIELDS),
+        )
+        return _project_result(row or data)
+    rows = _supabase_req("POST", "/saas_projects", json_data=data)
+    if isinstance(rows, list) and rows:
+        return _project_result(rows[0])
+    return db_get_project(data["id"], data["usuario_id"]) or _project_result(data)
+
+
+def db_get_project(project_id: str, usuario_id: int) -> dict | None:
+    if DEV_MODE:
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            store = _dev_load()
+            row = next(
+                (
+                    candidate for candidate in store.setdefault("projects", [])
+                    if candidate.get("id") == project_id
+                    and int(candidate.get("usuario_id", 0)) == int(usuario_id)
+                ),
+                None,
+            )
+            return _project_result(row)
+    if _use_postgres():
+        return _project_result(_pg_one(
+            "SELECT * FROM saas_projects WHERE id = %s AND usuario_id = %s LIMIT 1",
+            (project_id, usuario_id),
+        ))
+    rows = _supabase_req(
+        "GET",
+        "/saas_projects",
+        params={"id": f"eq.{project_id}", "usuario_id": f"eq.{usuario_id}", "limit": "1"},
+    )
+    return _project_result(rows[0]) if rows else None
+
+
+def db_list_projects(usuario_id: int, status: str) -> list[dict]:
+    if DEV_MODE:
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            store = _dev_load()
+            rows = [
+                row for row in store.setdefault("projects", [])
+                if int(row.get("usuario_id", 0)) == int(usuario_id)
+                and row.get("status") == status
+            ]
+            return [_project_result(row) for row in sorted(
+                rows, key=lambda row: row.get("updated_at", ""), reverse=True
+            )]
+    if _use_postgres():
+        rows = _pg_rows(
+            "SELECT * FROM saas_projects WHERE usuario_id = %s AND status = %s ORDER BY updated_at DESC",
+            (usuario_id, status),
+        )
+    else:
+        rows = _supabase_req(
+            "GET",
+            "/saas_projects",
+            params={
+                "usuario_id": f"eq.{usuario_id}", "status": f"eq.{status}",
+                "select": "*", "order": "updated_at.desc",
+            },
+        )
+    return [_project_result(row) for row in rows]
+
+
+def db_save_project(
+    project_id: str, usuario_id: int, name: str, payload: dict, *,
+    expected_revision: int, operation_id: str,
+) -> dict:
+    now = _iso(datetime.now(timezone.utc))
+    if DEV_MODE:
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            store = _dev_load()
+            row = next(
+                (
+                    candidate for candidate in store.setdefault("projects", [])
+                    if candidate.get("id") == project_id
+                    and int(candidate.get("usuario_id", 0)) == int(usuario_id)
+                ),
+                None,
+            )
+            if row is None:
+                return {}
+            if row.get("last_operation_id") == operation_id:
+                return _project_result(row)
+            if int(row.get("revision", 0)) != int(expected_revision):
+                return {}
+            row.update({
+                "name": name,
+                "payload": deepcopy(payload),
+                "schema_version": deepcopy(payload["schema_version"]),
+                "revision": int(row["revision"]) + 1,
+                "last_operation_id": operation_id,
+                "updated_at": now,
+            })
+            _dev_save(store)
+            return _project_result(row)
+    if _use_postgres():
+        row = _pg_write(
+            """UPDATE saas_projects
+SET name = %s,
+    payload = %s,
+    revision = revision + 1,
+    last_operation_id = %s,
+    updated_at = %s
+WHERE id = %s
+  AND usuario_id = %s
+  AND revision = %s
+RETURNING *""",
+            (name, deepcopy(payload), operation_id, now, project_id, usuario_id, expected_revision),
+        )
+        return _project_result(row) if row else _project_retry_or_conflict(
+            project_id, usuario_id, operation_id
+        )
+    rows = _supabase_req(
+        "PATCH",
+        f"/saas_projects?id=eq.{project_id}&usuario_id=eq.{usuario_id}&revision=eq.{expected_revision}",
+        json_data={
+            "name": name,
+            "payload": deepcopy(payload),
+            "schema_version": deepcopy(payload["schema_version"]),
+            "revision": int(expected_revision) + 1,
+            "last_operation_id": operation_id,
+            "updated_at": now,
+        },
+    )
+    return _project_result(rows[0]) if rows else _project_retry_or_conflict(
+        project_id, usuario_id, operation_id
+    )
+
+
+def db_set_project_status(
+    project_id: str, usuario_id: int, status: str, *, expected_revision: int,
+    operation_id: str,
+) -> dict:
+    if status not in {"active", "archived"}:
+        raise ValueError("Estado de proyecto invalido")
+    now = _iso(datetime.now(timezone.utc))
+    archived_at = now if status == "archived" else None
+    if DEV_MODE:
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            store = _dev_load()
+            row = next(
+                (
+                    candidate for candidate in store.setdefault("projects", [])
+                    if candidate.get("id") == project_id
+                    and int(candidate.get("usuario_id", 0)) == int(usuario_id)
+                ),
+                None,
+            )
+            if row is None:
+                return {}
+            if row.get("last_operation_id") == operation_id:
+                return _project_result(row)
+            if int(row.get("revision", 0)) != int(expected_revision):
+                return {}
+            row.update({
+                "status": status,
+                "revision": int(row["revision"]) + 1,
+                "last_operation_id": operation_id,
+                "updated_at": now,
+                "archived_at": archived_at,
+            })
+            _dev_save(store)
+            return _project_result(row)
+    if _use_postgres():
+        row = _pg_write(
+            """
+            UPDATE saas_projects
+            SET status = %s,
+                archived_at = %s,
+                revision = revision + 1,
+                last_operation_id = %s,
+                updated_at = %s
+            WHERE id = %s
+              AND usuario_id = %s
+              AND revision = %s
+            RETURNING *
+            """,
+            (status, archived_at, operation_id, now, project_id, usuario_id, expected_revision),
+        )
+        return _project_result(row) if row else _project_retry_or_conflict(
+            project_id, usuario_id, operation_id
+        )
+    rows = _supabase_req(
+        "PATCH",
+        f"/saas_projects?id=eq.{project_id}&usuario_id=eq.{usuario_id}&revision=eq.{expected_revision}",
+        json_data={
+            "status": status,
+            "revision": int(expected_revision) + 1,
+            "last_operation_id": operation_id,
+            "updated_at": now,
+            "archived_at": archived_at,
+        },
+    )
+    return _project_result(rows[0]) if rows else _project_retry_or_conflict(
+        project_id, usuario_id, operation_id
+    )
 
 
 def db_create_quote_job(usuario_id: int, template: str, metadata: dict, input_path: str, job_id: str = None):
