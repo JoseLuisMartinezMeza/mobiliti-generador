@@ -10,6 +10,20 @@ SUPPLIER_VIEW = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx")
 WORKSPACE_MODULE = Path("mobiliti_saas/web/src/projectWorkspace.js").resolve().as_uri()
 
 
+def test_product_picker_covers_all_contexts_and_previews_images():
+    source = Path("mobiliti_saas/web/src/ProductPickerDialog.jsx").read_text(encoding="utf-8")
+    for mode in ('add:', '"replace-one":', '"replace-all":', 'complement:'):
+        assert mode in source
+    for copy in (
+        "Agregar al Proyecto", "Cambiar producto",
+        "Cambiar todos los iguales", "Agregar complemento",
+    ):
+        assert copy in source
+    assert 'alt={selected.snapshot.name}' in source
+    assert "Sin imagen" in source
+    assert "/catalogs/search" in source
+
+
 def run_workspace(source):
     completed = subprocess.run(
         ["node", "--input-type=module"],
