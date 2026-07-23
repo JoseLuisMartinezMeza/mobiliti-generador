@@ -233,6 +233,25 @@ durables, privados y asociados al Proyecto del usuario.
 
 Esta fase no cambia todavia el motor XLSX.
 
+### Aceptacion local del editor de Proyectos
+
+El escenario browser crea un Proyecto, agrega dos ocurrencias independientes del
+mismo producto, configura y confirma un complemento, espera el autosave y
+comprueba que el estado persiste despues de recargar y reabrir el Proyecto.
+Tambien valida el editor a `390 x 844`: ocupa el viewport completo y no genera
+overflow horizontal.
+
+La prueba usa el mismo servidor Vite y el guard de red del resto de la suite. Su
+stub en memoria respeta los contratos de `/projects` y `/catalogs/search`,
+incluida la revision optimista; no requiere levantar un segundo backend ni
+permite solicitudes sin declarar.
+
+```powershell
+python -m pytest tests/test_mixed_catalog_browser_e2e.py -k "project_survives_reload" -q
+python -m pytest tests/test_mixed_catalog_browser_e2e.py tests/test_project_ui.py tests/test_project_model_ui.py -q
+npm --prefix mobiliti_saas/web run build
+```
+
 ### Crear usuario cliente
 
 ```bash

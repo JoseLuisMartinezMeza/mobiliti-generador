@@ -3710,7 +3710,18 @@ textarea:focus {
 
 @media (max-width: 720px) {
   .project-editor {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    width: 100vw;
+    height: 100dvh;
+    overflow: auto;
     padding: 18px 14px 28px;
+  }
+
+  .project-line-actions {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .project-editor-header,

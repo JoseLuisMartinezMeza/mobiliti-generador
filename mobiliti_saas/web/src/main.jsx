@@ -188,6 +188,19 @@ const EMPTY_MIXED_QUOTE = Object.freeze({
   template: "Formato Cotizacion 2026 GDL (1).xlsx"
 });
 
+function projectQuoteFieldsFromMixedQuote(quote) {
+  return {
+    proyecto: quote.proyecto,
+    cliente: quote.cliente,
+    correo: quote.correo,
+    telefono: quote.telefono,
+    direccion: quote.direccion,
+    razon_social: quote.razon_social,
+    quote_currency: quote.quote_currency,
+    descuento: quote.descuento,
+  };
+}
+
 const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";
 const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";
 const OFFIHO_PAGE_SIZE = 24;
@@ -2420,13 +2433,17 @@ function App() {
   const mixedImportRevisionRef = useRef(0);
   const { request } = useApi(session?.access_token);
   const mixedRequest = useMemo(
-    () => createMixedQuoteRequestSnapshot({}, mixedCartSections, mixedCart),
+    () => createMixedQuoteRequestSnapshot(
+      {},
+      mixedCartSections,
+      projectMixedQuoteLines(mixedCart),
+    ),
     [mixedCart, mixedCartSections],
   );
   const editorProject = useMemo(() => (
     activeProject ? {
       ...activeProject,
-      quoteFields: mixedQuote,
+      quoteFields: projectQuoteFieldsFromMixedQuote(mixedQuote),
       sections: mixedCartSections,
       lines: mixedCart,
     } : null
@@ -2435,16 +2452,7 @@ function App() {
     activeProject,
     pendingImportDraft,
     localState: {
-      quoteFields: {
-        proyecto: mixedQuote.proyecto,
-        cliente: mixedQuote.cliente,
-        correo: mixedQuote.correo,
-        telefono: mixedQuote.telefono,
-        direccion: mixedQuote.direccion,
-        razon_social: mixedQuote.razon_social,
-        quote_currency: mixedQuote.quote_currency,
-        descuento: mixedQuote.descuento,
-      },
+      quoteFields: projectQuoteFieldsFromMixedQuote(mixedQuote),
       sections: mixedCartSections,
       lines: mixedCart,
     },

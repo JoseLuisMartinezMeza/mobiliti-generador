@@ -3,8 +3,9 @@ import re
 import socket
 import subprocess
 import time
+from copy import deepcopy
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
 import pytest
@@ -14,6 +15,7 @@ from quotation_import_fixtures import write_import_fixture
 
 
 IMPORT_JOB_ID = "77777777-7777-4777-8777-777777777777"
+PROJECT_ID = "99999999-9999-4999-8999-999999999999"
 IMPORT_PREVIEW_IMAGE = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -238,6 +240,11 @@ KNOWN_API_REQUESTS = frozenset({
     ("POST", "/cotizaciones/init-upload"),
     ("POST", f"/cotizaciones/{IMPORT_JOB_ID}/dev-upload"),
     ("POST", f"/cotizaciones/{IMPORT_JOB_ID}/import-preview"),
+    ("GET", "/projects"),
+    ("POST", "/projects"),
+    ("GET", f"/projects/{PROJECT_ID}"),
+    ("PATCH", f"/projects/{PROJECT_ID}"),
+    ("GET", "/catalogs/search"),
 })
 
 
@@ -268,6 +275,90 @@ def test_network_guard_contract_rejects_other_local_origins_and_unknown_prefligh
     assert not is_known_api_request("OPTIONS", "/catalogs/mixed-quote", "DELETE")
 
 
+def test_project_survives_reload_and_supports_replacements_and_complements(
+    vite_url, browser
+):
+    stub = ApiStub([])
+    stub.enable_project_routes(project_id=PROJECT_ID)
+    context, page = new_page(
+        browser, {"width": 1440, "height": 1000}, stub, vite_url
+    )
+    console_errors = capture_console_errors(page)
+    page_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+    def add_product(code):
+        page.get_by_role("button", name="Agregar producto", exact=True).click()
+        picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Buscar producto", exact=True).fill(code)
+        picker.get_by_role("button", name=re.compile(code, re.IGNORECASE)).click()
+        picker.get_by_role("button", name="Agregar al Proyecto", exact=True).click()
+
+    try:
+        page.goto(vite_url)
+        page.get_by_role("button", name="Proyectos", exact=True).click()
+        page.get_by_role("button", name="Nuevo Proyecto", exact=True).click()
+        page.get_by_label("Nombre del Proyecto", exact=True).fill(
+            "QA Proyecto persistente"
+        )
+
+        add_product("OLIVE-II")
+        add_product("OLIVE-II")
+        assert page.get_by_text("OLIVE-II", exact=True).count() == 2
+
+        page.get_by_role("button", name="Agregar complemento", exact=True).first.click()
+        picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Buscar producto", exact=True).fill("HEAD-1")
+        picker.get_by_role(
+            "button", name=re.compile("HEAD-1", re.IGNORECASE)
+        ).click()
+        picker.get_by_role(
+            "button", name="Agregar complemento", exact=True
+        ).click()
+
+        config = page.get_by_role("dialog", name="Configurar HEAD-1")
+        config.wait_for(state="visible")
+        assert page.get_by_text("+ HEAD-1", exact=True).count() == 0
+        config.get_by_role("combobox").select_option("fixed_project")
+        config.get_by_role("textbox").fill("2")
+        config.get_by_role(
+            "button", name="Confirmar complemento", exact=True
+        ).click()
+        complement = page.get_by_text("+ HEAD-1", exact=True)
+        complement.wait_for(state="visible")
+        assert complement.count() == 1
+
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+        assert stub.project_revision > 0
+        persisted = deepcopy(stub.saved_project)
+        assert len(persisted["payload"]["lines"]) == 3
+
+        page.reload()
+        page.get_by_role("button", name="Proyectos", exact=True).click()
+        project_card = page.locator(
+            ".project-card", has_text="QA Proyecto persistente"
+        )
+        project_card.get_by_role("button", name="Abrir", exact=True).click()
+        assert page.get_by_text("OLIVE-II", exact=True).count() == 2
+        assert page.get_by_text("+ HEAD-1", exact=True).count() == 1
+        assert stub.saved_project == persisted
+
+        page.set_viewport_size({"width": 390, "height": 844})
+        editor_box = page.locator(".project-editor").bounding_box()
+        assert editor_box is not None
+        assert editor_box["x"] == pytest.approx(0, abs=1)
+        assert editor_box["y"] == pytest.approx(0, abs=1)
+        assert editor_box["width"] == pytest.approx(390, abs=1)
+        assert editor_box["height"] == pytest.approx(844, abs=1)
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        )
+        assert stub.unexpected_requests == []
+        assert_no_browser_failures(page, console_errors, page_errors)
+    finally:
+        context.close()
+
+
 class ApiStub:
     def __init__(self, mixed_responses, import_preview=None):
         self.mixed_responses = list(mixed_responses)
@@ -275,6 +366,11 @@ class ApiStub:
         self.mixed_post_bodies = []
         self.upload_count = 0
         self.unexpected_requests = []
+
+    def enable_project_routes(self, *, project_id):
+        self.project_id = project_id
+        self.saved_project = None
+        self.project_revision = 0
 
     def install(self, page, vite_origin):
         def block_external_network(route):
@@ -298,10 +394,34 @@ class ApiStub:
                 headers={
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
                 },
                 body=json.dumps(body),
             )
+
+        def project_response(name, payload):
+            lines = payload.get("lines", [])
+            return {
+                "id": self.project_id,
+                "usuario_id": SESSION["usuario"]["id"],
+                "name": name,
+                "status": "active",
+                "revision": self.project_revision,
+                "schema_version": deepcopy(payload["schema_version"]),
+                "payload": deepcopy(payload),
+                "last_operation_id": None,
+                "created_at": "2026-07-23T12:00:00Z",
+                "updated_at": f"2026-07-23T12:00:{self.project_revision:02d}Z",
+                "archived_at": None,
+                "summary": {
+                    "principals": sum(
+                        line.get("role") == "principal" for line in lines
+                    ),
+                    "complements": sum(
+                        line.get("role") == "complement" for line in lines
+                    ),
+                },
+            }
 
         def dispatch(route):
             request = route.request
@@ -341,6 +461,100 @@ class ApiStub:
                 return
             if request.method == "GET" and path == "/catalogs/alma":
                 fulfill_json(route, ALMA_CATALOG)
+                return
+            if (
+                hasattr(self, "project_id")
+                and request.method == "GET"
+                and path == "/projects"
+            ):
+                status = parse_qs(parsed.query).get("status", ["active"])[0]
+                projects = (
+                    [deepcopy(self.saved_project)]
+                    if self.saved_project is not None
+                    and self.saved_project["status"] == status
+                    else []
+                )
+                fulfill_json(route, {"projects": projects})
+                return
+            if (
+                hasattr(self, "project_id")
+                and request.method == "POST"
+                and path == "/projects"
+            ):
+                body = deepcopy(request.post_data_json)
+                assert set(body) == {"name", "payload"}
+                self.saved_project = project_response(body["name"], body["payload"])
+                fulfill_json(
+                    route, {"project": deepcopy(self.saved_project)}, status=201
+                )
+                return
+            if (
+                hasattr(self, "project_id")
+                and request.method == "GET"
+                and path == f"/projects/{self.project_id}"
+            ):
+                assert self.saved_project is not None
+                fulfill_json(route, {"project": deepcopy(self.saved_project)})
+                return
+            if (
+                hasattr(self, "project_id")
+                and request.method == "PATCH"
+                and path == f"/projects/{self.project_id}"
+            ):
+                assert self.saved_project is not None
+                body = deepcopy(request.post_data_json)
+                assert set(body) == {
+                    "name", "payload", "expected_revision", "operation_id"
+                }
+                assert body["expected_revision"] == self.project_revision
+                self.project_revision += 1
+                self.saved_project = project_response(body["name"], body["payload"])
+                self.saved_project["last_operation_id"] = body["operation_id"]
+                fulfill_json(route, {"project": deepcopy(self.saved_project)})
+                return
+            if (
+                hasattr(self, "project_id")
+                and request.method == "GET"
+                and path == "/catalogs/search"
+            ):
+                products = [{
+                    "catalog": "sunon",
+                    "official_code": "OLIVE-II",
+                    "identity": {
+                        "internal_id": "sunon:olive-ii",
+                        "base_option_id": "",
+                        "add_on_option_ids": [],
+                    },
+                    "snapshot": {
+                        "name": "OLIVE-II",
+                        "code": "OLIVE-II",
+                        "image_url": IMPORT_PREVIEW_IMAGE,
+                        "availability": "Disponible",
+                        "configuration": "",
+                        "warnings": [],
+                    },
+                }, {
+                    "catalog": "alma",
+                    "official_code": "HEAD-1",
+                    "identity": {
+                        "internal_id": "alma:head-1",
+                        "base_option_id": "",
+                        "add_on_option_ids": [],
+                    },
+                    "snapshot": {
+                        "name": "HEAD-1",
+                        "code": "HEAD-1",
+                        "image_url": IMPORT_PREVIEW_IMAGE,
+                        "availability": "Disponible",
+                        "configuration": "",
+                        "warnings": [],
+                    },
+                }]
+                fulfill_json(route, {
+                    "items": deepcopy(products),
+                    "total": len(products),
+                    "next_offset": None,
+                })
                 return
             if request.method == "POST" and path == "/cotizaciones/init-upload":
                 fulfill_json(route, {
