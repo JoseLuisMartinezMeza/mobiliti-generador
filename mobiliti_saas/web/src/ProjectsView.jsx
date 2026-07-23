@@ -14,22 +14,34 @@ const EMPTY_PROJECT_QUOTE_FIELDS = Object.freeze({
   descuento: "40",
 });
 
-export async function createNewProject(request, onOpenProject) {
-  const data = await request("/projects", {
-    method: "POST",
-    body: JSON.stringify({
-      name: "Nuevo Proyecto",
-      payload: serializeProject({
-        quoteFields: {...EMPTY_PROJECT_QUOTE_FIELDS},
-        sections: createInitialMixedCartSections(),
-        lines: [],
+export async function createNewProject(
+  request,
+  onActivateProject,
+  projectState = null,
+  inFlightRef = {current: false},
+) {
+  if (inFlightRef.current) return null;
+  inFlightRef.current = true;
+  try {
+    const state = projectState || {
+      quoteFields: {...EMPTY_PROJECT_QUOTE_FIELDS},
+      sections: createInitialMixedCartSections(),
+      lines: [],
+    };
+    const data = await request("/projects", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Nuevo Proyecto",
+        payload: serializeProject(state),
       }),
-    }),
-  });
-  const created = data?.project;
-  if (!created?.id) throw new Error("Respuesta de Proyecto invÃ¡lida");
-  onOpenProject(created.id);
-  return created;
+    });
+    const created = data?.project;
+    if (!created?.id || !created?.payload) throw new Error("Respuesta de Proyecto invÃ¡lida");
+    onActivateProject(created);
+    return created;
+  } finally {
+    inFlightRef.current = false;
+  }
 }
 
 function formatDate(value) {
@@ -76,13 +88,20 @@ function ProjectCard({ project, activeProjectId, busyProjectId, onOpenProject, o
   );
 }
 
-export default function ProjectsView({ request, onOpenProject, activeProjectId }) {
+export default function ProjectsView({
+  request,
+  onOpenProject,
+  onActivateProject,
+  projectDraft,
+  activeProjectId,
+}) {
   const [activeProjects, setActiveProjects] = useState([]);
   const [archivedProjects, setArchivedProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [busyProjectId, setBusyProjectId] = useState("");
   const [error, setError] = useState("");
+  const creatingRef = useRef(false);
   const abortControllerRef = useRef(null);
   const loadGuardRef = useRef(null);
 
@@ -162,11 +181,11 @@ export default function ProjectsView({ request, onOpenProject, activeProjectId }
   }
 
   async function createProject() {
-    if (!canUpdate() || creating) return;
+    if (!canUpdate() || creatingRef.current) return;
     setCreating(true);
     setError("");
     try {
-      await createNewProject(request, onOpenProject);
+      await createNewProject(request, onActivateProject, projectDraft, creatingRef);
     } catch (failure) {
       if (canUpdate()) setError(failure.message || "No se pudo crear el Proyecto.");
     } finally {

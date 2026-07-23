@@ -55,6 +55,40 @@ npm.cmd --prefix mobiliti_saas/web run build
 vite build: PASS
 ```
 
+## Remediacion del rereview independiente
+
+Fecha: 2026-07-23
+
+Se corrigieron los dos hallazgos Important restantes de
+`.superpowers/sdd/project-editor-task-5-rereview.md`:
+
+1. Importar una Quotation sin Proyecto activo ya no reemplaza secciones ni lineas.
+   El borrador se conserva en `App`, se muestra un mensaje accionable y se navega a
+   Proyectos. El borrador se adopta al crear un Proyecto o al abrir uno existente.
+2. `Nuevo Proyecto` adopta el estado local completo en un unico `POST /projects`,
+   incluida una importacion pendiente, y activa directamente la respuesta hidratada.
+   Un guard con `useRef` impide POST duplicados durante clics concurrentes.
+
+Evidencia RED:
+
+```text
+python -m pytest tests/test_mixed_catalog_cart_ui.py -k "pending_import_draft_is_adopted" -q
+1 failed: Missing JavaScript helper: projectStateWithImportDraft
+
+python -m pytest tests/test_project_ui.py -k "blocked_import_is_parked" -q
+1 failed: el flujo no estacionaba el borrador ni navegaba a Proyectos
+```
+
+Verificacion final:
+
+```text
+python -m pytest tests/test_project_ui.py tests/test_project_model_ui.py tests/test_project_autosave_ui.py tests/test_mixed_catalog_cart_ui.py tests/test_project_api.py -q
+124 passed in 18.60s
+
+npm.cmd --prefix mobiliti_saas/web run build
+vite build: PASS (1712 modules transformed)
+```
+
 En esta mÃ¡quina `npm.ps1` estÃ¡ bloqueado por la Execution Policy de PowerShell, por lo que se usÃ³ el ejecutable oficial `npm.cmd`.
 
 ## Alcance y riesgos residuales

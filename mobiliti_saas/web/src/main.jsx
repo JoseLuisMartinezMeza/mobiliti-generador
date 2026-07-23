@@ -2135,6 +2135,44 @@ function createMixedQuoteController({
   };
 }
 
+function importQuotationPreviewForProject({
+  activeProject,
+  preview,
+  options,
+  controller,
+  onBlocked,
+}) {
+  if (!activeProject?.id) {
+    onBlocked();
+    return false;
+  }
+  return controller.importPreview(preview, options);
+}
+
+function projectStateWithImportDraft(baseState, pendingImportDraft) {
+  if (!pendingImportDraft) return baseState;
+  const {preview, options} = pendingImportDraft;
+  const bundle = createImportedCartBundle(
+    preview,
+    options?.sourceCurrency,
+    options?.provider,
+    baseState.sections,
+  );
+  const adopted = replaceImportedCartBundle(
+    baseState.lines,
+    baseState.sections,
+    bundle,
+  );
+  return {
+    quoteFields: {
+      ...baseState.quoteFields,
+      ...(options?.quoteForm || {}),
+    },
+    sections: adopted.sections,
+    lines: adopted.lines,
+  };
+}
+
 function App() {
   const [session, setSession] = useState(() => {
     try {
@@ -2166,6 +2204,7 @@ function App() {
   const [mixedQuoteBusy, setMixedQuoteBusy] = useState(false);
   const [mixedQuoteError, setMixedQuoteError] = useState("");
   const [mixedQuoteNotice, setMixedQuoteNotice] = useState("");
+  const [pendingImportDraft, setPendingImportDraft] = useState(null);
   const mixedQuoteSubmittingRef = useRef(false);
   const mixedQuoteSessionEpochRef = useRef(0);
   const mixedImportRevisionRef = useRef(0);
@@ -2182,6 +2221,16 @@ function App() {
       lines: mixedCart,
     } : null
   ), [activeProject, mixedCart, mixedCartSections, mixedQuote]);
+  const projectDraftForCreation = useMemo(() => projectStateWithImportDraft({
+    quoteFields: mixedQuote,
+    sections: mixedCartSections,
+    lines: mixedCart,
+  }, pendingImportDraft), [
+    mixedCart,
+    mixedCartSections,
+    mixedQuote,
+    pendingImportDraft,
+  ]);
   const projectSaveSnapshot = useMemo(() => (
     editorProject ? {
       id: editorProject.id,
@@ -2291,6 +2340,7 @@ function App() {
       setDeleteState(null);
       setActiveProjectId("");
       setActiveProject(null);
+      setPendingImportDraft(null);
       setProjectChangeVersion(0);
       setView("cotizaciones");
       setSessionNotice(AUTH_EXPIRED_MESSAGE);
@@ -2327,6 +2377,7 @@ function App() {
     setSessionNotice("");
     setActiveProjectId("");
     setActiveProject(null);
+    setPendingImportDraft(null);
     setProjectChangeVersion(0);
   }
 
@@ -2368,7 +2419,20 @@ function App() {
   }
 
   function importQuotationPreview(preview, options) {
-    return mixedQuoteController.importPreview(preview, options);
+    return importQuotationPreviewForProject({
+      activeProject,
+      preview,
+      options,
+      controller: mixedQuoteController,
+      onBlocked: () => {
+        setPendingImportDraft({preview, options});
+        setMixedQuoteError(
+          "Crea o abre un Proyecto desde Proyectos. El borrador importado se conservarÃ¡.",
+        );
+        setMixedCartOpen(false);
+        setView("proyectos");
+      },
+    });
   }
 
   function removeMixedCartLineFromApp(key) {
@@ -2403,6 +2467,27 @@ function App() {
     setMixedCartOpen(true);
   }
 
+  function activateCreatedProject(created) {
+    const hydrated = hydrateProject(created.payload);
+    projectLoadEpochRef.current += 1;
+    mixedCartRef.current = hydrated.lines;
+    mixedCartSectionsRef.current = hydrated.sections;
+    setMixedCart(hydrated.lines);
+    setMixedCartSections(hydrated.sections);
+    setMixedQuote({...EMPTY_MIXED_QUOTE, ...hydrated.quoteFields});
+    setActiveProjectId(created.id);
+    setActiveProject({
+      id: created.id,
+      name: created.name,
+      revision: created.revision,
+    });
+    setPendingImportDraft(null);
+    setProjectChangeVersion(0);
+    setProjectLoadState({status: "ready", message: ""});
+    setMixedQuoteError("");
+    setView("project-editor");
+  }
+
   async function openProject(projectId) {
     if (!activeProject && mixedCartRef.current.length) {
       setMixedQuoteError(
@@ -2425,17 +2510,19 @@ function App() {
       if (projectLoadEpochRef.current !== loadEpoch) return;
       if (!data?.project?.payload) throw new Error("Respuesta de Proyecto invÃ¡lida");
       const hydrated = hydrateProject(data.project.payload);
-      mixedCartRef.current = hydrated.lines;
-      mixedCartSectionsRef.current = hydrated.sections;
-      setMixedCart(hydrated.lines);
-      setMixedCartSections(hydrated.sections);
-      setMixedQuote({...EMPTY_MIXED_QUOTE, ...hydrated.quoteFields});
+      const adopted = projectStateWithImportDraft(hydrated, pendingImportDraft);
+      mixedCartRef.current = adopted.lines;
+      mixedCartSectionsRef.current = adopted.sections;
+      setMixedCart(adopted.lines);
+      setMixedCartSections(adopted.sections);
+      setMixedQuote({...EMPTY_MIXED_QUOTE, ...adopted.quoteFields});
       setActiveProject({
         id: data.project.id,
         name: data.project.name,
         revision: data.project.revision,
       });
-      setProjectChangeVersion(0);
+      setPendingImportDraft(null);
+      setProjectChangeVersion(pendingImportDraft ? 1 : 0);
       setProjectLoadState({status: "ready", message: ""});
     } catch (failure) {
       if (projectLoadEpochRef.current !== loadEpoch) return;
@@ -2525,7 +2612,15 @@ function App() {
   const mainView = view === "cotizaciones"
     ? <QuotesView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} onCreateNew={() => setView("nueva")} refreshJobs={refreshJobs} downloadState={downloadState} deleteState={deleteState} />
     : view === "proyectos"
-      ? <ProjectsView request={request} onOpenProject={openProject} activeProjectId={activeProjectId} />
+      ? (
+        <ProjectsView
+          request={request}
+          onOpenProject={openProject}
+          onActivateProject={activateCreatedProject}
+          projectDraft={projectDraftForCreation}
+          activeProjectId={activeProjectId}
+        />
+      )
       : view === "project-editor"
         ? projectLoadState.status === "loading"
           ? <section className="project-editor-loading" role="status">Cargando Proyectoâ€¦</section>

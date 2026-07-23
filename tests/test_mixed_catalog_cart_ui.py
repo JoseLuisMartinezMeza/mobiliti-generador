@@ -1434,6 +1434,102 @@ def test_imported_preview_replaces_only_imported_lines_without_intermediate_cart
     assert {line["sectionId"] for line in result["lines"]} <= {section["id"] for section in result["sections"]}
 
 
+def test_import_preview_without_active_project_keeps_draft_and_does_not_mutate_lines():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("importQuotationPreviewForProject",),
+        r"""
+      const preview = {import_id: "11111111-1111-4111-8111-111111111111"};
+      const state = {draft: preview, importCalls: 0, blocked: 0};
+      const imported = importQuotationPreviewForProject({
+        activeProject: null,
+        preview,
+        options: {sourceCurrency: "USD", provider: "Proveedor"},
+        controller: {
+          importPreview() {
+            state.importCalls += 1;
+            return true;
+          },
+        },
+        onBlocked() { state.blocked += 1; },
+      });
+      if (imported) state.draft = null;
+      console.log(JSON.stringify({
+        imported,
+        draftRetained: state.draft === preview,
+        importCalls: state.importCalls,
+        blocked: state.blocked,
+      }));
+        """,
+    )
+    assert result == {
+        "imported": False,
+        "draftRetained": True,
+        "importCalls": 0,
+        "blocked": 1,
+    }
+
+
+def test_pending_import_draft_is_adopted_without_mutating_the_local_state():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("projectStateWithImportDraft",),
+        r"""
+      const importId = "11111111-1111-4111-8111-111111111111";
+      const base = {
+        quoteFields: {proyecto: "Base"},
+        sections: createInitialMixedCartSections(),
+        lines: [],
+      };
+      const pending = {
+        preview: {
+          import_id: importId,
+          original_filename: "Proveedor.xlsx",
+          provider: "Proveedor detectado",
+          source_currency: "USD",
+          sections: [{id: "source-section", title: "Sala", item_keys: [`import:${importId}:9`]}],
+          items: [{
+            key: `import:${importId}:9`,
+            source_row: 9,
+            name: "Producto importado",
+            description: "",
+            dimension: "",
+            quantity: "2",
+            unit_price: "10",
+            source_currency: "USD",
+            image_url: "",
+          }],
+        },
+        options: {
+          sourceCurrency: "USD",
+          provider: "Proveedor elegido",
+          quoteForm: {proyecto: "Desde importacion"},
+        },
+      };
+      const adopted = projectStateWithImportDraft(base, pending);
+      console.log(JSON.stringify({
+        baseLines: base.lines.length,
+        baseProject: base.quoteFields.proyecto,
+        adoptedLines: adopted.lines.length,
+        adoptedName: adopted.lines[0].snapshot.name,
+        adoptedProvider: adopted.lines[0].provider,
+        adoptedProject: adopted.quoteFields.proyecto,
+        validSections: adopted.lines.every(line =>
+          adopted.sections.some(section => section.id === line.sectionId)),
+      }));
+        """,
+    )
+    assert result == {
+        "baseLines": 0,
+        "baseProject": "Base",
+        "adoptedLines": 1,
+        "adoptedName": "Producto importado",
+        "adoptedProvider": "Proveedor elegido",
+        "adoptedProject": "Desde importacion",
+        "validSections": True,
+    }
+
+
 def test_reimporting_same_preview_changes_editor_revision_and_resets_canonical_model():
     result = run_ui_helper_js(
         "mobiliti_saas/web/src/main.jsx",

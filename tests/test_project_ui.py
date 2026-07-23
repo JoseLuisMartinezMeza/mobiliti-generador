@@ -226,7 +226,21 @@ def test_catalog_add_requires_active_project_and_projects_view_creates_one():
     assert 'request("/projects", {' in projects
     assert 'method: "POST"' in projects
     assert "payload: serializeProject(" in projects
-    assert "onOpenProject(created.id)" in projects
+    assert "onActivateProject(created)" in projects
+    assert "creatingRef.current" in projects
+    assert "activateCreatedProject" in main
+    assert "projectDraft={projectDraftForCreation}" in main
+    assert "onActivateProject={activateCreatedProject}" in main
+
+
+def test_blocked_import_is_parked_and_routes_to_projects():
+    main = MAIN.read_text(encoding="utf-8")
+    start = main.index("function importQuotationPreview(preview, options)")
+    end = main.index("function removeMixedCartLineFromApp", start)
+    import_flow = main[start:end]
+    assert "setPendingImportDraft({preview, options})" in import_flow
+    assert 'setView("proyectos")' in import_flow
+    assert "El borrador importado se conservar" in import_flow
 
 
 def test_new_project_flow_posts_backend_valid_payload_then_opens_created_project():
@@ -242,17 +256,42 @@ def test_new_project_flow_posts_backend_valid_payload_then_opens_created_project
             appType: "custom",
           }});
           const module = await server.ssrLoadModule({json.dumps(projects_url)});
+          const model = await server.ssrLoadModule("/src/mixedCart.js");
+          const line = model.createMixedCartLine({{
+            catalog: "cr-global",
+            identity: {{internal_id: "cr:1", base_option_id: "", add_on_option_ids: []}},
+            officialCode: "CR-1",
+            provider: "cr-global",
+            quantity: "2",
+            quantityRules: {{min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true}},
+            snapshot: {{name: "Silla CR", code: "CR-1", image_url: "", unit: "PZA",
+              availability: "", configuration: "", warnings: []}},
+          }});
+          const projectState = {{
+            quoteFields: {{proyecto: "Adoptado", cliente: "", correo: "", telefono: "",
+              direccion: "", razon_social: "", quote_currency: "MXN", descuento: "40"}},
+            sections: model.createInitialMixedCartSections(),
+            lines: [line],
+          }};
           const calls = [];
-          const opened = [];
+          const activated = [];
           const created = await module.createNewProject(
             async (path, options) => {{
               calls.push({{path, options}});
-              return {{project: {{id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}}}};
+              const body = JSON.parse(options.body);
+              return {{project: {{
+                id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                name: body.name,
+                revision: 0,
+                payload: body.payload,
+              }}}};
             }},
-            (id) => opened.push(id),
+            (project) => activated.push(project),
+            projectState,
+            {{current: false}},
           );
           await server.close();
-          console.log(JSON.stringify({{calls, opened, created}}));
+          console.log(JSON.stringify({{calls, activated, created}}));
         """,
         text=True,
         encoding="utf-8",
@@ -266,8 +305,69 @@ def test_new_project_flow_posts_backend_valid_payload_then_opens_created_project
     body = json.loads(result["calls"][0]["options"]["body"])
     assert body["name"] == "Nuevo Proyecto"
     assert normalize_project_payload(body["payload"]) == body["payload"]
-    assert result["opened"] == ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]
+    assert body["payload"]["quote_fields"]["proyecto"] == "Adoptado"
+    assert len(body["payload"]["lines"]) == 1
+    assert result["activated"][0]["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert result["activated"][0]["payload"] == body["payload"]
     assert result["created"]["id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def test_new_project_flow_guards_duplicate_clicks_while_post_is_in_flight():
+    projects_url = PROJECTS_VIEW.resolve().as_uri()
+    vite_url = Path("mobiliti_saas/web/node_modules/vite/dist/node/index.js").resolve().as_uri()
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=f"""
+          import {{createServer}} from {json.dumps(vite_url)};
+          const server = await createServer({{
+            root: "mobiliti_saas/web",
+            server: {{middlewareMode: true}},
+            appType: "custom",
+          }});
+          const module = await server.ssrLoadModule({json.dumps(projects_url)});
+          let release;
+          const response = new Promise((resolve) => {{ release = resolve; }});
+          const calls = [];
+          const activated = [];
+          const inFlight = {{current: false}};
+          const projectState = null;
+          const request = async (path, options) => {{
+            calls.push({{path, options}});
+            return response;
+          }};
+          const first = module.createNewProject(request, (project) => activated.push(project), projectState, inFlight);
+          const second = module.createNewProject(request, (project) => activated.push(project), projectState, inFlight);
+          await new Promise((resolve) => setImmediate(resolve));
+          const callsBeforeRelease = calls.length;
+          release({{project: {{
+            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            name: "Nuevo Proyecto",
+            revision: 0,
+            payload: JSON.parse(calls[0].options.body).payload,
+          }}}});
+          const results = await Promise.all([first, second]);
+          await server.close();
+          console.log(JSON.stringify({{
+            callsBeforeRelease,
+            totalCalls: calls.length,
+            activated: activated.map((project) => project.id),
+            results: results.map((project) => project?.id || null),
+            inFlight: inFlight.current,
+          }}));
+        """,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "callsBeforeRelease": 1,
+        "totalCalls": 1,
+        "activated": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
+        "results": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", None],
+        "inFlight": False,
+    }
 
 
 def test_closed_quick_panel_is_unmounted_and_editor_images_have_fallback():
