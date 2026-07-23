@@ -285,6 +285,33 @@ def test_cached_catalog_persisted_quantity_rejects_backend_invalid_bounds(quanti
     assert result == "rejected"
 
 
+def test_backend_normalized_long_fixed_decimals_round_trip_for_catalog_and_imported():
+    catalog_payload = normalize_project_payload(catalog_project_payload("1e-31"))
+    imported_payload = normalize_project_payload(imported_project_payload("1e-31", "1e-31"))
+    catalog_quantity = catalog_payload["lines"][0]["quantity"]
+    imported_quantity = imported_payload["lines"][0]["quantity"]
+    imported_price = imported_payload["lines"][0]["unit_price"]
+    assert len(catalog_quantity) > 32
+    assert catalog_quantity == imported_quantity == imported_price
+
+    result = run_js(f"""
+      const catalog = {json.dumps(catalog_payload)};
+      const imported = {json.dumps(imported_payload)};
+      const catalogSaved = model.serializeProject(model.hydrateProject(catalog));
+      const importedSaved = model.serializeProject(model.hydrateProject(imported));
+      console.log(JSON.stringify({{
+        catalog: catalogSaved.lines[0].quantity,
+        importedQuantity: importedSaved.lines[0].quantity,
+        importedPrice: importedSaved.lines[0].unit_price,
+      }}));
+    """)
+    assert result == {
+        "catalog": catalog_quantity,
+        "importedQuantity": imported_quantity,
+        "importedPrice": imported_price,
+    }
+
+
 def imported_project_payload(quantity="1.0000001", unit_price="0.0000001"):
     return {
         "schema_version": 1,

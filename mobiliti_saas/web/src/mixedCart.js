@@ -365,8 +365,15 @@ function quantityFromMicrounits(value) {
   return fraction ? `${integer}.${fraction}` : String(integer);
 }
 
+function normalizedPersistedDecimalText(value, field) {
+  if (typeof value !== "string") throw new Error(`${field} invalido`);
+  const text = pythonStrip(value);
+  if (!text || IDENTITY_CONTROL_PATTERN.test(text)) throw new Error(`${field} invalido`);
+  return text;
+}
+
 function normalizedBackendProjectQuantity(value) {
-  const text = normalizedText(value, "Cantidad", { limit: 32 });
+  const text = normalizedPersistedDecimalText(value, "Cantidad");
   const normalized = text.replace(/_/g, "");
   const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(normalized);
   if (!match || match[1] === "-") throw new Error("Cantidad invalida");
@@ -403,7 +410,7 @@ function normalizedBackendProjectQuantity(value) {
 }
 
 function normalizedBackendImportedPrice(value) {
-  const text = normalizedText(value, "Precio importado", { limit: 32 });
+  const text = normalizedPersistedDecimalText(value, "Precio importado");
   const normalized = text.replace(/_/g, "");
   const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(normalized);
   if (!match) throw new Error("Precio importado invalido");
