@@ -2137,16 +2137,17 @@ function createMixedQuoteController({
 
 function importQuotationPreviewForProject({
   activeProject,
+  allowed,
   preview,
   options,
   controller,
   onBlocked,
 }) {
-  if (!activeProject?.id) {
-    onBlocked();
-    return false;
-  }
-  return controller.importPreview(preview, options);
+  return runProjectLineEntry({
+    allowed: allowed ?? Boolean(activeProject?.id),
+    mutate: () => controller.importPreview(preview, options),
+    onBlocked,
+  });
 }
 
 function projectStateWithImportDraft(baseState, pendingImportDraft) {
@@ -2164,13 +2165,65 @@ function projectStateWithImportDraft(baseState, pendingImportDraft) {
     bundle,
   );
   return {
-    quoteFields: {
-      ...baseState.quoteFields,
-      ...(options?.quoteForm || {}),
-    },
+    quoteFields: Object.fromEntries(
+      Object.entries(baseState.quoteFields).map(([field, value]) => (
+        [field, options?.quoteForm?.[field] ?? value]
+      )),
+    ),
     sections: adopted.sections,
     lines: adopted.lines,
   };
+}
+
+function projectDraftForNewProject({
+  activeProject,
+  pendingImportDraft,
+  localState,
+  emptyState,
+}) {
+  const hasRecoverableOrphan = !activeProject
+    && (localState.lines.length > 0 || Boolean(pendingImportDraft));
+  if (!hasRecoverableOrphan) return emptyState;
+  return projectStateWithImportDraft(localState, pendingImportDraft);
+}
+
+function loadProjectSnapshot({
+  request,
+  projectId,
+  adoptionDraft,
+  hydrate,
+}) {
+  return request(`/projects/${projectId}`).then((data) => {
+    if (!data?.project?.payload) throw new Error("Respuesta de Proyecto inválida");
+    const hydrated = hydrate(data.project.payload);
+    return {
+      project: {
+        id: data.project.id,
+        name: data.project.name,
+        revision: data.project.revision,
+      },
+      state: projectStateWithImportDraft(hydrated, adoptionDraft),
+      adoptionDraft,
+    };
+  });
+}
+
+function canMutateProject({
+  activeProject,
+  projectLoadStatus,
+  autosaveStatus,
+}) {
+  return Boolean(activeProject?.id)
+    && projectLoadStatus !== "loading"
+    && autosaveStatus !== "conflict";
+}
+
+function runProjectLineEntry({allowed, mutate, onBlocked}) {
+  if (!allowed) {
+    onBlocked();
+    return false;
+  }
+  return mutate();
 }
 
 function saveProjectSnapshot({
@@ -2259,11 +2312,39 @@ function App() {
       lines: mixedCart,
     } : null
   ), [activeProject, mixedCart, mixedCartSections, mixedQuote]);
-  const projectDraftForCreation = useMemo(() => projectStateWithImportDraft({
-    quoteFields: mixedQuote,
-    sections: mixedCartSections,
-    lines: mixedCart,
-  }, pendingImportDraft), [
+  const projectDraftForCreation = useMemo(() => projectDraftForNewProject({
+    activeProject,
+    pendingImportDraft,
+    localState: {
+      quoteFields: {
+        proyecto: mixedQuote.proyecto,
+        cliente: mixedQuote.cliente,
+        correo: mixedQuote.correo,
+        telefono: mixedQuote.telefono,
+        direccion: mixedQuote.direccion,
+        razon_social: mixedQuote.razon_social,
+        quote_currency: mixedQuote.quote_currency,
+        descuento: mixedQuote.descuento,
+      },
+      sections: mixedCartSections,
+      lines: mixedCart,
+    },
+    emptyState: {
+      quoteFields: {
+        proyecto: "",
+        cliente: "",
+        correo: "",
+        telefono: "",
+        direccion: "",
+        razon_social: "",
+        quote_currency: "MXN",
+        descuento: "40",
+      },
+      sections: createInitialMixedCartSections(),
+      lines: [],
+    },
+  }), [
+    activeProject,
     mixedCart,
     mixedCartSections,
     mixedQuote,
@@ -2297,11 +2378,18 @@ function App() {
   }), [request]);
   const projectAutosave = useProjectAutosave({
     project: projectSaveSnapshot,
-    projectKey: activeProject?.id || "",
+    projectKey: activeProject
+      ? `${activeProject.id}:${activeProject.loadKey}`
+      : "",
     revision: activeProject?.revision || 0,
     changeVersion: projectChangeVersion,
     saveProject: saveActiveProject,
     enabled: Boolean(activeProject?.id),
+  });
+  const canMutateActiveProject = canMutateProject({
+    activeProject,
+    projectLoadStatus: projectLoadState.status,
+    autosaveStatus: projectAutosave.status,
   });
 
   async function waitForMixedQuoteJob(job, isCurrent) {
@@ -2431,14 +2519,32 @@ function App() {
     lumbro: "Lumbro"
   };
 
-  function addMixedCartLine(line) {
-    if (!activeProject?.id) {
-      setMixedQuoteError("Crea o abre un Proyecto antes de agregar productos.");
-      setMixedCartOpen(false);
-      setView("proyectos");
-      return false;
+  function blockExternalProjectEntry(pendingDraft = null) {
+    if (pendingDraft) {
+      pendingImportAdoptionRef.current = null;
+      setPendingImportDraft((current) => current || pendingDraft);
     }
-    return mixedQuoteController.add(line);
+    if (activeProject?.id) {
+      setMixedQuoteError(
+        "Reabre el Proyecto desde Proyectos para cargar la revisión vigente antes de continuar.",
+      );
+    } else if (pendingDraft) {
+      setMixedQuoteError(
+        "Crea o abre un Proyecto desde Proyectos. El borrador importado se conservará.",
+      );
+    } else {
+      setMixedQuoteError("Crea o abre un Proyecto antes de agregar productos.");
+    }
+    setMixedCartOpen(false);
+    setView("proyectos");
+  }
+
+  function addMixedCartLine(line) {
+    return runProjectLineEntry({
+      allowed: canMutateActiveProject,
+      mutate: () => mixedQuoteController.add(line),
+      onBlocked: () => blockExternalProjectEntry(),
+    });
   }
 
   function updateMixedCartLine(key, quantity) {
@@ -2460,18 +2566,11 @@ function App() {
   function importQuotationPreview(preview, options) {
     return importQuotationPreviewForProject({
       activeProject,
+      allowed: canMutateActiveProject,
       preview,
       options,
       controller: mixedQuoteController,
-      onBlocked: () => {
-        pendingImportAdoptionRef.current = null;
-        setPendingImportDraft({preview, options});
-        setMixedQuoteError(
-          "Crea o abre un Proyecto desde Proyectos. El borrador importado se conservarÃ¡.",
-        );
-        setMixedCartOpen(false);
-        setView("proyectos");
-      },
+      onBlocked: () => blockExternalProjectEntry({preview, options}),
     });
   }
 
@@ -2520,6 +2619,7 @@ function App() {
       id: created.id,
       name: created.name,
       revision: created.revision,
+      loadKey: projectLoadEpochRef.current,
     });
     pendingImportAdoptionRef.current = null;
     setPendingImportDraft(null);
@@ -2542,21 +2642,22 @@ function App() {
     }
     const loadEpoch = projectLoadEpochRef.current + 1;
     projectLoadEpochRef.current = loadEpoch;
-    setActiveProjectId(projectId);
-    setActiveProject(null);
     setProjectLoadState({status: "loading", message: ""});
     setView("project-editor");
     try {
-      const data = await request(`/projects/${projectId}`);
+      const loaded = await loadProjectSnapshot({
+        request,
+        projectId,
+        adoptionDraft: pendingImportDraft,
+        hydrate: hydrateProject,
+      });
       if (projectLoadEpochRef.current !== loadEpoch) return;
-      if (!data?.project?.payload) throw new Error("Respuesta de Proyecto invÃ¡lida");
-      const hydrated = hydrateProject(data.project.payload);
-      const adoptionDraft = pendingImportDraft;
-      const adopted = projectStateWithImportDraft(hydrated, adoptionDraft);
+      const adoptionDraft = loaded.adoptionDraft;
+      const adopted = loaded.state;
       pendingImportAdoptionRef.current = null;
       if (adoptionDraft) {
         pendingImportAdoptionRef.current = {
-          projectId: data.project.id,
+          projectId: loaded.project.id,
           operationId: "",
           draft: adoptionDraft,
         };
@@ -2566,10 +2667,10 @@ function App() {
       setMixedCart(adopted.lines);
       setMixedCartSections(adopted.sections);
       setMixedQuote({...EMPTY_MIXED_QUOTE, ...adopted.quoteFields});
+      setActiveProjectId(loaded.project.id);
       setActiveProject({
-        id: data.project.id,
-        name: data.project.name,
-        revision: data.project.revision,
+        ...loaded.project,
+        loadKey: loadEpoch,
       });
       setProjectChangeVersion(adoptionDraft ? 1 : 0);
       setProjectLoadState({status: "ready", message: ""});

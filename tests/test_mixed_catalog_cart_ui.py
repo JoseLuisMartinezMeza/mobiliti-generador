@@ -1437,7 +1437,7 @@ def test_imported_preview_replaces_only_imported_lines_without_intermediate_cart
 def test_import_preview_without_active_project_keeps_draft_and_does_not_mutate_lines():
     result = run_ui_helper_js(
         "mobiliti_saas/web/src/main.jsx",
-        ("importQuotationPreviewForProject",),
+        ("runProjectLineEntry", "importQuotationPreviewForProject"),
         r"""
       const preview = {import_id: "11111111-1111-4111-8111-111111111111"};
       const state = {draft: preview, importCalls: 0, blocked: 0};
@@ -1528,6 +1528,274 @@ def test_pending_import_draft_is_adopted_without_mutating_the_local_state():
         "adoptedProject": "Desde importacion",
         "validSections": True,
     }
+
+
+def test_new_project_from_active_project_uses_canonical_empty_state():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("projectDraftForNewProject", "projectStateWithImportDraft"),
+        r"""
+      const line = createMixedCartLine({
+        catalog: "alma",
+        identity: {internal_id: "alma:1", base_option_id: "", add_on_option_ids: []},
+        quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+        snapshot: {name: "Propiedad del activo", code: "A-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+      });
+      const emptyState = {
+        quoteFields: {
+          proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+          razon_social: "", quote_currency: "MXN", descuento: "40",
+        },
+        sections: createInitialMixedCartSections(),
+        lines: [],
+      };
+      const selected = projectDraftForNewProject({
+        activeProject: {id: "project-active"},
+        pendingImportDraft: null,
+        localState: {
+          quoteFields: {proyecto: "Proyecto activo"},
+          sections: createInitialMixedCartSections(),
+          lines: [line],
+        },
+        emptyState,
+      });
+      console.log(JSON.stringify({
+        isCanonicalEmpty: selected === emptyState,
+        project: selected.quoteFields.proyecto,
+        lines: selected.lines.length,
+      }));
+        """,
+    )
+    assert result == {
+        "isCanonicalEmpty": True,
+        "project": "",
+        "lines": 0,
+    }
+
+
+def test_new_project_without_active_project_adopts_pending_import():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("projectDraftForNewProject", "projectStateWithImportDraft"),
+        r"""
+      const importId = "11111111-1111-4111-8111-111111111111";
+      const emptyState = {
+        quoteFields: {
+          proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+          razon_social: "", quote_currency: "MXN", descuento: "40",
+        },
+        sections: createInitialMixedCartSections(),
+        lines: [],
+      };
+      const pendingImportDraft = {
+        preview: {
+          import_id: importId,
+          original_filename: "Proveedor.xlsx",
+          provider: "Proveedor",
+          source_currency: "USD",
+          sections: [{id: "source", title: "Sala", item_keys: [`import:${importId}:9`]}],
+          items: [{
+            key: `import:${importId}:9`, source_row: 9, name: "Importado",
+            description: "", dimension: "", quantity: "1", unit_price: "10",
+            source_currency: "USD", image_url: "",
+          }],
+        },
+        options: {
+          sourceCurrency: "USD",
+          provider: "Proveedor",
+          quoteForm: {proyecto: "Borrador recuperado", template: "no-persistir.xlsx"},
+        },
+      };
+      const selected = projectDraftForNewProject({
+        activeProject: null,
+        pendingImportDraft,
+        localState: emptyState,
+        emptyState,
+      });
+      console.log(JSON.stringify({
+        project: selected.quoteFields.proyecto,
+        quoteKeys: Object.keys(selected.quoteFields).sort(),
+        lines: selected.lines.length,
+        name: selected.lines[0].snapshot.name,
+      }));
+        """,
+    )
+    assert result == {
+        "project": "Borrador recuperado",
+        "quoteKeys": [
+            "cliente",
+            "correo",
+            "descuento",
+            "direccion",
+            "proyecto",
+            "quote_currency",
+            "razon_social",
+            "telefono",
+        ],
+        "lines": 1,
+        "name": "Importado",
+    }
+
+
+def test_failed_project_switch_keeps_previous_state_and_retry_can_succeed():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("loadProjectSnapshot", "projectStateWithImportDraft"),
+        r"""
+      const previous = {
+        project: {id: "project-a", name: "Proyecto A", revision: 3},
+        state: {
+          quoteFields: {proyecto: "A"},
+          sections: createInitialMixedCartSections(),
+          lines: [{key: "owned-by-a"}],
+        },
+      };
+      let visible = previous;
+      let attempts = 0;
+      const request = async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("network");
+        return {
+          project: {
+            id: "project-b",
+            name: "Proyecto B",
+            revision: 7,
+            payload: {quote_fields: {proyecto: "B"}, sections: [], lines: []},
+          },
+        };
+      };
+      try {
+        visible = await loadProjectSnapshot({
+          request,
+          projectId: "project-b",
+          adoptionDraft: null,
+          hydrate: value => ({
+            quoteFields: value.quote_fields,
+            sections: createInitialMixedCartSections(),
+            lines: [],
+          }),
+        });
+      } catch {}
+      const afterFailure = {
+        projectId: visible.project.id,
+        line: visible.state.lines[0].key,
+      };
+      const loaded = await loadProjectSnapshot({
+        request,
+        projectId: "project-b",
+        adoptionDraft: null,
+        hydrate: value => ({
+          quoteFields: value.quote_fields,
+          sections: createInitialMixedCartSections(),
+          lines: [],
+        }),
+      });
+      visible = {project: loaded.project, state: loaded.state};
+      console.log(JSON.stringify({
+        attempts,
+        afterFailure,
+        afterSuccess: {
+          projectId: visible.project.id,
+          revision: visible.project.revision,
+          projectName: visible.state.quoteFields.proyecto,
+        },
+      }));
+        """,
+    )
+    assert result == {
+        "attempts": 2,
+        "afterFailure": {
+            "projectId": "project-a",
+            "line": "owned-by-a",
+        },
+        "afterSuccess": {
+            "projectId": "project-b",
+            "revision": 7,
+            "projectName": "B",
+        },
+    }
+
+
+def test_conflict_blocks_catalog_add_and_import_without_mutating_project():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("canMutateProject", "runProjectLineEntry", "importQuotationPreviewForProject"),
+        r"""
+      const state = {mutations: 0, changeVersion: 5, blocked: 0, draft: null};
+      const activeProject = {id: "project-a"};
+      const allowed = canMutateProject({
+        activeProject,
+        projectLoadStatus: "ready",
+        autosaveStatus: "conflict",
+      });
+      const onBlocked = value => {
+        state.blocked += 1;
+        if (value) state.draft = value;
+      };
+      const addResult = runProjectLineEntry({
+        allowed,
+        mutate() {
+          state.mutations += 1;
+          state.changeVersion += 1;
+          return true;
+        },
+        onBlocked,
+      });
+      const preview = {import_id: "pending-import"};
+      const options = {sourceCurrency: "USD", provider: "Proveedor"};
+      const importResult = importQuotationPreviewForProject({
+        activeProject,
+        allowed,
+        preview,
+        options,
+        controller: {
+          importPreview() {
+            state.mutations += 1;
+            state.changeVersion += 1;
+            return true;
+          },
+        },
+        onBlocked: () => onBlocked({preview, options}),
+      });
+      console.log(JSON.stringify({
+        allowed,
+        addResult,
+        importResult,
+        mutations: state.mutations,
+        changeVersion: state.changeVersion,
+        blocked: state.blocked,
+        retainedDraft: state.draft?.preview === preview,
+      }));
+        """,
+    )
+    assert result == {
+        "allowed": False,
+        "addResult": False,
+        "importResult": False,
+        "mutations": 0,
+        "changeVersion": 5,
+        "blocked": 2,
+        "retainedDraft": True,
+    }
+
+
+def test_loading_target_blocks_external_line_entry():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("canMutateProject",),
+        r"""
+      console.log(JSON.stringify({
+        allowed: canMutateProject({
+          activeProject: {id: "project-a"},
+          projectLoadStatus: "loading",
+          autosaveStatus: "saved",
+        }),
+      }));
+        """,
+    )
+    assert result == {"allowed": False}
 
 
 def test_confirmed_adoption_save_clears_only_its_pending_import_draft():

@@ -89,6 +89,45 @@ npm.cmd --prefix mobiliti_saas/web run build
 vite build: PASS (1712 modules transformed)
 ```
 
+## Remediacion de la revision de aprobacion
+
+Fecha: 2026-07-23
+
+Se corrigieron los tres hallazgos Important de
+`.superpowers/sdd/project-editor-task-5-approval-review.md`:
+
+1. `Nuevo Proyecto` usa el estado vacio canonico cuando ya existe un Proyecto activo.
+   Solo adopta lineas huerfanas o una importacion pendiente cuando no hay Proyecto
+   activo; la accion separada `Duplicar` conserva su responsabilidad original.
+2. El cambio de Proyecto es atomico: la identidad, lineas, secciones y datos anteriores
+   permanecen visibles/propietarios hasta completar GET, hidratacion y validacion. Un
+   fallo no desposee el estado anterior y el mismo destino puede reintentarse. Cada
+   carga confirmada recibe una clave de instancia para sincronizar tambien una reapertura
+   del mismo ID tras conflicto.
+3. `canMutateProject` centraliza la regla para entradas externas. Catalogos e importacion
+   se bloquean durante carga o conflicto 409 con la misma instruccion de reapertura, sin
+   mutar lineas ni incrementar la version. El borrador importado se conserva.
+
+Evidencia RED:
+
+```text
+python -m pytest tests/test_mixed_catalog_cart_ui.py -k "new_project_from_active or new_project_without_active or failed_project_switch or conflict_blocks_catalog or loading_target_blocks" -q
+5 failed: faltaban seleccion de payload, carga atomica y regla central
+
+python -m pytest tests/test_project_ui.py -k "draft_distinguishes or commits_identity_only or external_line_entries_share" -q
+3 failed: App aun usaba los flujos anteriores
+```
+
+Verificacion final:
+
+```text
+python -m pytest tests/test_project_autosave_ui.py tests/test_project_ui.py tests/test_project_model_ui.py tests/test_mixed_catalog_cart_ui.py tests/test_project_api.py -q
+139 passed in 27.72s
+
+npm.cmd --prefix mobiliti_saas/web run build
+vite build: PASS (1712 modules transformed)
+```
+
 En esta mÃ¡quina `npm.ps1` estÃ¡ bloqueado por la Execution Policy de PowerShell, por lo que se usÃ³ el ejecutable oficial `npm.cmd`.
 
 ## Alcance y riesgos residuales
