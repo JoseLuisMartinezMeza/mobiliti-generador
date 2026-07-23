@@ -936,9 +936,14 @@ export function upsertMixedCartLine(lines, incoming) {
 
 export function updateMixedCartQuantity(lines, key, quantity) {
   if (!lines.some((line) => line.key === key)) throw new Error("Linea de carrito no encontrada");
-  return lines.map((line) => (
-    line.key === key ? { ...line, quantity: validateLineQuantity(line, quantity) } : line
-  ));
+  return lines.map((line) => {
+    if (line.key !== key) return line;
+    if (line.projectQuantityFallback === true && line.projectQuantityRulesCache === true) {
+      const { projectQuantityFallback, projectQuantityRulesCache, ...interactiveLine } = line;
+      return { ...interactiveLine, quantity: validateLineQuantity(interactiveLine, quantity) };
+    }
+    return { ...line, quantity: validateLineQuantity(line, quantity) };
+  });
 }
 
 export function removeMixedCartLine(lines, key) {
@@ -1142,7 +1147,7 @@ function hydrateProjectCatalogIdentity(catalog, identity) {
   return identity;
 }
 
-function hydrateCatalogLineWithoutQuantityRules(line) {
+function hydratePersistedCatalogLine(line, quantityRules, hasQuantityRulesCache) {
   if (!MIXED_CATALOGS.includes(line.catalog)) throw new Error("Catalogo mixto no soportado");
   const role = normalizedProjectRole(line.role);
   const parentLineId = line.parent_line_id == null ? null : normalizedProjectLineId(line.parent_line_id);
@@ -1167,8 +1172,9 @@ function hydrateCatalogLineWithoutQuantityRules(line) {
     quantityMode,
     position: normalizedPosition(line.position),
     quantity: normalizedBackendProjectQuantity(line.quantity),
-    quantityRules: defaultProjectQuantityRules(),
+    quantityRules,
     projectQuantityFallback: true,
+    projectQuantityRulesCache: hasQuantityRulesCache,
     snapshot,
     sectionId: role === "principal" ? line.section_id : null,
   };
@@ -1297,11 +1303,15 @@ function serializeProjectLine(line, sectionIds) {
   if (relationship.role === "complement") common.quantity_mode = relationship.quantityMode;
   if (common.source === "catalog") {
     if (line.projectQuantityFallback === true) {
-      return {
+      const result = {
         ...common,
         catalog: line.catalog,
         identity: normalizedIdentity(line.catalog, line.identity),
       };
+      if (line.projectQuantityRulesCache === true) {
+        result.quantity_rules_cache = hydrateProjectQuantityRules(line.quantityRules);
+      }
+      return result;
     }
     const copied = createMixedCartLine(line);
     return {
@@ -1380,23 +1390,14 @@ function hydrateCatalogProjectLine(line) {
     throw new Error("Linea de Proyecto invalida");
   }
   if (line.source !== "catalog") throw new Error("Origen de linea invalido");
-  if (!hasOwn(line, "quantity_rules_cache")) {
-    return hydrateCatalogLineWithoutQuantityRules(line);
-  }
-  return createMixedCartLine({
-    catalog: line.catalog,
-    identity: hydrateProjectCatalogIdentity(line.catalog, line.identity),
-    quantity: line.quantity,
-    quantityRules: hydrateProjectQuantityRules(line.quantity_rules_cache),
-    snapshot: hydrateProjectDisplayCache(line.display_cache),
-    lineId: line.line_id,
-    officialCode: line.official_code,
-    role: line.role,
-    sectionId: line.section_id,
-    parentLineId: line.parent_line_id,
-    quantityMode: line.quantity_mode ?? null,
-    position: line.position,
-  });
+  const hasQuantityRulesCache = hasOwn(line, "quantity_rules_cache");
+  return hydratePersistedCatalogLine(
+    line,
+    hasQuantityRulesCache
+      ? hydrateProjectQuantityRules(line.quantity_rules_cache)
+      : defaultProjectQuantityRules(),
+    hasQuantityRulesCache,
+  );
 }
 
 function hydrateImportedProjectLine(line) {

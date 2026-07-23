@@ -221,6 +221,70 @@ def test_no_cache_catalog_fallback_matches_backend_decimal_boundaries():
     ]
 
 
+def catalog_project_payload(quantity="1.0000001"):
+    return {
+        "schema_version": 1,
+        "quote_fields": {
+            "proyecto": "", "cliente": "", "correo": "", "telefono": "",
+            "direccion": "", "razon_social": "", "quote_currency": "MXN", "descuento": "40",
+        },
+        "sections": [{"section_id": "section-1", "concept": "RecepciÃ³n", "position": 0}],
+        "lines": [{
+            "line_id": "11111111-1111-4111-8111-111111111111",
+            "role": "principal", "section_id": "section-1", "parent_line_id": None,
+            "position": 0, "quantity": quantity, "source": "catalog", "catalog": "sunon",
+            "official_code": "CHAIR-1", "display_cache": {
+                "name": "Silla", "code": "CHAIR-1", "image_url": "",
+            },
+            "identity": {
+                "internal_id": "sunon:chair", "base_option_id": "", "add_on_option_ids": [],
+            },
+            "quantity_rules_cache": {
+                "min": "1", "step": "1", "maxDecimals": 0, "max": "1000000", "integer": True,
+            },
+        }],
+    }
+
+
+def test_cached_catalog_persisted_quantity_uses_backend_decimal_contract():
+    payload = normalize_project_payload(catalog_project_payload())
+    assert payload["lines"][0]["quantity"] == "1.0000001"
+
+    result = run_js(f"""
+      const payload = {json.dumps(payload)};
+      const reopened = model.hydrateProject(payload);
+      const saved = model.serializeProject(reopened);
+      console.log(JSON.stringify({{
+        quantity: reopened.lines[0].quantity,
+        persistedFallback: reopened.lines[0].projectQuantityFallback,
+        savedQuantity: saved.lines[0].quantity,
+        savedRules: saved.lines[0].quantity_rules_cache,
+      }}));
+    """)
+    assert result == {
+        "quantity": "1.0000001",
+        "persistedFallback": True,
+        "savedQuantity": "1.0000001",
+        "savedRules": {
+            "min": "1", "step": "1", "maxDecimals": 0, "max": "1000000", "integer": True,
+        },
+    }
+
+
+@pytest.mark.parametrize("quantity", ["0", "-1", "1000000.0000001"])
+def test_cached_catalog_persisted_quantity_rejects_backend_invalid_bounds(quantity):
+    payload = catalog_project_payload(quantity)
+    with pytest.raises(ValueError):
+        normalize_project_payload(payload)
+
+    result = run_js(f"""
+      const payload = {json.dumps(payload)};
+      try {{ model.hydrateProject(payload); console.log(JSON.stringify("accepted")); }}
+      catch {{ console.log(JSON.stringify("rejected")); }}
+    """)
+    assert result == "rejected"
+
+
 def imported_project_payload(quantity="1.0000001", unit_price="0.0000001"):
     return {
         "schema_version": 1,
