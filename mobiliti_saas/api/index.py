@@ -614,11 +614,33 @@ def _storage_req(method: str, path: str, json_data=None):
         raise RuntimeError(f"Supabase Storage connection error: {e.reason}") from e
 
 
+class _StorageObjectNotFound(RuntimeError):
+    """Indica una ausencia confirmada por el proveedor de storage."""
+
+
+class _StorageObjectAlreadyExists(RuntimeError):
+    """Indica que una escritura condicional encontro un objeto existente."""
+
+
+def _r2_error_details(exc: Exception) -> tuple[str | None, int | None]:
+    """Extrae un codigo estructurado de errores compatibles con boto3/R2."""
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return None, None
+    error = response.get("Error")
+    metadata = response.get("ResponseMetadata")
+    code = error.get("Code") if isinstance(error, dict) else None
+    status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
+    return str(code) if code is not None else None, status if isinstance(status, int) else None
+
+
 def _storage_download_bytes(path: str) -> bytes:
     """Descarga un objeto privado del proveedor de storage desde backend."""
     if DEV_MODE:
         try:
             return _dev_storage_file(path).read_bytes()
+        except FileNotFoundError as exc:
+            raise _StorageObjectNotFound("Objeto de storage no encontrado") from exc
         except OSError as exc:
             raise RuntimeError("Dev storage download error") from exc
     if _use_r2_storage():
@@ -626,6 +648,9 @@ def _storage_download_bytes(path: str) -> bytes:
             obj = _r2_client().get_object(Bucket=R2_BUCKET, Key=path.strip("/"))
             return obj["Body"].read()
         except Exception as exc:
+            code, status = _r2_error_details(exc)
+            if code in {"NoSuchKey", "NotFound", "404"} or status == 404:
+                raise _StorageObjectNotFound("Objeto de storage no encontrado") from exc
             raise RuntimeError(f"Cloudflare R2 download error: {exc.__class__.__name__}") from exc
 
     if not SUPABASE_URL:
@@ -643,6 +668,8 @@ def _storage_download_bytes(path: str) -> bytes:
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.read()
     except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise _StorageObjectNotFound("Objeto de storage no encontrado") from e
         body = e.read().decode("utf-8")
         raise RuntimeError(_safe_http_error("Supabase Storage", e.code, body)) from e
     except urllib.error.URLError as e:
@@ -688,6 +715,66 @@ def _storage_upload_bytes(path: str, content: bytes, content_type: str = "applic
         with urllib.request.urlopen(req, timeout=60):
             return
     except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        raise RuntimeError(_safe_http_error("Supabase Storage", e.code, body)) from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Supabase Storage connection error: {e.reason}") from e
+
+
+def _storage_create_bytes_if_absent(
+    path: str,
+    content: bytes,
+    content_type: str = "application/octet-stream",
+) -> None:
+    """Crea un objeto una sola vez sin sobrescribir una llave existente."""
+    clean_path = str(path or "").strip().lstrip("/")
+    if not clean_path:
+        raise RuntimeError("Ruta de storage invalida")
+    if DEV_MODE:
+        dest = _dev_storage_file(clean_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with dest.open("xb") as output:
+                output.write(content)
+            return
+        except FileExistsError as exc:
+            raise _StorageObjectAlreadyExists("El objeto de storage ya existe") from exc
+    if _use_r2_storage():
+        try:
+            _r2_client().put_object(
+                Bucket=R2_BUCKET,
+                Key=clean_path,
+                Body=content,
+                ContentType=content_type,
+                IfNoneMatch="*",
+            )
+            return
+        except Exception as exc:
+            code, status = _r2_error_details(exc)
+            if code == "PreconditionFailed" or status == 412:
+                raise _StorageObjectAlreadyExists("El objeto de storage ya existe") from exc
+            raise RuntimeError(f"Cloudflare R2 upload error: {exc.__class__.__name__}") from exc
+    if not SUPABASE_URL:
+        raise RuntimeError("SUPABASE_URL no configurada")
+    if not _storage_key():
+        raise RuntimeError("Falta SUPABASE_SERVICE_KEY o SUPABASE_ANON_KEY para storage")
+
+    encoded_path = quote(clean_path, safe="/")
+    url = f"{SUPABASE_URL}/storage/v1/object/{QUOTE_STORAGE_BUCKET}/{encoded_path}"
+    req = urllib.request.Request(
+        url,
+        data=content,
+        headers={"Content-Type": content_type, "x-upsert": "false"},
+        method="PUT",
+    )
+    for key, value in _get_supabase_headers().items():
+        req.add_header(key, value)
+    try:
+        with urllib.request.urlopen(req, timeout=60):
+            return
+    except urllib.error.HTTPError as e:
+        if e.code in {409, 412}:
+            raise _StorageObjectAlreadyExists("El objeto de storage ya existe") from e
         body = e.read().decode("utf-8")
         raise RuntimeError(_safe_http_error("Supabase Storage", e.code, body)) from e
     except urllib.error.URLError as e:
@@ -4279,26 +4366,64 @@ def _project_for_current_user(project_id: str, usuario_id: int) -> dict:
 
 
 def _copy_project_import_asset(path: str, content: bytes, content_type: str) -> None:
-    """Conserva la copia inmutable cuando un reintento usa la misma llave."""
+    """Crea una copia inmutable o verifica un reintento con la misma llave."""
+    try:
+        _storage_create_bytes_if_absent(path, content, content_type)
+        return
+    except _StorageObjectAlreadyExists:
+        pass
     try:
         existing = _storage_download_bytes(path)
-    except KeyError:
-        existing = None
-    except RuntimeError as exc:
-        if "404" not in str(exc):
-            raise
-        existing = None
-    if existing is not None:
-        if existing != content:
-            raise ValueError("El activo de Proyecto ya existe con contenido diferente")
-        return
-    _storage_upload_bytes(path, content, content_type)
-    try:
-        copied = _storage_download_bytes(path)
-    except (KeyError, RuntimeError) as exc:
+    except _StorageObjectNotFound as exc:
         raise RuntimeError("No se pudo verificar el activo de Proyecto") from exc
-    if copied != content:
-        raise RuntimeError("El activo de Proyecto no se conservo correctamente")
+    if existing != content:
+        raise ValueError("El activo de Proyecto ya existe con contenido diferente")
+
+
+def _validate_project_import_preview_png(content: object) -> bytes | None:
+    """Acepta solo una imagen PNG no animada, segura y dentro de los limites."""
+    if (
+        not isinstance(content, bytes)
+        or not content
+        or len(content) > IMPORT_PREVIEW_IMAGE_MAX_BYTES
+        or _catalog_image_type(content) != ("png", "image/png")
+        or not _catalog_image_has_exact_end(content, "png")
+    ):
+        return None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as probe:
+                width, height = probe.size
+                if (
+                    probe.format != "PNG"
+                    or width < 1 or height < 1
+                    or width > IMPORT_PREVIEW_IMAGE_MAX_WIDTH
+                    or height > IMPORT_PREVIEW_IMAGE_MAX_HEIGHT
+                    or width * height > IMPORT_PREVIEW_IMAGE_MAX_PIXELS
+                    or getattr(probe, "is_animated", False)
+                    or getattr(probe, "n_frames", 1) != 1
+                ):
+                    return None
+                probe.verify()
+            with Image.open(io.BytesIO(content)) as decoded:
+                decoded.load()
+                if (
+                    decoded.format != "PNG"
+                    or getattr(decoded, "is_animated", False)
+                    or getattr(decoded, "n_frames", 1) != 1
+                ):
+                    return None
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+        ValueError,
+    ):
+        return None
+    return content
 
 
 @app.post("/projects", status_code=201)
@@ -4356,14 +4481,15 @@ def projects_promote_import(
             if str(row) != row_text or row not in valid_rows:
                 raise ValueError("Fila de previsualizacion invalida")
             content = _storage_download_bytes(preview_path)
-            if not isinstance(content, bytes):
-                raise ValueError("Imagen de previsualizacion invalida")
-            if len(content) > IMPORT_PREVIEW_IMAGE_MAX_BYTES:
+            if isinstance(content, bytes) and len(content) > IMPORT_PREVIEW_IMAGE_MAX_BYTES:
                 raise HTTPException(
                     status_code=413,
                     detail="Imagen de previsualizacion excede el limite de tamano",
                 )
-            previews.append((row_text, content))
+            preview_png = _validate_project_import_preview_png(content)
+            if preview_png is None:
+                raise ValueError("Imagen de previsualizacion invalida")
+            previews.append((row_text, preview_png))
     except HTTPException:
         raise
     except RuntimeError:

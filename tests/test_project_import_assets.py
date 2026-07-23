@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from io import BytesIO
 import json
+import urllib.error
 
+import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from mobiliti_saas.web.api import index
 from mobiliti_saas.quote_engine.quotation_import import build_import_manifest
@@ -17,6 +21,12 @@ IMPORT_ID = "22222222-2222-4222-8222-222222222222"
 def _auth_headers(user_id: int = 7) -> dict[str, str]:
     token = index.create_access_token({"sub": str(user_id), "email": "cliente@example.com"})
     return {"Authorization": f"Bearer {token}"}
+
+
+def _preview_png(size: tuple[int, int] = (4, 3), *, image_format: str = "PNG") -> bytes:
+    output = BytesIO()
+    Image.new("RGB", size, (23, 97, 151)).save(output, format=image_format)
+    return output.getvalue()
 
 
 def project_with_import_fixture(monkeypatch, tmp_path):
@@ -45,7 +55,7 @@ def project_with_import_fixture(monkeypatch, tmp_path):
     preview_path = f"{prefix}preview/{manifest['source_hash'][:16]}/row-11.png"
     storage.update({
         f"{prefix}input.xlsx": source_bytes,
-        preview_path: b"preview-png-bytes",
+        preview_path: _preview_png(),
         manifest_path: json.dumps({
             **manifest, "preview_image_paths": {"11": preview_path},
         }, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
@@ -70,6 +80,12 @@ def project_with_import_fixture(monkeypatch, tmp_path):
         storage[path] = content
 
     monkeypatch.setattr(index, "_storage_upload_bytes", upload)
+    def create(path, content, content_type="application/octet-stream"):
+        if path in storage:
+            raise index._StorageObjectAlreadyExists(path)
+        storage[path] = content
+
+    monkeypatch.setattr(index, "_storage_create_bytes_if_absent", create)
     client = TestClient(index.app)
     created = client.post(
         "/projects", headers=_auth_headers(),
@@ -135,7 +151,7 @@ def test_import_promotion_rejects_oversized_source_before_upload(monkeypatch, tm
         "_validated_import_source",
         lambda *_args: ({"source_hash": "a" * 64}, job, b"x" * (index.MAX_QUOTE_REQUEST_BYTES + 1)),
     )
-    monkeypatch.setattr(index, "_storage_upload_bytes", lambda *args: uploads.append(args))
+    monkeypatch.setattr(index, "_storage_create_bytes_if_absent", lambda *args: uploads.append(args))
 
     response = client.post(
         f"/projects/{project['id']}/imports/{job['id']}", headers=headers,
@@ -145,22 +161,37 @@ def test_import_promotion_rejects_oversized_source_before_upload(monkeypatch, tm
     assert uploads == []
 
 
-def test_import_promotion_preflights_all_preview_sizes_before_first_upload(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("preview", "status"),
+    [
+        (b"", 409),
+        (b"not-a-png", 409),
+        (b"x" * (8 * 1024 * 1024 + 1), 413),
+        (_preview_png((8193, 1)), 409),
+        (_preview_png(image_format="JPEG"), 409),
+    ],
+    ids=["empty", "malformed", "oversized", "oversized-dimensions", "jpeg"],
+)
+def test_import_promotion_preflights_all_preview_images_before_first_upload(
+    monkeypatch, tmp_path, preview, status
+):
     client, headers, project, job, storage = project_with_import_fixture(monkeypatch, tmp_path)
     preview_path = next(iter(job["metadata"]["import_preview_paths"].values()))
-    storage[preview_path] = b"x" * (index.IMPORT_PREVIEW_IMAGE_MAX_BYTES + 1)
+    storage[preview_path] = preview
     uploads = []
 
     def upload(path, content, content_type="application/octet-stream"):
+        if path in storage:
+            raise index._StorageObjectAlreadyExists(path)
         uploads.append((path, content, content_type))
         storage[path] = content
 
-    monkeypatch.setattr(index, "_storage_upload_bytes", upload)
+    monkeypatch.setattr(index, "_storage_create_bytes_if_absent", upload)
     response = client.post(
         f"/projects/{project['id']}/imports/{job['id']}", headers=headers,
     )
 
-    assert response.status_code == 413
+    assert response.status_code == status
     assert uploads == []
     assert not [path for path in storage if path.startswith("projects/")]
 
@@ -170,10 +201,12 @@ def test_import_promotion_retry_is_byte_identical_and_does_not_reupload(monkeypa
     uploads = []
 
     def upload(path, content, content_type="application/octet-stream"):
+        if path in storage:
+            raise index._StorageObjectAlreadyExists(path)
         uploads.append((path, content, content_type))
         storage[path] = content
 
-    monkeypatch.setattr(index, "_storage_upload_bytes", upload)
+    monkeypatch.setattr(index, "_storage_create_bytes_if_absent", upload)
     first = client.post(f"/projects/{project['id']}/imports/{job['id']}", headers=headers)
     first_bytes = {path: content for path, content, _mime in uploads}
     uploads.clear()
@@ -184,3 +217,86 @@ def test_import_promotion_retry_is_byte_identical_and_does_not_reupload(monkeypa
     assert uploads == []
     assert {path: storage[path] for path in first_bytes} == first_bytes
     assert job["status"] == "draft"
+
+
+def test_import_promotion_uses_real_dev_storage_for_first_copy_and_retry(monkeypatch, tmp_path):
+    real_download = index._storage_download_bytes
+    real_upload = index._storage_upload_bytes
+    real_create = index._storage_create_bytes_if_absent
+    monkeypatch.setattr(index, "DEV_STORE_DIR", tmp_path / "dev-store")
+    client, headers, project, job, storage = project_with_import_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(index, "_storage_download_bytes", real_download)
+    monkeypatch.setattr(index, "_storage_upload_bytes", real_upload)
+    monkeypatch.setattr(index, "_storage_create_bytes_if_absent", real_create)
+
+    for path, content in storage.items():
+        if path.startswith("users/"):
+            real_upload(path, content, "image/png" if path.endswith(".png") else "application/octet-stream")
+
+    first = client.post(f"/projects/{project['id']}/imports/{job['id']}", headers=headers)
+    second = client.post(f"/projects/{project['id']}/imports/{job['id']}", headers=headers)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert job["status"] == "draft"
+
+
+class _R2Error(Exception):
+    def __init__(self, code: str, status: int | None = None):
+        response = {"Error": {"Code": code}}
+        if status is not None:
+            response["ResponseMetadata"] = {"HTTPStatusCode": status}
+        self.response = response
+
+
+def test_r2_missing_object_and_conditional_conflict_are_explicit(monkeypatch):
+    class R2:
+        def get_object(self, **_kwargs):
+            raise _R2Error("NoSuchKey")
+
+        def put_object(self, **kwargs):
+            assert kwargs["IfNoneMatch"] == "*"
+            raise _R2Error("PreconditionFailed", 412)
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "_use_r2_storage", lambda: True)
+    monkeypatch.setattr(index, "_r2_client", lambda: R2())
+
+    with pytest.raises(index._StorageObjectNotFound):
+        index._storage_download_bytes("projects/7/example/missing.png")
+    with pytest.raises(index._StorageObjectAlreadyExists):
+        index._storage_create_bytes_if_absent("projects/7/example/asset.png", b"content", "image/png")
+
+
+def test_r2_transport_error_is_not_treated_as_absence(monkeypatch):
+    class R2:
+        def get_object(self, **_kwargs):
+            raise _R2Error("AccessDenied", 403)
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "_use_r2_storage", lambda: True)
+    monkeypatch.setattr(index, "_r2_client", lambda: R2())
+
+    with pytest.raises(RuntimeError) as error:
+        index._storage_download_bytes("projects/7/example/asset.png")
+    assert not isinstance(error.value, index._StorageObjectNotFound)
+
+
+def test_supabase_conditional_conflict_uses_non_upsert_write(monkeypatch):
+    requests = []
+
+    def conflict(request, timeout):
+        requests.append(request)
+        raise urllib.error.HTTPError(
+            request.full_url, 409, "Conflict", {}, BytesIO(b'{"message":"exists"}')
+        )
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "_use_r2_storage", lambda: False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://example.invalid")
+    monkeypatch.setattr(index, "SUPABASE_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(index.urllib.request, "urlopen", conflict)
+
+    with pytest.raises(index._StorageObjectAlreadyExists):
+        index._storage_create_bytes_if_absent("projects/7/example/asset.png", b"content", "image/png")
+    assert requests[0].get_header("X-upsert") == "false"
