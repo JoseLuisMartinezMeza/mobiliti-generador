@@ -10,6 +10,7 @@ import {
   Clock3,
   ExternalLink,
   FileSpreadsheet,
+  FolderKanban,
   History,
   ImageOff,
   LayoutDashboard,
@@ -31,6 +32,7 @@ import {
 import SupplierCatalogView from "./SupplierCatalogView";
 import CatalogAdminPanel from "./CatalogAdminPanel";
 import MixedCartDrawer from "./MixedCartDrawer";
+import ProjectsView from "./ProjectsView";
 import {
   closeMixedCartSection,
   compactMixedCartSections,
@@ -429,6 +431,7 @@ function Login({ onLogin, notice = "" }) {
 function Sidebar({ view, setView, isAdmin, onLogout }) {
   const items = [
     ["cotizaciones", "Cotizaciones", FileSpreadsheet],
+    ["proyectos", "Proyectos", FolderKanban],
     ["nueva", "Nueva", UploadCloud],
     ["historial", "Historial", History],
     ["clientes", "Clientes", UsersRound],
@@ -494,8 +497,8 @@ function Header({ user, subscription, cartCount, onOpenCart }) {
         <small>Vence: {formatDate(subscription?.fecha_fin)}</small>
       </div>
       <button className="global-cart-toggle" type="button" onClick={onOpenCart}>
-        <ShoppingCart size={19} />
-        Carrito ({cartCount})
+        <FolderKanban size={19} />
+        Proyecto ({cartCount})
       </button>
       <div className="user-chip">
         <div>{initials}</div>
@@ -1016,7 +1019,7 @@ function TarkettView({ token, userId, cartLines, onAddCartLine, onOpenCart, cart
             Refrescar
           </button>
           <button className="ghost-action" type="button" onClick={onOpenCart}>
-            <ShoppingCart size={17} /> Carrito ({cartLines.length})
+            <FolderKanban size={17} /> Proyecto ({cartLines.length})
           </button>
         </div>
       </div>
@@ -1289,7 +1292,7 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
         <div><h2>Offiho</h2><p>{catalog.total || catalog.items.length} productos indexados{catalog.generated_at ? ` - ${formatDate(catalog.generated_at)}` : ""}</p></div>
         <div className="catalog-head-actions">
           <button className="ghost-action" type="button" onClick={() => { sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY); setReloadKey((value) => value + 1); }}><RefreshCw size={16} />Refrescar</button>
-          <button className="ghost-action" type="button" onClick={onOpenCart}><ShoppingCart size={17} /> Carrito ({cartLines.length})</button>
+          <button className="ghost-action" type="button" onClick={onOpenCart}><FolderKanban size={17} /> Proyecto ({cartLines.length})</button>
         </div>
       </div>
 
@@ -2124,6 +2127,7 @@ function App() {
   const [jobs, setJobs] = useState([]);
   const [downloadState, setDownloadState] = useState(null);
   const [deleteState, setDeleteState] = useState(null);
+  const [activeProjectId, setActiveProjectId] = useState("");
   const [mixedCart, setMixedCart] = useState([]);
   const mixedCartRef = useRef([]);
   const [mixedCartSections, setMixedCartSections] = useState(
@@ -2201,6 +2205,7 @@ function App() {
       setJobs([]);
       setDownloadState(null);
       setDeleteState(null);
+      setActiveProjectId("");
       setView("cotizaciones");
       setSessionNotice(AUTH_EXPIRED_MESSAGE);
     }
@@ -2234,6 +2239,7 @@ function App() {
     resetMixedQuoteSession();
     setSession(null);
     setSessionNotice("");
+    setActiveProjectId("");
   }
 
   if (!session) return <Login onLogin={login} notice={sessionNotice} />;
@@ -2303,6 +2309,11 @@ function App() {
     setMixedCartOpen(true);
   }
 
+  function openProject(projectId) {
+    setActiveProjectId(projectId);
+    setView("nueva");
+  }
+
   async function submitMixedQuote(event, submissionLines = mixedCartRef.current) {
     const preparedRequest = submissionLines === mixedCartRef.current
       ? Object.freeze({ ...mixedQuote, ...mixedRequest })
@@ -2351,7 +2362,9 @@ function App() {
   );
   const mainView = view === "cotizaciones"
     ? <QuotesView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} onCreateNew={() => setView("nueva")} refreshJobs={refreshJobs} downloadState={downloadState} deleteState={deleteState} />
-    : view === "nueva"
+    : view === "proyectos"
+      ? <ProjectsView request={request} onOpenProject={openProject} activeProjectId={activeProjectId} />
+      : view === "nueva"
       ? quoteForm
       : view === "historial"
         ? <HistoryView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} downloadState={downloadState} deleteState={deleteState} />
