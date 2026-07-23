@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
 import hashlib
@@ -59,7 +60,7 @@ def project_quote_projection(
     del orden accidental de las listas de entrada.
     """
 
-    checked = normalize_project_payload(dict(payload))
+    checked = normalize_project_payload(deepcopy(dict(payload)))
     section_positions = {
         section["section_id"]: section["position"]
         for section in checked["sections"]
@@ -145,7 +146,7 @@ def project_context(
 ) -> dict:
     """Congela el contexto normalizado y su hash canónico para el job."""
 
-    checked = normalize_project_payload(dict(payload))
+    checked = normalize_project_payload(deepcopy(dict(payload)))
     projection = project_quote_projection(checked)
     canonical = json.dumps(
         checked,

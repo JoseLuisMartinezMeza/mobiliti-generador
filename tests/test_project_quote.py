@@ -94,6 +94,9 @@ def test_projection_orders_sections_principals_and_children_by_saved_position():
 
 def test_project_context_is_canonical_and_does_not_mutate_the_source_payload():
     payload = valid_project_payload()
+    payload["lines"][0]["quantity_rules_cache"] = {
+        "bounds": {"minimum": "1"},
+    }
     original = deepcopy(payload)
 
     context = project_context(payload, "project-7", 3)
@@ -111,6 +114,11 @@ def test_project_context_is_canonical_and_does_not_mutate_the_source_payload():
     assert payload == original
     normalized["quote_fields"]["cliente"] = "Otro"
     assert payload == original
+    payload["lines"][0]["quantity_rules_cache"]["bounds"]["minimum"] = "2"
+    assert (
+        normalized["lines"][0]["quantity_rules_cache"]["bounds"]["minimum"]
+        == "1"
+    )
 
 
 def test_projection_values_are_frozen():
