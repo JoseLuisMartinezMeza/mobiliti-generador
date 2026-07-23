@@ -17,7 +17,7 @@ function withoutField(record, field) {
 
 export function createImportedLineDraft(edits) {
   return {
-    values: { ...edits },
+    values: { officialCode: "", ...edits },
     errors: {},
     invalidFields: {},
   };

@@ -41,9 +41,22 @@ export default function ImportedCartLineFields({
     applyDraft(commitImportedLineDraft(draft, field, onChange));
   }
 
+  const linked = Boolean(
+    String(draft.values.officialCode || "").trim()
+    && String(draft.values.provider || "").trim(),
+  );
+
   return (
     <details className="imported-line-editor">
       <summary>Editar datos importados</summary>
+      <p className="imported-line-linkage" role="status">
+        {linked ? "Vinculado" : "No vinculado"}
+      </p>
+      <label>
+        Código oficial
+        <input name="officialCode" disabled={busy} value={draft.values.officialCode} aria-invalid={Boolean(draft.invalidFields.officialCode)} aria-describedby={draft.errors.officialCode ? errorId("officialCode") : undefined} onChange={(event) => handleChange("officialCode", event.target.value)} onBlur={() => handleBlur("officialCode")} />
+        {draft.errors.officialCode ? <small id={errorId("officialCode")} role="alert">{draft.errors.officialCode}</small> : null}
+      </label>
       <label>
         Nombre
         <input name="name" disabled={busy} value={draft.values.name} aria-invalid={Boolean(draft.invalidFields.name)} aria-describedby={draft.errors.name ? errorId("name") : undefined} onChange={(event) => handleChange("name", event.target.value)} onBlur={() => handleBlur("name")} />

@@ -760,7 +760,7 @@ export function createImportedCartBundle(preview, sourceCurrency, provider, curr
       preview,
       item,
       sourceCurrency: item.source_currency || selectedCurrency,
-      provider: selectedProvider,
+      provider: item.provider || selectedProvider,
       sectionId: sectionByKey.get(item.key),
     });
   });
@@ -770,6 +770,52 @@ export function createImportedCartBundle(preview, sourceCurrency, provider, curr
       ...(current.length === 1 && current[0].id === "section-1" ? [] : current),
       ...importedSections.map(({ itemKeys, ...section }) => section),
     ],
+  };
+}
+
+export function withDurableImportedAssets(preview, promotion) {
+  if (!preview || typeof preview !== "object" || Array.isArray(preview)
+      || !Array.isArray(preview.items) || !preview.items.length
+      || !promotion || typeof promotion !== "object" || Array.isArray(promotion)) {
+    throw new Error("Promocion importada invalida");
+  }
+  const sourceAssetKey = normalizedText(
+    promotion.source_asset_key,
+    "Fuente durable",
+    {limit: 500},
+  );
+  const imageAssetKeys = identityRecord(promotion.image_asset_keys);
+  if (promotion.manifest?.import_id !== preview.import_id) {
+    throw new Error("La promocion no corresponde a la importacion");
+  }
+  const previewRows = new Set(preview.items.map((item) => String(item?.source_row)));
+  const durableImageAssetKeys = {};
+  for (const [row, assetKey] of Object.entries(imageAssetKeys)) {
+    if (!/^[1-9]\d*$/.test(row) || !previewRows.has(row)) {
+      throw new Error("Mapa de imagenes durables invalido");
+    }
+    durableImageAssetKeys[row] = normalizedText(
+      assetKey,
+      "Imagen durable",
+      {limit: 500},
+    );
+  }
+  return {
+    ...preview,
+    source_asset_key: sourceAssetKey,
+    items: preview.items.map((item) => {
+      const row = String(item?.source_row);
+      const imageAssetKey = durableImageAssetKeys[row] || "";
+      if (item?.image_url && !imageAssetKey) {
+        throw new Error(`Falta imagen durable para la fila importada ${row}`);
+      }
+      return {
+        ...item,
+        image_url: "",
+        image_asset_key: imageAssetKey,
+        source_asset_key: sourceAssetKey,
+      };
+    }),
   };
 }
 
@@ -789,7 +835,9 @@ export function updateImportedCartLine(lines, key, edits) {
   return lines.map((current, position) => (
     position === index ? {
       ...line,
-      officialCode: nextEdits.officialCode || line.officialCode,
+      officialCode: hasOwn(nextEdits, "officialCode")
+        ? nextEdits.officialCode
+        : line.officialCode,
       provider: nextEdits.provider,
       edits: nextEdits,
     } : current
@@ -855,9 +903,13 @@ export function createProjectLineId() {
 }
 
 export function projectMatchKey(provider, officialCode) {
-  const cleanProvider = String(provider || "").normalize("NFKD")
-    .replace(/\p{M}/gu, "").trim().toLocaleLowerCase().replace(/\s+/g, " ");
-  const cleanCode = String(officialCode || "").trim().toUpperCase();
+  const normalizeMatchPart = (value) => String(value || "").normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .trim()
+    .toLocaleUpperCase()
+    .replace(/\s+/gu, " ");
+  const cleanProvider = normalizeMatchPart(provider);
+  const cleanCode = normalizeMatchPart(officialCode);
   return cleanProvider && cleanCode ? `${cleanProvider}\u0000${cleanCode}` : "";
 }
 

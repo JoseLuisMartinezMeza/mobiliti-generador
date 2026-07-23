@@ -25,6 +25,44 @@ def test_project_editor_has_tabs_and_line_actions():
     assert "quantityMode" in source
 
 
+def test_imported_editor_exposes_official_code_provider_and_linkage():
+    source = Path(
+        "mobiliti_saas/web/src/ImportedCartLineFields.jsx"
+    ).read_text(encoding="utf-8")
+    assert 'name="officialCode"' in source
+    assert "Código oficial" in source
+    assert 'name="provider"' in source
+    assert "Vinculado" in source
+    assert "No vinculado" in source
+
+
+def test_active_project_import_promotes_assets_before_mutation_and_retains_draft():
+    source = MAIN.read_text(encoding="utf-8")
+    helper_start = source.index("async function promoteProjectImport(")
+    helper_end = source.index("function projectStateWithImportDraft", helper_start)
+    promotion_helper = source[helper_start:helper_end]
+    start = source.index("async function importQuotationPreview(preview, options)")
+    end = source.index("function removeMixedCartLineFromApp", start)
+    import_flow = source[start:end]
+    promotion = (
+        "`/projects/${projectId}/imports/${draft.preview.import_id}`"
+    )
+    assert promotion in promotion_helper
+    assert '{method: "POST"}' in promotion_helper
+    assert "withDurableImportedAssets(draft.preview, promoted)" in promotion_helper
+    assert "await promoteProjectImport({" in import_flow
+    assert import_flow.index("await promoteProjectImport({") < import_flow.index(
+        "mixedQuoteController.importPreview(durablePreview, options)"
+    )
+    assert "pendingImportAdoptionRef.current = {" in import_flow
+    assert "setPendingImportDraft(importDraft)" in import_flow
+    assert "setPendingImportDraft(null)" not in import_flow
+    assert "consume" not in import_flow.lower()
+    assert "delete" not in import_flow.lower()
+    assert "async function confirmImport()" in source
+    assert "await onImportPreview(importPreview" in source
+
+
 def test_quick_panel_has_only_project_copy():
     source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
     assert 'aria-label="Proyecto activo"' in source

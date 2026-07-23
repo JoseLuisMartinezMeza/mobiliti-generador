@@ -78,14 +78,147 @@ def test_imported_line_matches_provider_and_official_code():
       const imported = {
         kind: "imported", role: "principal",
         lineId: "11111111-1111-4111-8111-111111111111",
-        officialCode: " OHE-405 ", provider: "Offiho",
+        officialCode: " OHE   405 ", provider: "Offiho   México",
       };
       console.log(JSON.stringify({
-        matches: model.projectLineMatches(imported, {provider: " offiho ", officialCode: "OHE-405"}),
-        missing: model.projectLineMatches({...imported, officialCode: ""}, {provider: "offiho", officialCode: "OHE-405"}),
+        matches: model.projectLineMatches(imported, {
+          provider: " offiho méxico ", officialCode: "ohe 405",
+        }),
+        missing: model.projectLineMatches(
+          {...imported, officialCode: ""},
+          {provider: "offiho méxico", officialCode: "OHE 405"},
+        ),
       }));
     """)
     assert result == {"matches": True, "missing": False}
+
+
+def test_imported_bundle_copies_row_code_and_provider_and_requires_durable_assets():
+    result = run_js(r"""
+      const preview = {
+        import_id: "11111111-1111-4111-8111-111111111111",
+        original_filename: "quotation.xlsx",
+        source_currency: "USD",
+        provider: "Proveedor general",
+        sections: [{
+          id: "source-1", title: "Recepción",
+          item_keys: ["import:11111111-1111-4111-8111-111111111111:9"],
+        }],
+        items: [{
+          key: "import:11111111-1111-4111-8111-111111111111:9",
+          source_row: 9,
+          official_code: " OHE-405 ",
+          provider: "Offiho México",
+          name: "Silla importada",
+          description: "",
+          dimension: "",
+          quantity: "1",
+          unit_price: "80.00",
+          source_currency: "USD",
+          image_url: "/cotizaciones/preview/transient.png",
+        }],
+      };
+      let missingAssetError = "";
+      try {
+        model.withDurableImportedAssets(preview, {
+          source_asset_key: "projects/7/project/sources/source.xlsx",
+          image_asset_keys: {},
+          manifest: {import_id: preview.import_id},
+        });
+      } catch (error) {
+        missingAssetError = error.message;
+      }
+      const durable = model.withDurableImportedAssets(preview, {
+        source_asset_key: "projects/7/project/sources/source.xlsx",
+        image_asset_keys: {"9": "projects/7/project/images/row-9.png"},
+        manifest: {import_id: preview.import_id},
+      });
+      const bundle = model.createImportedCartBundle(
+        durable, "USD", "Proveedor elegido", [{id: "section-1", concept: "Recepción"}],
+      );
+      console.log(JSON.stringify({
+        officialCode: bundle.lines[0].officialCode,
+        provider: bundle.lines[0].provider,
+        sourceAssetKey: bundle.lines[0].sourceAssetKey,
+        imageAssetKey: bundle.lines[0].imageAssetKey,
+        imageUrl: bundle.lines[0].snapshot.image_url,
+        originalImageUrl: preview.items[0].image_url,
+        missingAssetError,
+      }));
+    """)
+    assert result == {
+        "officialCode": "OHE-405",
+        "provider": "Offiho México",
+        "sourceAssetKey": "projects/7/project/sources/source.xlsx",
+        "imageAssetKey": "projects/7/project/images/row-9.png",
+        "imageUrl": "",
+        "originalImageUrl": "/cotizaciones/preview/transient.png",
+        "missingAssetError": "Falta imagen durable para la fila importada 9",
+    }
+
+
+def test_imported_official_code_allows_empty_rejects_unsafe_text_and_unlinks_immediately():
+    result = run_js(r"""
+      const edits = {
+        officialCode: "",
+        name: "Importada",
+        description: "",
+        dimension: "",
+        unitPrice: "80.00",
+        provider: "Offiho",
+      };
+      const empty = model.validateImportedCartEdits(edits);
+      const failures = ["=CMD()", "+SUM(A1)", "-1+1", "@A1", "ABC\u0007"].map((officialCode) => {
+        try {
+          model.validateImportedCartEdits({...edits, officialCode});
+          return "";
+        } catch (error) {
+          return error.message;
+        }
+      });
+      const line = model.createImportedCartBundle({
+        import_id: "11111111-1111-4111-8111-111111111111",
+        source_currency: "USD",
+        sections: [{
+          id: "source", title: "Sala",
+          item_keys: ["import:11111111-1111-4111-8111-111111111111:9"],
+        }],
+        items: [{
+          key: "import:11111111-1111-4111-8111-111111111111:9",
+          source_row: 9,
+          official_code: "OHE-405",
+          provider: "Offiho",
+          name: "Importada",
+          description: "",
+          dimension: "",
+          quantity: "1",
+          unit_price: "80.00",
+          source_currency: "USD",
+          image_url: "",
+        }],
+      }, "USD", "Offiho", [{id: "section-1", concept: "Sala"}]).lines[0];
+      const unlinked = model.updateImportedCartLine([line], line.key, {officialCode: ""})[0];
+      console.log(JSON.stringify({
+        empty: empty.officialCode,
+        failures,
+        visibleCode: unlinked.officialCode,
+        matches: model.projectLineMatches(
+          unlinked, {provider: "Offiho", officialCode: "OHE-405"},
+        ),
+      }));
+    """)
+    assert result == {
+        "empty": "",
+        "failures": [
+            "Codigo oficial invalido",
+            "Codigo oficial invalido",
+            "Codigo oficial invalido",
+            "Codigo oficial invalido",
+            "Codigo oficial requerido",
+        ],
+        "visibleCode": "",
+        "matches": False,
+    }
 
 
 def test_project_serialization_round_trips_occurrence_graph():

@@ -57,6 +57,7 @@ import {
   updateImportedCartLine,
   upsertMixedCartLine,
   validateLineQuantity,
+  withDurableImportedAssets,
 } from "./mixedCart.js";
 import "./styles.css";
 
@@ -522,7 +523,16 @@ function previewNeedsSourceCurrency(preview) {
   return preview?.currency_status === "required";
 }
 
-function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory, onImportPreview }) {
+function QuoteForm({
+  token,
+  onJobChange,
+  recentJobs,
+  refreshJobs,
+  onOpenHistory,
+  onImportPreview,
+  confirmedImport,
+  pendingImportId,
+}) {
   const { request } = useApi(token);
   const [form, setForm] = useState(emptyQuote);
   const [file, setFile] = useState(null);
@@ -539,6 +549,15 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory,
   const uploadDraftRef = useRef(null);
   const requestInFlightRef = useRef(false);
   const requestEpochRef = useRef(0);
+
+  useEffect(() => {
+    if (!confirmedImport?.importId
+        || confirmedImport.importId !== importPreview?.import_id) return;
+    setImportPreview(null);
+    setImportCurrency("");
+    setImportProvider("");
+    uploadDraftRef.current = null;
+  }, [confirmedImport, importPreview?.import_id]);
 
   useEffect(() => {
     if (!job?.id || !["queued", "processing", "draft"].includes(job.status)) return;
@@ -704,13 +723,28 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory,
     }
   }
 
-  function confirmImport() {
+  async function confirmImport() {
+    if (requestInFlightRef.current) return;
     const detectedCurrency = importPreview?.source_currency || "";
     const sourceCurrency = detectedCurrency || importCurrency;
     const provider = importProvider.trim();
     if (!importPreview || (previewNeedsSourceCurrency(importPreview) && !sourceCurrency) || !provider) return;
-    const imported = onImportPreview(importPreview, { sourceCurrency, provider, quoteForm: form });
-    if (imported) setImportPreview(null);
+    const requestEpoch = ++requestEpochRef.current;
+    requestInFlightRef.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await onImportPreview(importPreview, { sourceCurrency, provider, quoteForm: form });
+    } catch (failure) {
+      if (requestEpoch === requestEpochRef.current) {
+        setError(failure.message || "No se pudo importar al Proyecto.");
+      }
+    } finally {
+      if (requestEpoch === requestEpochRef.current) {
+        requestInFlightRef.current = false;
+        setBusy(false);
+      }
+    }
   }
 
   async function download(jobToDownload = job) {
@@ -738,6 +772,9 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory,
   }
 
   const displayJob = job || recentJobs[0];
+  const importIsPending = Boolean(
+    importPreview?.import_id && pendingImportId === importPreview.import_id,
+  );
 
   return (
     <div className="workspace-grid">
@@ -875,10 +912,10 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory,
               <button
                 type="button"
                 className="primary-action"
-                disabled={busy || !importProvider.trim() || (previewNeedsSourceCurrency(importPreview) && !(importPreview.source_currency || importCurrency))}
+                disabled={busy || importIsPending || !importProvider.trim() || (previewNeedsSourceCurrency(importPreview) && !(importPreview.source_currency || importCurrency))}
                 onClick={confirmImport}
               >
-                Confirmar importacion al proyecto
+                {importIsPending ? "Guardando importacion…" : "Confirmar importacion al proyecto"}
               </button>
             </section>
           ) : null}
@@ -2150,6 +2187,20 @@ function importQuotationPreviewForProject({
   });
 }
 
+async function promoteProjectImport({request, projectId, draft}) {
+  if (!projectId || !draft?.preview?.import_id) {
+    throw new Error("Borrador de importacion invalido");
+  }
+  const promoted = await request(
+    `/projects/${projectId}/imports/${draft.preview.import_id}`,
+    {method: "POST"},
+  );
+  return {
+    ...draft,
+    preview: withDurableImportedAssets(draft.preview, promoted),
+  };
+}
+
 function projectStateWithImportDraft(baseState, pendingImportDraft) {
   if (!pendingImportDraft) return baseState;
   const {preview, options} = pendingImportDraft;
@@ -2201,25 +2252,28 @@ function pendingDraftAfterConfirmedCreation(currentDraft, submittedAdoption) {
     : currentDraft;
 }
 
-function loadProjectSnapshot({
+async function loadProjectSnapshot({
   request,
   projectId,
   adoptionDraft,
   hydrate,
+  promoteImport = null,
 }) {
-  return request(`/projects/${projectId}`).then((data) => {
-    if (!data?.project?.payload) throw new Error("Respuesta de Proyecto inválida");
-    const hydrated = hydrate(data.project.payload);
-    return {
-      project: {
-        id: data.project.id,
-        name: data.project.name,
-        revision: data.project.revision,
-      },
-      state: projectStateWithImportDraft(hydrated, adoptionDraft),
-      adoptionDraft,
-    };
-  });
+  const data = await request(`/projects/${projectId}`);
+  if (!data?.project?.payload) throw new Error("Respuesta de Proyecto inválida");
+  const hydrated = hydrate(data.project.payload);
+  const durableDraft = adoptionDraft && promoteImport
+    ? await promoteImport(data.project.id, adoptionDraft)
+    : adoptionDraft;
+  return {
+    project: {
+      id: data.project.id,
+      name: data.project.name,
+      revision: data.project.revision,
+    },
+    state: projectStateWithImportDraft(hydrated, durableDraft),
+    adoptionDraft,
+  };
 }
 
 function canMutateProject({
@@ -2298,6 +2352,8 @@ function App() {
   const [projectChangeVersion, setProjectChangeVersion] = useState(0);
   const projectLoadEpochRef = useRef(0);
   const pendingImportAdoptionRef = useRef(null);
+  const activeProjectRef = useRef(null);
+  const canMutateActiveProjectRef = useRef(false);
   const [mixedCart, setMixedCart] = useState([]);
   const mixedCartRef = useRef([]);
   const [mixedCartSections, setMixedCartSections] = useState(
@@ -2310,6 +2366,7 @@ function App() {
   const [mixedQuoteError, setMixedQuoteError] = useState("");
   const [mixedQuoteNotice, setMixedQuoteNotice] = useState("");
   const [pendingImportDraft, setPendingImportDraft] = useState(null);
+  const [confirmedImport, setConfirmedImport] = useState(null);
   const mixedQuoteSubmittingRef = useRef(false);
   const mixedQuoteSessionEpochRef = useRef(0);
   const mixedImportRevisionRef = useRef(0);
@@ -2388,6 +2445,11 @@ function App() {
     },
     onAdoptionConfirmed: (draft) => {
       setPendingImportDraft((current) => current === draft ? null : current);
+      setConfirmedImport({
+        importId: draft.preview.import_id,
+        projectId: snapshot.id,
+        confirmedAt: Date.now(),
+      });
     },
   }), [request]);
   const projectAutosave = useProjectAutosave({
@@ -2405,6 +2467,8 @@ function App() {
     projectLoadStatus: projectLoadState.status,
     autosaveStatus: projectAutosave.status,
   });
+  activeProjectRef.current = activeProject;
+  canMutateActiveProjectRef.current = canMutateActiveProject;
 
   async function waitForMixedQuoteJob(job, isCurrent) {
     let current = job;
@@ -2480,6 +2544,7 @@ function App() {
       setActiveProjectId("");
       setActiveProject(null);
       setPendingImportDraft(null);
+      setConfirmedImport(null);
       pendingImportAdoptionRef.current = null;
       setProjectChangeVersion(0);
       setView("cotizaciones");
@@ -2518,6 +2583,7 @@ function App() {
     setActiveProjectId("");
     setActiveProject(null);
     setPendingImportDraft(null);
+    setConfirmedImport(null);
     pendingImportAdoptionRef.current = null;
     setProjectChangeVersion(0);
   }
@@ -2577,15 +2643,46 @@ function App() {
     }
   }
 
-  function importQuotationPreview(preview, options) {
-    return importQuotationPreviewForProject({
-      activeProject,
+  async function importQuotationPreview(preview, options) {
+    const allowed = runProjectLineEntry({
       allowed: canMutateActiveProject,
-      preview,
-      options,
-      controller: mixedQuoteController,
+      mutate: () => true,
       onBlocked: () => blockExternalProjectEntry({preview, options}),
     });
+    if (!allowed) return false;
+    if (pendingImportAdoptionRef.current) {
+      setMixedQuoteError("Espera a que la importacion pendiente termine de guardarse.");
+      return false;
+    }
+    const projectId = activeProject.id;
+    const loadEpoch = projectLoadEpochRef.current;
+    const importDraft = {preview, options};
+    try {
+      const durableDraft = await promoteProjectImport({
+        request,
+        projectId,
+        draft: importDraft,
+      });
+      if (projectLoadEpochRef.current !== loadEpoch
+          || activeProjectRef.current?.id !== projectId
+          || !canMutateActiveProjectRef.current) {
+        throw new Error("El Proyecto cambio durante la importacion. Vuelve a intentarlo.");
+      }
+      const durablePreview = durableDraft.preview;
+      const imported = mixedQuoteController.importPreview(durablePreview, options);
+      if (!imported) return false;
+      pendingImportAdoptionRef.current = {
+        projectId,
+        operationId: "",
+        draft: importDraft,
+      };
+      setPendingImportDraft(importDraft);
+      return false;
+    } catch (failure) {
+      const message = failure.message || "No se pudo promover la importacion al Proyecto.";
+      setMixedQuoteError(message);
+      throw failure;
+    }
   }
 
   function removeMixedCartLineFromApp(key) {
@@ -2620,31 +2717,60 @@ function App() {
     setMixedCartOpen(true);
   }
 
-  function activateCreatedProject(created, submittedAdoption) {
-    const hydrated = hydrateProject(created.payload);
-    projectLoadEpochRef.current += 1;
-    mixedCartRef.current = hydrated.lines;
-    mixedCartSectionsRef.current = hydrated.sections;
-    setMixedCart(hydrated.lines);
-    setMixedCartSections(hydrated.sections);
-    setMixedQuote({...EMPTY_MIXED_QUOTE, ...hydrated.quoteFields});
-    setActiveProjectId(created.id);
-    setActiveProject({
-      id: created.id,
-      name: created.name,
-      revision: created.revision,
-      loadKey: projectLoadEpochRef.current,
-    });
-    if (pendingImportAdoptionRef.current?.draft === submittedAdoption) {
-      pendingImportAdoptionRef.current = null;
+  async function activateCreatedProject(created, submittedAdoption) {
+    const loadEpoch = projectLoadEpochRef.current + 1;
+    projectLoadEpochRef.current = loadEpoch;
+    setProjectLoadState({status: "loading", message: ""});
+    try {
+      const hydrated = hydrateProject(created.payload);
+      const durableDraft = submittedAdoption
+        ? await promoteProjectImport({
+          request,
+          projectId: created.id,
+          draft: submittedAdoption,
+        })
+        : null;
+      if (projectLoadEpochRef.current !== loadEpoch) return;
+      const adopted = durableDraft
+        ? projectStateWithImportDraft(hydrated, durableDraft)
+        : hydrated;
+      mixedCartRef.current = adopted.lines;
+      mixedCartSectionsRef.current = adopted.sections;
+      setMixedCart(adopted.lines);
+      setMixedCartSections(adopted.sections);
+      setMixedQuote({...EMPTY_MIXED_QUOTE, ...adopted.quoteFields});
+      setActiveProjectId(created.id);
+      setActiveProject({
+        id: created.id,
+        name: created.name,
+        revision: created.revision,
+        loadKey: loadEpoch,
+      });
+      pendingImportAdoptionRef.current = submittedAdoption ? {
+        projectId: created.id,
+        operationId: "",
+        draft: submittedAdoption,
+      } : null;
+      setPendingImportDraft((current) => (
+        submittedAdoption
+          ? current
+          : pendingDraftAfterConfirmedCreation(current, submittedAdoption)
+      ));
+      setProjectChangeVersion(submittedAdoption ? 1 : 0);
+      setProjectLoadState({status: "ready", message: ""});
+      setMixedQuoteError("");
+      setView("project-editor");
+    } catch (failure) {
+      if (projectLoadEpochRef.current !== loadEpoch) return;
+      setProjectLoadState({
+        status: "failed",
+        message: failure.message || "No se pudo adoptar la importacion en el Proyecto.",
+      });
+      setMixedQuoteError(
+        failure.message || "No se pudo adoptar la importacion en el Proyecto.",
+      );
+      setView("proyectos");
     }
-    setPendingImportDraft((current) => (
-      pendingDraftAfterConfirmedCreation(current, submittedAdoption)
-    ));
-    setProjectChangeVersion(0);
-    setProjectLoadState({status: "ready", message: ""});
-    setMixedQuoteError("");
-    setView("project-editor");
   }
 
   async function openProject(projectId) {
@@ -2668,6 +2794,11 @@ function App() {
         projectId,
         adoptionDraft: pendingImportDraft,
         hydrate: hydrateProject,
+        promoteImport: (targetProjectId, draft) => promoteProjectImport({
+          request,
+          projectId: targetProjectId,
+          draft,
+        }),
       });
       if (projectLoadEpochRef.current !== loadEpoch) return;
       const adoptionDraft = loaded.adoptionDraft;
@@ -2772,6 +2903,8 @@ function App() {
       refreshJobs={refreshJobs}
       onOpenHistory={() => setView("historial")}
       onImportPreview={importQuotationPreview}
+      confirmedImport={confirmedImport}
+      pendingImportId={pendingImportDraft?.preview?.import_id || ""}
       onJobChange={(job) => {
         setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       }}
