@@ -314,7 +314,6 @@ def _normalize_imported_source(
     quote_currency: str,
     rate_rows: list[dict],
     discount: Decimal,
-    allow_duplicate_occurrences: bool,
 ) -> dict[str, Any] | None:
     if imported_source is None:
         return None
@@ -331,7 +330,7 @@ def _normalize_imported_source(
     }
     normalized_inputs: list[dict[str, Any]] = []
     occurrence_metadata: list[dict[str, str]] = []
-    source_row_occurrences: dict[int, list[bool]] = {}
+    source_row_occurrences: dict[int, list[str | None]] = {}
     manifest_by_row = {
         item["source_row"]: item
         for item in manifest.get("items", [])
@@ -348,7 +347,7 @@ def _normalize_imported_source(
         source_row = raw.get("source_row")
         if type(source_row) is int:
             source_row_occurrences.setdefault(source_row, []).append(
-                "line_id" in raw
+                line_id if "line_id" in raw else None
             )
         authoritative = manifest_by_row.get(source_row, {})
         metadata = {
@@ -376,18 +375,17 @@ def _normalize_imported_source(
             key: value for key, value in raw.items() if key not in project_fields
         })
         occurrence_metadata.append(metadata)
-    duplicate_source_rows = {
-        source_row: explicit_line_ids
-        for source_row, explicit_line_ids in source_row_occurrences.items()
-        if len(explicit_line_ids) > 1
-    }
-    if duplicate_source_rows and (
-        not allow_duplicate_occurrences
-        or any(
-            not all(explicit_line_ids)
-            for explicit_line_ids in duplicate_source_rows.values()
-        )
-    ):
+    duplicate_line_ids = [
+        line_id
+        for line_ids in source_row_occurrences.values()
+        if len(line_ids) > 1
+        for line_id in line_ids
+    ]
+    allow_duplicate_source_rows = bool(duplicate_line_ids) and (
+        all(line_id is not None for line_id in duplicate_line_ids)
+        and len(set(duplicate_line_ids)) == len(duplicate_line_ids)
+    )
+    if duplicate_line_ids and not allow_duplicate_source_rows:
         raise ValueError("Fila importada invalida")
     items = normalize_imported_items(
         normalized_inputs,
@@ -396,7 +394,7 @@ def _normalize_imported_source(
         quote_currency=quote_currency,
         rate_rows=rate_rows,
         discount_percent=str(discount),
-        allow_duplicate_source_rows=allow_duplicate_occurrences,
+        allow_duplicate_source_rows=allow_duplicate_source_rows,
     )
     items = [{
         **metadata,
@@ -625,7 +623,6 @@ def build_mixed_catalog_cart_payload(
         quote_currency=quote_currency,
         rate_rows=rate_rows,
         discount=discount,
-        allow_duplicate_occurrences=project_context is not None,
     )
     if not ordered_rows and normalized_import is None:
         raise ValueError("La cotizacion debe contener al menos una linea")

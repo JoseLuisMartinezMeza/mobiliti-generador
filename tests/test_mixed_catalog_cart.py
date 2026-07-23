@@ -311,7 +311,9 @@ def test_line_id_must_be_unique_across_catalog_and_imported_occurrences(
         )
 
 
-def test_project_imported_occurrences_can_share_the_same_source_row(
+@pytest.mark.parametrize("with_project_context", (False, True))
+def test_explicit_imported_occurrences_can_share_the_same_source_row(
+    with_project_context,
     tmp_path,
     mixed_catalogs,
     rate_rows,
@@ -382,7 +384,11 @@ def test_project_imported_occurrences_can_share_the_same_source_row(
                 },
             ],
         },
-        project_context=project_context(project, "project-imported", 1),
+        project_context=(
+            project_context(project, "project-imported", 1)
+            if with_project_context
+            else None
+        ),
         today=date(2026, 7, 19),
     )
 
