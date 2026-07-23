@@ -150,3 +150,91 @@ def test_imported_serialization_uses_editable_code_and_provider():
       }));
     """)
     assert result == {"code": "OHE-405", "provider": "Offiho", "hasAvailability": False}
+
+
+def test_hydrate_catalog_line_without_optional_quantity_rules_cache():
+    result = run_js(r"""
+      const line = model.createMixedCartLine({
+        catalog: "sunon",
+        identity: {internal_id: "sunon:chair", base_option_id: "", add_on_option_ids: []},
+        officialCode: "CHAIR-1", provider: "Sunon", quantity: "1.5",
+        quantityRules: {min: "0.5", step: "0.5", maxDecimals: 1, max: "100", integer: false},
+        snapshot: {name: "Chair", code: "CHAIR-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+        sectionId: "section-1", lineId: "11111111-1111-4111-8111-111111111111",
+      });
+      const payload = model.serializeProject({
+        quoteFields: {proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+          razon_social: "", quote_currency: "MXN", descuento: "40"},
+        sections: [{id: "section-1", concept: "RecepciÃ³n"}], lines: [line],
+      });
+      delete payload.lines[0].quantity_rules_cache;
+      const reopened = model.hydrateProject(payload);
+      console.log(JSON.stringify({
+        quantity: reopened.lines[0].quantity,
+        min: reopened.lines[0].quantityRules.min,
+        step: reopened.lines[0].quantityRules.step,
+        maxDecimals: reopened.lines[0].quantityRules.maxDecimals,
+        max: reopened.lines[0].quantityRules.max,
+      }));
+    """)
+    assert result == {
+        "quantity": "1.5",
+        "min": "0.000001",
+        "step": "0.000001",
+        "maxDecimals": 6,
+        "max": "1000000",
+    }
+
+
+def test_hydrate_project_rejects_unknown_nested_persisted_keys():
+    result = run_js(r"""
+      const line = model.createMixedCartLine({
+        catalog: "sunon",
+        identity: {internal_id: "sunon:chair", base_option_id: "", add_on_option_ids: []},
+        officialCode: "CHAIR-1", provider: "Sunon", quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "100", integer: true},
+        snapshot: {name: "Chair", code: "CHAIR-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+        sectionId: "section-1", lineId: "11111111-1111-4111-8111-111111111111",
+      });
+      const state = {
+        quoteFields: {proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+          razon_social: "", quote_currency: "MXN", descuento: "40"},
+        sections: [{id: "section-1", concept: "RecepciÃ³n"}], lines: [line],
+      };
+      const payload = model.serializeProject(state);
+      const attempts = [
+        ["display", (copy) => { copy.lines[0].display_cache.availability = "forged"; }],
+        ["rules", (copy) => { copy.lines[0].quantity_rules_cache.forged = true; }],
+        ["identity", (copy) => { copy.lines[0].identity.forged = true; }],
+      ].map(([name, mutate]) => {
+        const copy = JSON.parse(JSON.stringify(payload)); mutate(copy);
+        try { model.hydrateProject(copy); return name + ":accepted"; }
+        catch { return name + ":rejected"; }
+      });
+      console.log(JSON.stringify(attempts));
+    """)
+    assert result == ["display:rejected", "rules:rejected", "identity:rejected"]
+
+
+def test_serialize_project_normalizes_empty_section_concept_without_mutating_state():
+    result = run_js(r"""
+      const line = model.createMixedCartLine({
+        catalog: "sunon",
+        identity: {internal_id: "sunon:chair", base_option_id: "", add_on_option_ids: []},
+        officialCode: "CHAIR-1", provider: "Sunon", quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "100", integer: true},
+        snapshot: {name: "Chair", code: "CHAIR-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+        sectionId: "section-1", lineId: "11111111-1111-4111-8111-111111111111",
+      });
+      const sections = [{id: "section-1", concept: ""}];
+      const payload = model.serializeProject({
+        quoteFields: {proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+          razon_social: "", quote_currency: "MXN", descuento: "40"},
+        sections, lines: [line],
+      });
+      console.log(JSON.stringify({saved: payload.sections[0].concept, editable: sections[0].concept}));
+    """)
+    assert result == {"saved": "Recepci\u00f3n", "editable": ""}

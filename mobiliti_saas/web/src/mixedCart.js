@@ -1035,6 +1035,55 @@ function projectDisplayCache(snapshot) {
   return { name: copied.name, code: copied.code, image_url: copied.image_url };
 }
 
+function hydrateProjectDisplayCache(displayCache) {
+  exactProjectKeys(displayCache, new Set(["name", "code", "image_url"]), "display_cache invalido");
+  return {
+    name: displayCache.name,
+    code: displayCache.code,
+    image_url: displayCache.image_url,
+    unit: "",
+    availability: "",
+    configuration: "",
+    warnings: [],
+  };
+}
+
+function hydrateProjectQuantityRules(quantityRules) {
+  const required = new Set(["min", "step", "maxDecimals", "max"]);
+  const allowed = new Set([
+    ...required,
+    "integer",
+    "warningAt",
+    "confirmOnInsufficient",
+    "confirmOnMissingPrice",
+  ]);
+  if (!quantityRules || typeof quantityRules !== "object" || Array.isArray(quantityRules)
+      || Object.keys(quantityRules).some((key) => !allowed.has(key))
+      || [...required].some((key) => !hasOwn(quantityRules, key))) {
+    throw new Error("Reglas de cantidad invalidas");
+  }
+  return copyQuantityRules(quantityRules);
+}
+
+function defaultProjectQuantityRules() {
+  return {
+    min: "0.000001",
+    step: "0.000001",
+    maxDecimals: 6,
+    max: "1000000",
+  };
+}
+
+function hydrateProjectCatalogIdentity(catalog, identity) {
+  const fields = catalog === "tarkett"
+    ? new Set(["code"])
+    : catalog === "offiho"
+      ? new Set(["inventory_key"])
+      : new Set(["internal_id", "base_option_id", "add_on_option_ids"]);
+  exactProjectKeys(identity, fields, "Identidad de catalogo invalida");
+  return identity;
+}
+
 function projectLineRelationship(line, sectionIds) {
   const role = normalizedProjectRole(line.role);
   const lineId = normalizedProjectLineId(line.lineId);
@@ -1135,7 +1184,7 @@ export function serializeProject({ quoteFields, sections, lines }) {
     quote_fields: projectQuoteFields(quoteFields),
     sections: currentSections.map((section, position) => ({
       section_id: section.id,
-      concept: section.concept,
+      concept: section.concept || defaultSectionConcept(position),
       position,
     })),
     lines: lines.map((line) => serializeProjectLine(line, sectionIds)),
@@ -1146,7 +1195,7 @@ function hydrateProjectSection(section) {
   exactProjectKeys(section, new Set(["section_id", "concept", "position"]), "Seccion de Proyecto invalida");
   return {
     id: normalizedSectionId(section.section_id),
-    concept: normalizedText(section.concept, "Concepto", { allowEmpty: true, limit: 120 }),
+    concept: normalizedText(section.concept, "Concepto", { limit: 120 }),
     position: normalizedPosition(section.position),
   };
 }
@@ -1155,25 +1204,22 @@ function hydrateCatalogProjectLine(line) {
   const commonKeys = new Set([
     "line_id", "role", "section_id", "parent_line_id", "position", "quantity",
     "source", "official_code", "display_cache", "catalog", "identity",
-    "quantity_rules_cache",
   ]);
   if (line?.role === "complement") commonKeys.add("quantity_mode");
-  exactProjectKeys(line, commonKeys, "Linea de Proyecto invalida");
+  if (!line || typeof line !== "object" || Array.isArray(line)
+      || [...commonKeys].some((key) => !hasOwn(line, key))
+      || Object.keys(line).some((key) => key !== "quantity_rules_cache" && !commonKeys.has(key))) {
+    throw new Error("Linea de Proyecto invalida");
+  }
   if (line.source !== "catalog") throw new Error("Origen de linea invalido");
   return createMixedCartLine({
     catalog: line.catalog,
-    identity: line.identity,
+    identity: hydrateProjectCatalogIdentity(line.catalog, line.identity),
     quantity: line.quantity,
-    quantityRules: line.quantity_rules_cache,
-    snapshot: {
-      name: line.display_cache?.name,
-      code: line.display_cache?.code,
-      image_url: line.display_cache?.image_url,
-      unit: "",
-      availability: "",
-      configuration: "",
-      warnings: [],
-    },
+    quantityRules: hasOwn(line, "quantity_rules_cache")
+      ? hydrateProjectQuantityRules(line.quantity_rules_cache)
+      : defaultProjectQuantityRules(),
+    snapshot: hydrateProjectDisplayCache(line.display_cache),
     lineId: line.line_id,
     officialCode: line.official_code,
     role: line.role,
@@ -1211,15 +1257,7 @@ function hydrateImportedProjectLine(line) {
     sourceAssetKey: line.source_asset_key,
     quantity: line.quantity,
     sectionId: line.section_id,
-    snapshot: {
-      name: line.display_cache?.name,
-      code: line.display_cache?.code,
-      image_url: line.display_cache?.image_url,
-      unit: "",
-      availability: "",
-      configuration: "",
-      warnings: [],
-    },
+    snapshot: hydrateProjectDisplayCache(line.display_cache),
     edits: {
       officialCode: line.official_code,
       name: line.name,
