@@ -3326,3 +3326,337 @@ textarea:focus {
     justify-content: flex-start;
   }
 }
+
+.project-editor {
+  display: grid;
+  gap: 20px;
+  padding: 28px;
+}
+
+.project-editor-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+}
+
+.project-editor-header > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.project-editor-header > div:first-child > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.project-editor-header input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  padding: 3px 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: clamp(22px, 3vw, 32px);
+  font-weight: 750;
+}
+
+.project-editor-header input:focus {
+  border-color: var(--teal);
+  outline: 0;
+}
+
+.project-autosave-status {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  color: #27705f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.project-autosave-status.saving,
+.project-autosave-status.pending {
+  color: #9a6400;
+}
+
+.project-autosave-status.conflict {
+  color: #a52b2b;
+}
+
+.project-autosave-status small {
+  max-width: 280px;
+  color: var(--muted);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.project-conflict {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #e7b0b0;
+  border-radius: 8px;
+  color: #7b2525;
+  background: #fff4f4;
+}
+
+.project-editor-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.project-editor-tabs button {
+  min-height: 44px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 9px 16px;
+  color: var(--muted);
+  background: transparent;
+  font-weight: 700;
+}
+
+.project-editor-tabs button.active {
+  border-bottom-color: var(--teal);
+  color: var(--ink);
+}
+
+.project-editor-products,
+.project-editor-section,
+.project-editor-lines {
+  display: grid;
+  gap: 14px;
+}
+
+.project-editor-section {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.project-editor-section-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.project-editor-section-header > input {
+  min-width: 180px;
+  flex: 1;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  padding: 8px 4px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.project-editor-section-header > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.project-principal {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.project-principal-main {
+  display: grid;
+  grid-template-columns: 92px minmax(180px, 1fr) minmax(110px, 150px) minmax(180px, auto);
+  gap: 14px;
+  align-items: start;
+  padding: 14px;
+}
+
+.project-line-image,
+.project-complement-image {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  min-height: 82px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: #f4f7fa;
+}
+
+.project-line-image img,
+.project-complement-image img {
+  width: 100%;
+  height: 82px;
+  object-fit: contain;
+}
+
+.project-line-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.project-line-copy small,
+.project-line-copy span,
+.project-complement-copy small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.project-line-quantity,
+.project-complement label,
+.project-quote-fields label {
+  display: grid;
+  gap: 6px;
+}
+
+.project-line-quantity input,
+.project-complement select,
+.project-quote-fields input,
+.project-quote-fields select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: #fff;
+}
+
+.project-line-quantity small {
+  color: #a52b2b;
+}
+
+.project-line-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.project-line-actions button,
+.project-line-actions select,
+.project-line-remove {
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 7px 9px;
+  color: var(--ink-soft);
+  background: #fff;
+}
+
+.project-line-remove {
+  display: inline-grid;
+  place-items: center;
+  color: #a52b2b;
+}
+
+.project-complements {
+  display: grid;
+  gap: 8px;
+  padding: 0 14px 14px 42px;
+}
+
+.project-complement {
+  display: grid;
+  grid-template-columns: 66px minmax(160px, 1fr) minmax(90px, 130px) minmax(130px, 170px) 44px;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid #c9ddd7;
+  border-radius: 8px;
+  background: #f2faf7;
+}
+
+.project-complement-image {
+  min-height: 58px;
+}
+
+.project-complement-image img {
+  height: 58px;
+}
+
+.project-complement-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.project-quote-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 920px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.project-quote-fields small {
+  color: var(--muted);
+}
+
+.project-quick-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.project-quick-summary {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7f9fb;
+}
+
+.project-quick-summary span,
+.project-quick-summary small {
+  color: var(--muted);
+}
+
+.project-quick-edit {
+  width: 100%;
+  min-height: 46px;
+}
+
+.project-editor-loading {
+  padding: 28px;
+}
+
+@media (max-width: 720px) {
+  .project-editor {
+    padding: 18px 14px 28px;
+  }
+
+  .project-editor-header,
+  .project-principal-main,
+  .project-complement,
+  .project-quote-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .project-autosave-status {
+    justify-items: start;
+  }
+
+  .project-editor-header > button {
+    width: 100%;
+  }
+
+  .project-complements {
+    padding: 0 10px 10px 24px;
+  }
+
+  .project-line-image {
+    max-width: 120px;
+  }
+}

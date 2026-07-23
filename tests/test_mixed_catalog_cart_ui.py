@@ -1597,6 +1597,43 @@ def test_mixed_submit_clears_only_after_completed_and_preserves_failed_snapshot(
     assert "worker failed" in result["failed"]["error"]
 
 
+def test_project_submit_reuses_controller_without_clearing_persistent_lines():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("createMixedQuoteController",),
+        r"""
+      const line = createMixedCartLine({
+        catalog: "tarkett", identity: {code: "T-1"}, quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "10"},
+        snapshot: {name: "Tarkett", code: "T-1", image_url: "", unit: "M2",
+          availability: "10", configuration: "", warnings: []},
+      });
+      const state = {cart: [line], sections: createInitialMixedCartSections(), open: false};
+      const cartRef = {current: state.cart};
+      const sectionsRef = {current: state.sections};
+      const controller = createMixedQuoteController({
+        cartRef, sectionsRef, submittingRef: {current: false}, sessionEpochRef: {current: 0},
+        emptyForm: {},
+        replaceCart(next) { state.cart = next; cartRef.current = next; },
+        replaceSections(next) { state.sections = next; sectionsRef.current = next; },
+        setOpen(value) { state.open = value; }, setForm() {}, getForm() { return {proyecto: "P"}; },
+        setBusy() {}, setError() {}, setNotice() {}, setJobs() {},
+        async request() { return {job: {id: "job-project"}}; },
+        confirmQuote() { return true; },
+        async waitForJobResult(job) { return {...job, status: "completed"}; },
+      });
+      await controller.submit(
+        {preventDefault() {}},
+        state.cart,
+        createMixedQuoteRequestSnapshot({proyecto: "P"}, state.sections, state.cart),
+        {preserveProject: true},
+      );
+      console.log(JSON.stringify({cartCount: state.cart.length, sectionCount: state.sections.length}));
+        """,
+    )
+    assert result == {"cartCount": 1, "sectionCount": 1}
+
+
 def test_imported_cart_editor_exposes_only_approved_fields():
     source = Path("mobiliti_saas/web/src/ImportedCartLineFields.jsx").read_text(encoding="utf-8")
 
@@ -1733,6 +1770,6 @@ def test_imported_editor_touch_targets_use_their_exact_selectors():
 def test_quote_form_offers_preview_import_without_removing_direct_generation():
     source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
 
-    assert "Previsualizar e importar al carrito" in source
+    assert "Previsualizar e importar al proyecto" in source
     assert "Generar cotizacion" in source
     assert "/import-preview" in source

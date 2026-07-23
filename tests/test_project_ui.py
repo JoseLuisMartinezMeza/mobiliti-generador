@@ -11,6 +11,93 @@ WORKSPACE_MODULE = Path("mobiliti_saas/web/src/projectWorkspace.js").resolve().a
 PICKER_MODULE = Path("mobiliti_saas/web/src/productPicker.js").resolve().as_uri()
 
 
+def test_project_editor_has_tabs_and_line_actions():
+    source = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
+    for copy in (
+        "Productos", "Datos de cotizaciÃ³n", "Cambiar producto",
+        "Cambiar todos los iguales", "Agregar complemento",
+        "Guardando", "Guardado", "Cambios pendientes",
+    ):
+        assert copy in source
+    assert "parentLineId" in source
+    assert "quantityMode" in source
+
+
+def test_quick_panel_has_only_project_copy():
+    source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+    assert 'aria-label="Proyecto activo"' in source
+    assert "<h2>Proyecto</h2>" in source
+    assert "Carrito" not in source
+
+
+def test_project_editor_composes_existing_model_operations_and_picker_contexts():
+    source = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
+    for operation in (
+        "addProjectComplement",
+        "closeMixedCartSection",
+        "mergeMixedCartSection",
+        "moveMixedCartLine",
+        "moveMixedCartLineToSection",
+        "removeProjectLineTree",
+        "renameMixedCartSection",
+        "replaceAllProjectLines",
+        "replaceProjectLine",
+        "updateImportedCartLine",
+        "updateMixedCartQuantity",
+    ):
+        assert operation in source
+    for mode in ('"add"', '"replace-one"', '"replace-all"', '"complement"'):
+        assert f"openPicker({mode}" in source
+    assert "<ProductPickerDialog" in source
+    assert "window.confirm(`Este cambio retirarÃ¡ ${children.length} complemento(s). Â¿Continuar?`)" in source
+
+
+def test_project_editor_renders_direct_complements_and_quantity_modes():
+    source = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
+    assert 'className="project-complement"' in source
+    assert "child.snapshot.image_url" in source
+    assert "<strong>+ {child.snapshot.name}</strong>" in source
+    assert 'value={child.quantityMode}' in source
+    assert '<option value="per_parent_unit">Por unidad</option>' in source
+    assert '<option value="fixed_project">Cantidad fija</option>' in source
+
+
+def test_app_opens_hydrates_and_autosaves_the_same_project_state():
+    source = MAIN.read_text(encoding="utf-8")
+    assert 'request(`/projects/${projectId}`' in source
+    assert "hydrateProject(data.project.payload)" in source
+    assert "<ProjectEditor" in source
+    assert "useProjectAutosave" in source
+    assert 'request(`/projects/${activeProject.id}`' in source
+    assert 'method: "PATCH"' in source
+    assert "expected_revision: expectedRevision" in source
+    assert "operation_id: operationId" in source
+    assert "serializeProject" in source
+    assert source.count("const [mixedCart, setMixedCart] = useState([])") == 1
+
+
+def test_quick_panel_migration_keeps_project_errors_visible_in_app_shell():
+    source = MAIN.read_text(encoding="utf-8")
+    assert "{mixedQuoteError ? (" in source
+    assert 'role="alert"' in source
+
+
+def test_project_editor_layout_has_principal_complement_and_mobile_styles():
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    for selector in (
+        ".project-editor",
+        ".project-editor-tabs",
+        ".project-principal",
+        ".project-complement",
+        ".project-autosave-status",
+        ".project-quick-summary",
+    ):
+        assert selector in styles
+    mobile = styles[styles.rfind("@media (max-width: 720px)"):]
+    assert ".project-editor-header" in mobile
+    assert ".project-principal-main" in mobile
+
+
 def test_product_picker_covers_all_contexts_and_previews_images():
     source = Path("mobiliti_saas/web/src/ProductPickerDialog.jsx").read_text(encoding="utf-8")
     helper = Path("mobiliti_saas/web/src/productPicker.js").read_text(encoding="utf-8")

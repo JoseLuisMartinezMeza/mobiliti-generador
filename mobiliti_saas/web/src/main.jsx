@@ -32,7 +32,9 @@ import {
 import SupplierCatalogView from "./SupplierCatalogView";
 import CatalogAdminPanel from "./CatalogAdminPanel";
 import MixedCartDrawer from "./MixedCartDrawer";
+import ProjectEditor from "./ProjectEditor";
 import ProjectsView from "./ProjectsView";
+import {useProjectAutosave} from "./useProjectAutosave.js";
 import {
   closeMixedCartSection,
   compactMixedCartSections,
@@ -40,6 +42,7 @@ import {
   createInitialMixedCartSections,
   createMixedCartLine,
   createMixedQuoteRequestSnapshot,
+  hydrateProject,
   lineNeedsAvailabilityConfirmation,
   lineNeedsPriceConfirmation,
   mergeMixedCartSection,
@@ -48,6 +51,7 @@ import {
   removeMixedCartLine,
   replaceImportedCartBundle,
   renameMixedCartSection,
+  serializeProject,
   updateMixedCartQuantity,
   updateImportedCartLine,
   upsertMixedCartLine,
@@ -64,10 +68,12 @@ const AUTH_EXPIRED_MESSAGE = "Tu sesion expiro. Vuelve a iniciar sesion para gen
 const MAX_QUOTE_INPUT_MB = 25;
 
 class ApiError extends Error {
-  constructor(message, status = 0) {
+  constructor(message, status = 0, detail = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
+    this.project = detail?.project || null;
   }
 }
 
@@ -363,7 +369,10 @@ function useApi(token) {
           notifyAuthExpired();
           throw new ApiError(AUTH_EXPIRED_MESSAGE, res.status);
         }
-        throw new ApiError(detail, res.status);
+        const message = typeof detail === "string"
+          ? detail
+          : detail?.code || "Error de API";
+        throw new ApiError(message, res.status, detail);
       }
       return data;
     }
@@ -2025,7 +2034,12 @@ function createMixedQuoteController({
     setNotice("");
   }
 
-  async function submit(event, submissionLines = mixedCartRef.current, preparedRequest = null) {
+  async function submit(
+    event,
+    submissionLines = mixedCartRef.current,
+    preparedRequest = null,
+    {preserveProject = false, propagateFailure = false} = {},
+  ) {
     event.preventDefault();
     if (mixedQuoteSubmittingRef.current || !submissionLines.length) return;
 
@@ -2074,19 +2088,27 @@ function createMixedQuoteController({
       if (submissionEpoch !== mixedQuoteSessionEpochRef.current || !finalJob) return;
       setJobs((current) => [finalJob, ...current.filter((job) => job.id !== finalJob.id)]);
       if (finalJob.status === "failed") {
-        setError(finalJob.error_message || "La cotizacion fallo; el proyecto se conservo para reintentar.");
+        const failure = new Error(
+          finalJob.error_message || "La cotizacion fallo; el proyecto se conservo para reintentar.",
+        );
+        setError(failure.message);
         setNotice("");
         setOpen(true);
+        if (propagateFailure) throw failure;
         return;
       }
       if (finalJob.status !== "completed") throw new Error("Estado final de cotizacion invalido");
-      replaceCart([]);
-      replaceSections(createInitialMixedCartSections());
+      if (!preserveProject) {
+        replaceCart([]);
+        replaceSections(createInitialMixedCartSections());
+      }
       setOpen(false);
       setNotice("Cotizacion mixta lista. Revisa el archivo en Cotizaciones.");
+      return finalJob;
     } catch (quoteFailure) {
       if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
       setError(quoteFailure.message || "No se pudo generar la cotizacion mixta");
+      if (propagateFailure) throw quoteFailure;
     } finally {
       if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
         mixedQuoteSubmittingRef.current = false;
@@ -2128,6 +2150,10 @@ function App() {
   const [downloadState, setDownloadState] = useState(null);
   const [deleteState, setDeleteState] = useState(null);
   const [activeProjectId, setActiveProjectId] = useState("");
+  const [activeProject, setActiveProject] = useState(null);
+  const [projectLoadState, setProjectLoadState] = useState({status: "idle", message: ""});
+  const [projectChangeVersion, setProjectChangeVersion] = useState(0);
+  const projectLoadEpochRef = useRef(0);
   const [mixedCart, setMixedCart] = useState([]);
   const mixedCartRef = useRef([]);
   const [mixedCartSections, setMixedCartSections] = useState(
@@ -2147,6 +2173,49 @@ function App() {
     () => createMixedQuoteRequestSnapshot({}, mixedCartSections, mixedCart),
     [mixedCart, mixedCartSections],
   );
+  const editorProject = useMemo(() => (
+    activeProject ? {
+      ...activeProject,
+      quoteFields: mixedQuote,
+      sections: mixedCartSections,
+      lines: mixedCart,
+    } : null
+  ), [activeProject, mixedCart, mixedCartSections, mixedQuote]);
+  const projectSaveSnapshot = useMemo(() => (
+    editorProject ? {
+      id: editorProject.id,
+      name: editorProject.name,
+      payload: serializeProject(editorProject),
+    } : null
+  ), [editorProject]);
+  const saveActiveProject = React.useCallback(async (
+    snapshot,
+    expectedRevision,
+    operationId,
+  ) => {
+    const data = await request(`/projects/${activeProject.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        name: snapshot.name,
+        payload: snapshot.payload,
+        expected_revision: expectedRevision,
+        operation_id: operationId,
+      }),
+    });
+    const saved = data?.project;
+    if (!saved?.id) throw new Error("Respuesta de guardado de Proyecto invÃ¡lida");
+    setActiveProject((current) => current?.id === saved.id
+      ? {...current, name: saved.name, revision: saved.revision}
+      : current);
+    return saved;
+  }, [activeProject?.id, request]);
+  const projectAutosave = useProjectAutosave({
+    project: projectSaveSnapshot,
+    revision: activeProject?.revision || 0,
+    changeVersion: projectChangeVersion,
+    saveProject: saveActiveProject,
+    enabled: Boolean(activeProject?.id),
+  });
 
   async function waitForMixedQuoteJob(job, isCurrent) {
     let current = job;
@@ -2160,14 +2229,28 @@ function App() {
     return isCurrent() ? current : null;
   }
 
-  function replaceMixedCart(next) {
+  function replaceMixedCart(next, markProjectChanged = true) {
     mixedCartRef.current = next;
     setMixedCart(next);
+    if (markProjectChanged && activeProject) {
+      setProjectChangeVersion((current) => current + 1);
+    }
   }
 
-  function replaceMixedCartSections(next) {
+  function replaceMixedCartSections(next, markProjectChanged = true) {
     mixedCartSectionsRef.current = next;
     setMixedCartSections(next);
+    if (markProjectChanged && activeProject) {
+      setProjectChangeVersion((current) => current + 1);
+    }
+  }
+
+  function replaceMixedQuote(next) {
+    setMixedQuote((current) => {
+      const value = typeof next === "function" ? next(current) : next;
+      return value;
+    });
+    if (activeProject) setProjectChangeVersion((current) => current + 1);
   }
 
   const mixedQuoteController = createMixedQuoteController({
@@ -2180,7 +2263,7 @@ function App() {
     replaceCart: replaceMixedCart,
     replaceSections: replaceMixedCartSections,
     setOpen: setMixedCartOpen,
-    setForm: setMixedQuote,
+    setForm: replaceMixedQuote,
     getForm: () => mixedQuote,
     setBusy: setMixedQuoteBusy,
     setError: setMixedQuoteError,
@@ -2206,6 +2289,8 @@ function App() {
       setDownloadState(null);
       setDeleteState(null);
       setActiveProjectId("");
+      setActiveProject(null);
+      setProjectChangeVersion(0);
       setView("cotizaciones");
       setSessionNotice(AUTH_EXPIRED_MESSAGE);
     }
@@ -2240,6 +2325,8 @@ function App() {
     setSession(null);
     setSessionNotice("");
     setActiveProjectId("");
+    setActiveProject(null);
+    setProjectChangeVersion(0);
   }
 
   if (!session) return <Login onLogin={login} notice={sessionNotice} />;
@@ -2309,9 +2396,72 @@ function App() {
     setMixedCartOpen(true);
   }
 
-  function openProject(projectId) {
+  async function openProject(projectId) {
+    const loadEpoch = projectLoadEpochRef.current + 1;
+    projectLoadEpochRef.current = loadEpoch;
     setActiveProjectId(projectId);
-    setView("nueva");
+    setActiveProject(null);
+    setProjectLoadState({status: "loading", message: ""});
+    setView("project-editor");
+    try {
+      const data = await request(`/projects/${projectId}`);
+      if (projectLoadEpochRef.current !== loadEpoch) return;
+      if (!data?.project?.payload) throw new Error("Respuesta de Proyecto invÃ¡lida");
+      const hydrated = hydrateProject(data.project.payload);
+      mixedCartRef.current = hydrated.lines;
+      mixedCartSectionsRef.current = hydrated.sections;
+      setMixedCart(hydrated.lines);
+      setMixedCartSections(hydrated.sections);
+      setMixedQuote({...EMPTY_MIXED_QUOTE, ...hydrated.quoteFields});
+      setActiveProject({
+        id: data.project.id,
+        name: data.project.name,
+        revision: data.project.revision,
+      });
+      setProjectChangeVersion(0);
+      setProjectLoadState({status: "ready", message: ""});
+    } catch (failure) {
+      if (projectLoadEpochRef.current !== loadEpoch) return;
+      setProjectLoadState({
+        status: "failed",
+        message: failure.message || "No se pudo abrir el Proyecto.",
+      });
+    }
+  }
+
+  function updateActiveProject(nextProject) {
+    if (!nextProject || nextProject.id !== activeProject?.id) return;
+    mixedCartRef.current = nextProject.lines;
+    mixedCartSectionsRef.current = nextProject.sections;
+    setMixedCart(nextProject.lines);
+    setMixedCartSections(nextProject.sections);
+    setMixedQuote(nextProject.quoteFields);
+    setActiveProject((current) => ({...current, name: nextProject.name}));
+    setProjectChangeVersion((current) => current + 1);
+  }
+
+  async function generateActiveProjectQuote(project) {
+    if (!project?.id) throw new Error("Abre un Proyecto persistente antes de cotizar.");
+    if (projectAutosave.status !== "saved") {
+      throw new Error("Espera a que el Proyecto termine de guardarse.");
+    }
+    const parentById = new Map(project.lines.map((line) => [line.lineId, line]));
+    const quoteLines = project.lines.map((line) => (
+      line.role === "complement"
+        ? {...line, sectionId: parentById.get(line.parentLineId)?.sectionId}
+        : line
+    ));
+    const preparedRequest = createMixedQuoteRequestSnapshot(
+      project.quoteFields,
+      project.sections,
+      quoteLines,
+    );
+    return mixedQuoteController.submit(
+      {preventDefault() {}},
+      quoteLines,
+      preparedRequest,
+      {preserveProject: true, propagateFailure: true},
+    );
   }
 
   async function submitMixedQuote(event, submissionLines = mixedCartRef.current) {
@@ -2364,6 +2514,29 @@ function App() {
     ? <QuotesView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} onCreateNew={() => setView("nueva")} refreshJobs={refreshJobs} downloadState={downloadState} deleteState={deleteState} />
     : view === "proyectos"
       ? <ProjectsView request={request} onOpenProject={openProject} activeProjectId={activeProjectId} />
+      : view === "project-editor"
+        ? projectLoadState.status === "loading"
+          ? <section className="project-editor-loading" role="status">Cargando Proyectoâ€¦</section>
+          : projectLoadState.status === "failed"
+            ? (
+              <section className="project-editor-loading">
+                <p className="error-line" role="alert">{projectLoadState.message}</p>
+                <button type="button" className="ghost-action" onClick={() => setView("proyectos")}>
+                  Volver a Proyectos
+                </button>
+              </section>
+            )
+            : editorProject
+              ? (
+                <ProjectEditor
+                  project={editorProject}
+                  request={request}
+                  autosave={projectAutosave}
+                  onProjectChange={updateActiveProject}
+                  onGenerateQuote={generateActiveProjectQuote}
+                />
+              )
+              : <section className="project-editor-loading">Selecciona un Proyecto para editarlo.</section>
       : view === "nueva"
       ? quoteForm
       : view === "historial"
@@ -2388,26 +2561,24 @@ function App() {
             {mixedQuoteNotice}
           </div>
         ) : null}
+        {mixedQuoteError ? (
+          <div className="error-line mixed-project-error" role="alert">
+            {mixedQuoteError}
+          </div>
+        ) : null}
         {mainView}
         <MixedCartDrawer
           lines={mixedCart}
           sections={mixedCartSections}
           open={mixedCartOpen}
-          form={mixedQuote}
+          projectName={activeProject?.name || ""}
+          autosave={activeProject ? projectAutosave : {status: "pending"}}
           busy={mixedQuoteBusy}
-          error={mixedQuoteError}
-          notice=""
           onClose={() => setMixedCartOpen(false)}
-          onFieldChange={updateMixedQuoteField}
-          onQuantityChange={updateMixedCartLine}
-          onImportedLineChange={updateImportedCartLineFromApp}
-          onRemove={removeMixedCartLineFromApp}
-          onCloseSection={closeMixedCartSectionFromApp}
-          onRenameSection={renameMixedCartSectionFromApp}
-          onMergeSection={mergeMixedCartSectionFromApp}
-          onMoveLine={moveMixedCartLineFromApp}
-          onMoveLineToSection={moveMixedCartLineToSectionFromApp}
-          onSubmit={submitMixedQuote}
+          onEditProject={() => {
+            setMixedCartOpen(false);
+            setView(activeProject ? "project-editor" : "proyectos");
+          }}
         />
       </main>
     </div>

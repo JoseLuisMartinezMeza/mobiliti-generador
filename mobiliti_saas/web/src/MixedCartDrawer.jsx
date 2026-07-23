@@ -131,7 +131,7 @@ function submitMixedDrawerDrafts({
   return true;
 }
 
-export default function MixedCartDrawer({
+function LegacyMixedProjectEditor({
   lines,
   sections = [],
   open,
@@ -603,6 +603,109 @@ export default function MixedCartDrawer({
             {busy ? "Cotizando..." : "Cotizar todos los catalogos"}
           </button>
         </form>
+      </aside>
+    </>
+  );
+}
+
+export default function MixedCartDrawer({
+  lines,
+  sections = [],
+  open,
+  projectName,
+  autosave,
+  busy,
+  onClose,
+  onEditProject,
+}) {
+  const drawerRef = useRef(null);
+  const previousFocusRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    previousFocusRef.current = document.activeElement;
+    drawerRef.current?.focus();
+    function handleKeyDown(event) {
+      if (event.key === "Escape" && !busy) {
+        event.preventDefault();
+        onClose();
+      }
+      if (event.key === "Tab") {
+        const focusable = Array.from(drawerRef.current?.querySelectorAll(
+          'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        ) || []);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus?.();
+    };
+  }, [open, busy, onClose]);
+
+  const principalCount = lines.filter((line) => line.role !== "complement").length;
+  const complementCount = lines.length - principalCount;
+  const occupiedSections = new Set(
+    lines.filter((line) => line.role !== "complement").map((line) => line.sectionId),
+  ).size;
+  const autosaveCopy = {
+    saving: "Guardando",
+    saved: "Guardado",
+    pending: "Cambios pendientes",
+    conflict: "Conflicto de ediciÃ³n",
+  };
+
+  return (
+    <>
+      {open ? (
+        <button
+          className="mixed-cart-overlay"
+          type="button"
+          aria-label="Cerrar proyecto"
+          disabled={busy}
+          onClick={onClose}
+        />
+      ) : null}
+      <aside
+        className={`mixed-cart-drawer project-quick-panel ${open ? "open" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-hidden={!open}
+        aria-label="Proyecto activo"
+        tabIndex="-1"
+        ref={drawerRef}
+      >
+        <div className="mixed-cart-title">
+          <div><FolderKanban size={22} /><h2>Proyecto</h2><span>{lines.length}</span></div>
+          <button type="button" onClick={onClose} aria-label="Cerrar proyecto" disabled={busy}>
+            <X size={20} />
+          </button>
+        </div>
+        <div className="project-quick-summary">
+          <strong>{projectName || "Proyecto sin guardar"}</strong>
+          <span>{principalCount} producto(s) principal(es)</span>
+          <span>{complementCount} complemento(s)</span>
+          <span>{occupiedSections || sections.length} secciÃ³n(es)</span>
+          <small role="status">{autosaveCopy[autosave?.status] || "Cambios pendientes"}</small>
+        </div>
+        <button
+          type="button"
+          className="primary-action project-quick-edit"
+          disabled={busy}
+          onClick={onEditProject}
+        >
+          Editar Proyecto
+        </button>
       </aside>
     </>
   );
