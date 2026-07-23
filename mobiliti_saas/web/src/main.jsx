@@ -34,7 +34,7 @@ import CatalogAdminPanel from "./CatalogAdminPanel";
 import MixedCartDrawer from "./MixedCartDrawer";
 import ProjectEditor from "./ProjectEditor";
 import ProjectsView from "./ProjectsView";
-import {projectMixedQuoteLines} from "./projectWorkspace.js";
+import {createProjectOperationId, projectMixedQuoteLines} from "./projectWorkspace.js";
 import {useProjectAutosave} from "./useProjectAutosave.js";
 import {
   closeMixedCartSection,
@@ -2187,8 +2187,9 @@ function importQuotationPreviewForProject({
   });
 }
 
-async function promoteProjectImport({request, projectId, draft}) {
-  if (!projectId || !draft?.preview?.import_id) {
+async function promoteProjectImport({request, userId, projectId, draft}) {
+  if (!Number.isSafeInteger(userId) || userId <= 0
+      || !projectId || !draft?.preview?.import_id) {
     throw new Error("Borrador de importacion invalido");
   }
   const promoted = await request(
@@ -2197,7 +2198,11 @@ async function promoteProjectImport({request, projectId, draft}) {
   );
   return {
     ...draft,
-    preview: withDurableImportedAssets(draft.preview, promoted),
+    preview: withDurableImportedAssets(draft.preview, promoted, {
+      userId,
+      projectId,
+      importId: draft.preview.import_id,
+    }),
   };
 }
 
@@ -2234,8 +2239,13 @@ function projectCreationPlan({
 }) {
   const baseState = activeProject ? emptyState : localState;
   if (pendingImportDraft) {
+    const adopted = projectStateWithImportDraft(baseState, pendingImportDraft);
     return {
-      projectState: projectStateWithImportDraft(baseState, pendingImportDraft),
+      projectState: {
+        quoteFields: adopted.quoteFields,
+        sections: baseState.sections,
+        lines: baseState.lines.filter((line) => line?.kind !== "imported"),
+      },
       submittedAdoption: pendingImportDraft,
     };
   }
@@ -2250,6 +2260,44 @@ function pendingDraftAfterConfirmedCreation(currentDraft, submittedAdoption) {
   return submittedAdoption && currentDraft === submittedAdoption
     ? null
     : currentDraft;
+}
+
+async function persistCreatedProjectAdoption({
+  request,
+  created,
+  submittedAdoption,
+  operationId,
+  promoteImport,
+}) {
+  if (!created?.id || !created?.payload || !Number.isSafeInteger(created.revision)
+      || !submittedAdoption || typeof promoteImport !== "function") {
+    throw new Error("Adopcion de importacion invalida");
+  }
+  const baseState = hydrateProject(created.payload);
+  if (baseState.lines.some((line) => line?.kind === "imported")) {
+    throw new Error("El Proyecto base contiene lineas importadas transitorias");
+  }
+  const durableDraft = await promoteImport(created.id, submittedAdoption);
+  const adoptedState = projectStateWithImportDraft(baseState, durableDraft);
+  const data = await request(`/projects/${created.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: created.name,
+      payload: serializeProject(adoptedState),
+      expected_revision: created.revision,
+      operation_id: operationId,
+    }),
+  });
+  const saved = data?.project;
+  if (!saved?.id || saved.id !== created.id || !saved.payload
+      || !Number.isSafeInteger(saved.revision) || saved.revision < created.revision) {
+    throw new Error("Respuesta de adopcion de Proyecto invalida");
+  }
+  return {
+    project: saved,
+    state: hydrateProject(saved.payload),
+    adoptionDraft: submittedAdoption,
+  };
 }
 
 async function loadProjectSnapshot({
@@ -2660,6 +2708,7 @@ function App() {
     try {
       const durableDraft = await promoteProjectImport({
         request,
+        userId: session.usuario.id,
         projectId,
         draft: importDraft,
       });
@@ -2722,46 +2771,57 @@ function App() {
     projectLoadEpochRef.current = loadEpoch;
     setProjectLoadState({status: "loading", message: ""});
     try {
-      const hydrated = hydrateProject(created.payload);
-      const durableDraft = submittedAdoption
-        ? await promoteProjectImport({
+      const persisted = submittedAdoption
+        ? await persistCreatedProjectAdoption({
           request,
-          projectId: created.id,
-          draft: submittedAdoption,
+          created,
+          submittedAdoption,
+          operationId: createProjectOperationId(),
+          promoteImport: (projectId, draft) => promoteProjectImport({
+            request,
+            userId: session.usuario.id,
+            projectId,
+            draft,
+          }),
         })
-        : null;
-      if (projectLoadEpochRef.current !== loadEpoch) return;
-      const adopted = durableDraft
-        ? projectStateWithImportDraft(hydrated, durableDraft)
-        : hydrated;
+        : {
+          project: created,
+          state: hydrateProject(created.payload),
+          adoptionDraft: null,
+        };
+      if (projectLoadEpochRef.current !== loadEpoch) return null;
+      const savedProject = persisted.project;
+      const adopted = persisted.state;
       mixedCartRef.current = adopted.lines;
       mixedCartSectionsRef.current = adopted.sections;
       setMixedCart(adopted.lines);
       setMixedCartSections(adopted.sections);
       setMixedQuote({...EMPTY_MIXED_QUOTE, ...adopted.quoteFields});
-      setActiveProjectId(created.id);
+      setActiveProjectId(savedProject.id);
       setActiveProject({
-        id: created.id,
-        name: created.name,
-        revision: created.revision,
+        id: savedProject.id,
+        name: savedProject.name,
+        revision: savedProject.revision,
         loadKey: loadEpoch,
       });
-      pendingImportAdoptionRef.current = submittedAdoption ? {
-        projectId: created.id,
-        operationId: "",
-        draft: submittedAdoption,
-      } : null;
+      pendingImportAdoptionRef.current = null;
       setPendingImportDraft((current) => (
-        submittedAdoption
-          ? current
-          : pendingDraftAfterConfirmedCreation(current, submittedAdoption)
+        pendingDraftAfterConfirmedCreation(current, submittedAdoption)
       ));
-      setProjectChangeVersion(submittedAdoption ? 1 : 0);
+      if (submittedAdoption) {
+        setConfirmedImport({
+          importId: submittedAdoption.preview.import_id,
+          projectId: savedProject.id,
+          confirmedAt: Date.now(),
+        });
+      }
+      setProjectChangeVersion(0);
       setProjectLoadState({status: "ready", message: ""});
       setMixedQuoteError("");
       setView("project-editor");
+      return savedProject;
     } catch (failure) {
-      if (projectLoadEpochRef.current !== loadEpoch) return;
+      if (projectLoadEpochRef.current !== loadEpoch) throw failure;
       setProjectLoadState({
         status: "failed",
         message: failure.message || "No se pudo adoptar la importacion en el Proyecto.",
@@ -2770,6 +2830,7 @@ function App() {
         failure.message || "No se pudo adoptar la importacion en el Proyecto.",
       );
       setView("proyectos");
+      throw failure;
     }
   }
 
@@ -2796,6 +2857,7 @@ function App() {
         hydrate: hydrateProject,
         promoteImport: (targetProjectId, draft) => promoteProjectImport({
           request,
+          userId: session.usuario.id,
           projectId: targetProjectId,
           draft,
         }),

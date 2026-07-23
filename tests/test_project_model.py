@@ -47,6 +47,29 @@ def test_match_key_requires_both_provider_and_code():
     assert normalized_match_key("CR Global", "") is None
 
 
+def test_imported_official_code_is_optional_but_catalog_code_remains_required():
+    imported = valid_project_payload()
+    imported["lines"][1]["official_code"] = ""
+
+    normalized = normalize_project_payload(imported)
+
+    assert normalized["lines"][1]["official_code"] == ""
+
+    catalog = valid_project_payload()
+    catalog["lines"][0]["official_code"] = ""
+    with pytest.raises(ValueError):
+        normalize_project_payload(catalog)
+
+
+@pytest.mark.parametrize("official_code", ["=A1", "+SUM(A1)", "-1+1", "@A1", "ABC\x07"])
+def test_imported_optional_official_code_still_rejects_unsafe_text(official_code):
+    payload = valid_project_payload()
+    payload["lines"][1]["official_code"] = official_code
+
+    with pytest.raises(ValueError):
+        normalize_project_payload(payload)
+
+
 def _duplicate_complement_position(payload):
     payload["lines"].append({
         **deepcopy(payload["lines"][1]),

@@ -258,7 +258,12 @@ def _normalize_common_line(item: dict, role: str, line_id: str) -> dict:
         "position": _nonnegative_int(item.get("position"), "position"),
         "quantity": _positive_decimal(item.get("quantity"), "Cantidad"),
         "source": item["source"],
-        "official_code": text_normalizer(item.get("official_code"), "official_code", limit=500),
+        "official_code": text_normalizer(
+            item.get("official_code"),
+            "official_code",
+            required=item["source"] != "imported",
+            limit=500,
+        ),
         "display_cache": _normalize_display_cache(item.get("display_cache")),
     }
     if role == "complement":

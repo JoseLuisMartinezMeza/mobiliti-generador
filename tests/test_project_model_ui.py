@@ -1,5 +1,6 @@
 import json
 import subprocess
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,60 @@ from mobiliti_saas.quote_engine.project_model import normalize_project_payload
 
 
 MODULE = Path("mobiliti_saas/web/src/mixedCart.js").resolve().as_uri()
+IMPORT_ID = "11111111-1111-4111-8111-111111111111"
+PROJECT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+SOURCE_HASH = "a" * 64
+
+
+def promotion_preview():
+    item = {
+        "key": f"import:{IMPORT_ID}:9",
+        "source_row": 9,
+        "category": "Sala",
+        "name": "Silla importada",
+        "description": "",
+        "dimension": "",
+        "provider": "Offiho México",
+        "official_code": "OHE-405",
+        "quantity": "1",
+        "unit_price": "80.00",
+        "source_currency": "USD",
+        "source_reference": "quotation.xlsx#Quotation!9",
+        "row_hash": "b" * 64,
+    }
+    manifest = {
+        "schema_version": 1,
+        "import_id": IMPORT_ID,
+        "source_hash": SOURCE_HASH,
+        "original_filename": "quotation.xlsx",
+        "provider": "Proveedor general",
+        "source_currency": "USD",
+        "currency_status": "detected",
+        "columns": {
+            "m3": "H", "unit_price": "J", "descripcion": "D", "dimension": "E",
+        },
+        "sections": [{
+            "id": "import-section-1",
+            "title": "Sala",
+            "item_keys": [item["key"]],
+        }],
+        "items": [item],
+    }
+    preview = deepcopy(manifest)
+    preview["items"][0]["image_url"] = "/cotizaciones/preview/transient.png"
+    return preview, manifest
+
+
+def valid_promotion_response():
+    _preview, manifest = promotion_preview()
+    prefix = f"projects/7/{PROJECT_ID}"
+    return {
+        "source_asset_key": f"{prefix}/sources/{SOURCE_HASH}.xlsx",
+        "image_asset_keys": {
+            "9": f"{prefix}/images/{SOURCE_HASH[:16]}-row-9.png",
+        },
+        "manifest": manifest,
+    }
 
 
 def run_js(source):
@@ -94,49 +149,31 @@ def test_imported_line_matches_provider_and_official_code():
 
 
 def test_imported_bundle_copies_row_code_and_provider_and_requires_durable_assets():
-    result = run_js(r"""
-      const preview = {
-        import_id: "11111111-1111-4111-8111-111111111111",
-        original_filename: "quotation.xlsx",
-        source_currency: "USD",
-        provider: "Proveedor general",
-        sections: [{
-          id: "source-1", title: "Recepción",
-          item_keys: ["import:11111111-1111-4111-8111-111111111111:9"],
-        }],
-        items: [{
-          key: "import:11111111-1111-4111-8111-111111111111:9",
-          source_row: 9,
-          official_code: " OHE-405 ",
-          provider: "Offiho México",
-          name: "Silla importada",
-          description: "",
-          dimension: "",
-          quantity: "1",
-          unit_price: "80.00",
-          source_currency: "USD",
-          image_url: "/cotizaciones/preview/transient.png",
-        }],
-      };
+    preview, _manifest = promotion_preview()
+    promotion = valid_promotion_response()
+    result = run_js(f"""
+      const preview = {json.dumps(preview, ensure_ascii=False)};
+      const promotion = {json.dumps(promotion, ensure_ascii=False)};
+      const expected = {{
+        userId: 7,
+        projectId: {json.dumps(PROJECT_ID)},
+        importId: preview.import_id,
+      }};
       let missingAssetError = "";
-      try {
-        model.withDurableImportedAssets(preview, {
-          source_asset_key: "projects/7/project/sources/source.xlsx",
-          image_asset_keys: {},
-          manifest: {import_id: preview.import_id},
-        });
-      } catch (error) {
+      try {{
+        model.withDurableImportedAssets(
+          preview,
+          {{...promotion, image_asset_keys: {{}}}},
+          expected,
+        );
+      }} catch (error) {{
         missingAssetError = error.message;
-      }
-      const durable = model.withDurableImportedAssets(preview, {
-        source_asset_key: "projects/7/project/sources/source.xlsx",
-        image_asset_keys: {"9": "projects/7/project/images/row-9.png"},
-        manifest: {import_id: preview.import_id},
-      });
+      }}
+      const durable = model.withDurableImportedAssets(preview, promotion, expected);
       const bundle = model.createImportedCartBundle(
-        durable, "USD", "Proveedor elegido", [{id: "section-1", concept: "Recepción"}],
+        durable, "USD", "Proveedor elegido", [{{id: "section-1", concept: "Recepción"}}],
       );
-      console.log(JSON.stringify({
+      console.log(JSON.stringify({{
         officialCode: bundle.lines[0].officialCode,
         provider: bundle.lines[0].provider,
         sourceAssetKey: bundle.lines[0].sourceAssetKey,
@@ -144,17 +181,98 @@ def test_imported_bundle_copies_row_code_and_provider_and_requires_durable_asset
         imageUrl: bundle.lines[0].snapshot.image_url,
         originalImageUrl: preview.items[0].image_url,
         missingAssetError,
-      }));
+      }}));
     """)
     assert result == {
         "officialCode": "OHE-405",
         "provider": "Offiho México",
-        "sourceAssetKey": "projects/7/project/sources/source.xlsx",
-        "imageAssetKey": "projects/7/project/images/row-9.png",
+        "sourceAssetKey": (
+            f"projects/7/{PROJECT_ID}/sources/{SOURCE_HASH}.xlsx"
+        ),
+        "imageAssetKey": (
+            f"projects/7/{PROJECT_ID}/images/{SOURCE_HASH[:16]}-row-9.png"
+        ),
         "imageUrl": "",
         "originalImageUrl": "/cotizaciones/preview/transient.png",
         "missingAssetError": "Falta imagen durable para la fila importada 9",
     }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda response: response.__setitem__("extra", True),
+        lambda response: response["manifest"].__setitem__("extra", True),
+        lambda response: response.__setitem__(
+            "source_asset_key",
+            response["source_asset_key"].replace("projects/7/", "projects/8/"),
+        ),
+        lambda response: response.__setitem__(
+            "source_asset_key",
+            response["source_asset_key"].replace(PROJECT_ID, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        ),
+        lambda response: response.__setitem__(
+            "source_asset_key",
+            f"projects/7/{PROJECT_ID}/sources/../source.xlsx",
+        ),
+        lambda response: response["manifest"].__setitem__(
+            "import_id", "22222222-2222-4222-8222-222222222222",
+        ),
+        lambda response: response["manifest"].__setitem__("source_hash", "c" * 64),
+        lambda response: response["manifest"]["items"][0].__setitem__(
+            "official_code", "STALE",
+        ),
+        lambda response: response["manifest"]["items"][0].__setitem__(
+            "provider", "Proveedor stale",
+        ),
+        lambda response: response["manifest"]["items"][0].__setitem__("source_row", 10),
+        lambda response: response["image_asset_keys"].__setitem__(
+            "10", f"projects/7/{PROJECT_ID}/images/{SOURCE_HASH[:16]}-row-10.png",
+        ),
+        lambda response: response["image_asset_keys"].__setitem__(
+            "9", f"projects/7/{PROJECT_ID}/images/not-the-canonical-row-name.png",
+        ),
+    ],
+    ids=[
+        "response-extra",
+        "manifest-extra",
+        "wrong-user",
+        "wrong-project",
+        "path-traversal",
+        "wrong-import",
+        "stale-source-hash",
+        "stale-official-code",
+        "stale-provider",
+        "stale-row",
+        "extra-image-row",
+        "malformed-image-name",
+    ],
+)
+def test_durable_import_response_rejects_malformed_or_stale_contract(mutation):
+    preview, _manifest = promotion_preview()
+    response = valid_promotion_response()
+    mutation(response)
+
+    result = run_js(f"""
+      const preview = {json.dumps(preview, ensure_ascii=False)};
+      const original = JSON.stringify(preview);
+      let message = "";
+      try {{
+        model.withDurableImportedAssets(
+          preview,
+          {json.dumps(response, ensure_ascii=False)},
+          {{userId: 7, projectId: {json.dumps(PROJECT_ID)}, importId: preview.import_id}},
+        );
+      }} catch (error) {{
+        message = error.message;
+      }}
+      console.log(JSON.stringify({{
+        rejected: Boolean(message),
+        originalUnchanged: JSON.stringify(preview) === original,
+      }}));
+    """)
+
+    assert result == {"rejected": True, "originalUnchanged": True}
 
 
 def test_imported_official_code_allows_empty_rejects_unsafe_text_and_unlinks_immediately():

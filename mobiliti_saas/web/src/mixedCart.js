@@ -773,49 +773,162 @@ export function createImportedCartBundle(preview, sourceCurrency, provider, curr
   };
 }
 
-export function withDurableImportedAssets(preview, promotion) {
-  if (!preview || typeof preview !== "object" || Array.isArray(preview)
-      || !Array.isArray(preview.items) || !preview.items.length
-      || !promotion || typeof promotion !== "object" || Array.isArray(promotion)) {
-    throw new Error("Promocion importada invalida");
-  }
-  const sourceAssetKey = normalizedText(
-    promotion.source_asset_key,
-    "Fuente durable",
-    {limit: 500},
-  );
-  const imageAssetKeys = identityRecord(promotion.image_asset_keys);
-  if (promotion.manifest?.import_id !== preview.import_id) {
-    throw new Error("La promocion no corresponde a la importacion");
-  }
-  const previewRows = new Set(preview.items.map((item) => String(item?.source_row)));
-  const durableImageAssetKeys = {};
-  for (const [row, assetKey] of Object.entries(imageAssetKeys)) {
-    if (!/^[1-9]\d*$/.test(row) || !previewRows.has(row)) {
-      throw new Error("Mapa de imagenes durables invalido");
-    }
-    durableImageAssetKeys[row] = normalizedText(
-      assetKey,
-      "Imagen durable",
-      {limit: 500},
+const IMPORT_MANIFEST_FIELDS = Object.freeze([
+  "schema_version", "import_id", "source_hash", "original_filename", "provider",
+  "source_currency", "currency_status", "columns", "sections", "items",
+]);
+const IMPORT_ITEM_FIELDS = Object.freeze([
+  "key", "source_row", "category", "name", "description", "dimension", "provider",
+  "official_code", "quantity", "unit_price", "source_currency", "row_hash",
+  "source_reference",
+]);
+const IMPORT_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const IMPORT_HASH_PATTERN = /^[0-9a-f]{64}$/;
+
+function hasExactFields(value, fields) {
+  const record = identityRecord(value);
+  const actual = Object.keys(record).sort(compareUnicodeCodePoints);
+  const expected = [...fields].sort(compareUnicodeCodePoints);
+  return actual.length === expected.length
+    && actual.every((field, index) => field === expected[index]);
+}
+
+function canonicalJsonValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(identityRecord(value))
+        .sort(compareUnicodeCodePoints)
+        .map((key) => [key, canonicalJsonValue(value[key])]),
     );
   }
+  return value;
+}
+
+function sameJsonValue(left, right) {
+  return JSON.stringify(canonicalJsonValue(left)) === JSON.stringify(canonicalJsonValue(right));
+}
+
+function validatedPromotionContract(preview, promotion, expected) {
+  if (!hasExactFields(promotion, ["source_asset_key", "image_asset_keys", "manifest"])
+      || !hasExactFields(expected, ["userId", "projectId", "importId"])
+      || !hasExactFields(preview, IMPORT_MANIFEST_FIELDS)
+      || !hasExactFields(promotion.manifest, IMPORT_MANIFEST_FIELDS)
+      || !Array.isArray(preview.items) || !preview.items.length
+      || !Array.isArray(preview.sections) || !preview.sections.length) {
+    throw new Error("Promocion importada invalida");
+  }
+  const userId = expected.userId;
+  const projectId = expected.projectId;
+  const importId = expected.importId;
+  if (!Number.isSafeInteger(userId) || userId <= 0
+      || typeof projectId !== "string" || !IMPORT_UUID_PATTERN.test(projectId)
+      || typeof importId !== "string" || !IMPORT_UUID_PATTERN.test(importId)
+      || preview.schema_version !== 1
+      || preview.import_id !== importId
+      || typeof preview.source_hash !== "string" || !IMPORT_HASH_PATTERN.test(preview.source_hash)
+      || !["detected", "required"].includes(preview.currency_status)) {
+    throw new Error("Promocion importada invalida");
+  }
+  const filename = normalizedText(preview.original_filename, "Archivo importado", {limit: 255});
+  if (filename !== preview.original_filename
+      || filename === "." || filename === ".."
+      || filename.includes("/") || filename.includes("\\")
+      || !filename.toLowerCase().endsWith(".xlsx")) {
+    throw new Error("Promocion importada invalida");
+  }
+  normalizedImportedText(preview.provider, "Proveedor", {allowEmpty: true});
+  if (preview.source_currency !== null) normalizedImportCurrency(preview.source_currency);
+  const columns = identityRecord(preview.columns);
+  for (const [name, column] of Object.entries(columns)) {
+    normalizedText(name, "Columna", {limit: 100});
+    normalizedText(column, "Columna", {limit: 20});
+  }
+
+  const canonicalItems = [];
+  const expectedImageRows = new Set();
+  const itemKeys = new Set();
+  const sourceRows = new Set();
+  for (const item of preview.items) {
+    if (!hasExactFields(item, [...IMPORT_ITEM_FIELDS, "image_url"])
+        || !Number.isSafeInteger(item.source_row) || item.source_row <= 7
+        || typeof item.row_hash !== "string" || !IMPORT_HASH_PATTERN.test(item.row_hash)
+        || item.key !== importedKey(importId, item.source_row)
+        || item.source_reference !== `${filename}#Quotation!${item.source_row}`
+        || itemKeys.has(item.key) || sourceRows.has(item.source_row)
+        || typeof item.image_url !== "string") {
+      throw new Error("Promocion importada invalida");
+    }
+    normalizedImportedText(item.category, "Categoria", {allowEmpty: true});
+    normalizedImportedText(item.name, "Nombre");
+    normalizedImportedText(item.description, "Descripcion", {allowEmpty: true});
+    normalizedImportedText(item.dimension, "Dimension", {allowEmpty: true});
+    normalizedImportedText(item.provider, "Proveedor", {allowEmpty: true});
+    normalizedImportedText(item.official_code, "Codigo oficial", {allowEmpty: true, limit: 500});
+    normalizedImportedQuantity(item.quantity);
+    normalizedImportedPrice(item.unit_price);
+    if (item.source_currency !== null) normalizedImportCurrency(item.source_currency);
+    itemKeys.add(item.key);
+    sourceRows.add(item.source_row);
+    if (item.image_url) expectedImageRows.add(String(item.source_row));
+    const {image_url: _transientImage, ...canonicalItem} = item;
+    canonicalItems.push(canonicalItem);
+  }
+
+  const coveredKeys = new Set();
+  preview.sections.forEach((section, index) => {
+    if (!hasExactFields(section, ["id", "title", "item_keys"])
+        || section.id !== `import-section-${index + 1}`
+        || !Array.isArray(section.item_keys) || !section.item_keys.length) {
+      throw new Error("Promocion importada invalida");
+    }
+    normalizedImportedText(section.title, "Seccion", {allowEmpty: true});
+    section.item_keys.forEach((key) => {
+      if (!itemKeys.has(key) || coveredKeys.has(key)) throw new Error("Promocion importada invalida");
+      coveredKeys.add(key);
+    });
+  });
+  if (coveredKeys.size !== itemKeys.size) throw new Error("Promocion importada invalida");
+
+  const canonicalManifest = {...preview, items: canonicalItems};
+  if (!sameJsonValue(canonicalManifest, promotion.manifest)) {
+    throw new Error("La promocion no corresponde a la importacion");
+  }
+  const prefix = `projects/${userId}/${projectId}`;
+  const sourceAssetKey = `${prefix}/sources/${preview.source_hash}.xlsx`;
+  if (promotion.source_asset_key !== sourceAssetKey) {
+    throw new Error("Fuente durable invalida");
+  }
+  const imageAssetKeys = identityRecord(promotion.image_asset_keys);
+  const actualImageRows = Object.keys(imageAssetKeys);
+  if (actualImageRows.length !== expectedImageRows.size
+      || actualImageRows.some((row) => !expectedImageRows.has(row))) {
+    const missingRow = [...expectedImageRows].find((row) => !hasOwn(imageAssetKeys, row));
+    if (missingRow) throw new Error(`Falta imagen durable para la fila importada ${missingRow}`);
+    throw new Error("Mapa de imagenes durables invalido");
+  }
+  for (const row of actualImageRows) {
+    const expectedKey = `${prefix}/images/${preview.source_hash.slice(0, 16)}-row-${row}.png`;
+    if (imageAssetKeys[row] !== expectedKey) throw new Error("Imagen durable invalida");
+  }
+  return {sourceAssetKey, imageAssetKeys};
+}
+
+export function withDurableImportedAssets(preview, promotion, expected) {
+  const {sourceAssetKey, imageAssetKeys} = validatedPromotionContract(
+    preview,
+    promotion,
+    expected,
+  );
   return {
     ...preview,
     source_asset_key: sourceAssetKey,
-    items: preview.items.map((item) => {
-      const row = String(item?.source_row);
-      const imageAssetKey = durableImageAssetKeys[row] || "";
-      if (item?.image_url && !imageAssetKey) {
-        throw new Error(`Falta imagen durable para la fila importada ${row}`);
-      }
-      return {
-        ...item,
-        image_url: "",
-        image_asset_key: imageAssetKey,
-        source_asset_key: sourceAssetKey,
-      };
-    }),
+    items: preview.items.map((item) => ({
+      ...item,
+      image_url: "",
+      image_asset_key: imageAssetKeys[String(item.source_row)] || "",
+      source_asset_key: sourceAssetKey,
+    })),
   };
 }
 

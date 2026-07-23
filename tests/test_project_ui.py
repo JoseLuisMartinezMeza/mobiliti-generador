@@ -49,7 +49,8 @@ def test_active_project_import_promotes_assets_before_mutation_and_retains_draft
     )
     assert promotion in promotion_helper
     assert '{method: "POST"}' in promotion_helper
-    assert "withDurableImportedAssets(draft.preview, promoted)" in promotion_helper
+    assert "withDurableImportedAssets(draft.preview, promoted, {" in promotion_helper
+    assert "userId," in promotion_helper
     assert "await promoteProjectImport({" in import_flow
     assert import_flow.index("await promoteProjectImport({") < import_flow.index(
         "mixedQuoteController.importPreview(durablePreview, options)"
@@ -265,7 +266,7 @@ def test_catalog_add_requires_active_project_and_projects_view_creates_one():
     assert 'request("/projects", {' in projects
     assert 'method: "POST"' in projects
     assert "payload: serializeProject(" in projects
-    assert "onActivateProject(created, submittedAdoption)" in projects
+    assert "await onActivateProject(created, submittedAdoption)" in projects
     assert "creatingRef.current" in projects
     assert "activateCreatedProject" in main
     assert "projectDraft={creationPlan.projectState}" in main
@@ -510,7 +511,7 @@ def test_failed_new_project_request_does_not_confirm_submitted_adoption():
     }
 
 
-def test_new_project_flow_guards_duplicate_clicks_while_post_is_in_flight():
+def test_new_project_flow_guards_duplicate_clicks_until_async_activation_finishes():
     projects_url = PROJECTS_VIEW.resolve().as_uri()
     vite_url = Path("mobiliti_saas/web/node_modules/vite/dist/node/index.js").resolve().as_uri()
     completed = subprocess.run(
@@ -523,33 +524,42 @@ def test_new_project_flow_guards_duplicate_clicks_while_post_is_in_flight():
             appType: "custom",
           }});
           const module = await server.ssrLoadModule({json.dumps(projects_url)});
-          let release;
-          const response = new Promise((resolve) => {{ release = resolve; }});
+          let releaseActivation;
+          const activation = new Promise((resolve) => {{ releaseActivation = resolve; }});
           const calls = [];
           const activated = [];
           const inFlight = {{current: false}};
           const projectState = null;
           const request = async (path, options) => {{
             calls.push({{path, options}});
-            return response;
+            return {{project: {{
+              id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+              name: "Nuevo Proyecto",
+              revision: 0,
+              payload: JSON.parse(options.body).payload,
+            }}}};
           }};
-          const first = module.createNewProject(request, (project) => activated.push(project), projectState, inFlight);
-          const second = module.createNewProject(request, (project) => activated.push(project), projectState, inFlight);
+          const activate = async (project) => {{
+            activated.push(project.id);
+            await activation;
+            return {{...project, revision: 1}};
+          }};
+          const first = module.createNewProject(request, activate, projectState, inFlight);
+          await new Promise((resolve) => setImmediate(resolve));
+          const second = module.createNewProject(request, activate, projectState, inFlight);
           await new Promise((resolve) => setImmediate(resolve));
           const callsBeforeRelease = calls.length;
-          release({{project: {{
-            id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            name: "Nuevo Proyecto",
-            revision: 0,
-            payload: JSON.parse(calls[0].options.body).payload,
-          }}}});
+          const busyBeforeRelease = inFlight.current;
+          releaseActivation();
           const results = await Promise.all([first, second]);
           await server.close();
           console.log(JSON.stringify({{
             callsBeforeRelease,
             totalCalls: calls.length,
-            activated: activated.map((project) => project.id),
+            activated,
             results: results.map((project) => project?.id || null),
+            revisions: results.map((project) => project?.revision ?? null),
+            busyBeforeRelease,
             inFlight: inFlight.current,
           }}));
         """,
@@ -564,6 +574,8 @@ def test_new_project_flow_guards_duplicate_clicks_while_post_is_in_flight():
         "totalCalls": 1,
         "activated": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
         "results": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", None],
+        "revisions": [1, None],
+        "busyBeforeRelease": True,
         "inFlight": False,
     }
 

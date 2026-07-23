@@ -39,6 +39,7 @@ EXPORTS = (
     "replaceImportedCartBundle",
     "updateImportedCartLine",
     "serializeProject",
+    "hydrateProject",
 )
 
 
@@ -61,7 +62,7 @@ def run_mixed_cart_js(source):
 
 
 def javascript_function(source, name):
-    start = re.search(rf"function\s+{name}\s*\([^)]*\)\s*\{{", source)
+    start = re.search(rf"(?:async\s+)?function\s+{name}\s*\([^)]*\)\s*\{{", source)
     assert start, f"Missing JavaScript helper: {name}"
     depth = 0
     body_start = start.end() - 1
@@ -1623,7 +1624,7 @@ def test_new_project_without_active_project_adopts_pending_import():
         project: selected.quoteFields.proyecto,
         quoteKeys: Object.keys(selected.quoteFields).sort(),
         lines: selected.lines.length,
-        name: selected.lines[0].snapshot.name,
+        onlyNonImported: selected.lines.every(line => line.kind !== "imported"),
         submittedOwnDraft: plan.submittedAdoption === pendingImportDraft,
       }));
         """,
@@ -1640,8 +1641,8 @@ def test_new_project_without_active_project_adopts_pending_import():
             "razon_social",
             "telefono",
         ],
-        "lines": 1,
-        "name": "Importado",
+        "lines": 0,
+        "onlyNonImported": True,
         "submittedOwnDraft": True,
     }
 
@@ -1704,15 +1705,146 @@ def test_active_project_pending_import_creation_excludes_active_lines():
         postLineNames: postPayload.lines.map(line => line.display_cache.name),
         postHasActiveLine: postPayload.lines.some(line =>
           line.display_cache.name === activeLine.snapshot.name),
+        postHasImportedLine: postPayload.lines.some(line => line.source === "imported"),
         postProject: postPayload.quote_fields.proyecto,
       }));
         """,
     )
     assert result == {
         "submittedOwnDraft": True,
-        "postLineNames": ["Solo pendiente"],
+        "postLineNames": [],
         "postHasActiveLine": False,
+        "postHasImportedLine": False,
         "postProject": "Adopcion pendiente",
+    }
+
+
+def test_created_project_adoption_orders_promotion_before_guarded_patch_and_retains_failures():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("persistCreatedProjectAdoption", "projectStateWithImportDraft"),
+        r"""
+      const importId = "22222222-2222-4222-8222-222222222222";
+      const projectId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      const baseState = {
+        quoteFields: {
+          proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+          razon_social: "", quote_currency: "MXN", descuento: "40",
+        },
+        sections: createInitialMixedCartSections(),
+        lines: [],
+      };
+      const created = {
+        id: projectId,
+        name: "Nuevo Proyecto",
+        revision: 0,
+        payload: serializeProject(baseState),
+      };
+      const submittedAdoption = {
+        preview: {
+          import_id: importId,
+          original_filename: "Proveedor.xlsx",
+          provider: "Proveedor",
+          source_currency: "USD",
+          sections: [{id: "source", title: "Sala", item_keys: [`import:${importId}:9`]}],
+          items: [{
+            key: `import:${importId}:9`, source_row: 9, name: "Importado",
+            official_code: "IMP-9", provider: "Proveedor",
+            description: "", dimension: "", quantity: "1", unit_price: "10",
+            source_currency: "USD", image_url: "",
+          }],
+        },
+        options: {
+          sourceCurrency: "USD",
+          provider: "Proveedor",
+          quoteForm: {proyecto: "Borrador recuperado"},
+        },
+      };
+      const durableDraft = {
+        ...submittedAdoption,
+        preview: {
+          ...submittedAdoption.preview,
+          items: submittedAdoption.preview.items.map(item => ({
+            ...item,
+            image_url: "",
+            image_asset_key: "",
+            source_asset_key: `projects/7/${projectId}/sources/source.xlsx`,
+          })),
+        },
+      };
+      const operationId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+      const promotionFailureOrder = [];
+      let promotionFailure = "";
+      try {
+        await persistCreatedProjectAdoption({
+          request: async () => {
+            promotionFailureOrder.push("patch");
+            throw new Error("unexpected patch");
+          },
+          created,
+          submittedAdoption,
+          operationId,
+          promoteImport: async () => {
+            promotionFailureOrder.push("promote");
+            throw new Error("promotion failed");
+          },
+        });
+      } catch (error) {
+        promotionFailure = error.message;
+      }
+
+      const patchFailureOrder = [];
+      let patchFailure = "";
+      let patchBody = null;
+      try {
+        await persistCreatedProjectAdoption({
+          request: async (path, options) => {
+            patchFailureOrder.push("patch");
+            patchBody = {path, ...JSON.parse(options.body)};
+            throw new Error("patch failed");
+          },
+          created,
+          submittedAdoption,
+          operationId,
+          promoteImport: async () => {
+            patchFailureOrder.push("promote");
+            return durableDraft;
+          },
+        });
+      } catch (error) {
+        patchFailure = error.message;
+      }
+
+      console.log(JSON.stringify({
+        promotionFailure,
+        promotionFailureOrder,
+        patchFailure,
+        patchFailureOrder,
+        expectedRevision: patchBody.expected_revision,
+        operationId: patchBody.operation_id,
+        patchPath: patchBody.path,
+        patchImportedSources: patchBody.payload.lines.map(line => line.source),
+        patchAssetKeys: patchBody.payload.lines.map(line => line.source_asset_key),
+        baseStillEmpty: created.payload.lines.length === 0,
+        draftStillTransient: submittedAdoption.preview.items[0].image_url === "",
+      }));
+        """,
+    )
+    assert result == {
+        "promotionFailure": "promotion failed",
+        "promotionFailureOrder": ["promote"],
+        "patchFailure": "patch failed",
+        "patchFailureOrder": ["promote", "patch"],
+        "expectedRevision": 0,
+        "operationId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "patchPath": "/projects/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "patchImportedSources": ["imported"],
+        "patchAssetKeys": [
+            "projects/7/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/sources/source.xlsx",
+        ],
+        "baseStillEmpty": True,
+        "draftStillTransient": True,
     }
 
 

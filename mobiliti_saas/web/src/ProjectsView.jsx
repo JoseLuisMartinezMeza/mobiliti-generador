@@ -38,8 +38,8 @@ export async function createNewProject(
     });
     const created = data?.project;
     if (!created?.id || !created?.payload) throw new Error("Respuesta de Proyecto invÃ¡lida");
-    onActivateProject(created, submittedAdoption);
-    return created;
+    const activated = await onActivateProject(created, submittedAdoption);
+    return activated && typeof activated === "object" ? activated : created;
   } finally {
     inFlightRef.current = false;
   }

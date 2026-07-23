@@ -235,6 +235,41 @@ def test_project_patch_updates_only_owned_project(monkeypatch):
     ).status_code == 404
 
 
+def test_project_patch_persists_and_reloads_cleared_imported_official_code(
+    persistent_project_client,
+):
+    payload = valid_project_payload()
+    created_response = persistent_project_client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Oficinas", "payload": payload},
+    )
+    assert created_response.status_code == 201, created_response.json()
+    created = created_response.json()["project"]
+    cleared = deepcopy(payload)
+    cleared["lines"][1]["official_code"] = ""
+
+    patched = persistent_project_client.patch(
+        f"/projects/{created['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": created["name"],
+            "payload": cleared,
+            "expected_revision": created["revision"],
+            "operation_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        },
+    )
+
+    assert patched.status_code == 200, patched.json()
+    assert patched.json()["project"]["payload"]["lines"][1]["official_code"] == ""
+    reloaded = persistent_project_client.get(
+        f"/projects/{created['id']}",
+        headers=_auth_headers(7),
+    )
+    assert reloaded.status_code == 200, reloaded.json()
+    assert reloaded.json()["project"]["payload"]["lines"][1]["official_code"] == ""
+
+
 def test_project_name_http_boundary_matches_schema_and_rejects_long_duplicate(monkeypatch):
     client = _project_client(monkeypatch)
     accepted_name = "P" * 120
