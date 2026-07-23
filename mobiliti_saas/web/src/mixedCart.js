@@ -393,13 +393,36 @@ function normalizedBackendProjectQuantity(value) {
     }
   }
 
-  if (scale > 1000000n) return normalized;
+  if (scale > 1000000n || scale < -1000000n) return normalized;
   if (scale <= 0n) return `${digits}${"0".repeat(Number(-scale))}`;
   if (digitLength > scale) {
     const split = Number(digitLength - scale);
     return `${digits.slice(0, split)}.${digits.slice(split)}`;
   }
   return `0.${"0".repeat(Number(scale - digitLength))}${digits}`;
+}
+
+function normalizedBackendImportedPrice(value) {
+  const text = normalizedText(value, "Precio importado", { limit: 32 });
+  const normalized = text.replace(/_/g, "");
+  const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(normalized);
+  if (!match) throw new Error("Precio importado invalido");
+  const integer = match[2] || "";
+  const fraction = match[3] ?? match[4] ?? "";
+  const digits = `${integer}${fraction}`.replace(/^0+/, "");
+  const isZero = !digits;
+  if (match[1] === "-" && !isZero) throw new Error("Precio importado invalido");
+  const scale = BigInt(fraction.length) - BigInt(match[5] || "0");
+  const coefficient = digits || "0";
+  const sign = match[1] === "-" && isZero ? "-" : "";
+
+  if (scale > 1000000n || scale < -1000000n) return normalized;
+  if (scale <= 0n) return `${sign}${coefficient}${"0".repeat(Number(-scale))}`;
+  if (BigInt(coefficient.length) > scale) {
+    const split = Number(BigInt(coefficient.length) - scale);
+    return `${sign}${coefficient.slice(0, split)}.${coefficient.slice(split)}`;
+  }
+  return `${sign}0.${"0".repeat(Number(scale - BigInt(coefficient.length)))}${coefficient}`;
 }
 
 function copyQuantityRules(quantityRules) {
@@ -858,7 +881,7 @@ export function createMixedCartLine({
 }
 
 export function validateLineQuantity(line, quantity) {
-  if (line?.projectQuantityFallback === true) {
+  if (line?.projectQuantityFallback === true || line?.projectPersistedImported === true) {
     return normalizedBackendProjectQuantity(quantity);
   }
   const text = typeof quantity === "string" ? quantity.trim() : "";
@@ -1151,6 +1174,62 @@ function hydrateCatalogLineWithoutQuantityRules(line) {
   };
 }
 
+function hydratePersistedImportedLine(line) {
+  const role = normalizedProjectRole(line.role);
+  const parentLineId = line.parent_line_id == null ? null : normalizedProjectLineId(line.parent_line_id);
+  if ((role === "principal" && parentLineId !== null)
+      || (role === "complement" && parentLineId === null)) {
+    throw new Error("Relacion de linea invalida");
+  }
+  const quantityMode = role === "complement" ? line.quantity_mode : null;
+  if (role === "complement" && !COMPLEMENT_QUANTITY_MODES.has(quantityMode)) {
+    throw new Error("Complemento invalido");
+  }
+  const identity = normalizedImportedIdentity(
+    line.import_id,
+    line.source_row,
+    importedKey(line.import_id, line.source_row),
+  );
+  const snapshot = copyImportedSnapshot(hydrateProjectDisplayCache(line.display_cache));
+  const provider = normalizedImportedText(line.provider, "Proveedor", { limit: 500 });
+  return {
+    kind: "imported",
+    key: identity.key,
+    lineId: normalizedProjectLineId(line.line_id),
+    officialCode: normalizedImportedText(line.official_code, "Codigo oficial", { limit: 500 }),
+    provider,
+    role,
+    parentLineId,
+    quantityMode,
+    position: normalizedPosition(line.position),
+    importId: identity.importId,
+    sourceRow: identity.sourceRow,
+    sourceCurrency: normalizedImportCurrency(line.source_currency),
+    imageAssetKey: normalizedText(line.image_asset_key || "", "Imagen", { allowEmpty: true, limit: 500 }),
+    sourceAssetKey: normalizedText(line.source_asset_key || "", "Fuente", { allowEmpty: true, limit: 500 }),
+    quantity: normalizedBackendProjectQuantity(line.quantity),
+    quantityRules: {},
+    projectPersistedImported: true,
+    snapshot,
+    sectionId: role === "principal" ? line.section_id : null,
+    edits: {
+      officialCode: normalizedImportedText(line.official_code, "Codigo oficial", { limit: 500 }),
+      name: normalizedImportedText(line.name, "Nombre", { limit: 500 }),
+      description: normalizedImportedText(line.description, "Descripcion", {
+        allowEmpty: true,
+        limit: 2000,
+      }),
+      dimension: normalizedImportedText(line.dimension, "Dimension", {
+        allowEmpty: true,
+        limit: 500,
+      }),
+      unitPrice: normalizedBackendImportedPrice(line.unit_price),
+      provider,
+    },
+    editorRevision: 0,
+  };
+}
+
 function projectLineRelationship(line, sectionIds) {
   const role = normalizedProjectRole(line.role);
   const lineId = normalizedProjectLineId(line.lineId);
@@ -1230,6 +1309,21 @@ function serializeProjectLine(line, sectionIds) {
       catalog: copied.catalog,
       identity: copied.identity,
       quantity_rules_cache: copied.quantityRules,
+    };
+  }
+  if (line.projectPersistedImported === true) {
+    return {
+      ...common,
+      import_id: line.importId,
+      source_row: line.sourceRow,
+      source_currency: line.sourceCurrency,
+      provider: line.edits.provider,
+      name: line.edits.name,
+      description: line.edits.description,
+      dimension: line.edits.dimension,
+      unit_price: normalizedBackendImportedPrice(line.edits.unitPrice),
+      image_asset_key: line.imageAssetKey,
+      source_asset_key: line.sourceAssetKey,
     };
   }
   const imported = copyImportedCartLine(line);
@@ -1315,34 +1409,7 @@ function hydrateImportedProjectLine(line) {
   if (line?.role === "complement") allowed.add("quantity_mode");
   exactProjectKeys(line, allowed, "Linea de Proyecto invalida");
   if (line.source !== "imported") throw new Error("Origen de linea invalido");
-  const imported = copyImportedCartLine({
-    kind: "imported",
-    key: importedKey(line.import_id, line.source_row),
-    lineId: line.line_id,
-    officialCode: line.official_code,
-    provider: line.provider,
-    role: line.role,
-    parentLineId: line.parent_line_id,
-    quantityMode: line.quantity_mode ?? null,
-    position: line.position,
-    importId: line.import_id,
-    sourceRow: line.source_row,
-    sourceCurrency: line.source_currency,
-    imageAssetKey: line.image_asset_key,
-    sourceAssetKey: line.source_asset_key,
-    quantity: line.quantity,
-    sectionId: line.section_id,
-    snapshot: hydrateProjectDisplayCache(line.display_cache),
-    edits: {
-      officialCode: line.official_code,
-      name: line.name,
-      description: line.description,
-      dimension: line.dimension,
-      unitPrice: line.unit_price,
-      provider: line.provider,
-    },
-  });
-  return imported;
+  return hydratePersistedImportedLine(line);
 }
 
 export function hydrateProject(payload) {

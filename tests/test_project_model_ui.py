@@ -2,6 +2,10 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from mobiliti_saas.quote_engine.project_model import normalize_project_payload
+
 
 MODULE = Path("mobiliti_saas/web/src/mixedCart.js").resolve().as_uri()
 
@@ -215,6 +219,77 @@ def test_no_cache_catalog_fallback_matches_backend_decimal_boundaries():
         "rejected",
         "rejected",
     ]
+
+
+def imported_project_payload(quantity="1.0000001", unit_price="0.0000001"):
+    return {
+        "schema_version": 1,
+        "quote_fields": {
+            "proyecto": "", "cliente": "", "correo": "", "telefono": "",
+            "direccion": "", "razon_social": "", "quote_currency": "MXN", "descuento": "40",
+        },
+        "sections": [{"section_id": "section-1", "concept": "RecepciÃ³n", "position": 0}],
+        "lines": [{
+            "line_id": "11111111-1111-4111-8111-111111111111",
+            "role": "principal", "section_id": "section-1", "parent_line_id": None,
+            "position": 0, "quantity": quantity, "source": "imported",
+            "official_code": "OHE-405", "display_cache": {
+                "name": "Silla importada", "code": "OHE-405", "image_url": "",
+            },
+            "import_id": "22222222-2222-4222-8222-222222222222", "source_row": 9,
+            "source_currency": "USD", "provider": "Offiho", "name": "Silla importada",
+            "description": "", "dimension": "", "unit_price": unit_price,
+            "image_asset_key": "", "source_asset_key": "",
+        }],
+    }
+
+
+def test_imported_persisted_decimals_match_backend_and_round_trip_unchanged():
+    payload = normalize_project_payload(imported_project_payload())
+    assert payload["lines"][0]["quantity"] == "1.0000001"
+    assert payload["lines"][0]["unit_price"] == "0.0000001"
+
+    result = run_js(f"""
+      const payload = {json.dumps(payload)};
+      const reopened = model.hydrateProject(payload);
+      const saved = model.serializeProject(reopened);
+      console.log(JSON.stringify({{
+        quantity: reopened.lines[0].quantity,
+        unitPrice: reopened.lines[0].edits.unitPrice,
+        savedQuantity: saved.lines[0].quantity,
+        savedUnitPrice: saved.lines[0].unit_price,
+      }}));
+    """)
+    assert result == {
+        "quantity": "1.0000001",
+        "unitPrice": "0.0000001",
+        "savedQuantity": "1.0000001",
+        "savedUnitPrice": "0.0000001",
+    }
+
+
+@pytest.mark.parametrize(
+    ("quantity", "unit_price"),
+    [
+        ("0", "0"),
+        ("-1", "0"),
+        ("1000000.0000001", "0"),
+        ("1", "-0.0000001"),
+        ("1", "NaN"),
+        ("1", "Infinity"),
+    ],
+)
+def test_imported_persisted_decimals_reject_backend_invalid_values(quantity, unit_price):
+    payload = imported_project_payload(quantity, unit_price)
+    with pytest.raises(ValueError):
+        normalize_project_payload(payload)
+
+    result = run_js(f"""
+      const payload = {json.dumps(payload)};
+      try {{ model.hydrateProject(payload); console.log(JSON.stringify("accepted")); }}
+      catch {{ console.log(JSON.stringify("rejected")); }}
+    """)
+    assert result == "rejected"
 
 
 def test_hydrate_project_rejects_unknown_nested_persisted_keys():
