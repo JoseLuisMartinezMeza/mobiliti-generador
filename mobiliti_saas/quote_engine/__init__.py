@@ -4,14 +4,38 @@ from .classification import classify_product_name, load_category_dictionary
 from .descriptions import build_product_description, normalize_description_language
 from .engine import generate_quote
 from .parser import QuoteItem, detect_columns, read_items
+from .project_model import (
+    CATALOG_LINE_FIELDS,
+    COMMON_LINE_FIELDS,
+    COMPLEMENT_QUANTITY_MODES,
+    IMPORTED_LINE_FIELDS,
+    PROJECT_CURRENCIES,
+    PROJECT_ROLES,
+    PROJECT_SCHEMA_VERSION,
+    normalize_project_payload,
+    normalized_match_key,
+    project_physical_line_count,
+    project_summary,
+)
 
 __all__ = [
     "QuoteItem",
+    "CATALOG_LINE_FIELDS",
+    "COMMON_LINE_FIELDS",
+    "COMPLEMENT_QUANTITY_MODES",
+    "IMPORTED_LINE_FIELDS",
+    "PROJECT_CURRENCIES",
+    "PROJECT_ROLES",
+    "PROJECT_SCHEMA_VERSION",
     "build_product_description",
     "classify_product_name",
     "detect_columns",
     "generate_quote",
     "load_category_dictionary",
     "normalize_description_language",
+    "normalize_project_payload",
+    "normalized_match_key",
+    "project_physical_line_count",
+    "project_summary",
     "read_items",
 ]
