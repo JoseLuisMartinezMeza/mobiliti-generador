@@ -434,3 +434,82 @@ def test_serialize_project_normalizes_empty_section_concept_without_mutating_sta
       console.log(JSON.stringify({saved: payload.sections[0].concept, editable: sections[0].concept}));
     """)
     assert result == {"saved": "Recepci\u00f3n", "editable": ""}
+
+
+def test_name_only_imported_edit_preserves_persisted_long_decimals():
+    payload = normalize_project_payload(imported_project_payload("1e-31", "1e-31"))
+    persisted_decimal = payload["lines"][0]["quantity"]
+
+    result = run_js(f"""
+      const reopened = model.hydrateProject({json.dumps(payload)});
+      const edited = model.updateImportedCartLine(
+        reopened.lines, reopened.lines[0].key, {{name: "Silla renombrada"}},
+      );
+      const saved = model.serializeProject({{...reopened, lines: edited}});
+      console.log(JSON.stringify({{
+        name: edited[0].edits.name,
+        quantity: edited[0].quantity,
+        unitPrice: edited[0].edits.unitPrice,
+        savedQuantity: saved.lines[0].quantity,
+        savedUnitPrice: saved.lines[0].unit_price,
+      }}));
+    """)
+
+    assert result == {
+        "name": "Silla renombrada",
+        "quantity": persisted_decimal,
+        "unitPrice": persisted_decimal,
+        "savedQuantity": persisted_decimal,
+        "savedUnitPrice": persisted_decimal,
+    }
+
+
+def test_replace_catalog_line_preserves_persisted_long_quantity_until_edit():
+    payload = normalize_project_payload(catalog_project_payload("1e-31"))
+    persisted_decimal = payload["lines"][0]["quantity"]
+
+    result = run_js(f"""
+      const reopened = model.hydrateProject({json.dumps(payload)});
+      const target = {{
+        catalog: "alma",
+        identity: {{internal_id: "alma:replacement", base_option_id: "", add_on_option_ids: []}},
+        officialCode: "NEW-1", provider: "ALMA", quantity: "1",
+        quantityRules: {{min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true}},
+        snapshot: {{name: "Reemplazo", code: "NEW-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []}},
+      }};
+      const replaced = model.replaceProjectLine(reopened.lines, reopened.lines[0].lineId, target);
+      const saved = model.serializeProject({{...reopened, lines: replaced.lines}});
+      console.log(JSON.stringify({{
+        quantity: replaced.lines[0].quantity,
+        savedQuantity: saved.lines[0].quantity,
+        code: replaced.lines[0].officialCode,
+      }}));
+    """)
+
+    assert result == {
+        "quantity": persisted_decimal,
+        "savedQuantity": persisted_decimal,
+        "code": "NEW-1",
+    }
+
+
+def test_explicit_edits_of_persisted_quantities_remain_interactively_strict():
+    catalog_payload = normalize_project_payload(catalog_project_payload("1e-31"))
+    imported_payload = normalize_project_payload(imported_project_payload("1e-31", "1e-31"))
+
+    result = run_js(f"""
+      const catalog = model.hydrateProject({json.dumps(catalog_payload)}).lines[0];
+      const imported = model.hydrateProject({json.dumps(imported_payload)}).lines[0];
+      const attempts = [catalog, imported].map((line) => {{
+        try {{
+          model.updateMixedCartQuantity([line], line.key, "1.0000001");
+          return "accepted";
+        }} catch {{
+          return "rejected";
+        }}
+      }});
+      console.log(JSON.stringify(attempts));
+    """)
+
+    assert result == ["rejected", "rejected"]

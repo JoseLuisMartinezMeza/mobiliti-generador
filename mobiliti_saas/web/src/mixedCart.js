@@ -566,6 +566,35 @@ function validatedImportedEdits(edits) {
   return result;
 }
 
+function validatedImportedEditUpdates(updates) {
+  const result = {};
+  for (const [field, value] of Object.entries(updates)) {
+    if (field === "officialCode") {
+      result.officialCode = normalizedImportedText(value, "Codigo oficial", {
+        allowEmpty: true,
+        limit: 500,
+      });
+    } else if (field === "name") {
+      result.name = normalizedImportedText(value, "Nombre", { limit: 1000 });
+    } else if (field === "description") {
+      result.description = normalizedImportedText(value, "Descripcion", {
+        allowEmpty: true,
+        limit: 10000,
+      });
+    } else if (field === "dimension") {
+      result.dimension = normalizedImportedText(value, "Dimension", {
+        allowEmpty: true,
+        limit: 1000,
+      });
+    } else if (field === "unitPrice") {
+      result.unitPrice = normalizedImportedPrice(value);
+    } else if (field === "provider") {
+      result.provider = normalizedImportedText(value, "Proveedor", { limit: 1000 });
+    }
+  }
+  return result;
+}
+
 export function validateImportedCartEdits(edits) {
   return validatedImportedEdits(edits);
 }
@@ -752,8 +781,11 @@ export function updateImportedCartLine(lines, key, edits) {
   if (Object.keys(updates).some((field) => !IMPORTED_EDIT_FIELDS.has(field))) {
     throw new Error("Ediciones importadas invalidas");
   }
-  const line = copyImportedCartLine(lines[index]);
-  const nextEdits = validatedImportedEdits({ ...line.edits, ...updates });
+  const persistedLine = lines[index].projectPersistedImported === true;
+  const line = persistedLine ? lines[index] : copyImportedCartLine(lines[index]);
+  const nextEdits = persistedLine
+    ? { ...line.edits, ...validatedImportedEditUpdates(updates) }
+    : validatedImportedEdits({ ...line.edits, ...updates });
   return lines.map((current, position) => (
     position === index ? {
       ...line,
@@ -949,6 +981,14 @@ export function updateMixedCartQuantity(lines, key, quantity) {
       const { projectQuantityFallback, projectQuantityRulesCache, ...interactiveLine } = line;
       return { ...interactiveLine, quantity: validateLineQuantity(interactiveLine, quantity) };
     }
+    if (line.projectPersistedImported === true) {
+      const { projectPersistedImported, ...interactiveLine } = line;
+      const interactiveImportedLine = { ...interactiveLine, quantityRules: importedQuantityRules() };
+      return {
+        ...interactiveImportedLine,
+        quantity: validateLineQuantity(interactiveImportedLine, quantity),
+      };
+    }
     return { ...line, quantity: validateLineQuantity(line, quantity) };
   });
 }
@@ -995,19 +1035,29 @@ export function replaceProjectLine(lines, lineId, target) {
   const children = current.role === "principal"
     ? projectComplements(lines, lineId).map((line) => line.lineId)
     : [];
+  const preservesPersistedQuantity = current.projectQuantityFallback === true
+    || current.projectPersistedImported === true;
   const replacement = createMixedCartLine({
     ...target,
     lineId: current.lineId,
-    quantity: current.quantity,
+    quantity: preservesPersistedQuantity ? target.quantity : current.quantity,
     sectionId: current.sectionId || "section-1",
     role: current.role,
     parentLineId: current.parentLineId || null,
     quantityMode: current.quantityMode || null,
     position: current.position,
   });
+  const replacementWithQuantity = preservesPersistedQuantity
+    ? {
+      ...replacement,
+      quantity: current.quantity,
+      projectQuantityFallback: true,
+      projectQuantityRulesCache: true,
+    }
+    : replacement;
   const kept = lines.filter((line) => !children.includes(line.lineId));
   return {
-    lines: kept.map((line) => line.lineId === lineId ? replacement : line),
+    lines: kept.map((line) => line.lineId === lineId ? replacementWithQuantity : line),
     removedComplementIds: children,
   };
 }
