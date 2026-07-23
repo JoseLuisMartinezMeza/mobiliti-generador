@@ -339,6 +339,94 @@ def test_imported_official_code_allows_empty_rejects_unsafe_text_and_unlinks_imm
     }
 
 
+def test_project_serialization_persists_empty_imported_code_but_rejects_empty_catalog_code():
+    result = run_js(r"""
+      const imported = model.createImportedCartBundle({
+        import_id: "11111111-1111-4111-8111-111111111111",
+        source_currency: "USD",
+        sections: [{
+          id: "source", title: "Sala",
+          item_keys: ["import:11111111-1111-4111-8111-111111111111:9"],
+        }],
+        items: [{
+          key: "import:11111111-1111-4111-8111-111111111111:9",
+          source_row: 9,
+          official_code: "",
+          provider: "Offiho",
+          name: "Importada",
+          description: "",
+          dimension: "",
+          quantity: "1",
+          unit_price: "80.00",
+          source_currency: "USD",
+          image_url: "",
+        }],
+      }, "USD", "Offiho", [{id: "section-1", concept: "Sala"}]).lines[0];
+      const base = {
+        quoteFields: {
+          proyecto: "", cliente: "", correo: "", telefono: "",
+          direccion: "", razon_social: "", quote_currency: "MXN", descuento: "40",
+        },
+        sections: [{id: "section-1", concept: "Sala"}],
+      };
+      const importedPayload = model.serializeProject({...base, lines: [imported]});
+      let catalogError = "";
+      try {
+        model.serializeProject({...base, lines: [model.createMixedCartLine({
+          catalog: "sunon",
+          identity: {internal_id: "sunon:chair", base_option_id: "", add_on_option_ids: []},
+          officialCode: "",
+          provider: "Sunon",
+          quantity: "1",
+          quantityRules: {min: "1", step: "1", maxDecimals: 0,
+            max: "1000000", integer: true},
+          snapshot: {name: "Chair", code: "", image_url: "", unit: "PZA",
+            availability: "", configuration: "", warnings: []},
+          sectionId: "section-1",
+        })]});
+      } catch (error) {
+        catalogError = error.message;
+      }
+      console.log(JSON.stringify({
+        importedCode: importedPayload.lines[0].official_code,
+        catalogError,
+      }));
+    """)
+    assert result == {
+        "importedCode": "",
+        "catalogError": "Codigo oficial requerido",
+    }
+
+
+def test_catalog_upsert_assigns_consecutive_positions_within_the_same_section():
+    result = run_js(r"""
+      const makeLine = (code) => model.createMixedCartLine({
+        catalog: "sunon",
+        identity: {
+          internal_id: `sunon:${code}`,
+          base_option_id: "",
+          add_on_option_ids: [],
+        },
+        officialCode: code,
+        provider: "Sunon",
+        quantity: "1",
+        quantityRules: {
+          min: "1", step: "1", maxDecimals: 0,
+          max: "1000000", integer: true,
+        },
+        snapshot: {
+          name: code, code, image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: [],
+        },
+        sectionId: "section-1",
+      });
+      let lines = model.upsertMixedCartLine([], makeLine("CHAIR-1"));
+      lines = model.upsertMixedCartLine(lines, makeLine("CHAIR-2"));
+      console.log(JSON.stringify(lines.map((line) => line.position)));
+    """)
+    assert result == [0, 1]
+
+
 def test_project_serialization_round_trips_occurrence_graph():
     result = run_js(r"""
       const state = {

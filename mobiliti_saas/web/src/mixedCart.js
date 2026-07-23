@@ -611,7 +611,14 @@ function copyImportedSnapshot(snapshot) {
   });
 }
 
-function createImportedCartLine({ preview, item, sourceCurrency, provider, sectionId }) {
+function createImportedCartLine({
+  preview,
+  item,
+  sourceCurrency,
+  provider,
+  sectionId,
+  position = 0,
+}) {
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     throw new Error("Item importado invalido");
   }
@@ -640,7 +647,7 @@ function createImportedCartLine({ preview, item, sourceCurrency, provider, secti
     role: "principal",
     parentLineId: null,
     quantityMode: null,
-    position: 0,
+    position: normalizedPosition(position),
     importId: identity.importId,
     sourceRow: identity.sourceRow,
     sourceCurrency: normalizedImportCurrency(sourceCurrency),
@@ -754,14 +761,19 @@ export function createImportedCartBundle(preview, sourceCurrency, provider, curr
   if (sectionByKey.size !== preview.items.length) throw new Error("Cobertura de secciones importadas invalida");
   const selectedCurrency = sourceCurrency || preview.source_currency;
   const selectedProvider = provider || preview.provider;
+  const nextPositionBySection = new Map();
   const lines = preview.items.map((item) => {
     if (!sectionByKey.has(item?.key)) throw new Error("Cobertura de secciones importadas invalida");
+    const sectionId = sectionByKey.get(item.key);
+    const position = nextPositionBySection.get(sectionId) || 0;
+    nextPositionBySection.set(sectionId, position + 1);
     return createImportedCartLine({
       preview,
       item,
       sourceCurrency: item.source_currency || selectedCurrency,
       provider: item.provider || selectedProvider,
-      sectionId: sectionByKey.get(item.key),
+      sectionId,
+      position,
     });
   });
   return {
@@ -1131,9 +1143,11 @@ export function upsertMixedCartLine(lines, incoming) {
   const copiedIncoming = createMixedCartLine({
     ...incoming,
     lineId,
-    position: incoming?.position ?? lines.filter((line) => (
-      line.role === "principal" && line.sectionId === (incoming?.sectionId || "section-1")
-    )).length,
+    position: incoming?.role === "complement"
+      ? incoming?.position
+      : lines.filter((line) => (
+        line.role === "principal" && line.sectionId === (incoming?.sectionId || "section-1")
+      )).length,
   });
   return [...lines, copiedIncoming];
 }
@@ -1521,7 +1535,9 @@ function serializeProjectLine(line, sectionIds) {
     official_code: normalizedOfficialCode(line.edits?.officialCode || line.officialCode, line.snapshot),
     display_cache: projectDisplayCache(line.snapshot),
   };
-  if (!common.official_code) throw new Error("Codigo oficial requerido");
+  if (!common.official_code && common.source !== "imported") {
+    throw new Error("Codigo oficial requerido");
+  }
   if (relationship.role === "complement") common.quantity_mode = relationship.quantityMode;
   if (common.source === "catalog") {
     if (line.projectQuantityFallback === true) {

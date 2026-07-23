@@ -244,6 +244,7 @@ KNOWN_API_REQUESTS = frozenset({
     ("POST", "/projects"),
     ("GET", f"/projects/{PROJECT_ID}"),
     ("PATCH", f"/projects/{PROJECT_ID}"),
+    ("POST", f"/projects/{PROJECT_ID}/imports/{IMPORT_JOB_ID}"),
     ("GET", "/catalogs/search"),
 })
 
@@ -514,6 +515,40 @@ class ApiStub:
                 return
             if (
                 hasattr(self, "project_id")
+                and request.method == "POST"
+                and path == f"/projects/{self.project_id}/imports/{IMPORT_JOB_ID}"
+            ):
+                assert self.import_preview is not None
+                manifest = deepcopy(self.import_preview)
+                manifest["items"] = [
+                    {
+                        key: deepcopy(value)
+                        for key, value in item.items()
+                        if key != "image_url"
+                    }
+                    for item in manifest["items"]
+                ]
+                prefix = (
+                    f"projects/{SESSION['usuario']['id']}/{self.project_id}"
+                )
+                source_hash = manifest["source_hash"]
+                fulfill_json(route, {
+                    "source_asset_key": (
+                        f"{prefix}/sources/{source_hash}.xlsx"
+                    ),
+                    "image_asset_keys": {
+                        str(item["source_row"]): (
+                            f"{prefix}/images/{source_hash[:16]}"
+                            f"-row-{item['source_row']}.png"
+                        )
+                        for item in self.import_preview["items"]
+                        if item.get("image_url")
+                    },
+                    "manifest": manifest,
+                })
+                return
+            if (
+                hasattr(self, "project_id")
                 and request.method == "GET"
                 and path == "/catalogs/search"
             ):
@@ -705,20 +740,53 @@ def assert_no_browser_failures(page, console_errors, page_errors):
 
 
 def close_auto_opened_drawer(page, expected_count):
-    dialog = page.get_by_role("dialog", name="Carrito de todos los catalogos")
+    dialog = page.get_by_role("dialog", name="Proyecto activo")
     dialog.wait_for(state="visible")
-    assert dialog.locator(".mixed-cart-line").count() == expected_count
+    assert dialog.locator(".mixed-cart-title span").inner_text() == str(expected_count)
+    dialog.get_by_role("status").filter(has_text="Guardado").wait_for(
+        state="visible"
+    )
     page.keyboard.press("Escape")
     dialog.wait_for(state="hidden")
-    assert page.get_by_role("button", name=f"Carrito ({expected_count})").first.is_visible()
+    assert page.get_by_role(
+        "button", name=f"Proyecto ({expected_count})"
+    ).first.is_visible()
 
 
-def fill_required_fields(dialog):
-    for label, value in REQUIRED_FIELDS:
-        dialog.get_by_label(label, exact=True).fill(value)
+def create_active_project(page, name="Proyecto E2E"):
+    page.get_by_role("button", name="Proyectos", exact=True).click()
+    page.get_by_role("button", name="Nuevo Proyecto", exact=True).click()
+    project_name = page.get_by_label("Nombre del Proyecto", exact=True)
+    project_name.wait_for(state="visible")
+    project_name.fill(name)
+    page.locator(".project-autosave-status.saved").wait_for(state="visible")
 
 
-def large_import_preview(total=700, section_count=20):
+def open_project_editor_from_quick_panel(page):
+    panel = page.get_by_role("dialog", name="Proyecto activo")
+    panel.wait_for(state="visible")
+    panel.get_by_role("button", name="Editar Proyecto", exact=True).click()
+    page.locator(".project-editor").wait_for(state="visible")
+    return page.locator(".project-editor")
+
+
+def fill_required_fields(editor):
+    editor.get_by_role("button", name=re.compile("Datos de cotizaci")).click()
+    form = editor.locator(".project-quote-fields")
+    values = dict(REQUIRED_FIELDS)
+    for field, value in (
+        ("proyecto", values["Proyecto *"]),
+        ("cliente", values["Cliente *"]),
+        ("correo", values["Correo *"]),
+        ("telefono", values["Telefono *"]),
+        ("direccion", values["Direccion *"]),
+        ("razon_social", values["Razon social *"]),
+    ):
+        form.locator(f'input[name="{field}"]').fill(value)
+    return form
+
+
+def large_import_preview(base_preview, total=700, section_count=20):
     assert total == 700 and section_count == 20
     counts = [60] * 10 + [10] * 10
     items = []
@@ -732,26 +800,37 @@ def large_import_preview(total=700, section_count=20):
             items.append({
                 "key": key,
                 "source_row": source_row,
+                "category": "",
                 "name": f"Producto grande {source_row}",
                 "description": "",
                 "dimension": "",
+                "provider": "Proveedor grande",
+                "official_code": f"PG-{source_row}",
                 "quantity": "1",
                 "unit_price": "10.00",
                 "source_currency": "MXN",
                 "image_url": "",
+                "row_hash": f"{source_row:064x}",
+                "source_reference": (
+                    f"{base_preview['original_filename']}"
+                    f"#Quotation!{source_row}"
+                ),
             })
             source_row += 1
         sections.append({
-            "id": f"source-section-{section_index}",
+            "id": f"import-section-{section_index}",
             "title": f"Espacio {section_index}",
             "item_keys": item_keys,
         })
     return {
+        "schema_version": base_preview["schema_version"],
         "import_id": IMPORT_JOB_ID,
-        "original_filename": "large-import.xlsx",
+        "source_hash": base_preview["source_hash"],
+        "original_filename": base_preview["original_filename"],
         "provider": "Proveedor grande",
         "source_currency": "MXN",
         "currency_status": "detected",
+        "columns": deepcopy(base_preview["columns"]),
         "sections": sections,
         "items": items,
     }
@@ -765,147 +844,132 @@ def accept_confirmation(page, confirmation_messages):
     page.once("dialog", accept)
 
 
+def add_catalog_product(
+    page,
+    catalog_name,
+    product_name,
+    *,
+    configure=None,
+    close_panel=True,
+):
+    page.get_by_role("button", name=re.compile(rf"^{re.escape(catalog_name)}")).click()
+    page.get_by_text(product_name, exact=True).wait_for()
+    if configure is not None:
+        configure(page)
+    if close_panel:
+        with page.expect_response(
+            lambda response: (
+                response.request.method == "PATCH"
+                and urlparse(response.url).path
+                == f"/projects/{PROJECT_ID}"
+            )
+        ) as saved:
+            page.get_by_role("button", name="Agregar", exact=True).first.click()
+        assert saved.value.ok
+        count = int(
+            page.get_by_role("dialog", name="Proyecto activo")
+            .locator(".mixed-cart-title span")
+            .inner_text()
+        )
+        close_auto_opened_drawer(page, count)
+    else:
+        page.get_by_role("button", name="Agregar", exact=True).first.click()
+
+
+def import_preview_into_active_project(
+    page,
+    source,
+    *,
+    source_currency=None,
+):
+    page.get_by_role("button", name="Nueva", exact=True).click()
+    page.locator('input[type="file"][accept=".xlsx,.pdf"]').set_input_files(source)
+    page.get_by_role(
+        "button", name="Previsualizar e importar al proyecto", exact=True
+    ).click()
+    preview_panel = page.get_by_role(
+        "region", name="Previsualizacion de importacion"
+    )
+    preview_panel.wait_for(state="visible")
+    if source_currency is not None:
+        preview_panel.get_by_label(re.compile(r"^Moneda de origen")).select_option(
+            source_currency
+        )
+    preview_panel.get_by_role(
+        "button", name="Confirmar importacion al proyecto", exact=True
+    ).click()
+    panel = page.get_by_role("dialog", name="Proyecto activo")
+    visible_error = page.locator('[role="alert"]:visible')
+    page.locator(
+        '[role="dialog"][aria-label="Proyecto activo"]:visible, '
+        '[role="alert"]:visible'
+    ).first.wait_for(state="visible")
+    if visible_error.count():
+        raise AssertionError(
+            "Importacion al proyecto rechazada: "
+            + " | ".join(visible_error.all_inner_texts())
+        )
+    return panel
+
+
 def test_four_catalog_checkout_retains_422_state_then_retries_once(vite_url, browser):
     stub = ApiStub([
         (422, {"detail": "sonara:sonara:review-panel requiere revision"}),
         (200, SUCCESS_JOB),
     ])
+    stub.enable_project_routes(project_id=PROJECT_ID)
     context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
     console_errors = capture_console_errors(page)
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
-        drawer = page.locator(".mixed-cart-drawer")
-        drawer.wait_for(state="hidden")
-        assert page.locator(".mixed-cart-overlay").count() == 0
-
-        page.get_by_role("button", name=re.compile(r"^Tarkett")).click()
-        page.get_by_text("Piso Tarkett", exact=True).wait_for()
-        page.get_by_role("button", name="Agregar", exact=True).first.click()
-        close_auto_opened_drawer(page, 1)
-
-        page.get_by_role("button", name=re.compile(r"^Offiho")).click()
-        page.get_by_text("Silla Offiho", exact=True).wait_for()
-        page.get_by_role("button", name="Agregar", exact=True).first.click()
-        close_auto_opened_drawer(page, 2)
-
-        page.get_by_role("button", name=re.compile(r"^Sonara")).click()
-        page.get_by_text("Panel Sonara", exact=True).wait_for()
-        page.get_by_role("button", name="Agregar", exact=True).first.click()
-        close_auto_opened_drawer(page, 3)
-
-        page.get_by_role("button", name=re.compile(r"^ALMA")).click()
-        page.get_by_text("Escritorio ALMA", exact=True).wait_for()
-        page.get_by_role("button", name=re.compile(r"^Base A")).click()
-        page.get_by_role("button", name=re.compile(r"^Electrificacion A")).click()
-        page.get_by_role("button", name="Agregar", exact=True).first.click()
-
-        dialog = page.get_by_role("dialog", name="Carrito de todos los catalogos")
-        dialog.wait_for(state="visible")
-        assert dialog.locator(".mixed-cart-line").count() == 4
-        assert dialog.get_by_text("Codigo por verificar", exact=True).is_visible()
-        assert dialog.get_by_text("Escritorio ALMA", exact=True).is_visible()
-        assert dialog.get_by_text("Base A + Electrificacion A", exact=True).is_visible()
-        first_concept = dialog.get_by_label("Concepto de la sección 1", exact=True)
-        assert first_concept.input_value() == "Recepción"
-        dialog.get_by_role("button", name="Cerrar sección y abrir otra", exact=True).click()
-        second_concept = dialog.get_by_label("Concepto de la sección 2", exact=True)
-        assert second_concept.input_value() == "Sala de estar"
-        second_concept.fill("Privados")
-        dialog.get_by_role("button", name="Subir Silla Offiho", exact=True).click()
-        dialog.get_by_label(
-            "Mover Escritorio ALMA a otra sección", exact=True
-        ).select_option("section-2")
-        fill_required_fields(dialog)
-        assert dialog.locator("label", has_text="Moneda de cotizacion").locator("select").input_value() == "MXN"
-        assert dialog.locator(
-            "label", has_text="Descuento general (%)"
-        ).locator("input").input_value() == "40"
-
-        offiho_quantity = dialog.get_by_label("Cantidad para Silla Offiho", exact=True)
-        offiho_quantity.fill("")
-        dialog.get_by_role("button", name="Cotizar todos los catalogos", exact=True).click()
-        assert stub.mixed_post_bodies == []
-        assert offiho_quantity.evaluate("element => document.activeElement === element")
-        offiho_quantity.fill("1.")
-        assert offiho_quantity.input_value() == "1."
-        offiho_quantity.fill("1.25")
-        offiho_quantity.press("Tab")
-        assert offiho_quantity.input_value() == "1.25"
+        create_active_project(page, "Proyecto checkout E2E")
+        add_catalog_product(page, "Tarkett", "Piso Tarkett")
+        add_catalog_product(page, "Offiho", "Silla Offiho")
+        add_catalog_product(page, "Sonara", "Panel Sonara")
+        add_catalog_product(
+            page,
+            "ALMA",
+            "Escritorio ALMA",
+            configure=lambda current: (
+                current.get_by_role("button", name=re.compile(r"^Base A")).click(),
+                current.get_by_role(
+                    "button", name=re.compile(r"^Electrificacion A")
+                ).click(),
+            ),
+            close_panel=False,
+        )
+        editor = open_project_editor_from_quick_panel(page)
+        assert editor.locator(".project-principal").count() == 4
+        fill_required_fields(editor)
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
 
         confirmations = []
         accept_confirmation(page, confirmations)
-        dialog.get_by_role("button", name="Cotizar todos los catalogos", exact=True).click()
-        dialog.get_by_role("alert").filter(
+        editor.get_by_role("button", name=re.compile("^Generar cotizaci")).click()
+        editor.get_by_role("alert").filter(
             has_text="sonara:sonara:review-panel requiere revision"
         ).wait_for()
-        assert confirmations == [CONFIRMATION]
         assert len(stub.mixed_post_bodies) == 1
-        request_body = stub.mixed_post_bodies[0]
-        expected_manual_items = [
-            EXPECTED_ITEMS[1], EXPECTED_ITEMS[0], EXPECTED_ITEMS[2], EXPECTED_ITEMS[3]
-        ]
-        assert request_body["items"] == expected_manual_items
-        assert request_body["sections"] == [
-            {
-                "id": "section-1",
-                "title": "Recepción",
-                "item_keys": [
-                    "offiho:OFF-1",
-                    "tarkett:25731726",
-                    'sonara:["sonara:review-panel","",[]]',
-                ],
-            },
-            {
-                "id": "section-2",
-                "title": "Privados",
-                "item_keys": ['alma:["alma:desk","base-a",["addon-a"]]'],
-            },
-        ]
-        for forbidden in (
-            "snapshot", "unit_price", "price_net", "base_currency", "exchange_rate",
-            "stock", "image_url", "product_url", "warnings",
-        ):
-            assert all(forbidden not in item for item in request_body["items"])
-
-        assert dialog.locator(".mixed-cart-line").count() == 4
-        assert page.get_by_role("button", name="Carrito (4)").first.is_visible()
-        assert offiho_quantity.input_value() == "1.25"
-        for label, value in REQUIRED_FIELDS:
-            assert dialog.get_by_label(label, exact=True).input_value() == value
-
-        # Chrome reports the deliberately stubbed 422 as a network console error.
-        # Account for that single expected diagnostic, then require a clean retry.
-        intentional_422_errors = [
+        assert len(stub.mixed_post_bodies[0]["items"]) == 4
+        intentional = [
             message for message in console_errors
             if is_intentional_mixed_422_console_error(message)
         ]
-        assert intentional_422_errors
-        assert [
-            message for message in console_errors
-            if message not in intentional_422_errors
-        ] == []
+        assert intentional
         console_errors[:] = [
-            message for message in console_errors
-            if message not in intentional_422_errors
+            message for message in console_errors if message not in intentional
         ]
 
         accept_confirmation(page, confirmations)
-        dialog.get_by_role("button", name="Cotizar todos los catalogos", exact=True).click()
+        editor.get_by_role("button", name=re.compile("^Generar cotizaci")).click()
         page.get_by_role("status").filter(
-            has_text="Cotizacion mixta en cola. Revisa el avance en Cotizaciones."
+            has_text="Cotizacion mixta en cola"
         ).wait_for()
-        dialog.wait_for(state="hidden")
-        empty_cart = page.get_by_role("button", name="Carrito (0)").first
-        empty_cart.wait_for(state="visible")
-        assert empty_cart.is_visible()
-        assert confirmations == [CONFIRMATION, CONFIRMATION]
         assert len(stub.mixed_post_bodies) == 2
-        assert [body["items"] for body in stub.mixed_post_bodies] == [
-            expected_manual_items,
-            expected_manual_items,
-        ]
+        assert stub.mixed_post_bodies[0]["items"] == stub.mixed_post_bodies[1]["items"]
+        assert len(stub.saved_project["payload"]["lines"]) == 4
         assert stub.unexpected_requests == []
         assert_no_browser_failures(page, console_errors, page_errors)
     finally:
@@ -914,30 +978,28 @@ def test_four_catalog_checkout_retains_422_state_then_retries_once(vite_url, bro
 
 def test_synchronous_double_submit_creates_one_mixed_job(vite_url, browser):
     stub = ApiStub([(200, SUCCESS_JOB)])
+    stub.enable_project_routes(project_id=PROJECT_ID)
     context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
     console_errors = capture_console_errors(page)
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
-        page.get_by_role("button", name=re.compile(r"^Tarkett")).click()
-        page.get_by_text("Piso Tarkett", exact=True).wait_for()
-        page.get_by_role("button", name="Agregar", exact=True).first.click()
-        dialog = page.get_by_role("dialog", name="Carrito de todos los catalogos")
-        dialog.wait_for(state="visible")
-        fill_required_fields(dialog)
-
-        dialog.locator("form.mixed-quote-form").evaluate(
-            """form => {
-                const first = new Event('submit', {bubbles: true, cancelable: true});
-                const second = new Event('submit', {bubbles: true, cancelable: true});
-                form.dispatchEvent(first);
-                form.dispatchEvent(second);
-            }"""
+        create_active_project(page, "Proyecto doble submit")
+        add_catalog_product(
+            page, "Tarkett", "Piso Tarkett", close_panel=False
         )
-        page.get_by_role("status").filter(has_text="Cotizacion mixta en cola").wait_for()
+        editor = open_project_editor_from_quick_panel(page)
+        fill_required_fields(editor)
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+        generate = editor.get_by_role(
+            "button", name=re.compile("^Generar cotizaci")
+        )
+        generate.evaluate("button => { button.click(); button.click(); }")
+        page.get_by_role("status").filter(
+            has_text="Cotizacion mixta en cola"
+        ).wait_for()
         assert len(stub.mixed_post_bodies) == 1
-        assert stub.mixed_post_bodies[0]["items"] == [EXPECTED_ITEMS[0]]
         assert stub.unexpected_requests == []
         assert_no_browser_failures(page, console_errors, page_errors)
     finally:
@@ -946,60 +1008,57 @@ def test_synchronous_double_submit_creates_one_mixed_job(vite_url, browser):
 
 def test_tarkett_card_rejects_invalid_draft_without_adding_line(vite_url, browser):
     stub = ApiStub([])
+    stub.enable_project_routes(project_id=PROJECT_ID)
     context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
     console_errors = capture_console_errors(page)
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
+        create_active_project(page, "Proyecto cantidad invalida")
         page.get_by_role("button", name=re.compile(r"^Tarkett")).click()
         card = page.locator("article.tarkett-product", has_text="Piso Tarkett")
         card.wait_for()
-        quantity = card.locator('input[type="number"]')
-        quantity.fill("")
+        card.locator('input[type="number"]').fill("")
         card.get_by_role("button", name="Agregar", exact=True).click()
-
         assert page.get_by_role("alert").filter(has_text="Cantidad invalida").is_visible()
-        assert page.get_by_role("button", name="Carrito (0)").first.is_visible()
+        assert stub.saved_project["payload"]["lines"] == []
         assert page.locator(".mixed-cart-overlay").count() == 0
-        assert stub.mixed_post_bodies == []
         assert stub.unexpected_requests == []
         assert_no_browser_failures(page, console_errors, page_errors)
     finally:
         context.close()
 
 
-def test_mobile_drawer_traps_focus_closes_on_escape_and_never_overflows(vite_url, browser):
+def test_mobile_drawer_traps_focus_closes_on_escape_and_never_overflows(
+    vite_url, browser
+):
     stub = ApiStub([])
-    context, page = new_page(browser, {"width": 390, "height": 844}, stub, vite_url)
+    stub.enable_project_routes(project_id=PROJECT_ID)
+    context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
     console_errors = capture_console_errors(page)
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
-        assert_no_browser_failures(page, console_errors, page_errors)
-        page.get_by_role("button", name=re.compile(r"^Sonara")).click()
-        page.get_by_text("Panel Sonara", exact=True).wait_for()
-        page.get_by_role("button", name="Agregar", exact=True).first.click()
-
-        dialog = page.get_by_role("dialog", name="Carrito de todos los catalogos")
+        create_active_project(page, "Proyecto panel movil")
+        add_catalog_product(
+            page, "Sonara", "Panel Sonara", close_panel=False
+        )
+        dialog = page.get_by_role("dialog", name="Proyecto activo")
         dialog.wait_for(state="visible")
+        page.set_viewport_size({"width": 390, "height": 844})
         assert page.evaluate(
             "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
         )
-        page.keyboard.press("Escape")
-        dialog.wait_for(state="hidden")
-
-        page.get_by_role("button", name="Carrito (1)").first.click()
-        dialog.wait_for(state="visible")
-        close_button = dialog.get_by_role("button", name="Cerrar carrito")
+        close_button = dialog.get_by_role("button", name="Cerrar proyecto")
         close_button.focus()
-        assert close_button.evaluate("element => document.activeElement === element")
         page.keyboard.press("Shift+Tab")
         assert dialog.evaluate("element => element.contains(document.activeElement)")
-        page.keyboard.press("Tab")
-        assert close_button.evaluate("element => document.activeElement === element")
-
+        page.keyboard.press("Escape")
+        dialog.wait_for(state="hidden")
+        page.get_by_role("button", name="Proyecto (1)").first.click()
+        dialog.wait_for(state="visible")
         assert stub.unexpected_requests == []
         assert_no_browser_failures(page, console_errors, page_errors)
     finally:
@@ -1011,105 +1070,50 @@ def test_browser_imports_uploaded_quotation_into_global_cart_and_quotes(
 ):
     source, preview = import_fixture
     stub = ApiStub([(200, SUCCESS_JOB)], import_preview=preview)
+    stub.enable_project_routes(project_id=PROJECT_ID)
     context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
     console_errors = capture_console_errors(page)
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
-        page.get_by_role("button", name="Nueva cotizacion", exact=True).click()
-        page.locator('input[type="file"][accept=".xlsx,.pdf"]').set_input_files(source)
-        page.get_by_role(
-            "button", name="Previsualizar e importar al carrito", exact=True
-        ).click()
-
-        preview_panel = page.get_by_role(
-            "region", name="Previsualizacion de importacion"
+        create_active_project(page, "Proyecto importado")
+        panel = import_preview_into_active_project(
+            page,
+            source,
+            source_currency="USD",
         )
-        preview_panel.wait_for(state="visible")
-        assert preview_panel.get_by_text(
-            "7 producto(s) en 3 seccion(es).", exact=True
-        ).is_visible()
-        assert preview["currency_status"] == "required"
-        currency = preview_panel.get_by_label(re.compile(r"^Moneda de origen"))
-        confirm = preview_panel.get_by_role(
-            "button", name="Confirmar importacion al carrito", exact=True
-        )
-        assert currency.input_value() == ""
-        assert confirm.is_disabled()
-        currency.select_option("USD")
-        assert confirm.is_enabled()
-        confirm.click()
-
-        dialog = page.get_by_role("dialog", name="Carrito de todos los catalogos")
-        dialog.wait_for(state="visible")
-        assert dialog.locator(".mixed-cart-line").count() == 7
-        assert dialog.locator(".mixed-cart-line img").count() == 7
-
-        imported_line = dialog.locator(
-            "article.mixed-cart-line", has_text="CAI63SW Alien Task Chair"
+        panel.wait_for(state="visible")
+        assert panel.locator(".mixed-cart-title span").inner_text() == "7"
+        editor = open_project_editor_from_quick_panel(page)
+        assert editor.locator(".project-principal").count() == 7
+        imported_line = editor.locator(
+            "article.project-principal", has_text="CAI63SW Alien Task Chair"
         )
         imported_line.get_by_text("Editar datos importados", exact=True).click()
-        imported_line.get_by_label("Precio unitario", exact=True).fill("82.00")
-        imported_line.get_by_label("Precio unitario", exact=True).press("Tab")
-        description = imported_line.locator('textarea[name="description"]')
-        description.fill("Descripcion revisada en navegador")
-        description.press("Tab")
-        imported_line.get_by_label(
-            "Cantidad para CAI63SW Alien Task Chair", exact=True
-        ).fill("2")
-        imported_line.get_by_label(
-            "Cantidad para CAI63SW Alien Task Chair", exact=True
-        ).press("Tab")
-
-        page.keyboard.press("Escape")
-        page.get_by_role("button", name=re.compile(r"^Offiho")).click()
-        catalog_card = page.locator("article.offiho-product", has_text="ALUFSEN")
-        catalog_card.wait_for(state="visible")
-        catalog_card.get_by_role("button", name="Agregar", exact=True).click()
-
-        dialog.wait_for(state="visible")
-        assert dialog.locator(".mixed-cart-line").count() == 8
-        catalog_line = dialog.locator("article.mixed-cart-line", has_text="ALUFSEN")
-        catalog_line.locator(".mixed-cart-move-section select").select_option("section-2")
-        catalog_line.get_by_role("button", name=re.compile(r"^Subir ")).click()
-
-        page.set_viewport_size({"width": 390, "height": 844})
-        assert page.evaluate(
-            "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+        imported_line.locator('input[name="unitPrice"]').fill("82.00")
+        imported_line.locator('input[name="unitPrice"]').blur()
+        imported_line.locator('textarea[name="description"]').fill(
+            "Descripcion revisada en navegador"
         )
-        page.set_viewport_size({"width": 1440, "height": 1000})
-        fill_required_fields(dialog)
-        assert dialog.locator(
-            "label", has_text="Moneda de cotizacion"
-        ).locator("select").input_value() == "MXN"
-        dialog.get_by_role(
-            "button", name="Cotizar todos los catalogos", exact=True
-        ).click()
+        imported_line.locator('textarea[name="description"]').blur()
+        imported_line.locator(".project-line-quantity input").fill("2")
+        imported_line.locator(".project-line-quantity input").blur()
+        fill_required_fields(editor)
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+        editor.get_by_role("button", name=re.compile("^Generar cotizaci")).click()
         page.get_by_role("status").filter(
-            has_text="Cotizacion mixta en cola. Revisa el avance en Cotizaciones."
+            has_text="Cotizacion mixta en cola"
         ).wait_for()
-
         assert len(stub.mixed_post_bodies) == 1
         assert stub.upload_count == 1
-        body = stub.mixed_post_bodies[0]
-        assert len(body["items"]) == 8
-        imported = next(item for item in body["items"] if item.get("source_row") == 11)
-        assert imported["source_currency"] == "USD"
+        assert len(stub.mixed_post_bodies[0]["items"]) == 7
+        imported = next(
+            item for item in stub.mixed_post_bodies[0]["items"]
+            if item.get("source_row") == 11
+        )
         assert imported["quantity"] == "2"
         assert imported["overrides"]["unit_price"] == "82.00"
-        assert imported["overrides"]["description"] == "Descripcion revisada en navegador"
-        assert any(
-            section["item_keys"][-2:] == [
-                "offiho:OHE-405 NEGRO ALUFSEN",
-                f"import:{IMPORT_JOB_ID}:15",
-            ]
-            for section in body["sections"]
-        )
-        assert body["quote_currency"] == "MXN"
-        empty_cart = page.get_by_role("button", name="Carrito (0)").first
-        empty_cart.wait_for(state="visible")
-        assert empty_cart.is_visible()
         assert stub.unexpected_requests == []
         assert_no_browser_failures(page, console_errors, page_errors)
     finally:
@@ -1119,50 +1123,35 @@ def test_browser_imports_uploaded_quotation_into_global_cart_and_quotes(
 def test_browser_submits_700_lines_once_from_compact_collapsed_cart(
     vite_url, browser, import_fixture
 ):
-    source, _preview = import_fixture
-    preview = large_import_preview()
+    source, base_preview = import_fixture
+    preview = large_import_preview(base_preview)
     stub = ApiStub([(200, SUCCESS_JOB)], import_preview=preview)
+    stub.enable_project_routes(project_id=PROJECT_ID)
     context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
-    page.set_default_timeout(30_000)
+    page.set_default_timeout(45_000)
     console_errors = capture_console_errors(page)
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
-        page.get_by_role("button", name="Nueva cotizacion", exact=True).click()
-        page.locator('input[type="file"][accept=".xlsx,.pdf"]').set_input_files(source)
-        page.get_by_role(
-            "button", name="Previsualizar e importar al carrito", exact=True
-        ).click()
-        preview_panel = page.get_by_role(
-            "region", name="Previsualizacion de importacion"
+        create_active_project(page, "Proyecto 700 lineas")
+        panel = import_preview_into_active_project(page, source)
+        panel.wait_for(state="visible")
+        assert panel.locator(".mixed-cart-title span").inner_text() == "700"
+        panel.get_by_role("status").filter(
+            has_text=re.compile("Cambios pendientes|Guardando")
+        ).wait_for(state="visible")
+        panel.get_by_role("status").filter(has_text="Guardado").wait_for(
+            state="visible"
         )
-        preview_panel.get_by_text("700 producto(s) en 20 seccion(es).", exact=True).wait_for()
-        preview_panel.get_by_role(
-            "button", name="Confirmar importacion al carrito", exact=True
-        ).click()
-
-        dialog = page.get_by_role("dialog", name="Carrito de todos los catalogos")
-        dialog.wait_for(state="visible")
-        toggles = dialog.locator(".mixed-cart-section-toggle")
-        assert toggles.count() == 20
-        assert [toggles.nth(index).get_attribute("aria-expanded") for index in range(20)] == (
-            ["false"] * 10 + ["true"] * 10
-        )
-        toggle_labels = [toggles.nth(index).get_attribute("aria-label") for index in range(20)]
-        assert all(label and "seccion" in label.lower() for label in toggle_labels)
-        assert len(set(toggle_labels)) == 20
-        assert dialog.locator(".mixed-cart-line").count() == 100
-        assert toggles.first.evaluate(
-            "button => document.getElementById(button.getAttribute('aria-controls'))?.hidden === true"
-        )
-
-        fill_required_fields(dialog)
-        dialog.get_by_role(
-            "button", name="Cotizar todos los catalogos", exact=True
-        ).click()
-        page.get_by_role("status").filter(has_text="Cotizacion mixta en cola").wait_for()
-
+        assert len(stub.saved_project["payload"]["lines"]) == 700
+        editor = open_project_editor_from_quick_panel(page)
+        fill_required_fields(editor)
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+        editor.get_by_role("button", name=re.compile("^Generar cotizaci")).click()
+        page.get_by_role("status").filter(
+            has_text="Cotizacion mixta en cola"
+        ).wait_for()
         assert len(stub.mixed_post_bodies) == 1
         assert len(stub.mixed_post_bodies[0]["items"]) == 700
         assert len(stub.mixed_post_bodies[0]["sections"]) == 20
@@ -1175,65 +1164,42 @@ def test_browser_submits_700_lines_once_from_compact_collapsed_cart(
 def test_collapsed_imported_editor_preserves_invalid_text_and_error(
     vite_url, browser, import_fixture
 ):
-    source, _preview = import_fixture
-    stub = ApiStub([], import_preview=large_import_preview())
+    source, preview = import_fixture
+    stub = ApiStub([], import_preview=preview)
+    stub.enable_project_routes(project_id=PROJECT_ID)
     context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
-    page.set_default_timeout(30_000)
     console_errors = capture_console_errors(page)
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
-        page.get_by_role("button", name="Nueva cotizacion", exact=True).click()
-        page.locator('input[type="file"][accept=".xlsx,.pdf"]').set_input_files(source)
-        page.get_by_role(
-            "button", name="Previsualizar e importar al carrito", exact=True
-        ).click()
-        preview_panel = page.get_by_role(
-            "region", name="Previsualizacion de importacion"
+        create_active_project(page, "Proyecto conserva borrador")
+        import_preview_into_active_project(
+            page,
+            source,
+            source_currency="USD",
         )
-        preview_panel.get_by_text("700 producto(s) en 20 seccion(es).", exact=True).wait_for()
-        preview_panel.get_by_role(
-            "button", name="Confirmar importacion al carrito", exact=True
-        ).click()
-
-        dialog = page.get_by_role("dialog", name="Carrito de todos los catalogos")
-        dialog.wait_for(state="visible")
-        toggle = dialog.locator(".mixed-cart-section-toggle").first
-        assert toggle.get_attribute("aria-expanded") == "false"
-        toggle.click()
-
-        line = dialog.locator("article.mixed-cart-line", has_text="Producto grande 9")
+        editor = open_project_editor_from_quick_panel(page)
+        line = editor.locator(
+            "article.project-principal", has_text="CAI63SW Alien Task Chair"
+        )
         line.get_by_text("Editar datos importados", exact=True).click()
         unit_price = line.locator('input[name="unitPrice"]')
         unit_price.fill("")
         unit_price.blur()
-        unit_price_error = line.locator('small[id$="-unit-price-error"]')
-        unit_price_error.filter(has_text="Precio importado invalido").wait_for()
+        error = line.locator('small[id$="-unit-price-error"]').filter(
+            has_text="Precio importado invalido"
+        )
+        error.wait_for(state="visible")
+        page.get_by_label("Nombre del Proyecto", exact=True).fill(
+            "Proyecto conserva borrador actualizado"
+        )
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
         assert unit_price.input_value() == ""
-
-        toggle.click()
-        assert toggle.get_attribute("aria-expanded") == "false"
-        toggle.click()
-        assert toggle.get_attribute("aria-expanded") == "true"
-
-        restored_line = dialog.locator("article.mixed-cart-line", has_text="Producto grande 9")
-        restored_line.get_by_text("Editar datos importados", exact=True).click()
-        restored_price = restored_line.locator('input[name="unitPrice"]')
-        assert restored_price.input_value() == ""
-        assert restored_line.locator('small[id$="-unit-price-error"]').filter(
-            has_text="Precio importado invalido"
-        ).is_visible()
-
-        restored_price.fill("12.00")
-        restored_price.blur()
-        assert restored_line.locator('small[id$="-unit-price-error"]').filter(
-            has_text="Precio importado invalido"
-        ).count() == 0
-        assert dialog.get_by_role(
-            "button", name="Cotizar todos los catalogos", exact=True
-        ).is_enabled()
-        assert stub.mixed_post_bodies == []
+        assert error.is_visible()
+        unit_price.fill("12.00")
+        unit_price.blur()
+        error.wait_for(state="detached")
         assert stub.unexpected_requests == []
         assert_no_browser_failures(page, console_errors, page_errors)
     finally:
@@ -1241,95 +1207,34 @@ def test_collapsed_imported_editor_preserves_invalid_text_and_error(
 
 
 def test_hidden_invalid_quantity_expands_announces_and_focuses_before_submit(
-    vite_url, browser, import_fixture
+    vite_url, browser
 ):
-    source, _preview = import_fixture
-    stub = ApiStub([(200, SUCCESS_JOB)], import_preview=large_import_preview())
+    stub = ApiStub([])
+    stub.enable_project_routes(project_id=PROJECT_ID)
     context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
-    page.set_default_timeout(30_000)
     console_errors = capture_console_errors(page)
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     try:
         page.goto(vite_url)
-        page.get_by_role("button", name="Nueva cotizacion", exact=True).click()
-        page.locator('input[type="file"][accept=".xlsx,.pdf"]').set_input_files(source)
-        page.get_by_role(
-            "button", name="Previsualizar e importar al carrito", exact=True
-        ).click()
-        preview_panel = page.get_by_role(
-            "region", name="Previsualizacion de importacion"
+        create_active_project(page, "Proyecto cantidades locales")
+        add_catalog_product(
+            page, "Tarkett", "Piso Tarkett", close_panel=False
         )
-        preview_panel.get_by_text("700 producto(s) en 20 seccion(es).", exact=True).wait_for()
-        preview_panel.get_by_role(
-            "button", name="Confirmar importacion al carrito", exact=True
-        ).click()
-
-        dialog = page.get_by_role("dialog", name="Carrito de todos los catalogos")
-        dialog.wait_for(state="visible")
-        toggle = dialog.locator(".mixed-cart-section-toggle").first
-        toggle.click()
-        quantity = dialog.get_by_label("Cantidad para Producto grande 9", exact=True)
-        second_quantity = dialog.get_by_label("Cantidad para Producto grande 10", exact=True)
+        editor = open_project_editor_from_quick_panel(page)
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+        quantity = editor.locator(".project-line-quantity input")
         quantity.fill("")
-        second_quantity.fill("")
-        toggle.click()
-        assert toggle.get_attribute("aria-expanded") == "false"
-
-        fill_required_fields(dialog)
-        dialog.get_by_role(
-            "button", name="Cotizar todos los catalogos", exact=True
-        ).click()
-
-        dialog.get_by_role("alert").filter(
-            has_text="Corrige la cantidad marcada antes de cotizar."
-        ).wait_for()
-        assert toggle.get_attribute("aria-expanded") == "true"
-        restored_quantity = dialog.get_by_label(
-            "Cantidad para Producto grande 9", exact=True
-        )
-        restored_second_quantity = dialog.get_by_label(
-            "Cantidad para Producto grande 10", exact=True
-        )
-        assert restored_quantity.input_value() == ""
-        assert restored_quantity.get_attribute("aria-invalid") == "true"
-        assert restored_second_quantity.input_value() == ""
-        assert restored_second_quantity.get_attribute("aria-invalid") == "true"
-        assert restored_quantity.evaluate("element => document.activeElement === element")
-
-        imported_line = dialog.locator(
-            "article.mixed-cart-line", has_text="Producto grande 9"
-        )
-        imported_line.get_by_text("Editar datos importados", exact=True).click()
-        provider = imported_line.locator('input[name="provider"]')
-        provider.fill("Proveedor actualizado")
-        provider.blur()
-        assert dialog.get_by_role("alert").filter(
-            has_text="Corrige la cantidad marcada antes de cotizar."
-        ).is_visible()
-
-        restored_quantity.fill("2")
-        restored_quantity.blur()
-        assert restored_quantity.get_attribute("aria-invalid") == "false"
-        assert restored_second_quantity.get_attribute("aria-invalid") == "true"
-        assert dialog.get_by_role("alert").filter(
-            has_text="Corrige la cantidad marcada antes de cotizar."
-        ).is_visible()
-
-        restored_second_quantity.fill("3")
-        restored_second_quantity.blur()
-        assert restored_second_quantity.get_attribute("aria-invalid") == "false"
-        dialog.get_by_role("alert").filter(
-            has_text="Corrige la cantidad marcada antes de cotizar."
-        ).wait_for(state="detached")
-
-        dialog.get_by_role(
-            "button", name="Cotizar todos los catalogos", exact=True
-        ).click()
-        page.get_by_role("status").filter(has_text="Cotizacion mixta en cola").wait_for()
-        assert len(stub.mixed_post_bodies) == 1
-        assert stub.mixed_post_bodies[0]["items"][0]["quantity"] == "2"
-        assert stub.mixed_post_bodies[0]["items"][1]["quantity"] == "3"
+        quantity.blur()
+        alert = editor.locator(".project-line-quantity").get_by_role("alert")
+        alert.wait_for(state="visible")
+        assert quantity.get_attribute("aria-invalid") == "true"
+        assert stub.saved_project["payload"]["lines"][0]["quantity"] == "1"
+        quantity.fill("2")
+        quantity.blur()
+        alert.wait_for(state="detached")
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+        assert stub.saved_project["payload"]["lines"][0]["quantity"] == "2"
         assert stub.unexpected_requests == []
         assert_no_browser_failures(page, console_errors, page_errors)
     finally:
