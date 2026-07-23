@@ -2590,10 +2590,7 @@ def _bind_authoritative_canonical_rows(
                 raise ValueError("Identidad técnica ausente: upstream_row_hash")
             origin_matches = canonical.origin == expected_origin
         else:
-            key_origin, separator, _identity = item.canonical_key.partition(":")
-            origin_matches = bool(separator and key_origin) and (
-                canonical.origin == key_origin.strip().lower()
-            )
+            origin_matches = canonical.origin in MIXED_CATALOG_ORDER
         comparisons = {
             "item_key": canonical.item_key == item.canonical_key,
             "source_hash": canonical.source_hash == item.source_hash,

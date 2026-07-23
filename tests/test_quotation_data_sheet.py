@@ -33,7 +33,7 @@ def mixed_payload():
 
 def _lines_by_key(payload):
     return {
-        line["canonical_key"]: line
+        line["line_id"]: line
         for group in payload["groups"]
         for line in group["items"]
     }
@@ -44,7 +44,7 @@ def test_quotation_data_contains_all_lines_in_user_order(mixed_payload):
     expected_keys = [
         item_key
         for section in mixed_payload["sections"]
-        for item_key in section["item_keys"]
+        for item_key in section["line_ids"]
     ]
     lines = _lines_by_key(mixed_payload)
 
@@ -59,6 +59,43 @@ def test_quotation_data_contains_all_lines_in_user_order(mixed_payload):
         for row in rows
     )
     assert all(len(row.row_hash) == 64 for row in rows)
+
+
+def test_quotation_data_keeps_duplicate_canonical_occurrences_as_distinct_rows():
+    catalogs = mixed_catalogs.__wrapped__()
+    rates = rate_rows.__wrapped__()
+    line_ids = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    ]
+    payload = build_mixed_catalog_cart_payload(
+        [
+            {
+                "line_id": line_id,
+                "catalog": "sunon",
+                "internal_id": "sunon:desk-1",
+                "quantity": str(index),
+            }
+            for index, line_id in enumerate(line_ids, start=1)
+        ],
+        catalogs=catalogs,
+        rate_rows=rates,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Recepcion",
+            "line_ids": line_ids,
+        }],
+    )
+
+    rows = quotation_data_rows(payload)
+
+    assert [row.item_key for row in rows] == line_ids
+    assert (
+        payload["groups"][0]["items"][0]["canonical_key"]
+        == payload["groups"][0]["items"][1]["canonical_key"]
+    )
 
 
 def test_quotation_data_is_very_hidden_with_only_inline_strings(mixed_payload):
@@ -129,12 +166,16 @@ def test_quotation_data_local_preflight_has_no_500_line_cap(mixed_payload):
     line = payload["groups"][0]["items"][0]
     payload["groups"] = [payload["groups"][0]]
     payload["groups"][0]["items"] = [
-        {**line, "canonical_key": f"tarkett:{index}"}
+        {
+            **line,
+            "line_id": f"legacy-{index}",
+            "canonical_key": f"tarkett:{index}",
+        }
         for index in range(501)
     ]
     payload["sections"] = [{
         "id": "section-1", "title": "Recepcion",
-        "item_keys": [line["canonical_key"] for line in payload["groups"][0]["items"]],
+        "line_ids": [line["line_id"] for line in payload["groups"][0]["items"]],
     }]
     payload["item_count"] = 501
 
@@ -246,8 +287,8 @@ def test_quotation_data_row_rejects_boolean_decimal_and_source_row():
 
 @pytest.mark.parametrize("mutate", (
     lambda payload: payload.update(item_count=payload["item_count"] + 1),
-    lambda payload: payload["sections"][0]["item_keys"].append(payload["sections"][0]["item_keys"][0]),
-    lambda payload: payload["sections"][0]["item_keys"].pop(),
+    lambda payload: payload["sections"][0]["line_ids"].append(payload["sections"][0]["line_ids"][0]),
+    lambda payload: payload["sections"][0]["line_ids"].pop(),
     lambda payload: payload["groups"][0]["items"][0].update(catalog="spoof"),
 ))
 def test_quotation_data_rejects_count_order_and_metadata_tampering(mixed_payload, mutate):
@@ -285,7 +326,7 @@ def test_quotation_data_normalizes_negative_zero_and_accepts_source_row_one(tmp_
         source_row=1, canonical_key=source_row_one_key,
         original_unit_price="-0", unit_price="-0",
     )
-    payload["sections"][0]["item_keys"] = [source_row_one_key]
+    payload["sections"][0]["line_ids"] = [line["line_id"]]
 
     row = quotation_data_rows(payload)[0]
 
@@ -324,7 +365,9 @@ def test_quotation_data_rejects_imported_source_hash_and_key_mismatches(tmp_path
 
     payload["imported_source"]["source_hash"] = manifest["source_hash"]
     payload["imported_source"]["items"][0]["canonical_key"] = "import:spoof:11"
-    payload["sections"][0]["item_keys"] = ["import:spoof:11"]
+    payload["sections"][0]["line_ids"] = [
+        payload["imported_source"]["items"][0]["line_id"]
+    ]
     with pytest.raises(ValueError, match="canonical_key"):
         quotation_data_rows(payload)
 

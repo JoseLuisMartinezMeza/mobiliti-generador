@@ -26,6 +26,7 @@ from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
 from mobiliti_saas.quote_engine.quotation_import import build_import_manifest
 from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
 from quotation_import_fixtures import write_import_fixture
+from test_mixed_catalog_cart import mixed_catalogs, rate_rows
 
 
 def _supplier_item(catalog, *, currency, internal_id):
@@ -117,6 +118,49 @@ def _png_bytes(color):
     stream = BytesIO()
     Image.new("RGB", (2, 2), color).save(stream, format="PNG")
     return stream.getvalue()
+
+
+def test_workbook_writes_occurrence_line_ids_for_duplicate_catalog_products(
+    mixed_catalogs,
+    rate_rows,
+    tmp_path,
+):
+    line_ids = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    ]
+    payload = build_mixed_catalog_cart_payload(
+        [
+            {
+                "line_id": line_id,
+                "catalog": "sunon",
+                "internal_id": "sunon:desk-1",
+                "quantity": str(index),
+            }
+            for index, line_id in enumerate(line_ids, start=1)
+        ],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Recepción",
+            "line_ids": line_ids,
+        }],
+    )
+
+    output = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "duplicate-occurrences.xlsx",
+    )
+    sheet = load_workbook(output, data_only=False)["Quotation"]
+
+    assert [sheet.cell(row, 20).value for row in (9, 10)] == line_ids
+    assert (
+        payload["groups"][0]["items"][0]["canonical_key"]
+        == payload["groups"][0]["items"][1]["canonical_key"]
+    )
 
 
 def _write_two_product_import_fixture(path):
@@ -307,12 +351,12 @@ def test_mixed_workbook_has_one_quotation_with_provider_sections_and_audit_colum
 
 def test_mixed_workbook_uses_manual_sections_and_interleaved_supplier_order(tmp_path):
     payload = frozen_payload()
-    tarkett_key = payload["groups"][0]["items"][0]["canonical_key"]
-    sonara_key = payload["groups"][1]["items"][0]["canonical_key"]
-    alma_key = payload["groups"][2]["items"][0]["canonical_key"]
+    tarkett_key = payload["groups"][0]["items"][0]["line_id"]
+    sonara_key = payload["groups"][1]["items"][0]["line_id"]
+    alma_key = payload["groups"][2]["items"][0]["line_id"]
     payload["sections"] = [
-        {"id": "section-1", "title": "Recepción", "item_keys": [alma_key, tarkett_key]},
-        {"id": "section-2", "title": "Privados", "item_keys": [sonara_key]},
+        {"id": "section-1", "title": "Recepción", "line_ids": [alma_key, tarkett_key]},
+        {"id": "section-2", "title": "Privados", "line_ids": [sonara_key]},
     ]
 
     output = create_mixed_catalog_quotation_workbook(
@@ -382,22 +426,22 @@ def test_mixed_workbook_interleaves_catalog_and_imported_rows_with_original_imag
         today=date(2026, 7, 21),
     )
     payload = _three_image_payload()
-    catalog_key = payload["groups"][0]["items"][0]["canonical_key"]
-    offiho_key = payload["groups"][1]["items"][0]["canonical_key"]
-    alma_key = payload["groups"][2]["items"][0]["canonical_key"]
+    catalog_key = payload["groups"][0]["items"][0]["line_id"]
+    offiho_key = payload["groups"][1]["items"][0]["line_id"]
+    alma_key = payload["groups"][2]["items"][0]["line_id"]
     for group in payload["groups"][1:]:
         group["items"][0]["image_url"] = ""
         group["items"][0]["image_kind"] = "placeholder"
-    imported_key = imported["imported_source"]["items"][0]["canonical_key"]
+    imported_key = imported["imported_source"]["items"][0]["line_id"]
     payload["imported_source"] = imported["imported_source"]
     payload["sections"] = [
         {
             "id": "section-1",
             "title": "Recepción",
-            "item_keys": [catalog_key, imported_key],
+            "line_ids": [catalog_key, imported_key],
         },
-        {"id": "section-2", "title": "Operación", "item_keys": [offiho_key]},
-        {"id": "section-3", "title": "Dirección", "item_keys": [alma_key]},
+        {"id": "section-2", "title": "Operación", "line_ids": [offiho_key]},
+        {"id": "section-3", "title": "Dirección", "line_ids": [alma_key]},
     ]
     payload["item_count"] += 1
 
@@ -642,7 +686,7 @@ def test_mixed_workbook_rejects_self_consistent_imported_row_remap_before_output
         source_reference=f"{source.name}#Quotation!9",
         row_hash=authoritative_row_9["row_hash"],
     )
-    payload["sections"][0]["item_keys"] = [remapped_key]
+    payload["sections"][0]["line_ids"] = [imported_line["line_id"]]
 
     # El validador estructural no puede ligar la fila al XLSX; el builder si debe.
     assert validate_mixed_catalog_payload(payload) is payload
@@ -1021,12 +1065,13 @@ def test_mixed_workbook_downloads_each_unique_image_url_once(monkeypatch, tmp_pa
     )
     second = deepcopy(first)
     second.update(
+        line_id="legacy-extra",
         canonical_key='alma:["alma:desk-2","",[]]',
         name="Segundo producto ALMA",
         source_reference="alma:source:second",
     )
     alma_group["items"].append(second)
-    payload["sections"][2]["item_keys"].append(second["canonical_key"])
+    payload["sections"][2]["line_ids"].append(second["line_id"])
     payload["item_count"] += 1
     calls = []
     image_path = tmp_path / "shared.png"

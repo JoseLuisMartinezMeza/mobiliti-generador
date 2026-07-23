@@ -347,7 +347,7 @@ def quotation_data_rows(payload: object) -> tuple[QuotationDataRow, ...]:
         section_title = section["title"]
         _validate_safe_text(section_id)
         _validate_safe_text(section_title)
-        for item_key in section["item_keys"]:
+        for item_key in section["line_ids"]:
             if item_key in expected_keys or item_key not in checked.items:
                 raise ValueError("Orden de Quotation_Data inconsistente")
             expected_keys.add(item_key)
@@ -2754,9 +2754,9 @@ def _preflight_payload(payload: object) -> "_Payload":
         imported_items = imported["items"]
         declared_items += len(imported_items)
     for section in sections:
-        if not isinstance(section, dict) or not _is_sequence(section.get("item_keys")):
+        if not isinstance(section, dict) or not _is_sequence(section.get("line_ids")):
             raise ValueError("Sección de Quotation_Data inválida")
-        declared_section_keys += len(section["item_keys"])
+        declared_section_keys += len(section["line_ids"])
     if declared_items + 1 > XLSX_MAX_ROWS or declared_section_keys + 1 > XLSX_MAX_ROWS:
         raise ValueError("Quotation_Data excede el límite físico de filas XLSX")
     if declared_items != item_count or declared_section_keys != item_count:
@@ -2770,7 +2770,7 @@ def _preflight_payload(payload: object) -> "_Payload":
         for line in group["items"]:
             if not isinstance(line, dict) or line.get("catalog") != catalog:
                 raise ValueError("Línea de Quotation_Data inválida")
-            _add_item(result, line.get("canonical_key"), (line, source_hash, catalog, None, ""))
+            _add_item(result, line.get("line_id"), (line, source_hash, catalog, None, ""))
     if imported is not None:
         source_hash = imported.get("source_hash")
         import_id = imported.get("import_id")
@@ -2789,16 +2789,16 @@ def _preflight_payload(payload: object) -> "_Payload":
                 raise ValueError("canonical_key importado de Quotation_Data inválido")
             _add_item(
                 result,
-                line.get("canonical_key"),
+                line.get("line_id"),
                 (line, source_hash, "imported", source_row, line.get("row_hash")),
             )
     normalized_sections: list[dict] = []
     seen_section_ids: set[str] = set()
     flattened: list[str] = []
     for section in sections:
-        if not isinstance(section, dict) or set(section) != {"id", "title", "item_keys"}:
+        if not isinstance(section, dict) or set(section) != {"id", "title", "line_ids"}:
             raise ValueError("Sección de Quotation_Data inválida")
-        section_id, title, keys = section["id"], section["title"], section["item_keys"]
+        section_id, title, keys = section["id"], section["title"], section["line_ids"]
         _validate_safe_text(section_id)
         _validate_safe_text(title)
         if section_id in seen_section_ids or not _is_sequence(keys) or not keys:

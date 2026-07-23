@@ -79,9 +79,9 @@ MAX_MIXED_SECTIONS = (
 )
 MAX_MIXED_SECTION_TITLE = 120
 MIXED_ALLOWED_FIELDS = {
-    "tarkett": frozenset({"catalog", "code", "quantity"}),
-    "offiho": frozenset({"catalog", "inventory_key", "quantity"}),
-    "supplier": frozenset({"catalog", "internal_id", "quantity", "base_option_id", "add_on_option_ids"}),
+    "tarkett": frozenset({"line_id", "catalog", "code", "quantity"}),
+    "offiho": frozenset({"line_id", "catalog", "inventory_key", "quantity"}),
+    "supplier": frozenset({"line_id", "catalog", "internal_id", "quantity", "base_option_id", "add_on_option_ids"}),
 }
 MIXED_REQUIRED_FIELDS = {
     "tarkett": frozenset({"catalog", "code", "quantity"}),
@@ -89,7 +89,7 @@ MIXED_REQUIRED_FIELDS = {
     "supplier": frozenset({"catalog", "internal_id", "quantity"}),
 }
 MIXED_LINE_FIELDS = frozenset({
-    "canonical_key", "catalog", "supplier", "code", "name", "description", "unit",
+    "line_id", "canonical_key", "catalog", "supplier", "code", "name", "description", "unit",
     "quantity", "unit_price", "discount_percent", "original_currency",
     "original_unit_price", "frozen_exchange_rate", "source_reference", "price_mode",
     "auto_electrification", "tax_rate", "image_url", "product_url", "warnings",
@@ -113,12 +113,18 @@ MIXED_IMPORTED_STORAGE_PROVIDERS = frozenset(
     {"supabase", "r2", "cloudflare-r2", "cloudflare"}
 )
 MIXED_IMPORTED_LINE_FIELDS = frozenset({
-    "kind", "canonical_key", "import_id", "source_row", "category", "name", "description",
+    "kind", "line_id", "canonical_key", "import_id", "source_row", "category", "name", "description",
     "dimension", "provider", "quantity", "original_unit_price", "original_currency",
     "unit_price", "frozen_exchange_rate", "discount_percent", "source_hash", "row_hash",
-    "source_reference",
+    "source_reference", "official_code", "image_asset_key", "source_asset_key",
 })
-MIXED_SECTION_FIELDS = frozenset({"id", "title", "item_keys"})
+MIXED_SECTION_FIELDS = frozenset({"id", "title", "line_ids"})
+MIXED_LEGACY_SECTION_FIELDS = frozenset({"id", "title", "item_keys"})
+MIXED_PAYLOAD_FIELDS = frozenset({
+    "source_type", "quote_currency", "created_at", "groups", "imported_source",
+    "sections", "item_count", "auto_electrification_rate", "rate_summary",
+    "project_context",
+})
 AUTO_ELECTRIFICATION_RATE_FIELDS = (
     "base_currency", "quote_currency", "exchange_rate", "rate_source", "rate_effective_date", "rate_retrieved_at",
 )
@@ -154,6 +160,10 @@ def _validate_browser_row(raw: object) -> dict[str, Any]:
     if missing:
         raise ValueError(f"Campo mixto requerido: {min(missing)}")
     normalized = dict(raw)
+    if "line_id" in normalized:
+        normalized["line_id"] = _identity_text(
+            normalized["line_id"], "line_id", limit=MAX_MIXED_TEXT
+        )
     identity_field = {"tarkett": "code", "offiho": "inventory_key", "supplier": "internal_id"}[family]
     normalized[identity_field] = _identity_text(normalized[identity_field], identity_field)
     quantity = normalized.get("quantity")
@@ -208,12 +218,12 @@ def mixed_cart_key(raw: dict[str, Any]) -> str:
 
 def _ordered_browser_rows(raw_items: list[dict[str, object]]) -> list[dict[str, Any]]:
     normalized = preflight_mixed_catalog_items(raw_items)
-    seen: set[str] = set()
-    for raw in normalized:
-        key = mixed_cart_key(raw)
-        if key in seen:
-            raise ValueError(f"Clave mixta duplicada: {key}")
-        seen.add(key)
+    seen_line_ids: set[str] = set()
+    for index, raw in enumerate(normalized, start=1):
+        line_id = raw.setdefault("line_id", f"legacy-{index}")
+        if line_id in seen_line_ids:
+            raise ValueError(f"line_id mixto duplicado: {line_id}")
+        seen_line_ids.add(line_id)
     return normalized
 
 
@@ -228,13 +238,14 @@ def _group_browser_rows(
 
 def _normalize_presentation_sections(
     raw_sections: object,
-    ordered_keys: list[str],
+    occurrences: list[tuple[str, str]],
 ) -> list[dict[str, Any]]:
+    ordered_line_ids = [line_id for line_id, _canonical_key in occurrences]
     if raw_sections is None:
         return [{
             "id": "section-1",
             "title": "Recepción",
-            "item_keys": ordered_keys,
+            "line_ids": ordered_line_ids,
         }]
     if (
         not isinstance(raw_sections, list)
@@ -245,8 +256,14 @@ def _normalize_presentation_sections(
     normalized: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     flattened: list[str] = []
+    line_ids_by_canonical: dict[str, list[str]] = {}
+    for line_id, canonical_key in occurrences:
+        line_ids_by_canonical.setdefault(canonical_key, []).append(line_id)
     for raw in raw_sections:
-        if not isinstance(raw, dict) or set(raw) != MIXED_SECTION_FIELDS:
+        if (
+            not isinstance(raw, dict)
+            or set(raw) not in {MIXED_SECTION_FIELDS, MIXED_LEGACY_SECTION_FIELDS}
+        ):
             raise ValueError("Secciones mixtas invalidas")
         section_id = _identity_text(raw.get("id"), "section_id", limit=64)
         if not re.fullmatch(r"section-[1-9]\d*", section_id) or section_id in seen_ids:
@@ -257,20 +274,36 @@ def _normalize_presentation_sections(
             "section_title",
             limit=MAX_MIXED_SECTION_TITLE,
         )
-        item_keys = raw.get("item_keys")
-        if not isinstance(item_keys, list) or not item_keys:
+        requested_ids = raw.get("line_ids", raw.get("item_keys"))
+        if not isinstance(requested_ids, list) or not requested_ids:
             raise ValueError("Secciones mixtas invalidas")
-        cleaned_keys = [
+        cleaned_ids = [
             _identity_text(value, "section_item_key", limit=MAX_MIXED_TEXT)
-            for value in item_keys
+            for value in requested_ids
         ]
-        flattened.extend(cleaned_keys)
+        if set(raw) == MIXED_LEGACY_SECTION_FIELDS:
+            resolved: list[str] = []
+            for canonical_key in cleaned_ids:
+                matches = line_ids_by_canonical.get(canonical_key, [])
+                if len(matches) > 1:
+                    raise ValueError(
+                        f"Clave canonica ambigua en seccion legacy: {canonical_key}"
+                    )
+                if not matches:
+                    raise ValueError("Secciones mixtas invalidas")
+                resolved.append(matches[0])
+            cleaned_ids = resolved
+        flattened.extend(cleaned_ids)
         normalized.append({
             "id": section_id,
             "title": title,
-            "item_keys": cleaned_keys,
+            "line_ids": cleaned_ids,
         })
-    if len(flattened) != len(ordered_keys) or set(flattened) != set(ordered_keys):
+    if (
+        len(flattened) != len(ordered_line_ids)
+        or len(set(flattened)) != len(flattened)
+        or set(flattened) != set(ordered_line_ids)
+    ):
         raise ValueError("Secciones mixtas invalidas")
     return normalized
 
@@ -289,18 +322,67 @@ def _normalize_imported_source(
     }:
         raise ValueError("Fuente importada invalida")
     manifest = imported_source["manifest"]
+    raw_items = imported_source["items"]
+    if not isinstance(raw_items, list):
+        raise ValueError("Items importados invalidos")
+    project_fields = {
+        "line_id", "official_code", "image_asset_key", "source_asset_key",
+    }
+    normalized_inputs: list[dict[str, Any]] = []
+    occurrence_metadata: list[dict[str, str]] = []
+    manifest_by_row = {
+        item["source_row"]: item
+        for item in manifest.get("items", [])
+        if isinstance(item, dict) and type(item.get("source_row")) is int
+    } if isinstance(manifest, dict) else {}
+    for index, raw in enumerate(raw_items, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError("Items importados invalidos")
+        line_id = _identity_text(
+            raw.get("line_id", f"legacy-import-{index}"),
+            "line_id",
+            limit=MAX_MIXED_TEXT,
+        )
+        source_row = raw.get("source_row")
+        authoritative = manifest_by_row.get(source_row, {})
+        metadata = {
+            "line_id": line_id,
+            "official_code": _bounded(
+                raw.get("official_code", authoritative.get("official_code", "")),
+                "official_code",
+                required=False,
+                limit=MAX_MIXED_TEXT,
+            ),
+            "image_asset_key": _bounded(
+                raw.get("image_asset_key", ""),
+                "image_asset_key",
+                required=False,
+                limit=MAX_MIXED_TEXT,
+            ),
+            "source_asset_key": _bounded(
+                raw.get("source_asset_key", ""),
+                "source_asset_key",
+                required=False,
+                limit=MAX_MIXED_TEXT,
+            ),
+        }
+        normalized_inputs.append({
+            key: value for key, value in raw.items() if key not in project_fields
+        })
+        occurrence_metadata.append(metadata)
     items = normalize_imported_items(
-        imported_source["items"],
+        normalized_inputs,
         manifest,
         source_currency=imported_source["source_currency"],
         quote_currency=quote_currency,
         rate_rows=rate_rows,
         discount_percent=str(discount),
     )
-    items = [
-        {"canonical_key": item["key"], **{key: value for key, value in item.items() if key != "key"}}
-        for item in items
-    ]
+    items = [{
+        **metadata,
+        "canonical_key": item["key"],
+        **{key: value for key, value in item.items() if key != "key"},
+    } for item, metadata in zip(items, occurrence_metadata, strict=True)]
     currencies = {item["original_currency"] for item in items}
     return {
         "import_id": manifest["import_id"],
@@ -312,6 +394,62 @@ def _normalize_imported_source(
         ),
         "items": items,
     }
+
+
+def _normalize_project_context(
+    value: object,
+    occurrence_ids: list[str],
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    from .project_quote import project_context as build_project_context
+
+    expected_fields = {
+        "project_id", "project_revision", "project_payload_hash",
+        "normalized_project_payload", "compositions",
+    }
+    if not isinstance(value, dict) or set(value) != expected_fields:
+        raise ValueError("Contexto de Proyecto invalido")
+    project_id = _identity_text(
+        value.get("project_id"), "project_id", limit=MAX_MIXED_TEXT
+    )
+    project_revision = value.get("project_revision")
+    if type(project_revision) is not int or project_revision < 0:
+        raise ValueError("Contexto de Proyecto invalido")
+    normalized_payload = value.get("normalized_project_payload")
+    try:
+        expected = build_project_context(
+            normalized_payload,
+            project_id,
+            project_revision,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Contexto de Proyecto invalido") from exc
+    if value != expected:
+        raise ValueError("Contexto de Proyecto invalido")
+
+    payload_ids = [
+        line["line_id"] for line in expected["normalized_project_payload"]["lines"]
+    ]
+    component_ids: list[str] = []
+    price_term_ids: list[str] = []
+    for composition in expected["compositions"]:
+        component_ids.extend(composition["component_line_ids"])
+        price_term_ids.extend(
+            term["line_id"] for term in composition["price_terms"]
+        )
+    occurrence_set = set(occurrence_ids)
+    if (
+        len(occurrence_ids) != len(occurrence_set)
+        or len(payload_ids) != len(set(payload_ids))
+        or set(payload_ids) != occurrence_set
+        or len(component_ids) != len(set(component_ids))
+        or set(component_ids) != occurrence_set
+        or not price_term_ids
+        or any(line_id not in occurrence_set for line_id in price_term_ids)
+    ):
+        raise ValueError("Contexto de Proyecto invalido")
+    return expected
 
 
 def _commercial_discount_percent(value: object) -> Decimal:
@@ -369,11 +507,20 @@ def _warnings(line: dict[str, Any], *, catalog: str) -> list[str]:
     return _stable_warnings(list(line.get("warnings") or []), derived=derived)
 
 
-def _common_line(raw: dict[str, Any], *, catalog: str, rate: dict[str, str], discount: Decimal, source_hash: str) -> dict[str, Any]:
+def _common_line(
+    raw: dict[str, Any],
+    browser: dict[str, Any],
+    *,
+    catalog: str,
+    rate: dict[str, str],
+    discount: Decimal,
+    source_hash: str,
+) -> dict[str, Any]:
     code = str(raw.get("code") or "").strip()
     stock = _six(raw["available_quantity"])
     image_url = str(raw.get("image_url") or "")
     line = {
+        "line_id": browser["line_id"],
         "canonical_key": f"{catalog}:{code}" if catalog == "tarkett" else f"offiho:{raw['inventory_key']}",
         "catalog": catalog, "supplier": MIXED_CATALOG_LABELS[catalog], "code": code or str(raw.get("inventory_key") or ""),
         "name": str(raw["name"]), "description": "" if catalog == "tarkett" else str(raw.get("description") or ""), "unit": str(raw["unit"]),
@@ -407,6 +554,7 @@ def _supplier_line(
     stock = _six(raw["stock"]) if availability == "stocked" else None
     quantity = _six(raw["quantity"])
     line = {
+        "line_id": browser["line_id"],
         "canonical_key": mixed_cart_key(browser), "catalog": catalog, "supplier": MIXED_CATALOG_LABELS[catalog],
         "code": str(raw.get("sku") or ""), "name": str(raw["name"]), "description": str(raw.get("description") or ""), "unit": str(raw["unit"]),
         "quantity": quantity, "unit_price": str(raw["unit_price"]), "discount_percent": "0.000000",
@@ -440,6 +588,7 @@ def build_mixed_catalog_cart_payload(
     commercial_discount_percent: object,
     presentation_sections: object = None,
     imported_source: object = None,
+    project_context: object = None,
     today: date | None = None,
 ) -> dict:
     if not isinstance(quote_currency, str) or quote_currency not in MIXED_QUOTE_CURRENCIES:
@@ -460,14 +609,25 @@ def build_mixed_catalog_cart_payload(
     if not ordered_rows and normalized_import is None:
         raise ValueError("La cotizacion debe contener al menos una linea")
     imported_items = [] if normalized_import is None else normalized_import["items"]
+    occurrences = [
+        (row["line_id"], mixed_cart_key(row)) for row in ordered_rows
+    ] + [
+        (item["line_id"], item["canonical_key"]) for item in imported_items
+    ]
+    occurrence_ids = [line_id for line_id, _canonical_key in occurrences]
+    if len(occurrence_ids) != len(set(occurrence_ids)):
+        raise ValueError("line_id mixto duplicado")
     rows_by_catalog = _group_browser_rows(ordered_rows)
     normalized_sections = _normalize_presentation_sections(
         presentation_sections,
-        [mixed_cart_key(row) for row in ordered_rows]
-        + [item["canonical_key"] for item in imported_items],
+        occurrences,
+    )
+    normalized_project_context = _normalize_project_context(
+        project_context,
+        occurrence_ids,
     )
     validate_quote_size(
-        section_counts=[len(section["item_keys"]) for section in normalized_sections],
+        section_counts=[len(section["line_ids"]) for section in normalized_sections],
         encoded_bytes=0,
     )
     normalized_groups: list[dict[str, Any]] = []
@@ -479,26 +639,74 @@ def build_mixed_catalog_cart_payload(
         if not isinstance(source_catalog, dict):
             raise ValueError(f"Catalogo mixto invalido: {catalog}")
         if catalog == "tarkett":
-            source = build_tarkett_cart_payload([{key: value for key, value in row.items() if key != "catalog"} for row in rows], catalog=source_catalog)
+            occurrence_sources = [
+                build_tarkett_cart_payload(
+                    [{
+                        key: value for key, value in row.items()
+                        if key not in {"catalog", "line_id"}
+                    }],
+                    catalog=source_catalog,
+                )
+                for row in rows
+            ]
+            source = {
+                **occurrence_sources[0],
+                "items": [
+                    occurrence_source["items"][0]
+                    for occurrence_source in occurrence_sources
+                ],
+            }
             rate = _rate_payload(resolve_conversion_rate("MXN", quote_currency, rate_rows, effective_today))
-            items = [_common_line(line, catalog=catalog, rate=rate, discount=discount, source_hash=source["catalog_source_hash"]) for line in source["items"]]
+            items = [_common_line(line, row, catalog=catalog, rate=rate, discount=discount, source_hash=source["catalog_source_hash"]) for line, row in zip(source["items"], rows, strict=True)]
         elif catalog == "offiho":
-            source = build_offiho_cart_payload([{key: value for key, value in row.items() if key != "catalog"} for row in rows], catalog=source_catalog)
+            occurrence_sources = [
+                build_offiho_cart_payload(
+                    [{
+                        key: value for key, value in row.items()
+                        if key not in {"catalog", "line_id"}
+                    }],
+                    catalog=source_catalog,
+                )
+                for row in rows
+            ]
+            source = {
+                **occurrence_sources[0],
+                "items": [
+                    occurrence_source["items"][0]
+                    for occurrence_source in occurrence_sources
+                ],
+            }
             rate = _rate_payload(resolve_conversion_rate("MXN", quote_currency, rate_rows, effective_today))
-            items = [_common_line(line, catalog=catalog, rate=rate, discount=discount, source_hash=source["catalog_source_hash"]) for line in source["items"]]
+            items = [_common_line(line, row, catalog=catalog, rate=rate, discount=discount, source_hash=source["catalog_source_hash"]) for line, row in zip(source["items"], rows, strict=True)]
         else:
             builder_rows = []
             for row in rows:
-                builder_row = {key: value for key, value in row.items() if key != "catalog"}
+                builder_row = {key: value for key, value in row.items() if key not in {"catalog", "line_id"}}
                 if not builder_row.get("base_option_id"):
                     builder_row.pop("base_option_id", None)
                 builder_rows.append(builder_row)
             try:
-                source = build_supplier_cart_payload(builder_rows, source_catalog, quote_currency, rate_rows, today=effective_today)
+                occurrence_sources = [
+                    build_supplier_cart_payload(
+                        [builder_row],
+                        source_catalog,
+                        quote_currency,
+                        rate_rows,
+                        today=effective_today,
+                    )
+                    for builder_row in builder_rows
+                ]
             except ValueError as exc:
                 if "moneda base" in str(exc).casefold():
                     raise ValueError(f"Moneda base mixta invalida: {catalog}") from exc
                 raise
+            source = {
+                **occurrence_sources[0],
+                "items": [
+                    occurrence_source["items"][0]
+                    for occurrence_source in occurrence_sources
+                ],
+            }
             items = [
                 _supplier_line(
                     line,
@@ -528,6 +736,7 @@ def build_mixed_catalog_cart_payload(
         "item_count": sum(len(group["items"]) for group in normalized_groups) + len(imported_items),
         "auto_electrification_rate": eligible[0] if eligible else None,
         "rate_summary": [{key: group[key] for key in ("catalog", *AUTO_ELECTRIFICATION_RATE_FIELDS)} for group in normalized_groups],
+        "project_context": normalized_project_context,
     }
     return validate_mixed_catalog_payload(payload)
 
@@ -725,32 +934,38 @@ def _validate_imported_payload_source(value: object, quote_currency: str) -> tup
     items = value["items"]
     if not isinstance(items, list) or not 1 <= len(items) <= MAX_MIXED_CATALOG_LINES:
         raise ValueError("Fuente importada invalida")
-    seen: set[str] = set()
+    seen_line_ids: set[str] = set()
+    seen_canonical_keys: set[str] = set()
     currencies: set[str] = set()
     for line in items:
         if not isinstance(line, dict) or set(line) != MIXED_IMPORTED_LINE_FIELDS:
             raise ValueError("Linea importada invalida")
         row = line["source_row"]
         key = line["canonical_key"]
+        line_id = _identity_text(line["line_id"], "line_id", limit=MAX_MIXED_TEXT)
         if (
             line["kind"] != "imported"
             or line["import_id"] != import_id
             or type(row) is not int
             or row <= 7
             or key != f"import:{import_id}:{row}"
-            or key in seen
+            or key in seen_canonical_keys
+            or line_id in seen_line_ids
             or line["source_hash"] != source_hash
             or not isinstance(line["row_hash"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", line["row_hash"])
         ):
             raise ValueError("Linea importada invalida")
-        seen.add(key)
+        seen_canonical_keys.add(key)
+        seen_line_ids.add(line_id)
         for field, required, limit in (
             ("category", False, MAX_MIXED_TEXT), ("name", True, MAX_MIXED_TEXT),
             ("description", False, 10_000), ("dimension", False, MAX_MIXED_TEXT),
             ("provider", True, MAX_MIXED_TEXT), ("source_reference", True, MAX_MIXED_TEXT),
         ):
             _bounded(line[field], field, required=required, limit=limit)
+        for field in ("official_code", "image_asset_key", "source_asset_key"):
+            _bounded(line[field], field, required=False, limit=MAX_MIXED_TEXT)
         if line["original_currency"] not in MIXED_QUOTE_CURRENCIES:
             raise ValueError("Linea importada invalida")
         currencies.add(line["original_currency"])
@@ -777,11 +992,11 @@ def _validate_imported_payload_source(value: object, quote_currency: str) -> tup
     expected_source_currency = next(iter(currencies)) if len(currencies) == 1 else None
     if source_currency != expected_source_currency:
         raise ValueError("Fuente importada invalida")
-    return value, seen
+    return value, seen_line_ids
 
 
 def _validate_mixed_catalog_payload(payload: object) -> dict:
-    if not isinstance(payload, dict) or set(payload) != {"source_type", "quote_currency", "created_at", "groups", "imported_source", "sections", "item_count", "auto_electrification_rate", "rate_summary"}:
+    if not isinstance(payload, dict) or set(payload) != MIXED_PAYLOAD_FIELDS:
         raise ValueError("Grupos mixtos invalidos")
     try:
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -842,9 +1057,12 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             if line["catalog"] != catalog or line["supplier"] != MIXED_CATALOG_LABELS[catalog]:
                 raise ValueError("Grupos mixtos invalidos")
             key = _identity_text(line["canonical_key"], "Clave")
-            if key in seen_keys or not key.startswith(f"{catalog}:"):
+            line_id = _identity_text(
+                line["line_id"], "line_id", limit=MAX_MIXED_TEXT
+            )
+            if line_id in seen_keys or not key.startswith(f"{catalog}:"):
                 raise ValueError("Grupos mixtos invalidos")
-            seen_keys.add(key)
+            seen_keys.add(line_id)
             for field, required in (("name", True), ("description", False), ("unit", True), ("source_reference", True), ("configuration", False), ("variant", False), ("lead_time", False), ("price_source", True)):
                 _bounded(line[field], field, required=required)
             if line["code_status"] not in {"verified", "needs_review"} or (not line["code"] and line["code_status"] != "needs_review"):
@@ -929,19 +1147,29 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             "section_title",
             limit=MAX_MIXED_SECTION_TITLE,
         )
-        item_keys = section.get("item_keys")
-        if not isinstance(item_keys, list) or not item_keys:
+        line_ids = section.get("line_ids")
+        if not isinstance(line_ids, list) or not line_ids:
             raise ValueError("Secciones mixtas invalidas")
         flattened_keys.extend(
             _identity_text(value, "section_item_key", limit=MAX_MIXED_TEXT)
-            for value in item_keys
+            for value in line_ids
         )
-    if len(flattened_keys) != total or set(flattened_keys) != seen_keys:
+    if (
+        len(flattened_keys) != total
+        or len(set(flattened_keys)) != len(flattened_keys)
+        or set(flattened_keys) != seen_keys
+    ):
         raise ValueError("Secciones mixtas invalidas")
     validate_quote_size(
-        section_counts=[len(section["item_keys"]) for section in sections],
+        section_counts=[len(section["line_ids"]) for section in sections],
         encoded_bytes=len(encoded),
     )
+    normalized_project_context = _normalize_project_context(
+        payload["project_context"],
+        flattened_keys,
+    )
+    if normalized_project_context != payload["project_context"]:
+        raise ValueError("Contexto de Proyecto invalido")
     expected_summary = [{key: group[key] for key in ("catalog", *AUTO_ELECTRIFICATION_RATE_FIELDS)} for group in groups]
     if payload["rate_summary"] != expected_summary:
         raise ValueError("Resumen de tasas mixtas inconsistente")
@@ -1078,8 +1306,8 @@ def create_mixed_catalog_quotation_workbook(
 
         row = 8
         product_index = 1
-        items_by_key = {
-            item["canonical_key"]: item
+        items_by_line_id = {
+            item["line_id"]: item
             for item in [
                 *(item for group in payload["groups"] for item in group["items"]),
                 *((imported_source or {}).get("items") or []),
@@ -1091,8 +1319,8 @@ def create_mixed_catalog_quotation_workbook(
             )
             ws.cell(row, 1).font = Font(bold=True)
             row += 1
-            for item_key in section["item_keys"]:
-                item = items_by_key[item_key]
+            for line_id in section["line_ids"]:
+                item = items_by_line_id[line_id]
                 imported = item.get("kind") == "imported"
                 if imported:
                     writer_item = {
@@ -1117,7 +1345,7 @@ def create_mixed_catalog_quotation_workbook(
                     local_image_data = None
                     image_file_key = (
                         f"{item['catalog']}-{row}-"
-                        f"{hashlib.sha256(item['canonical_key'].encode('utf-8')).hexdigest()[:16]}"
+                        f"{hashlib.sha256(item['line_id'].encode('utf-8')).hexdigest()[:16]}"
                     )
                 write_catalog_quotation_item(
                     ws,
@@ -1157,7 +1385,7 @@ def create_mixed_catalog_quotation_workbook(
                 if not isinstance(auto_electrification, bool):
                     raise ValueError("Auto Electrification mixto debe ser booleano")
                 ws.cell(row, 19).value = auto_electrification
-                ws.cell(row, 20).value = safe_excel_text(item["canonical_key"])
+                ws.cell(row, 20).value = safe_excel_text(item["line_id"])
                 ws.cell(row, 21).value = safe_excel_text(source_hash)
                 ws.cell(row, 22).value = item["source_row"] if imported else None
                 ws.cell(row, 23).value = (

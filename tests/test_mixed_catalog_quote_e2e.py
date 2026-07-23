@@ -661,7 +661,7 @@ def _assert_blank_mobiliti_formulas(ws, row: int) -> None:
 
 def _one_discount_totals(payload: dict) -> tuple[Decimal, ...]:
     items = {
-        item["canonical_key"]: item
+        item["line_id"]: item
         for item in [
             *(item for group in payload["groups"] for item in group["items"]),
             *payload["imported_source"]["items"],
@@ -669,7 +669,7 @@ def _one_discount_totals(payload: dict) -> tuple[Decimal, ...]:
     }
     subtotal = Decimal("0")
     for section in payload["sections"]:
-        for key in section["item_keys"]:
+        for key in section["line_ids"]:
             item = items[key]
             price = Decimal(item["unit_price"])
             quantity = Decimal(item["quantity"])
@@ -886,7 +886,7 @@ def test_authoritative_identity_rejects_inverted_identical_lines_and_keeps_lumbr
         correct.close()
 
     reordered = deepcopy(payload)
-    reordered["sections"][0]["item_keys"].reverse()
+    reordered["sections"][0]["line_ids"].reverse()
     inverted_rows = quotation_data_rows(reordered)
     rejected_output = tmp_path / "identical-offiho-inverted-must-not-exist.xlsx"
 
@@ -1142,7 +1142,7 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
             for image_bytes, _extension in imported_images.values()
         }
         _assert_exact_quotation_data(audit, canonical_rows)
-        assert audit["A2"].value == imported_key
+        assert audit["A2"].value == payload["imported_source"]["items"][0]["line_id"]
         assert audit["F2"].value == 11
         assert audit["O2"].value == manifest["items"][1]["row_hash"]
 
@@ -1344,7 +1344,18 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         },
         today=today,
     )
-    assert payload["sections"] == sections
+    assert payload["sections"] == [
+        {
+            "id": "section-1",
+            "title": "Recepcion",
+            "line_ids": ["legacy-1", "legacy-import-1", "legacy-2"],
+        },
+        {
+            "id": "section-2",
+            "title": "Privados",
+            "line_ids": ["legacy-3"],
+        },
+    ]
     assert payload["groups"][0]["items"][0]["name"] == (
         catalogs["offiho"]["items"][0].name
     )
@@ -1402,12 +1413,12 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         imported_audit_row = canonical_rows.index(
             next(row for row in canonical_rows if row.origin == "imported")
         ) + 2
-        assert audit.cell(imported_audit_row, 1).value == imported_key
+        assert audit.cell(imported_audit_row, 1).value == imported_line["line_id"]
         assert audit.cell(imported_audit_row, 6).value == 11
         assert audit.cell(imported_audit_row, 15).value == imported_line["row_hash"]
 
         items_by_key = {
-            item["canonical_key"]: item
+            item["line_id"]: item
             for item in [
                 *(item for group in payload["groups"] for item in group["items"]),
                 *payload["imported_source"]["items"],
@@ -1416,7 +1427,7 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         ordered_items = [
             items_by_key[key]
             for section in payload["sections"]
-            for key in section["item_keys"]
+            for key in section["line_ids"]
         ]
         expected_names = [item["name"] for item in ordered_items]
         mobiliti_rows = [
@@ -1485,10 +1496,9 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         assert getattr(subtotal_formula, "text", None) == (
             f"=SUM(IFERROR(J{first_product_row}:J{cotizacion_rows[-1]},0))"
         )
-        assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*6%"
-        assert cotizacion.cell(subtotal + 2, 8).value == 0
+        assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*10%"
         assert cotizacion.cell(before_tax, 8).value == (
-            f"=H{subtotal}+H{subtotal + 1}-H{subtotal + 2}"
+            f"=H{subtotal}+H{subtotal + 1}"
         )
         assert cotizacion.cell(tax, 8).value == f"=H{before_tax}*16%"
         assert cotizacion.cell(total, 8).value == f"=H{before_tax}+H{tax}"
@@ -1717,7 +1727,7 @@ def _assert_task9_final_workbook(
     assert base_keys == [
         item_key
         for section in payload["sections"]
-        for item_key in section["item_keys"]
+        for item_key in section["line_ids"]
     ]
     records = [
         {
@@ -1819,7 +1829,7 @@ def _assert_task9_final_workbook(
     ]
 
     payload_items = {
-        item["canonical_key"]: item
+        item["line_id"]: item
         for group in payload["groups"]
         for item in group["items"]
     }
@@ -1890,10 +1900,9 @@ def _assert_task9_final_workbook(
     assert getattr(subtotal_formula, "text", None) == (
         f"=SUM(IFERROR(J{first_product}:J{cotizacion_rows[-1]},0))"
     )
-    assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*6%"
-    assert cotizacion.cell(subtotal + 2, 8).value == 0
+    assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*10%"
     assert cotizacion.cell(before_tax, 8).value == (
-        f"=H{subtotal}+H{subtotal + 1}-H{subtotal + 2}"
+        f"=H{subtotal}+H{subtotal + 1}"
     )
     assert cotizacion.cell(tax_row, 8).value == f"=H{before_tax}*16%"
     assert cotizacion.cell(total_row, 8).value == f"=H{before_tax}+H{tax_row}"

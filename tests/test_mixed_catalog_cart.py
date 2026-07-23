@@ -18,8 +18,10 @@ from mobiliti_saas.quote_engine.mixed_catalog import (
     validate_mixed_catalog_payload,
 )
 from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+from mobiliti_saas.quote_engine.project_quote import project_context
 from mobiliti_saas.quote_engine.quotation_import import build_import_manifest
 from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
+from project_fixtures import valid_project_payload
 from quotation_import_fixtures import write_import_fixture
 
 
@@ -31,6 +33,8 @@ MIXED_CART_EXPORTS = (
     "updateImportedCartLine",
 )
 IMPORT_ID = "7b1d6d42-236a-4bc1-9aa8-8d9db793c30b"
+FIRST_LINE_ID = "11111111-1111-4111-8111-111111111111"
+SECOND_LINE_ID = "22222222-2222-4222-8222-222222222222"
 
 
 def run_mixed_cart_js(function_name, *args):
@@ -127,6 +131,215 @@ def test_imported_preview_creates_mapped_sections_from_an_empty_cart():
     assert {line["sectionId"] for line in result["lines"]} == {
         section["id"] for section in result["sections"]
     }
+
+
+def test_same_canonical_product_can_appear_twice_with_distinct_line_ids(
+    mixed_catalogs,
+    rate_rows,
+):
+    rows = [
+        {
+            "line_id": FIRST_LINE_ID,
+            "catalog": "sunon",
+            "internal_id": "sunon:desk-1",
+            "quantity": "1",
+        },
+        {
+            "line_id": SECOND_LINE_ID,
+            "catalog": "sunon",
+            "internal_id": "sunon:desk-1",
+            "quantity": "2",
+        },
+    ]
+    project = valid_project_payload()
+    principal = project["lines"][0]
+    principal["line_id"] = FIRST_LINE_ID
+    principal["identity"]["internal_id"] = "sunon:desk-1"
+    second = deepcopy(principal)
+    second["line_id"] = SECOND_LINE_ID
+    second["position"] = 1
+    second["quantity"] = "2"
+    project["lines"] = [principal, second]
+
+    payload = build_mixed_catalog_cart_payload(
+        rows,
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Recepción",
+            "line_ids": [row["line_id"] for row in rows],
+        }],
+        project_context=project_context(project, "project-7", 3),
+        today=date(2026, 7, 19),
+    )
+
+    items = payload["groups"][0]["items"]
+    assert [item["line_id"] for item in items] == [FIRST_LINE_ID, SECOND_LINE_ID]
+    assert items[0]["canonical_key"] == items[1]["canonical_key"]
+    assert payload["sections"][0]["line_ids"] == [FIRST_LINE_ID, SECOND_LINE_ID]
+    assert payload["project_context"]["project_revision"] == 3
+
+
+def test_legacy_request_without_line_ids_still_builds_payload(
+    mixed_catalogs,
+    rate_rows,
+):
+    payload = build_mixed_catalog_cart_payload(
+        [{"catalog": "tarkett", "code": "25731726", "quantity": "1"}],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+
+    assert payload["groups"][0]["items"][0]["line_id"] == "legacy-1"
+    assert payload["sections"] == [{
+        "id": "section-1",
+        "title": "Recepción",
+        "line_ids": ["legacy-1"],
+    }]
+    assert payload["project_context"] is None
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"catalog": "tarkett", "code": "25731726", "quantity": "1"},
+        {"catalog": "offiho", "inventory_key": "offiho:desk-1", "quantity": "1"},
+    ],
+)
+def test_direct_catalog_duplicates_also_keep_independent_occurrences(
+    row,
+    mixed_catalogs,
+    rate_rows,
+):
+    payload = build_mixed_catalog_cart_payload(
+        [row, {**row, "quantity": "2"}],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+
+    lines = payload["groups"][0]["items"]
+    assert [line["line_id"] for line in lines] == ["legacy-1", "legacy-2"]
+    assert lines[0]["canonical_key"] == lines[1]["canonical_key"]
+
+
+def test_legacy_item_keys_are_rejected_when_duplicate_catalog_identity_is_ambiguous(
+    mixed_catalogs,
+    rate_rows,
+):
+    rows = [
+        {
+            "line_id": FIRST_LINE_ID,
+            "catalog": "sunon",
+            "internal_id": "sunon:desk-1",
+            "quantity": "1",
+        },
+        {
+            "line_id": SECOND_LINE_ID,
+            "catalog": "sunon",
+            "internal_id": "sunon:desk-1",
+            "quantity": "2",
+        },
+    ]
+
+    with pytest.raises(ValueError, match="ambigu"):
+        build_mixed_catalog_cart_payload(
+            rows,
+            catalogs=mixed_catalogs,
+            rate_rows=rate_rows,
+            quote_currency="MXN",
+            commercial_discount_percent="40",
+            presentation_sections=[{
+                "id": "section-1",
+                "title": "Recepción",
+                "item_keys": [mixed_cart_key(rows[0]), mixed_cart_key(rows[1])],
+            }],
+            today=date(2026, 7, 19),
+        )
+
+
+def test_line_id_must_be_unique_across_catalog_and_imported_occurrences(
+    tmp_path,
+    mixed_catalogs,
+    rate_rows,
+):
+    source = write_import_fixture(tmp_path / "cross-occurrence.xlsx")
+    manifest, _images = build_import_manifest(
+        source.read_bytes(), IMPORT_ID, source.name
+    )
+
+    with pytest.raises(ValueError, match="line_id mixto duplicado"):
+        build_mixed_catalog_cart_payload(
+            [{
+                "line_id": FIRST_LINE_ID,
+                "catalog": "tarkett",
+                "code": "25731726",
+                "quantity": "1",
+            }],
+            catalogs=mixed_catalogs,
+            rate_rows=rate_rows,
+            quote_currency="MXN",
+            commercial_discount_percent="40",
+            imported_source={
+                "manifest": manifest,
+                "source_currency": "USD",
+                "items": [{
+                    "line_id": FIRST_LINE_ID,
+                    "kind": "imported",
+                    "import_id": IMPORT_ID,
+                    "source_row": 11,
+                    "source_currency": "USD",
+                    "quantity": "1",
+                    "overrides": {
+                        "name": "Alien Task Chair",
+                        "description": "Silla operativa",
+                        "dimension": "630 x 565 x 1000 mm",
+                        "unit_price": "82",
+                        "provider": "Sunon",
+                    },
+                }],
+            },
+            today=date(2026, 7, 19),
+        )
+
+
+def test_project_context_must_be_exact_and_reference_every_occurrence(
+    mixed_catalogs,
+    rate_rows,
+):
+    project = valid_project_payload()
+    project["lines"] = [project["lines"][0]]
+    context = project_context(project, "project-7", 3)
+    context["compositions"][0]["price_terms"][0]["line_id"] = SECOND_LINE_ID
+
+    with pytest.raises(ValueError, match="Contexto de Proyecto invalido"):
+        build_mixed_catalog_cart_payload(
+            [{
+                "line_id": FIRST_LINE_ID,
+                "catalog": "sunon",
+                "internal_id": "sunon:desk-1",
+                "quantity": "10",
+            }],
+            catalogs=mixed_catalogs,
+            rate_rows=rate_rows,
+            quote_currency="MXN",
+            commercial_discount_percent="40",
+            presentation_sections=[{
+                "id": "section-1",
+                "title": "Recepción",
+                "line_ids": [FIRST_LINE_ID],
+            }],
+            project_context=context,
+            today=date(2026, 7, 19),
+        )
 
 
 def test_imported_line_checkout_contains_only_reference_and_allowed_overrides():
@@ -390,7 +603,7 @@ def test_mixed_payload_keeps_catalog_groups_and_imported_source_separate(
 
     assert payload["groups"][0]["catalog"] == "offiho"
     assert payload["imported_source"]["items"][0]["canonical_key"] == imported_key
-    assert payload["sections"][0]["item_keys"] == [catalog_key, imported_key]
+    assert payload["sections"][0]["line_ids"] == ["legacy-1", "legacy-import-1"]
     assert build_mixed_reservation_groups(payload) == [{
         "catalog": "offiho",
         "items": [{
@@ -433,7 +646,10 @@ def test_mixed_cart_preserves_manual_sections_independent_from_catalog_groups(
         today=date(2026, 7, 19),
     )
 
-    assert payload["sections"] == sections
+    assert payload["sections"] == [
+        {"id": "section-1", "title": "Recepción", "line_ids": ["legacy-1", "legacy-2"]},
+        {"id": "section-2", "title": "Privados", "line_ids": ["legacy-3"]},
+    ]
     assert [group["catalog"] for group in payload["groups"]] == [
         "offiho",
         "sonara",
@@ -459,7 +675,7 @@ def test_mixed_cart_without_sections_uses_one_reception_section_in_request_order
     assert payload["sections"] == [{
         "id": "section-1",
         "title": "Recepción",
-        "item_keys": [mixed_cart_key(row) for row in rows],
+        "line_ids": ["legacy-1", "legacy-2"],
     }]
 
 
@@ -564,15 +780,24 @@ def test_mixed_cart_rejects_bounded_configuration_before_builders(row):
         preflight_mixed_catalog_items([row])
 
 
-def test_mixed_cart_rejects_duplicate_before_calling_supplier_builder(monkeypatch, mixed_catalogs, rate_rows):
-    import mobiliti_saas.quote_engine.mixed_catalog as mixed_module
-
-    called = []
-    monkeypatch.setattr(mixed_module, "build_supplier_cart_payload", lambda *args, **kwargs: called.append(args))
+def test_mixed_cart_allows_duplicate_canonical_rows_with_legacy_occurrence_ids(
+    mixed_catalogs,
+    rate_rows,
+):
     row = {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"}
-    with pytest.raises(ValueError, match="Clave mixta duplicada"):
-        build_mixed_catalog_cart_payload([row, dict(row)], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
-    assert called == []
+    payload = build_mixed_catalog_cart_payload(
+        [row, dict(row)],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+
+    assert [line["line_id"] for line in payload["groups"][0]["items"]] == [
+        "legacy-1", "legacy-2",
+    ]
+    assert len({line["canonical_key"] for line in payload["groups"][0]["items"]}) == 1
 
 
 def test_mixed_cart_sorts_add_ons_before_supplier_builder(monkeypatch, mixed_catalogs, rate_rows):
@@ -684,6 +909,9 @@ def test_mixed_line_projection_has_exact_contract_for_each_family(frozen_mixed_p
         "lumbro": {"canonical_key":"lumbro:[\"lumbro:desk-1\",\"\",[]]","catalog":"lumbro","supplier":"Lumbro","code":"LUMBRO:DESK-1","name":"Producto lumbro","description":"","unit":"pieza","quantity":"1.000000","unit_price":"100.00","discount_percent":"0.000000","original_currency":"MXN","original_unit_price":"100.000000","frozen_exchange_rate":"1.000000","source_reference":"lumbro:source","price_mode":"net","auto_electrification":False,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"Standard","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"5.000000","stock":"5.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"lumbro:desk-1","sku":"LUMBRO:DESK-1","quantity":"1.000000","stock":"5.000000"}},
     }
     line = next(group for group in frozen_mixed_payload["groups"] if group["catalog"] == catalog)["items"][0]
+    expected_by_catalog[catalog]["line_id"] = (
+        f"legacy-{MIXED_CATALOG_ORDER.index(catalog) + 1}"
+    )
     assert line == expected_by_catalog[catalog]
 
 
