@@ -76,9 +76,19 @@ from mobiliti_saas.quote_engine.project_model import (  # noqa: E402
     normalize_project_payload,
     project_summary,
 )
+from mobiliti_saas.quote_engine.project_quote import (  # noqa: E402
+    project_context,
+    project_quote_projection,
+)
 from mobiliti_saas.quote_engine.quotation_import import (  # noqa: E402
     build_import_manifest,
     validate_import_manifest,
+)
+from mobiliti_saas.quote_engine.engine import (  # noqa: E402
+    OFFICIAL_TEMPLATE_CONTRACT_PATH,
+)
+from mobiliti_saas.quote_engine.official_template import (  # noqa: E402
+    load_template_contract,
 )
 
 
@@ -4451,6 +4461,194 @@ def _validate_project_import_preview_png(content: object) -> bytes | None:
     return content
 
 
+_PROJECT_QUOTE_FIELDS = frozenset({"expected_revision"})
+_PROJECT_QUOTE_TEMPLATE = "Formato Cotizacion 2026 GDL (1).xlsx"
+
+
+def _project_normalized_payload(value: dict) -> dict:
+    if isinstance(value.get("lines"), list):
+        return value
+    context = value.get("project_context")
+    normalized = (
+        context.get("normalized_project_payload")
+        if isinstance(context, dict)
+        else None
+    )
+    if not isinstance(normalized, dict):
+        raise ValueError("Contexto de Proyecto invalido")
+    return normalized
+
+
+def _project_import_source_keys(payload: dict) -> list[str]:
+    payload = _project_normalized_payload(payload)
+    imported_lines = [
+        line for line in payload["lines"] if line["source"] == "imported"
+    ]
+    keys = {
+        str(line.get("source_asset_key") or "").strip()
+        for line in imported_lines
+    }
+    if "" in keys:
+        raise ValueError("El Proyecto contiene una referencia importada sin fuente")
+    if len(keys) > 1:
+        raise ValueError("El Proyecto contiene mas de una Quotation de origen")
+    return sorted(keys)
+
+
+def _project_import_source_bytes(payload: dict) -> bytes | None:
+    """Descarga la unica Quotation inmutable promovida del Proyecto."""
+
+    keys = _project_import_source_keys(payload)
+    if not keys:
+        return None
+    source_key = keys[0]
+    match = ASSET_KEY.fullmatch(source_key)
+    if match is None or match.group(3) != "sources":
+        raise ValueError("Fuente importada de Proyecto no permitida")
+    expected_hash = Path(match.group(4)).stem.lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        raise ValueError("Fuente importada de Proyecto no permitida")
+    try:
+        content = _storage_download_bytes(source_key)
+    except _StorageObjectNotFound as exc:
+        raise ValueError("Fuente importada de Proyecto no disponible") from exc
+    if (
+        not isinstance(content, bytes)
+        or not hmac.compare_digest(hashlib.sha256(content).hexdigest(), expected_hash)
+    ):
+        raise ValueError("La fuente importada no coincide con su manifiesto")
+    return content
+
+
+def _project_import_bundle(payload: dict) -> tuple[dict | None, bytes | None]:
+    payload = _project_normalized_payload(payload)
+    imported = [line for line in payload["lines"] if line["source"] == "imported"]
+    source = _project_import_source_bytes(payload)
+    if not imported:
+        return None, None
+    if source is None:
+        raise ValueError("El Proyecto contiene una referencia importada sin fuente")
+    import_ids = {line["import_id"] for line in imported}
+    if len(import_ids) != 1:
+        raise ValueError("El Proyecto contiene mas de una Quotation de origen")
+    source_key = _project_import_source_keys(payload)[0]
+    manifest, _images = build_import_manifest(
+        source,
+        next(iter(import_ids)),
+        Path(source_key).name,
+    )
+    expected_hash = Path(source_key).stem.lower()
+    if not hmac.compare_digest(manifest["source_hash"], expected_hash):
+        raise ValueError("La fuente importada no coincide con su manifiesto")
+    return manifest, source
+
+
+def _project_catalog_browser_row(line: dict, quantity: Decimal) -> dict:
+    row = {
+        "line_id": line["line_id"],
+        "catalog": line["catalog"],
+        "quantity": format(quantity, "f"),
+    }
+    row.update(deepcopy(line["identity"]))
+    return row
+
+
+def _project_import_browser_row(line: dict, quantity: Decimal) -> dict:
+    return {
+        "kind": "imported",
+        "line_id": line["line_id"],
+        "import_id": line["import_id"],
+        "source_row": line["source_row"],
+        "source_currency": line["source_currency"],
+        "quantity": format(quantity, "f"),
+        "overrides": {
+            "name": line["name"],
+            "description": line["description"],
+            "dimension": line["dimension"],
+            "unit_price": line["unit_price"],
+            "provider": line["provider"],
+        },
+        "official_code": line["official_code"],
+        "image_asset_key": line["image_asset_key"],
+        "source_asset_key": line["source_asset_key"],
+    }
+
+
+def _load_project_catalogs(browser_rows: list[dict]) -> tuple[dict, list[dict]]:
+    requested = {row["catalog"] for row in browser_rows}
+    if not requested <= set(MIXED_CATALOG_ORDER):
+        raise ValueError("Catalogo mixto no soportado")
+    catalogs: dict[str, dict] = {}
+    if "tarkett" in requested:
+        catalogs["tarkett"] = _load_tarkett_catalog_cached()
+    if "offiho" in requested:
+        catalogs["offiho"] = _load_offiho_catalog_cached()
+    for supplier in sorted(requested - {"tarkett", "offiho"}):
+        _require_enabled_catalog_supplier(supplier)
+        catalogs[supplier] = _load_supplier_catalog_cached(supplier)
+    return catalogs, db_list_exchange_rates()
+
+
+def _build_saved_project_quote_payload(
+    project: dict,
+    usuario_id: int,
+) -> tuple[dict, bytes | None, dict | None]:
+    checked = normalize_project_payload(deepcopy(project["payload"]))
+    _validate_project_asset_ownership(checked, usuario_id)
+    projection = project_quote_projection(checked)
+    lines_by_id = {line["line_id"]: line for line in checked["lines"]}
+
+    catalog_rows: list[dict] = []
+    imported_rows: list[dict] = []
+    for component in projection.components:
+        line = lines_by_id[component.line_id]
+        if line["source"] == "catalog":
+            catalog_rows.append(
+                _project_catalog_browser_row(line, component.physical_quantity)
+            )
+        else:
+            imported_rows.append(
+                _project_import_browser_row(line, component.physical_quantity)
+            )
+
+    manifest, import_source_bytes = _project_import_bundle(checked)
+    catalogs, rate_rows = _load_project_catalogs(catalog_rows)
+    compositions_by_section: dict[str, list[str]] = {}
+    for composition in projection.compositions:
+        compositions_by_section.setdefault(composition.section_id, []).extend(
+            composition.component_line_ids
+        )
+    sections = [
+        {
+            "id": f"section-{index}",
+            "title": section["concept"],
+            "line_ids": compositions_by_section.get(section["section_id"], []),
+        }
+        for index, section in enumerate(checked["sections"], start=1)
+        if compositions_by_section.get(section["section_id"])
+    ]
+    context = project_context(checked, project["id"], project["revision"])
+    payload = build_mixed_catalog_cart_payload(
+        catalog_rows,
+        catalogs=catalogs,
+        rate_rows=rate_rows,
+        quote_currency=checked["quote_fields"]["quote_currency"],
+        commercial_discount_percent=checked["quote_fields"]["descuento"],
+        presentation_sections=sections,
+        imported_source=(
+            {
+                "manifest": manifest,
+                "items": imported_rows,
+                "source_currency": None,
+            }
+            if imported_rows
+            else None
+        ),
+        project_context=context,
+    )
+    return payload, import_source_bytes, manifest
+
+
 @app.post("/projects", status_code=201)
 def projects_create(body: dict, current_user: dict = Depends(get_current_user)):
     _require_active_subscription(current_user["id"])
@@ -4629,6 +4827,114 @@ def projects_duplicate(
 
 
 # ─── Health Check ─────────────────────────────────────────────
+
+@app.post("/projects/{project_id}/quote", status_code=202)
+def projects_quote(
+    project_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    _require_active_subscription(current_user["id"])
+    _project_unexpected_fields(body, _PROJECT_QUOTE_FIELDS)
+    project_id = _project_uuid(project_id)
+    project = _project_for_current_user(project_id, current_user["id"])
+    expected_revision = _project_expected_revision(body.get("expected_revision"))
+    if project["status"] != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Restaura el Proyecto antes de cotizar",
+        )
+    if project["revision"] != expected_revision:
+        _project_conflict(project)
+
+    try:
+        cart_payload, import_source_bytes, import_manifest = (
+            _build_saved_project_quote_payload(project, current_user["id"])
+        )
+        encoded = json.dumps(
+            cart_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        validate_quote_size(
+            section_counts=[
+                len(section["line_ids"]) for section in cart_payload["sections"]
+            ],
+            encoded_bytes=len(encoded),
+        )
+    except HTTPException:
+        raise
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    quote_fields = cart_payload["project_context"][
+        "normalized_project_payload"
+    ]["quote_fields"]
+    metadata = _validate_metadata({
+        **quote_fields,
+        "image_provider": "pillow",
+    })
+    contract_hash = load_template_contract(
+        OFFICIAL_TEMPLATE_CONTRACT_PATH
+    ).sha256
+    metadata.update({
+        "source_type": "mixed_catalog_cart",
+        "original_filename": f"project-{project_id}-r{expected_revision}.json",
+        "input_extension": ".json",
+        "storage_provider": _storage_provider_name(),
+        "input_storage_provider": _storage_provider_name(),
+        "mixed_item_count": cart_payload["item_count"],
+        "mixed_section_count": len(cart_payload["sections"]),
+        "catalog_item_counts": {
+            group["catalog"]: len(group["items"])
+            for group in cart_payload["groups"]
+        },
+        "catalog_source_hashes": {
+            group["catalog"]: group["catalog_source_hash"]
+            for group in cart_payload["groups"]
+        },
+        "quote_currency": cart_payload["quote_currency"],
+        "rate_summary": cart_payload["rate_summary"],
+        "auto_electrification_rate": cart_payload["auto_electrification_rate"],
+        "project_id": project_id,
+        "project_revision": expected_revision,
+        "project_payload_hash": cart_payload["project_context"][
+            "project_payload_hash"
+        ],
+        "template_contract_hash": contract_hash,
+        "estimated_duration_seconds": 120,
+    })
+    if import_manifest is not None:
+        metadata.update(_import_metadata(
+            import_manifest,
+            cart_payload["imported_source"],
+            cart_payload["quote_currency"],
+        ))
+    assigned_quote_number = _next_quote_number_for_user(current_user)
+    if assigned_quote_number:
+        metadata["cotizacion"] = assigned_quote_number
+    elif not metadata.get("cotizacion"):
+        metadata["cotizacion"] = metadata["proyecto"]
+
+    _enforce_active_quote_limit(current_user["id"])
+    try:
+        job = _enqueue_mixed_payload(
+            current_user=current_user,
+            cart_payload=cart_payload,
+            template=_PROJECT_QUOTE_TEMPLATE,
+            metadata=metadata,
+            import_job=None,
+            import_source_bytes=import_source_bytes,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="No fue posible crear la cotizacion del Proyecto",
+        ) from exc
+    _wake_worker()
+    return {"mensaje": "Cotizacion del Proyecto en cola", "job": job}
+
 
 @app.get("/")
 def root():
@@ -5433,6 +5739,115 @@ def _import_metadata(manifest: dict, imported_source: dict, quote_currency: str)
     }
 
 
+def _enqueue_mixed_payload(
+    *,
+    current_user: dict,
+    cart_payload: dict,
+    template: str,
+    metadata: dict,
+    import_job: dict | None,
+    import_source_bytes: bytes | None,
+) -> dict:
+    """Ejecuta una sola transaccion compensable para cotizaciones mixtas."""
+
+    job_id = str(uuid.uuid4())
+    input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
+    source_copy_path = (
+        f"users/{current_user['id']}/jobs/{job_id}/import-source.xlsx"
+    )
+    job_created = False
+    import_consumed = False
+    additional_cleanup_paths: list[str] = []
+    try:
+        db_create_quote_job(
+            current_user["id"],
+            template,
+            metadata,
+            input_path,
+            job_id=job_id,
+        )
+        job_created = True
+        if import_source_bytes is not None:
+            additional_cleanup_paths.append(source_copy_path)
+            _storage_upload_bytes(
+                source_copy_path,
+                import_source_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            copied_source = _storage_download_bytes(source_copy_path)
+            imported_source = cart_payload.get("imported_source")
+            expected_hash = (
+                imported_source.get("source_hash")
+                if isinstance(imported_source, dict)
+                else None
+            )
+            if (
+                not isinstance(copied_source, bytes)
+                or not isinstance(expected_hash, str)
+                or not hmac.compare_digest(
+                    hashlib.sha256(copied_source).hexdigest(),
+                    expected_hash,
+                )
+            ):
+                raise RuntimeError("Import source copy verification failed")
+            imported_source["source_path"] = source_copy_path
+            metadata["import_source_path"] = source_copy_path
+            validate_mixed_catalog_payload(cart_payload)
+        snapshot = db_reserve_mixed_cart(
+            current_user["id"],
+            job_id,
+            build_mixed_reservation_groups(cart_payload),
+        )
+        _apply_mixed_reservation_snapshot(cart_payload, snapshot)
+        validate_mixed_catalog_payload(cart_payload)
+        content = json.dumps(
+            cart_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        validate_quote_size(
+            section_counts=[
+                len(section["line_ids"]) for section in cart_payload["sections"]
+            ],
+            encoded_bytes=len(content),
+        )
+        _storage_upload_bytes(input_path, content, "application/json")
+        if import_job is not None:
+            _consume_import_draft(import_job, job_id)
+            import_consumed = True
+        return db_queue_mixed_quote_job(job_id, metadata)
+    except Exception:
+        import_restored = not import_consumed
+        if import_consumed:
+            try:
+                import_restored = bool(
+                    _restore_consumed_import_draft(import_job["id"], job_id)
+                )
+            except Exception:
+                import_restored = False
+            if not import_restored:
+                try:
+                    import_restored = not _import_source_references_consumer(
+                        import_job["id"],
+                        job_id,
+                        current_user["id"],
+                    )
+                except Exception:
+                    import_restored = False
+        if job_created:
+            if import_consumed and not import_restored:
+                _preserve_failed_import_consumer(job_id, db_release_mixed_cart)
+            else:
+                _cleanup_failed_catalog_quote(
+                    job_id,
+                    input_path,
+                    db_release_mixed_cart,
+                    additional_storage_paths=additional_cleanup_paths,
+                )
+        raise
+
+
 @app.post("/catalogs/mixed-quote")
 async def mixed_catalog_quote(
     request: Request,
@@ -5547,70 +5962,16 @@ async def mixed_catalog_quote(
         exclude_job_id=import_job["id"] if import_job is not None else None,
     )
 
-    job_id = str(uuid.uuid4())
-    input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
-    source_copy_path = f"users/{current_user['id']}/jobs/{job_id}/import-source.xlsx"
-    job_created = False
-    import_consumed = False
-    additional_cleanup_paths: list[str] = []
     try:
-        db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
-        job_created = True
-        if import_source_bytes is not None:
-            additional_cleanup_paths.append(source_copy_path)
-            _storage_upload_bytes(
-                source_copy_path,
-                import_source_bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-            copied_source = _storage_download_bytes(source_copy_path)
-            if not hmac.compare_digest(
-                hashlib.sha256(copied_source).hexdigest(),
-                cart_payload["imported_source"]["source_hash"],
-            ):
-                raise RuntimeError("Import source copy verification failed")
-            cart_payload["imported_source"]["source_path"] = source_copy_path
-            metadata["import_source_path"] = source_copy_path
-            validate_mixed_catalog_payload(cart_payload)
-        snapshot = db_reserve_mixed_cart(
-            current_user["id"], job_id, build_mixed_reservation_groups(cart_payload)
+        updated = _enqueue_mixed_payload(
+            current_user=current_user,
+            cart_payload=cart_payload,
+            template=template,
+            metadata=metadata,
+            import_job=import_job,
+            import_source_bytes=import_source_bytes,
         )
-        _apply_mixed_reservation_snapshot(cart_payload, snapshot)
-        validate_mixed_catalog_payload(cart_payload)
-        content = json.dumps(
-            cart_payload, ensure_ascii=False, separators=(",", ":")
-        ).encode("utf-8")
-        _storage_upload_bytes(input_path, content, "application/json")
-        if import_job is not None:
-            _consume_import_draft(import_job, job_id)
-            import_consumed = True
-        updated = db_queue_mixed_quote_job(job_id, metadata)
     except Exception as exc:
-        import_restored = not import_consumed
-        if import_consumed:
-            try:
-                import_restored = bool(
-                    _restore_consumed_import_draft(import_job["id"], job_id)
-                )
-            except Exception:
-                import_restored = False
-            if not import_restored:
-                try:
-                    import_restored = not _import_source_references_consumer(
-                        import_job["id"], job_id, current_user["id"]
-                    )
-                except Exception:
-                    import_restored = False
-        if job_created:
-            if import_consumed and not import_restored:
-                _preserve_failed_import_consumer(job_id, db_release_mixed_cart)
-            else:
-                _cleanup_failed_catalog_quote(
-                    job_id,
-                    input_path,
-                    db_release_mixed_cart,
-                    additional_storage_paths=additional_cleanup_paths,
-                )
         raise HTTPException(
             status_code=503, detail="No fue posible crear cotizacion mixta"
         ) from exc

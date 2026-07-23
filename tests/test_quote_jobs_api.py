@@ -1471,6 +1471,30 @@ def test_mixed_quote_loads_exactly_the_requested_catalogs(monkeypatch):
     assert len(state["uploads"]) == 1
 
 
+def test_mixed_quote_uses_the_shared_enqueue_transaction_once(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    original = index._enqueue_mixed_payload
+    calls = []
+
+    def tracked(**kwargs):
+        calls.append(kwargs["cart_payload"]["source_type"])
+        return original(**kwargs)
+
+    monkeypatch.setattr(index, "_enqueue_mixed_payload", tracked)
+
+    response = _client().post(
+        "/catalogs/mixed-quote",
+        headers=_auth_headers(),
+        json=_valid_mixed_body(),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert calls == ["mixed_catalog_cart"]
+    assert state["events"] == [
+        "create_job", "reserve_mixed", "upload", "queue", "wake",
+    ]
+
+
 def _mixed_snapshot_payload(*, catalog="alma", quantity="1.000000", stock="5.000000", warning=None):
     line = {
         "catalog": catalog,
