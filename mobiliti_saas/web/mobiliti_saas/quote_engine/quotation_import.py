@@ -52,7 +52,8 @@ MANIFEST_FIELDS = {
 }
 MANIFEST_ITEM_FIELDS = {
     "key", "source_row", "category", "name", "description", "dimension",
-    "quantity", "unit_price", "source_currency", "row_hash", "source_reference",
+    "provider", "official_code", "quantity", "unit_price", "source_currency",
+    "row_hash", "source_reference",
 }
 MANIFEST_SECTION_FIELDS = {"id", "title", "item_keys"}
 RAW_ITEM_FIELDS = {
@@ -318,6 +319,8 @@ def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, st
                         "cantidad": sheet.cell(row=row, column=quantity_column).value,
                         "precio": sheet.cell(row=row, column=price_column).value,
                         "categoria": current_category,
+                        "provider": _optional_cell(sheet, row, columns, "provider"),
+                        "official_code": _optional_cell(sheet, row, columns, "official_code"),
                         "moneda_original": _optional_cell(sheet, row, columns, "moneda_original"),
                     }
                 )
@@ -403,6 +406,12 @@ def _manifest_item(item: dict, import_id: str, filename: str) -> dict:
     dimension = _workbook_text(
         item["dimension"], "Dimension", allow_empty=True, allow_none=True
     )
+    provider = _workbook_text(
+        item.get("provider"), "Proveedor", allow_empty=True, allow_none=True
+    )
+    official_code = _workbook_text(
+        item.get("official_code"), "Codigo oficial", allow_empty=True, allow_none=True
+    )
     quantity = _quantity(item["cantidad"])
     unit_price = _decimal(item["precio"], "Precio unitario invalido", minimum=Decimal(0))
     currency = _currency(item.get("moneda_original"), "Moneda de origen invalida", allow_none=True)
@@ -413,6 +422,8 @@ def _manifest_item(item: dict, import_id: str, filename: str) -> dict:
         "name": name,
         "description": description,
         "dimension": dimension,
+        "provider": provider,
+        "official_code": official_code,
         "quantity": _plain_decimal(quantity),
         "unit_price": _plain_decimal(unit_price),
         "source_currency": currency,
@@ -461,6 +472,8 @@ def _validate_manifest_item(item: object, import_id: str, filename: str) -> dict
         "name": _text(item["name"], "Nombre"),
         "description": _text(item["description"], "Descripcion", allow_empty=True, maximum=MAX_DESCRIPTION_LENGTH),
         "dimension": _text(item["dimension"], "Dimension", allow_empty=True),
+        "provider": _text(item["provider"], "Proveedor", allow_empty=True),
+        "official_code": _text(item["official_code"], "Codigo oficial", allow_empty=True),
         "quantity": _plain_decimal(_quantity(item["quantity"])),
         "unit_price": _plain_decimal(_decimal(item["unit_price"], "Precio unitario invalido", minimum=Decimal(0))),
         "source_currency": _currency(item["source_currency"], "Moneda de origen invalida", allow_none=True),
@@ -584,6 +597,8 @@ def _detect_columns(sheet) -> dict[str, str]:
         "list_price": ["list price", "listprice", "price list"],
         "descripcion": ["description", "desc", "descripcion"],
         "dimension": ["dimension", "dimensions", "size", "medida"],
+        "provider": ["provider", "supplier", "proveedor"],
+        "official_code": ["official code", "product code", "item code", "codigo oficial", "codigo producto"],
         "moneda_original": ["original currency", "base currency", "moneda original"],
     }
     result: dict[str, str] = {}

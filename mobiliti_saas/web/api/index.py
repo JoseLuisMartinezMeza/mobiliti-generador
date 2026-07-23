@@ -2878,6 +2878,7 @@ def _catalog_search_integer(value: object, field: str, minimum: int, maximum: in
         raise ValueError(f"{field} invalido")
     return parsed
 
+
 def _catalog_reservation_request_lines(cart_payload: dict) -> list[dict]:
     rows = []
     for line in cart_payload.get("items", []):
@@ -4277,6 +4278,29 @@ def _project_for_current_user(project_id: str, usuario_id: int) -> dict:
     return project
 
 
+def _copy_project_import_asset(path: str, content: bytes, content_type: str) -> None:
+    """Conserva la copia inmutable cuando un reintento usa la misma llave."""
+    try:
+        existing = _storage_download_bytes(path)
+    except KeyError:
+        existing = None
+    except RuntimeError as exc:
+        if "404" not in str(exc):
+            raise
+        existing = None
+    if existing is not None:
+        if existing != content:
+            raise ValueError("El activo de Proyecto ya existe con contenido diferente")
+        return
+    _storage_upload_bytes(path, content, content_type)
+    try:
+        copied = _storage_download_bytes(path)
+    except (KeyError, RuntimeError) as exc:
+        raise RuntimeError("No se pudo verificar el activo de Proyecto") from exc
+    if copied != content:
+        raise RuntimeError("El activo de Proyecto no se conservo correctamente")
+
+
 @app.post("/projects", status_code=201)
 def projects_create(body: dict, current_user: dict = Depends(get_current_user)):
     _require_active_subscription(current_user["id"])
@@ -4301,6 +4325,74 @@ def projects_get(project_id: str, current_user: dict = Depends(get_current_user)
     return {"project": _project_for_current_user(
         _project_uuid(project_id), current_user["id"]
     )}
+
+
+@app.post("/projects/{project_id}/imports/{job_id}")
+def projects_promote_import(
+    project_id: str,
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _require_active_subscription(current_user["id"])
+    project_id = _project_uuid(project_id)
+    job_id = _project_uuid(job_id)
+    project = _project_for_current_user(project_id, current_user["id"])
+    if project.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Proyecto archivado")
+    manifest, _job, source = _validated_import_source(
+        current_user["id"], [{"import_id": job_id}]
+    )
+    if len(source) > MAX_QUOTE_REQUEST_BYTES:
+        raise HTTPException(status_code=413, detail="Fuente importada excede el limite de tamano")
+
+    preview_paths = _quote_job_metadata(_job).get("import_preview_paths")
+    if not isinstance(preview_paths, dict):
+        raise HTTPException(status_code=409, detail="La fuente debe volver a importarse")
+    valid_rows = {item["source_row"] for item in manifest["items"]}
+    previews: list[tuple[str, bytes]] = []
+    try:
+        for row_text, preview_path in sorted(preview_paths.items(), key=lambda item: int(item[0])):
+            row = int(row_text)
+            if str(row) != row_text or row not in valid_rows:
+                raise ValueError("Fila de previsualizacion invalida")
+            content = _storage_download_bytes(preview_path)
+            if not isinstance(content, bytes):
+                raise ValueError("Imagen de previsualizacion invalida")
+            if len(content) > IMPORT_PREVIEW_IMAGE_MAX_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Imagen de previsualizacion excede el limite de tamano",
+                )
+            previews.append((row_text, content))
+    except HTTPException:
+        raise
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="No se pudo leer la previsualizacion importada") from None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=409, detail="La fuente debe volver a importarse") from None
+
+    prefix = f"projects/{current_user['id']}/{project_id}"
+    source_key = f"{prefix}/sources/{manifest['source_hash']}.xlsx"
+    image_asset_keys: dict[str, str] = {}
+    try:
+        _copy_project_import_asset(
+            source_key,
+            source,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        for row_text, content in previews:
+            image_key = f"{prefix}/images/{manifest['source_hash'][:16]}-row-{int(row_text)}.png"
+            _copy_project_import_asset(image_key, content, "image/png")
+            image_asset_keys[row_text] = image_key
+    except ValueError:
+        raise HTTPException(status_code=409, detail="El activo importado no coincide con el Proyecto") from None
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="No se pudo guardar el activo importado") from None
+    return {
+        "source_asset_key": source_key,
+        "image_asset_keys": image_asset_keys,
+        "manifest": manifest,
+    }
 
 
 @app.patch("/projects/{project_id}")
@@ -4738,6 +4830,7 @@ def catalog_search(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="Catalogos publicados no disponibles") from exc
+
 
 @app.get("/catalogs/{supplier}")
 def supplier_catalog(supplier: str, current_user: dict = Depends(get_current_user)):

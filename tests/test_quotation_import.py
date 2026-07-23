@@ -485,3 +485,45 @@ def test_validate_quote_size_rejects_non_integer_section_counts():
             section_counts=["1"],
             encoded_bytes=0,
         )
+
+
+def test_manifest_item_preserves_provider_and_official_code_from_explicit_columns(tmp_path):
+    from openpyxl import load_workbook
+
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    workbook = load_workbook(source)
+    sheet = workbook["Quotation"]
+    sheet["K7"] = "Official Code"
+    sheet["L7"] = "Provider"
+    sheet["K11"] = "ALIEN-001"
+    sheet["L11"] = "Sunon\nMexico"
+    workbook.save(source)
+    workbook.close()
+
+    manifest, _ = build_import_manifest(
+        source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+    )
+
+    item = next(row for row in manifest["items"] if row["source_row"] == 11)
+    assert item["official_code"] == "ALIEN-001"
+    assert item["provider"] == "Sunon Mexico"
+    assert item["official_code"] != item["name"]
+
+
+@pytest.mark.parametrize("cell", ("K11", "L11"))
+def test_manifest_item_rejects_formula_prefixes_in_structured_columns(tmp_path, cell):
+    from openpyxl import load_workbook
+
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    workbook = load_workbook(source)
+    sheet = workbook["Quotation"]
+    sheet["K7"] = "Official Code"
+    sheet["L7"] = "Provider"
+    sheet[cell] = "=SUM(A1:A2)"
+    workbook.save(source)
+    workbook.close()
+
+    with pytest.raises(ValueError):
+        build_import_manifest(
+            source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+        )
