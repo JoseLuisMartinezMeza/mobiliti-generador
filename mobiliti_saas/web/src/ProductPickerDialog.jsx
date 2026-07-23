@@ -1,4 +1,12 @@
 import {useEffect, useMemo, useRef, useState} from "react";
+import {
+  buildCatalogSearchPath,
+  CATALOG_OPTIONS,
+  catalogLabel,
+  createCanonicalProductSelection,
+  normalizeWarnings,
+  shouldShowProductImage,
+} from "./productPicker";
 
 const PAGE_SIZE = 20;
 
@@ -9,25 +17,10 @@ const COPY_BY_MODE = {
   complement: "Agregar complemento",
 };
 
-function normalizarAdvertencias(value) {
-  if (Array.isArray(value)) return value.filter(Boolean);
-  return value ? [value] : [];
-}
-
-function crearSeleccionConfirmable(item) {
-  const snapshot = item.snapshot || {};
-  return {
-    catalog: item.catalog,
-    official_code: item.official_code,
-    supplier: item.supplier || item.provider || snapshot.supplier || "",
-    snapshot: {
-      name: snapshot.name || "",
-      image_url: snapshot.image_url || "",
-      configuration: snapshot.configuration || "",
-      availability: snapshot.availability || "",
-      warnings: normalizarAdvertencias(snapshot.warnings || item.warnings),
-    },
-  };
+function focusableElements(container) {
+  return [...container.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+  )].filter((element) => !element.hidden);
 }
 
 export default function ProductPickerDialog({
@@ -40,19 +33,20 @@ export default function ProductPickerDialog({
 }) {
   const [query, setQuery] = useState("");
   const [supplier, setSupplier] = useState("");
-  const [supplierOptions, setSupplierOptions] = useState([]);
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(null);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [failedImageKey, setFailedImageKey] = useState("");
   const dialogRef = useRef(null);
   const searchRef = useRef(null);
   const requestVersionRef = useRef(0);
+  const previousFocusRef = useRef(null);
 
   const confirmar = () => {
-    if (selected) onConfirm(crearSeleccionConfirmable(selected));
+    if (selected) onConfirm(createCanonicalProductSelection(selected));
   };
 
   const cancelar = () => {
@@ -68,10 +62,15 @@ export default function ProductPickerDialog({
       setOffset(0);
       setTotal(0);
       setError("");
+      setFailedImageKey("");
       return undefined;
     }
-    searchRef.current?.focus();
-    return undefined;
+    previousFocusRef.current = document.activeElement;
+    const frame = window.requestAnimationFrame(() => searchRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      previousFocusRef.current?.focus();
+    };
   }, [open]);
 
   useEffect(() => {
@@ -83,25 +82,14 @@ export default function ProductPickerDialog({
     setError("");
     const timer = window.setTimeout(async () => {
       try {
-        const params = new URLSearchParams({
-          q: query,
-          supplier,
-          offset: String(offset),
-          limit: String(PAGE_SIZE),
-        });
         const response = await request(
-          `/catalogs/search?${params.toString()}`,
+          buildCatalogSearchPath({query, supplier, offset, limit: PAGE_SIZE}),
           {signal: controller.signal},
         );
         if (controller.signal.aborted || requestVersion !== requestVersionRef.current) return;
         const items = Array.isArray(response?.items) ? response.items : [];
         setResults(items);
         setTotal(Number(response?.total) || 0);
-        setSupplierOptions((current) => Array.from(new Set([
-          ...current,
-          ...(response?.suppliers || []),
-          ...items.map((item) => item.supplier || item.provider || item.snapshot?.supplier),
-        ].filter(Boolean))).sort());
         setSelected((current) => (
           current && items.some((item) => (
             item.catalog === current.catalog
@@ -135,8 +123,10 @@ export default function ProductPickerDialog({
 
   const confirmLabel = COPY_BY_MODE[mode] || COPY_BY_MODE.add;
   const preview = selected?.snapshot || {};
-  const previewSupplier = selected?.supplier || selected?.provider || preview.supplier;
-  const warnings = normalizarAdvertencias(preview.warnings || selected?.warnings);
+  const previewSupplier = catalogLabel(selected?.catalog);
+  const warnings = normalizeWarnings(preview.warnings);
+  const selectedKey = selected ? `${selected.catalog}:${selected.official_code}` : "";
+  const showImage = shouldShowProductImage(preview.image_url, failedImageKey === selectedKey);
   const canGoBack = offset > 0;
   const canGoForward = offset + results.length < total;
 
@@ -153,6 +143,19 @@ export default function ProductPickerDialog({
         aria-describedby="project-picker-help"
         tabIndex="-1"
         onKeyDown={(event) => {
+          if (event.key === "Tab") {
+            const focusables = focusableElements(dialogRef.current);
+            const first = focusables[0];
+            const last = focusables.at(-1);
+            if (!first || !last) return;
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
+          }
           if (event.key === "Escape") {
             event.preventDefault();
             cancelar();
@@ -203,14 +206,14 @@ export default function ProductPickerDialog({
               }}
             >
               <option value="">Todos los proveedores</option>
-              {supplierOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+              {CATALOG_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
         </div>
 
         <div className="project-picker-layout">
           <section aria-label="Resultados de catálogo">
-            <div className="project-picker-results" role="listbox" aria-label="Resultados">
+            <div className="project-picker-results" aria-label="Resultados">
               {loading && <p className="project-picker-state" role="status">Cargando productos…</p>}
               {!loading && error && <p className="project-picker-state error-line" role="alert">{error}</p>}
               {!loading && !error && results.length === 0 && (
@@ -218,19 +221,20 @@ export default function ProductPickerDialog({
               )}
               {!loading && !error && results.map((item) => {
                 const itemSnapshot = item.snapshot || {};
-                const isSelected = selected?.catalog === item.catalog
-                  && selected?.official_code === item.official_code;
+                const isSelected = selectedKey === `${item.catalog}:${item.official_code}`;
                 return (
                   <button
                     className={`project-picker-result${isSelected ? " selected" : ""}`}
                     type="button"
-                    role="option"
-                    aria-selected={isSelected}
+                    aria-pressed={isSelected}
                     key={`${item.catalog}:${item.official_code}`}
-                    onClick={() => setSelected({...item, snapshot: item.snapshot || {}})}
+                    onClick={() => {
+                      setSelected({...item, snapshot: item.snapshot || {}});
+                      setFailedImageKey("");
+                    }}
                   >
                     <strong>{itemSnapshot.name || "Producto sin nombre"}</strong>
-                    <span>{item.supplier || item.provider || itemSnapshot.supplier || "Proveedor no disponible"}</span>
+                    <span>{catalogLabel(item.catalog)}</span>
                     <small>{item.official_code} · {item.catalog}</small>
                   </button>
                 );
@@ -254,8 +258,8 @@ export default function ProductPickerDialog({
             {!selected && <p>Selecciona un producto para revisar sus datos.</p>}
             {selected && (
               <>
-                {preview.image_url
-                  ? <img src={preview.image_url} alt={selected.snapshot.name} />
+                {showImage
+                  ? <img src={preview.image_url} alt={selected.snapshot.name} onError={() => setFailedImageKey(selectedKey)} />
                   : <span className="project-picker-no-image">Sin imagen</span>}
                 <strong>{preview.name}</strong>
                 <span>{previewSupplier || "Proveedor no disponible"}</span>

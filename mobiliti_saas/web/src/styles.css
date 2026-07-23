@@ -1086,6 +1086,43 @@ textarea:focus {
   justify-content: flex-end;
 }
 
+@media (max-width: 720px) {
+  .project-picker-backdrop {
+    align-items: start;
+    padding: 10px;
+  }
+
+  .project-product-picker {
+    max-height: calc(100vh - 20px);
+  }
+
+  .project-picker-header,
+  .project-picker-filters,
+  .project-picker-layout,
+  .project-picker-actions {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .project-picker-filters,
+  .project-picker-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .project-picker-results {
+    min-height: 220px;
+    max-height: 42vh;
+  }
+
+  .project-product-preview {
+    min-height: 0;
+  }
+
+  .project-picker-actions {
+    flex-wrap: wrap;
+  }
+}
+
 .tarkett-shell {
   margin: 18px;
   overflow: visible;
