@@ -248,9 +248,13 @@ def test_mixed_request_snapshot_is_compact_and_deeply_frozen():
     assert result["snapshot"]["items"] == [
         {"catalog": "tarkett", "code": "T-1", "quantity": "1"}
     ]
-    assert result["snapshot"]["sections"] == [
-        {"id": "section-1", "title": "Recepcion", "item_keys": ["tarkett:T-1"]}
-    ]
+    assert result["snapshot"]["sections"][0]["id"] == "section-1"
+    assert result["snapshot"]["sections"][0]["title"] == "Recepcion"
+    assert len(result["snapshot"]["sections"][0]["item_keys"]) == 1
+    assert re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        result["snapshot"]["sections"][0]["item_keys"][0],
+    )
 
 
 def test_controller_sends_manual_sections_and_resets_them_after_success():
@@ -752,7 +756,7 @@ def test_mixed_cart_keys_reject_ambiguous_or_unsupported_identities():
     ]
 
 
-def test_upsert_accumulates_without_float_drift_and_preserves_other_catalogs():
+def test_upsert_appends_independent_occurrences_without_float_drift():
     result = run_mixed_cart_js(
         """
       const tarkett = createMixedCartLine({
@@ -768,13 +772,13 @@ def test_upsert_accumulates_without_float_drift_and_preserves_other_catalogs():
       let lines = upsertMixedCartLine([], tarkett);
       lines = upsertMixedCartLine(lines, sonara);
       lines = upsertMixedCartLine(lines, {...tarkett, quantity: "0.2"});
-      console.log(JSON.stringify(lines.map(line => [line.key, line.quantity])));
+      console.log(JSON.stringify({
+        quantities: lines.map(line => line.quantity),
+        uniqueKeys: new Set(lines.map(line => line.key)).size,
+      }));
     """
     )
-    assert result == [
-        ["tarkett:T-1", "0.3"],
-        ['sonara:["sonara:panel","",[]]', "1"],
-    ]
+    assert result == {"quantities": ["0.1", "1", "0.2"], "uniqueKeys": 3}
 
 
 def test_quantity_precision_is_enforced_per_catalog_without_float_rounding():
@@ -859,8 +863,15 @@ def test_line_shape_is_exact_and_defensively_copies_visual_and_identity_data():
             "catalog",
             "identity",
             "key",
+            "lineId",
+            "officialCode",
+            "parentLineId",
+            "position",
+            "provider",
             "quantity",
+            "quantityMode",
             "quantityRules",
+            "role",
             "sectionId",
             "snapshot",
         ],
@@ -1031,7 +1042,7 @@ def test_confirmation_helpers_are_rule_driven_not_warning_text_driven():
     }
 
 
-def test_refresh_upsert_uses_incoming_rules_and_snapshot_without_mutating_inputs():
+def test_upsert_appends_validated_snapshot_without_mutating_inputs():
     result = run_mixed_cart_js(
         """
       const make = (quantity, max, image, warning) => createMixedCartLine({
@@ -1052,26 +1063,26 @@ def test_refresh_upsert_uses_incoming_rules_and_snapshot_without_mutating_inputs
       catch (error) { loweredLimit = error.message; }
       incoming.snapshot.warnings.push("caller mutation");
       console.log(JSON.stringify({
-        quantity: refreshed[0].quantity,
-        max: refreshed[0].quantityRules.max,
-        image: refreshed[0].snapshot.image_url,
-        warnings: refreshed[0].snapshot.warnings,
-        needsAvailability: lineNeedsAvailabilityConfirmation(refreshed[0]),
-        needsPrice: lineNeedsPriceConfirmation(refreshed[0]),
+        quantity: refreshed[1].quantity,
+        max: refreshed[1].quantityRules.max,
+        image: refreshed[1].snapshot.image_url,
+        warnings: refreshed[1].snapshot.warnings,
+        needsAvailability: lineNeedsAvailabilityConfirmation(refreshed[1]),
+        needsPrice: lineNeedsPriceConfirmation(refreshed[1]),
         oldUnchanged: original[0].snapshot.image_url,
         loweredLimit
       }));
     """
     )
     assert result == {
-        "quantity": "2",
+        "quantity": "1",
         "max": "3",
         "image": "new.png",
         "warnings": ["new"],
-        "needsAvailability": True,
+        "needsAvailability": False,
         "needsPrice": True,
         "oldUnchanged": "old.png",
-        "loweredLimit": "Cantidad mayor al maximo permitido",
+        "loweredLimit": "accepted",
     }
 
 
@@ -1087,24 +1098,18 @@ def test_update_and_remove_are_immutable_and_preserve_unrelated_catalog_lines():
       try {{ updateMixedCartQuantity(original, "missing", "2"); }}
       catch (error) {{ missing = error.message; }}
       console.log(JSON.stringify({{
-        original: original.map(line => [line.key, line.quantity]),
-        updated: updated.map(line => [line.key, line.quantity]),
-        removed: removed.map(line => [line.key, line.quantity]),
+        original: original.map(line => line.quantity),
+        updated: updated.map(line => line.quantity),
+        removed: removed.map(line => line.quantity),
         secondPreservedByReference: original[1] === updated[1],
         missing
       }}));
     """
     )
     assert result == {
-        "original": [
-            ['sonara:["sonara:first","",[]]', "1"],
-            ['lumbro:["lumbro:second","",[]]', "1"],
-        ],
-        "updated": [
-            ['sonara:["sonara:first","",[]]', "2"],
-            ['lumbro:["lumbro:second","",[]]', "1"],
-        ],
-        "removed": [['lumbro:["lumbro:second","",[]]', "1"]],
+        "original": ["1", "1"],
+        "updated": ["2", "1"],
+        "removed": ["1"],
         "secondPreservedByReference": True,
         "missing": "Linea de carrito no encontrada",
     }

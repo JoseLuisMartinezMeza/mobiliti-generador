@@ -30,9 +30,19 @@ const QUANTITY_SCALE = 1000000n;
 const hasOwn = (value, field) => Object.prototype.hasOwnProperty.call(value, field);
 const SECTION_ID_PATTERN = /^section-([1-9]\d*)$/;
 const IMPORTED_CURRENCIES = new Set(["MXN", "USD", "EUR"]);
-const IMPORTED_EDIT_FIELDS = new Set(["name", "description", "dimension", "unitPrice", "provider"]);
+const IMPORTED_EDIT_FIELDS = new Set([
+  "officialCode", "name", "description", "dimension", "unitPrice", "provider",
+]);
 const IMPORTED_PRICE_PATTERN = /^(?:0|[1-9]\d{0,9})(?:\.\d{1,6})?$/;
 const IMPORTED_MAX_QUANTITY = 1000000n * QUANTITY_SCALE;
+const PROJECT_SCHEMA_VERSION = 1;
+const PROJECT_LINE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const PROJECT_ROLES = new Set(["principal", "complement"]);
+const COMPLEMENT_QUANTITY_MODES = new Set(["per_parent_unit", "fixed_project"]);
+const PROJECT_QUOTE_FIELDS = new Set([
+  "proyecto", "cliente", "correo", "telefono", "direccion", "razon_social",
+  "quote_currency", "descuento",
+]);
 
 function pythonStrip(value) {
   return value.replace(PYTHON_EDGE_WHITESPACE_PATTERN, "");
@@ -56,6 +66,31 @@ function normalizedSectionId(value) {
   const sectionId = normalizedText(value, "Seccion", { limit: 64 });
   if (!SECTION_ID_PATTERN.test(sectionId)) throw new Error("Seccion invalida");
   return sectionId;
+}
+
+function normalizedProjectLineId(value) {
+  if (typeof value !== "string" || !PROJECT_LINE_ID_PATTERN.test(value)) {
+    throw new Error("lineId invalido");
+  }
+  return value;
+}
+
+function normalizedProjectRole(value) {
+  if (!PROJECT_ROLES.has(value)) throw new Error("Rol de linea invalido");
+  return value;
+}
+
+function normalizedPosition(value) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error("Posicion de linea invalida");
+  return value;
+}
+
+function normalizedOfficialCode(value, snapshot) {
+  return normalizedText(value ?? snapshot?.code ?? "", "Codigo oficial", { allowEmpty: true, limit: 500 });
+}
+
+function normalizedProvider(value, catalog) {
+  return normalizedText(value ?? catalog ?? "", "Proveedor", { allowEmpty: true, limit: 500 });
 }
 
 function validatedSections(sections) {
@@ -435,11 +470,14 @@ function importedQuantityRules() {
 
 function validatedImportedEdits(edits) {
   const record = identityRecord(edits);
-  if (Object.keys(record).length !== IMPORTED_EDIT_FIELDS.size
-      || Object.keys(record).some((field) => !IMPORTED_EDIT_FIELDS.has(field))) {
+  const fieldCount = Object.keys(record).length;
+  if ((fieldCount !== IMPORTED_EDIT_FIELDS.size && fieldCount !== IMPORTED_EDIT_FIELDS.size - 1)
+      || Object.keys(record).some((field) => !IMPORTED_EDIT_FIELDS.has(field))
+      || !["name", "description", "dimension", "unitPrice", "provider"]
+        .every((field) => hasOwn(record, field))) {
     throw new Error("Ediciones importadas invalidas");
   }
-  return {
+  const result = {
     name: normalizedImportedText(record.name, "Nombre", { limit: 1000 }),
     description: normalizedImportedText(record.description, "Descripcion", {
       allowEmpty: true,
@@ -452,6 +490,13 @@ function validatedImportedEdits(edits) {
     unitPrice: normalizedImportedPrice(record.unitPrice),
     provider: normalizedImportedText(record.provider, "Proveedor", { limit: 1000 }),
   };
+  if (hasOwn(record, "officialCode")) {
+    result.officialCode = normalizedImportedText(record.officialCode, "Codigo oficial", {
+      allowEmpty: true,
+      limit: 500,
+    });
+  }
+  return result;
 }
 
 export function validateImportedCartEdits(edits) {
@@ -476,6 +521,7 @@ function createImportedCartLine({ preview, item, sourceCurrency, provider, secti
   }
   const identity = normalizedImportedIdentity(preview.import_id, item.source_row, item.key);
   const edits = validatedImportedEdits({
+    officialCode: item.official_code ?? item.code ?? "",
     name: item.name,
     description: item.description || "",
     dimension: item.dimension || "",
@@ -492,9 +538,18 @@ function createImportedCartLine({ preview, item, sourceCurrency, provider, secti
   return {
     kind: "imported",
     key: identity.key,
+    lineId: createProjectLineId(),
+    officialCode: edits.officialCode || normalizedOfficialCode(item.official_code ?? item.code, snapshot),
+    provider: edits.provider,
+    role: "principal",
+    parentLineId: null,
+    quantityMode: null,
+    position: 0,
     importId: identity.importId,
     sourceRow: identity.sourceRow,
     sourceCurrency: normalizedImportCurrency(sourceCurrency),
+    imageAssetKey: normalizedText(item.image_asset_key || "", "Imagen", { allowEmpty: true, limit: 500 }),
+    sourceAssetKey: normalizedText(item.source_asset_key || "", "Fuente", { allowEmpty: true, limit: 500 }),
     quantity,
     quantityRules: importedQuantityRules(),
     snapshot,
@@ -509,16 +564,39 @@ function copyImportedCartLine(line) {
     throw new Error("Linea importada invalida");
   }
   const identity = normalizedImportedIdentity(line.importId, line.sourceRow, line.key);
+  const role = normalizedProjectRole(line.role ?? "principal");
+  const parentLineId = line.parentLineId == null ? null : normalizedProjectLineId(line.parentLineId);
+  if ((role === "principal" && parentLineId !== null) || (role === "complement" && parentLineId === null)) {
+    throw new Error("Relacion de linea invalida");
+  }
+  const quantityMode = role === "complement"
+    ? line.quantityMode
+    : null;
+  if (role === "complement" && !COMPLEMENT_QUANTITY_MODES.has(quantityMode)) {
+    throw new Error("Complemento invalido");
+  }
+  const sectionId = role === "principal"
+    ? normalizedSectionId(line.sectionId)
+    : null;
   return {
     kind: "imported",
     key: identity.key,
+    lineId: normalizedProjectLineId(line.lineId ?? createProjectLineId()),
+    officialCode: normalizedOfficialCode(line.officialCode, line.snapshot),
+    provider: normalizedProvider(line.provider ?? line.edits?.provider, ""),
+    role,
+    parentLineId,
+    quantityMode,
+    position: normalizedPosition(line.position ?? 0),
     importId: identity.importId,
     sourceRow: identity.sourceRow,
     sourceCurrency: normalizedImportCurrency(line.sourceCurrency),
+    imageAssetKey: normalizedText(line.imageAssetKey || "", "Imagen", { allowEmpty: true, limit: 500 }),
+    sourceAssetKey: normalizedText(line.sourceAssetKey || "", "Fuente", { allowEmpty: true, limit: 500 }),
     quantity: normalizedImportedQuantity(line.quantity),
     quantityRules: importedQuantityRules(),
     snapshot: copyImportedSnapshot(line.snapshot || {}),
-    sectionId: normalizedSectionId(line.sectionId),
+    sectionId,
     edits: validatedImportedEdits(line.edits),
     editorRevision: Number.isSafeInteger(line.editorRevision) && line.editorRevision >= 0
       ? line.editorRevision
@@ -610,7 +688,12 @@ export function updateImportedCartLine(lines, key, edits) {
   const line = copyImportedCartLine(lines[index]);
   const nextEdits = validatedImportedEdits({ ...line.edits, ...updates });
   return lines.map((current, position) => (
-    position === index ? { ...line, edits: nextEdits } : current
+    position === index ? {
+      ...line,
+      officialCode: nextEdits.officialCode || line.officialCode,
+      provider: nextEdits.provider,
+      edits: nextEdits,
+    } : current
   ));
 }
 
@@ -668,6 +751,28 @@ export function replaceImportedCartBundle(lines, sections, bundle) {
   return { lines: finalLines, sections: resultSections };
 }
 
+export function createProjectLineId() {
+  return globalThis.crypto.randomUUID();
+}
+
+export function projectMatchKey(provider, officialCode) {
+  const cleanProvider = String(provider || "").normalize("NFKD")
+    .replace(/\p{M}/gu, "").trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  const cleanCode = String(officialCode || "").trim().toUpperCase();
+  return cleanProvider && cleanCode ? `${cleanProvider}\u0000${cleanCode}` : "";
+}
+
+export function projectLineMatches(line, selector) {
+  return projectMatchKey(line.provider || line.catalog, line.officialCode)
+    === projectMatchKey(selector.provider, selector.officialCode)
+    && projectMatchKey(selector.provider, selector.officialCode) !== "";
+}
+
+export function projectComplements(lines, parentLineId) {
+  return lines.filter((line) => line.role === "complement" && line.parentLineId === parentLineId)
+    .sort((left, right) => left.position - right.position);
+}
+
 export function createMixedCartLine({
   catalog,
   identity,
@@ -675,18 +780,42 @@ export function createMixedCartLine({
   quantityRules,
   snapshot,
   sectionId = "section-1",
+  lineId = createProjectLineId(),
+  officialCode,
+  provider,
+  role = "principal",
+  parentLineId = null,
+  quantityMode = null,
+  position = 0,
 }) {
   if (!MIXED_CATALOGS.includes(catalog)) throw new Error("Catalogo mixto no soportado");
   const copiedIdentity = normalizedIdentity(catalog, identity);
   const copiedRules = copyQuantityRules(quantityRules);
+  const copiedSnapshot = copySnapshot(snapshot);
+  const copiedRole = normalizedProjectRole(role);
+  const copiedParentLineId = parentLineId == null ? null : normalizedProjectLineId(parentLineId);
+  if ((copiedRole === "principal" && copiedParentLineId !== null)
+      || (copiedRole === "complement" && copiedParentLineId === null)) {
+    throw new Error("Relacion de linea invalida");
+  }
+  if (copiedRole === "complement" && !COMPLEMENT_QUANTITY_MODES.has(quantityMode)) {
+    throw new Error("Complemento invalido");
+  }
   const line = {
-    key: keyFromIdentity(catalog, copiedIdentity),
+    key: normalizedProjectLineId(lineId),
+    lineId: normalizedProjectLineId(lineId),
     catalog,
     identity: copiedIdentity,
+    officialCode: normalizedOfficialCode(officialCode, copiedSnapshot),
+    provider: normalizedProvider(provider, catalog),
+    role: copiedRole,
+    parentLineId: copiedParentLineId,
+    quantityMode: copiedRole === "complement" ? quantityMode : null,
+    position: normalizedPosition(position),
     quantity: quantityFromMicrounits(quantityMicrounits(quantity)),
     quantityRules: copiedRules,
-    snapshot: copySnapshot(snapshot),
-    sectionId: normalizedSectionId(sectionId),
+    snapshot: copiedSnapshot,
+    sectionId: copiedRole === "principal" ? normalizedSectionId(sectionId) : null,
   };
   return { ...line, quantity: validateLineQuantity(line, line.quantity) };
 }
@@ -727,21 +856,19 @@ export function lineNeedsPriceConfirmation(line) {
 }
 
 export function upsertMixedCartLine(lines, incoming) {
-  const copiedIncoming = createMixedCartLine(incoming);
-  const index = lines.findIndex((line) => line.key === copiedIncoming.key);
-  if (index < 0) return [...lines, copiedIncoming];
-  const combined = quantityMicrounits(lines[index].quantity)
-    + quantityMicrounits(copiedIncoming.quantity);
-  const refreshed = {
-    ...lines[index],
-    catalog: copiedIncoming.catalog,
-    identity: copiedIncoming.identity,
-    quantityRules: copiedIncoming.quantityRules,
-    snapshot: copiedIncoming.snapshot,
-    sectionId: normalizedSectionId(lines[index].sectionId || "section-1"),
-  };
-  const quantity = validateLineQuantity(refreshed, quantityFromMicrounits(combined));
-  return lines.map((line, position) => (position === index ? { ...refreshed, quantity } : line));
+  if (!Array.isArray(lines)) throw new Error("Lineas de carrito invalidas");
+  const requestedId = incoming?.lineId;
+  const lineId = lines.some((line) => line.lineId === requestedId)
+    ? createProjectLineId()
+    : requestedId;
+  const copiedIncoming = createMixedCartLine({
+    ...incoming,
+    lineId,
+    position: incoming?.position ?? lines.filter((line) => (
+      line.role === "principal" && line.sectionId === (incoming?.sectionId || "section-1")
+    )).length,
+  });
+  return [...lines, copiedIncoming];
 }
 
 export function updateMixedCartQuantity(lines, key, quantity) {
@@ -753,6 +880,92 @@ export function updateMixedCartQuantity(lines, key, quantity) {
 
 export function removeMixedCartLine(lines, key) {
   return lines.filter((line) => line.key !== key);
+}
+
+export function removeProjectLineTree(lines, lineId) {
+  const current = lines.find((line) => line.lineId === lineId);
+  if (!current) throw new Error("Producto del Proyecto no encontrado");
+  const removed = current.role === "principal"
+    ? new Set([lineId, ...projectComplements(lines, lineId).map((line) => line.lineId)])
+    : new Set([lineId]);
+  return lines.filter((line) => !removed.has(line.lineId));
+}
+
+export function addProjectComplement(lines, parentLineId, target, quantityMode) {
+  if (!Array.isArray(lines)) throw new Error("Lineas de carrito invalidas");
+  const parent = lines.find((line) => line.lineId === parentLineId);
+  if (!parent) throw new Error("Producto del Proyecto no encontrado");
+  if (parent.role !== "principal") throw new Error("Un complemento no puede tener complementos");
+  if (!COMPLEMENT_QUANTITY_MODES.has(quantityMode)) throw new Error("Complemento invalido");
+  const children = projectComplements(lines, parentLineId);
+  const requestedId = target?.lineId;
+  const lineId = lines.some((line) => line.lineId === requestedId)
+    ? createProjectLineId()
+    : requestedId;
+  const complement = createMixedCartLine({
+    ...target,
+    lineId,
+    sectionId: null,
+    role: "complement",
+    parentLineId,
+    quantityMode,
+    position: children.length,
+  });
+  return [...lines, complement];
+}
+
+export function replaceProjectLine(lines, lineId, target) {
+  const current = lines.find((line) => line.lineId === lineId);
+  if (!current) throw new Error("Producto del Proyecto no encontrado");
+  const children = current.role === "principal"
+    ? projectComplements(lines, lineId).map((line) => line.lineId)
+    : [];
+  const replacement = createMixedCartLine({
+    ...target,
+    lineId: current.lineId,
+    quantity: current.quantity,
+    sectionId: current.sectionId || "section-1",
+    role: current.role,
+    parentLineId: current.parentLineId || null,
+    quantityMode: current.quantityMode || null,
+    position: current.position,
+  });
+  const kept = lines.filter((line) => !children.includes(line.lineId));
+  return {
+    lines: kept.map((line) => line.lineId === lineId ? replacement : line),
+    removedComplementIds: children,
+  };
+}
+
+export function replaceAllProjectLines(lines, selector, target) {
+  const matched = lines.filter((line) => projectLineMatches(line, selector));
+  const ids = matched.map((line) => line.lineId);
+  const parentById = new Map(lines.map((line) => [line.lineId, line]));
+  const sectionIds = new Set(matched.map((line) => (
+    line.sectionId
+    || parentById.get(line.parentLineId)?.sectionId
+  )).filter(Boolean));
+  let result = [...lines];
+  const removed = [];
+  for (const lineId of ids) {
+    if (!result.some((line) => line.lineId === lineId)) continue;
+    const next = replaceProjectLine(result, lineId, target);
+    result = next.lines;
+    removed.push(...next.removedComplementIds);
+  }
+  return {
+    lines: result,
+    summary: {
+      affected: ids.length,
+      catalog: matched.filter((line) => line.kind !== "imported").length,
+      imported: matched.filter((line) => line.kind === "imported").length,
+      sections: sectionIds.size,
+      removedComplements: removed.length,
+      excludedUnlinked: lines.filter((line) => (
+        !projectMatchKey(line.provider || line.catalog, line.officialCode)
+      )).length,
+    },
+  };
 }
 
 export function toMixedQuoteItem(line) {
@@ -792,4 +1005,248 @@ export function toMixedQuoteItem(line) {
   };
   if (line.identity.base_option_id) result.base_option_id = line.identity.base_option_id;
   return result;
+}
+
+function exactProjectKeys(value, keys, message) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).length !== keys.size
+      || Object.keys(value).some((key) => !keys.has(key))) {
+    throw new Error(message);
+  }
+}
+
+function projectQuoteFields(quoteFields) {
+  exactProjectKeys(quoteFields, PROJECT_QUOTE_FIELDS, "Datos de cotizacion invalidos");
+  const result = {};
+  for (const field of PROJECT_QUOTE_FIELDS) {
+    result[field] = normalizedText(quoteFields[field], field, { allowEmpty: true, limit: 500 });
+  }
+  const currency = result.quote_currency.toUpperCase();
+  if (!IMPORTED_CURRENCIES.has(currency)) throw new Error("Moneda de cotizacion invalida");
+  if (!/^(?:0|[1-9]\d{0,2})(?:\.\d+)?$/.test(result.descuento)
+      || Number(result.descuento) > 100) {
+    throw new Error("Descuento invalido");
+  }
+  return { ...result, quote_currency: currency };
+}
+
+function projectDisplayCache(snapshot) {
+  const copied = copySnapshot(snapshot);
+  return { name: copied.name, code: copied.code, image_url: copied.image_url };
+}
+
+function projectLineRelationship(line, sectionIds) {
+  const role = normalizedProjectRole(line.role);
+  const lineId = normalizedProjectLineId(line.lineId);
+  const position = normalizedPosition(line.position);
+  if (role === "principal") {
+    if (line.parentLineId !== null || !sectionIds.has(line.sectionId)) {
+      throw new Error("Principal fuera de seccion");
+    }
+    return { lineId, role, position, sectionId: line.sectionId, parentLineId: null, quantityMode: null };
+  }
+  if (line.sectionId !== null || !COMPLEMENT_QUANTITY_MODES.has(line.quantityMode)) {
+    throw new Error("Complemento invalido");
+  }
+  return {
+    lineId,
+    role,
+    position,
+    sectionId: null,
+    parentLineId: normalizedProjectLineId(line.parentLineId),
+    quantityMode: line.quantityMode,
+  };
+}
+
+function validateProjectLineGraph(lines, sectionIds) {
+  const lineIds = new Set();
+  const positions = new Map();
+  for (const line of lines) {
+    const relation = projectLineRelationship(line, sectionIds);
+    if (lineIds.has(relation.lineId)) throw new Error("lineId duplicado");
+    lineIds.add(relation.lineId);
+    const group = relation.role === "principal" ? relation.sectionId : relation.parentLineId;
+    const groupPositions = positions.get(group) || new Set();
+    if (groupPositions.has(relation.position)) throw new Error("Posicion de linea duplicada");
+    groupPositions.add(relation.position);
+    positions.set(group, groupPositions);
+  }
+  for (const line of lines) {
+    if (line.role === "complement") {
+      const parent = lines.find((candidate) => candidate.lineId === line.parentLineId);
+      if (!parent || parent.role !== "principal") throw new Error("Padre de complemento invalido");
+    }
+  }
+  for (const groupPositions of positions.values()) {
+    if ([...groupPositions].sort((left, right) => left - right)
+      .some((position, index) => position !== index)) {
+      throw new Error("Posicion de linea invalida");
+    }
+  }
+}
+
+function serializeProjectLine(line, sectionIds) {
+  const relationship = projectLineRelationship(line, sectionIds);
+  const common = {
+    line_id: relationship.lineId,
+    role: relationship.role,
+    section_id: relationship.sectionId,
+    parent_line_id: relationship.parentLineId,
+    position: relationship.position,
+    quantity: validateLineQuantity(line, line.quantity),
+    source: line.kind === "imported" ? "imported" : "catalog",
+    official_code: normalizedOfficialCode(line.edits?.officialCode || line.officialCode, line.snapshot),
+    display_cache: projectDisplayCache(line.snapshot),
+  };
+  if (!common.official_code) throw new Error("Codigo oficial requerido");
+  if (relationship.role === "complement") common.quantity_mode = relationship.quantityMode;
+  if (common.source === "catalog") {
+    const copied = createMixedCartLine(line);
+    return {
+      ...common,
+      catalog: copied.catalog,
+      identity: copied.identity,
+      quantity_rules_cache: copied.quantityRules,
+    };
+  }
+  const imported = copyImportedCartLine(line);
+  return {
+    ...common,
+    import_id: imported.importId,
+    source_row: imported.sourceRow,
+    source_currency: imported.sourceCurrency,
+    provider: imported.edits.provider,
+    name: imported.edits.name,
+    description: imported.edits.description,
+    dimension: imported.edits.dimension,
+    unit_price: imported.edits.unitPrice,
+    image_asset_key: imported.imageAssetKey,
+    source_asset_key: imported.sourceAssetKey,
+  };
+}
+
+export function serializeProject({ quoteFields, sections, lines }) {
+  const currentSections = validatedSections(sections);
+  if (!Array.isArray(lines)) throw new Error("Lineas de Proyecto invalidas");
+  const sectionIds = new Set(currentSections.map((section) => section.id));
+  validateProjectLineGraph(lines, sectionIds);
+  return {
+    schema_version: PROJECT_SCHEMA_VERSION,
+    quote_fields: projectQuoteFields(quoteFields),
+    sections: currentSections.map((section, position) => ({
+      section_id: section.id,
+      concept: section.concept,
+      position,
+    })),
+    lines: lines.map((line) => serializeProjectLine(line, sectionIds)),
+  };
+}
+
+function hydrateProjectSection(section) {
+  exactProjectKeys(section, new Set(["section_id", "concept", "position"]), "Seccion de Proyecto invalida");
+  return {
+    id: normalizedSectionId(section.section_id),
+    concept: normalizedText(section.concept, "Concepto", { allowEmpty: true, limit: 120 }),
+    position: normalizedPosition(section.position),
+  };
+}
+
+function hydrateCatalogProjectLine(line) {
+  const commonKeys = new Set([
+    "line_id", "role", "section_id", "parent_line_id", "position", "quantity",
+    "source", "official_code", "display_cache", "catalog", "identity",
+    "quantity_rules_cache",
+  ]);
+  if (line?.role === "complement") commonKeys.add("quantity_mode");
+  exactProjectKeys(line, commonKeys, "Linea de Proyecto invalida");
+  if (line.source !== "catalog") throw new Error("Origen de linea invalido");
+  return createMixedCartLine({
+    catalog: line.catalog,
+    identity: line.identity,
+    quantity: line.quantity,
+    quantityRules: line.quantity_rules_cache,
+    snapshot: {
+      name: line.display_cache?.name,
+      code: line.display_cache?.code,
+      image_url: line.display_cache?.image_url,
+      unit: "",
+      availability: "",
+      configuration: "",
+      warnings: [],
+    },
+    lineId: line.line_id,
+    officialCode: line.official_code,
+    role: line.role,
+    sectionId: line.section_id,
+    parentLineId: line.parent_line_id,
+    quantityMode: line.quantity_mode ?? null,
+    position: line.position,
+  });
+}
+
+function hydrateImportedProjectLine(line) {
+  const allowed = new Set([
+    "line_id", "role", "section_id", "parent_line_id", "position", "quantity",
+    "source", "official_code", "display_cache", "import_id", "source_row",
+    "source_currency", "provider", "name", "description", "dimension", "unit_price",
+    "image_asset_key", "source_asset_key",
+  ]);
+  if (line?.role === "complement") allowed.add("quantity_mode");
+  exactProjectKeys(line, allowed, "Linea de Proyecto invalida");
+  if (line.source !== "imported") throw new Error("Origen de linea invalido");
+  const imported = copyImportedCartLine({
+    kind: "imported",
+    key: importedKey(line.import_id, line.source_row),
+    lineId: line.line_id,
+    officialCode: line.official_code,
+    provider: line.provider,
+    role: line.role,
+    parentLineId: line.parent_line_id,
+    quantityMode: line.quantity_mode ?? null,
+    position: line.position,
+    importId: line.import_id,
+    sourceRow: line.source_row,
+    sourceCurrency: line.source_currency,
+    imageAssetKey: line.image_asset_key,
+    sourceAssetKey: line.source_asset_key,
+    quantity: line.quantity,
+    sectionId: line.section_id,
+    snapshot: {
+      name: line.display_cache?.name,
+      code: line.display_cache?.code,
+      image_url: line.display_cache?.image_url,
+      unit: "",
+      availability: "",
+      configuration: "",
+      warnings: [],
+    },
+    edits: {
+      officialCode: line.official_code,
+      name: line.name,
+      description: line.description,
+      dimension: line.dimension,
+      unitPrice: line.unit_price,
+      provider: line.provider,
+    },
+  });
+  return imported;
+}
+
+export function hydrateProject(payload) {
+  exactProjectKeys(payload, new Set(["schema_version", "quote_fields", "sections", "lines"]), "Proyecto invalido");
+  if (payload.schema_version !== PROJECT_SCHEMA_VERSION) throw new Error("Version de Proyecto no soportada");
+  if (!Array.isArray(payload.sections) || !Array.isArray(payload.lines)) {
+    throw new Error("Proyecto invalido");
+  }
+  const rawSections = payload.sections.map(hydrateProjectSection)
+    .sort((left, right) => left.position - right.position);
+  if (rawSections.some((section, position) => section.position !== position)) {
+    throw new Error("Orden de secciones invalido");
+  }
+  const sections = validatedSections(rawSections.map(({ id, concept }) => ({ id, concept })));
+  const lines = payload.lines.map((line) => (
+    line?.source === "catalog" ? hydrateCatalogProjectLine(line) : hydrateImportedProjectLine(line)
+  ));
+  validateProjectLineGraph(lines, new Set(sections.map((section) => section.id)));
+  return { quoteFields: projectQuoteFields(payload.quote_fields), sections, lines };
 }
