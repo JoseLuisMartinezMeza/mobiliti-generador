@@ -172,19 +172,49 @@ def test_hydrate_catalog_line_without_optional_quantity_rules_cache():
       const reopened = model.hydrateProject(payload);
       console.log(JSON.stringify({
         quantity: reopened.lines[0].quantity,
-        min: reopened.lines[0].quantityRules.min,
-        step: reopened.lines[0].quantityRules.step,
-        maxDecimals: reopened.lines[0].quantityRules.maxDecimals,
-        max: reopened.lines[0].quantityRules.max,
+        backendFallback: reopened.lines[0].projectQuantityFallback,
       }));
     """)
     assert result == {
         "quantity": "1.5",
-        "min": "0.000001",
-        "step": "0.000001",
-        "maxDecimals": 6,
-        "max": "1000000",
+        "backendFallback": True,
     }
+
+
+def test_no_cache_catalog_fallback_matches_backend_decimal_boundaries():
+    result = run_js(r"""
+      const line = model.createMixedCartLine({
+        catalog: "sunon",
+        identity: {internal_id: "sunon:chair", base_option_id: "", add_on_option_ids: []},
+        officialCode: "CHAIR-1", provider: "Sunon", quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "100", integer: true},
+        snapshot: {name: "Chair", code: "CHAIR-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+        sectionId: "section-1", lineId: "11111111-1111-4111-8111-111111111111",
+      });
+      const base = model.serializeProject({
+        quoteFields: {proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+          razon_social: "", quote_currency: "MXN", descuento: "40"},
+        sections: [{id: "section-1", concept: "RecepciÃ³n"}], lines: [line],
+      });
+      delete base.lines[0].quantity_rules_cache;
+      const outcomes = ["1.0000001", "1e-7", "1000000", "0", "-1", "1000000.0000001"]
+        .map((quantity) => {
+          const payload = JSON.parse(JSON.stringify(base));
+          payload.lines[0].quantity = quantity;
+          try { return model.hydrateProject(payload).lines[0].quantity; }
+          catch { return "rejected"; }
+        });
+      console.log(JSON.stringify(outcomes));
+    """)
+    assert result == [
+        "1.0000001",
+        "0.0000001",
+        "1000000",
+        "rejected",
+        "rejected",
+        "rejected",
+    ]
 
 
 def test_hydrate_project_rejects_unknown_nested_persisted_keys():

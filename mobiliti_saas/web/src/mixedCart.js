@@ -365,6 +365,43 @@ function quantityFromMicrounits(value) {
   return fraction ? `${integer}.${fraction}` : String(integer);
 }
 
+function normalizedBackendProjectQuantity(value) {
+  const text = normalizedText(value, "Cantidad", { limit: 32 });
+  const normalized = text.replace(/_/g, "");
+  const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(normalized);
+  if (!match || match[1] === "-") throw new Error("Cantidad invalida");
+  const integer = match[2] || "";
+  const fraction = match[3] ?? match[4] ?? "";
+  const digits = `${integer}${fraction}`.replace(/^0+/, "");
+  if (!digits) throw new Error("Cantidad invalida");
+  const scale = BigInt(fraction.length) - BigInt(match[5] || "0");
+  const digitLength = BigInt(digits.length);
+
+  if (scale >= 0n) {
+    const maximumLength = 7n + scale;
+    if (digitLength > maximumLength) throw new Error("Cantidad mayor al maximo permitido");
+    if (digitLength === maximumLength) {
+      const maximum = `1${"0".repeat(Number(6n + scale))}`;
+      if (digits > maximum) throw new Error("Cantidad mayor al maximo permitido");
+    }
+  } else {
+    const expandedLength = digitLength - scale;
+    if (expandedLength > 7n) throw new Error("Cantidad mayor al maximo permitido");
+    if (expandedLength === 7n) {
+      const expanded = `${digits}${"0".repeat(Number(-scale))}`;
+      if (expanded > "1000000") throw new Error("Cantidad mayor al maximo permitido");
+    }
+  }
+
+  if (scale > 1000000n) return normalized;
+  if (scale <= 0n) return `${digits}${"0".repeat(Number(-scale))}`;
+  if (digitLength > scale) {
+    const split = Number(digitLength - scale);
+    return `${digits.slice(0, split)}.${digits.slice(split)}`;
+  }
+  return `0.${"0".repeat(Number(scale - digitLength))}${digits}`;
+}
+
 function copyQuantityRules(quantityRules) {
   if (!quantityRules || typeof quantityRules !== "object" || Array.isArray(quantityRules)) {
     throw new Error("Reglas de cantidad requeridas");
@@ -821,6 +858,9 @@ export function createMixedCartLine({
 }
 
 export function validateLineQuantity(line, quantity) {
+  if (line?.projectQuantityFallback === true) {
+    return normalizedBackendProjectQuantity(quantity);
+  }
   const text = typeof quantity === "string" ? quantity.trim() : "";
   const units = quantityMicrounits(quantity);
   const maxDecimals = line?.quantityRules?.maxDecimals;
@@ -1066,12 +1106,7 @@ function hydrateProjectQuantityRules(quantityRules) {
 }
 
 function defaultProjectQuantityRules() {
-  return {
-    min: "0.000001",
-    step: "0.000001",
-    maxDecimals: 6,
-    max: "1000000",
-  };
+  return {};
 }
 
 function hydrateProjectCatalogIdentity(catalog, identity) {
@@ -1082,6 +1117,38 @@ function hydrateProjectCatalogIdentity(catalog, identity) {
       : new Set(["internal_id", "base_option_id", "add_on_option_ids"]);
   exactProjectKeys(identity, fields, "Identidad de catalogo invalida");
   return identity;
+}
+
+function hydrateCatalogLineWithoutQuantityRules(line) {
+  if (!MIXED_CATALOGS.includes(line.catalog)) throw new Error("Catalogo mixto no soportado");
+  const role = normalizedProjectRole(line.role);
+  const parentLineId = line.parent_line_id == null ? null : normalizedProjectLineId(line.parent_line_id);
+  if ((role === "principal" && parentLineId !== null)
+      || (role === "complement" && parentLineId === null)) {
+    throw new Error("Relacion de linea invalida");
+  }
+  const quantityMode = role === "complement" ? line.quantity_mode : null;
+  if (role === "complement" && !COMPLEMENT_QUANTITY_MODES.has(quantityMode)) {
+    throw new Error("Complemento invalido");
+  }
+  const snapshot = copySnapshot(hydrateProjectDisplayCache(line.display_cache));
+  return {
+    key: normalizedProjectLineId(line.line_id),
+    lineId: normalizedProjectLineId(line.line_id),
+    catalog: line.catalog,
+    identity: normalizedIdentity(line.catalog, hydrateProjectCatalogIdentity(line.catalog, line.identity)),
+    officialCode: normalizedOfficialCode(line.official_code, snapshot),
+    provider: normalizedProvider(undefined, line.catalog),
+    role,
+    parentLineId,
+    quantityMode,
+    position: normalizedPosition(line.position),
+    quantity: normalizedBackendProjectQuantity(line.quantity),
+    quantityRules: defaultProjectQuantityRules(),
+    projectQuantityFallback: true,
+    snapshot,
+    sectionId: role === "principal" ? line.section_id : null,
+  };
 }
 
 function projectLineRelationship(line, sectionIds) {
@@ -1150,6 +1217,13 @@ function serializeProjectLine(line, sectionIds) {
   if (!common.official_code) throw new Error("Codigo oficial requerido");
   if (relationship.role === "complement") common.quantity_mode = relationship.quantityMode;
   if (common.source === "catalog") {
+    if (line.projectQuantityFallback === true) {
+      return {
+        ...common,
+        catalog: line.catalog,
+        identity: normalizedIdentity(line.catalog, line.identity),
+      };
+    }
     const copied = createMixedCartLine(line);
     return {
       ...common,
@@ -1212,13 +1286,14 @@ function hydrateCatalogProjectLine(line) {
     throw new Error("Linea de Proyecto invalida");
   }
   if (line.source !== "catalog") throw new Error("Origen de linea invalido");
+  if (!hasOwn(line, "quantity_rules_cache")) {
+    return hydrateCatalogLineWithoutQuantityRules(line);
+  }
   return createMixedCartLine({
     catalog: line.catalog,
     identity: hydrateProjectCatalogIdentity(line.catalog, line.identity),
     quantity: line.quantity,
-    quantityRules: hasOwn(line, "quantity_rules_cache")
-      ? hydrateProjectQuantityRules(line.quantity_rules_cache)
-      : defaultProjectQuantityRules(),
+    quantityRules: hydrateProjectQuantityRules(line.quantity_rules_cache),
     snapshot: hydrateProjectDisplayCache(line.display_cache),
     lineId: line.line_id,
     officialCode: line.official_code,
