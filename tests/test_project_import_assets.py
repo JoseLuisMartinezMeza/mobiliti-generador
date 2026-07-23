@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from io import BytesIO
 import json
+from pathlib import Path
+import re
 import urllib.error
 
 import pytest
@@ -300,3 +302,98 @@ def test_supabase_conditional_conflict_uses_non_upsert_write(monkeypatch):
     with pytest.raises(index._StorageObjectAlreadyExists):
         index._storage_create_bytes_if_absent("projects/7/example/asset.png", b"content", "image/png")
     assert requests[0].get_header("X-upsert") == "false"
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (409, {"code": "ResourceAlreadyExists"}),
+        (400, {"message": "The resource already exists"}),
+    ],
+    ids=["conflict-409", "legacy-duplicate-400"],
+)
+def test_supabase_create_conflicts_re_read_and_accept_same_bytes(monkeypatch, status, body):
+    requests = []
+
+    def conflict(request, timeout):
+        requests.append(request)
+        raise urllib.error.HTTPError(
+            request.full_url, status, "Conflict", {}, BytesIO(json.dumps(body).encode("utf-8"))
+        )
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "_use_r2_storage", lambda: False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://example.invalid")
+    monkeypatch.setattr(index, "SUPABASE_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(index.urllib.request, "urlopen", conflict)
+    monkeypatch.setattr(index, "_storage_download_bytes", lambda _path: b"same-bytes")
+
+    index._copy_project_import_asset("projects/7/example/asset.png", b"same-bytes", "image/png")
+
+    assert requests[0].get_method() == "POST"
+    assert requests[0].get_header("X-upsert") == "false"
+    assert requests[0].full_url.endswith(
+        f"/storage/v1/object/{index.QUOTE_STORAGE_BUCKET}/projects/7/example/asset.png"
+    )
+
+
+def test_supabase_create_conflict_rejects_different_existing_bytes(monkeypatch):
+    def conflict(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url, 409, "Conflict", {}, BytesIO(b'{"code":"KeyAlreadyExists"}')
+        )
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "_use_r2_storage", lambda: False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://example.invalid")
+    monkeypatch.setattr(index, "SUPABASE_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(index.urllib.request, "urlopen", conflict)
+    monkeypatch.setattr(index, "_storage_download_bytes", lambda _path: b"other-bytes")
+
+    with pytest.raises(ValueError, match="contenido diferente"):
+        index._copy_project_import_asset("projects/7/example/asset.png", b"same-bytes", "image/png")
+
+
+def test_supabase_validation_400_is_not_a_conditional_conflict(monkeypatch):
+    def validation_error(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url, 400, "Bad Request", {}, BytesIO(b'{"code":"ValidationError"}')
+        )
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "_use_r2_storage", lambda: False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://example.invalid")
+    monkeypatch.setattr(index, "SUPABASE_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(index.urllib.request, "urlopen", validation_error)
+
+    with pytest.raises(RuntimeError) as error:
+        index._storage_create_bytes_if_absent("projects/7/example/asset.png", b"content", "image/png")
+    assert not isinstance(error.value, index._StorageObjectAlreadyExists)
+
+
+@pytest.mark.parametrize(
+    "requirements_path",
+    [
+        "mobiliti_saas/requirements.txt",
+        "mobiliti_saas/web/requirements.txt",
+        "vercel_deploy/requirements.txt",
+        "mobiliti_saas/worker/requirements.txt",
+    ],
+)
+def test_api_requirements_require_boto3_with_if_none_match_support(requirements_path):
+    contents = Path(requirements_path).read_text(encoding="utf-8")
+    match = re.search(r"^boto3\s*>=\s*(\d+)\.(\d+)\.(\d+)", contents, re.MULTILINE)
+    assert match, f"{requirements_path} debe declarar boto3>=1.36.0"
+    assert tuple(map(int, match.groups())) >= (1, 36, 0)
+
+
+def test_installed_boto3_put_object_model_accepts_if_none_match_when_available():
+    boto3 = pytest.importorskip("boto3")
+    client = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
+    put_object = client.meta.service_model.operation_model("PutObject")
+    assert "IfNoneMatch" in put_object.input_shape.members

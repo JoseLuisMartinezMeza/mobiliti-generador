@@ -634,6 +634,31 @@ def _r2_error_details(exc: Exception) -> tuple[str | None, int | None]:
     return str(code) if code is not None else None, status if isinstance(status, int) else None
 
 
+def _is_supabase_create_conflict(status: int, body: str) -> bool:
+    """Reconoce exclusivamente conflictos documentados del create de Storage."""
+    if status == 409:
+        return True
+    if status != 400:
+        return False
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    code = str(payload.get("code") or payload.get("error") or "").strip()
+    if code in {"ResourceAlreadyExists", "KeyAlreadyExists"}:
+        return True
+    message = str(payload.get("message") or "").strip().lower()
+    return message in {
+        "resource already exists",
+        "the resource already exists",
+        "key already exists",
+        "the key already exists",
+        "duplicate key value violates unique constraint",
+    }
+
+
 def _storage_download_bytes(path: str) -> bytes:
     """Descarga un objeto privado del proveedor de storage desde backend."""
     if DEV_MODE:
@@ -765,7 +790,7 @@ def _storage_create_bytes_if_absent(
         url,
         data=content,
         headers={"Content-Type": content_type, "x-upsert": "false"},
-        method="PUT",
+        method="POST",
     )
     for key, value in _get_supabase_headers().items():
         req.add_header(key, value)
@@ -773,9 +798,9 @@ def _storage_create_bytes_if_absent(
         with urllib.request.urlopen(req, timeout=60):
             return
     except urllib.error.HTTPError as e:
-        if e.code in {409, 412}:
+        body = e.read().decode("utf-8", errors="replace")
+        if _is_supabase_create_conflict(e.code, body):
             raise _StorageObjectAlreadyExists("El objeto de storage ya existe") from e
-        body = e.read().decode("utf-8")
         raise RuntimeError(_safe_http_error("Supabase Storage", e.code, body)) from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"Supabase Storage connection error: {e.reason}") from e
