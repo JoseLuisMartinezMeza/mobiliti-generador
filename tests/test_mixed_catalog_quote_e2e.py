@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
@@ -16,7 +17,7 @@ from openpyxl import load_workbook
 from PIL import Image
 import pytest
 
-from mobiliti_saas.quote_engine import catalog_cart, generate_quote
+from mobiliti_saas.quote_engine import catalog_cart, generate_quote, quotation_sheets
 from mobiliti_saas.quote_engine import engine as quote_engine
 from mobiliti_saas.quote_engine.mixed_catalog import (
     build_mixed_catalog_cart_payload,
@@ -636,6 +637,10 @@ def _assert_exact_quotation_data(audit, expected_rows) -> None:
 def _mixed_import_metadata(payload: dict, quote_currency: str) -> dict:
     return {
         "catalog_price_mode": "mixed_catalog_converted",
+        "catalog_source_hashes": {
+            group["catalog"]: group["catalog_source_hash"]
+            for group in payload["groups"]
+        },
         "quote_currency": quote_currency,
         "rate_summary": deepcopy(payload["rate_summary"]),
         "auto_electrification_rate": deepcopy(
@@ -792,6 +797,53 @@ def test_authoritative_catalog_origin_uses_canonical_key_not_source_reference(
     )
 
     assert output.is_file()
+
+
+def test_authoritative_catalog_origin_rejects_another_catalog_with_valid_row_hash(
+    monkeypatch,
+    tmp_path,
+):
+    row = {"catalog": "cr-global", "internal_id": "cr:e2e", "quantity": "1"}
+    payload = build_mixed_catalog_cart_payload(
+        [row],
+        catalogs=authoritative_catalogs(),
+        rate_rows=rate_rows(),
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Validacion",
+            "item_keys": [mixed_cart_key(row)],
+        }],
+        today=date.today(),
+    )
+    monkeypatch.setattr(
+        catalog_cart,
+        "_download_catalog_image",
+        lambda *_args, **_kwargs: None,
+    )
+    parser_source = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "forged-origin-source.xlsx",
+        image_dir=tmp_path / "forged-origin-images",
+    )
+    canonical = quotation_data_rows(payload)[0]
+    forged = quotation_sheets._with_canonical_hash(
+        replace(canonical, origin="sunon", row_hash="")
+    )
+    output = tmp_path / "forged-origin-must-not-exist.xlsx"
+
+    with pytest.raises(ValueError, match="origin"):
+        generate_quote(
+            parser_source,
+            output,
+            _mixed_import_metadata(payload, "MXN"),
+            WORKER_TEMPLATE,
+            original_quotation_path=None,
+            quotation_data_rows=(forged,),
+        )
+
+    assert not output.exists()
 
 
 def _identical_offiho_payload_with_lumbro_parents() -> dict:

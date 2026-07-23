@@ -154,7 +154,11 @@ def normalize_imported_items(
     quote_currency: str,
     rate_rows: list[dict],
     discount_percent: str,
+    *,
+    allow_duplicate_source_rows: bool = False,
 ) -> list[dict]:
+    if type(allow_duplicate_source_rows) is not bool:
+        raise TypeError("allow_duplicate_source_rows invalido")
     checked = validate_import_manifest(manifest)
     if not isinstance(raw_items, list) or not raw_items:
         raise ValueError("Items importados invalidos")
@@ -168,7 +172,10 @@ def normalize_imported_items(
     seen: set[int] = set()
     for raw in raw_items:
         row = _source_row(raw)
-        if row in seen or row not in originals:
+        if (
+            row not in originals
+            or (row in seen and not allow_duplicate_source_rows)
+        ):
             raise ValueError("Fila importada invalida")
         seen.add(row)
         _raw_item(raw, checked["import_id"])

@@ -311,6 +311,133 @@ def test_line_id_must_be_unique_across_catalog_and_imported_occurrences(
         )
 
 
+def test_project_imported_occurrences_can_share_the_same_source_row(
+    tmp_path,
+    mixed_catalogs,
+    rate_rows,
+):
+    source = write_import_fixture(tmp_path / "duplicate-project-import.xlsx")
+    manifest, _images = build_import_manifest(
+        source.read_bytes(), IMPORT_ID, source.name
+    )
+    project = valid_project_payload()
+    imported_template = deepcopy(project["lines"][1])
+    imported_template.update({
+        "role": "principal",
+        "section_id": "section-1",
+        "parent_line_id": None,
+        "source_row": 11,
+        "import_id": IMPORT_ID,
+        "quantity": "1",
+        "unit_price": "82.00",
+    })
+    imported_template.pop("quantity_mode")
+    first_project_line = {
+        **imported_template,
+        "line_id": FIRST_LINE_ID,
+        "position": 0,
+    }
+    second_project_line = {
+        **imported_template,
+        "line_id": SECOND_LINE_ID,
+        "position": 1,
+        "quantity": "2",
+    }
+    project["lines"] = [first_project_line, second_project_line]
+    raw_template = {
+        "kind": "imported",
+        "import_id": IMPORT_ID,
+        "source_row": 11,
+        "source_currency": "USD",
+        "quantity": "1",
+        "overrides": {
+            "name": "Alien Task Chair",
+            "description": "Silla operativa",
+            "dimension": "630 x 565 x 1000 mm",
+            "unit_price": "82.00",
+            "provider": "Sunon",
+        },
+    }
+
+    payload = build_mixed_catalog_cart_payload(
+        [],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Recepción",
+            "line_ids": [FIRST_LINE_ID, SECOND_LINE_ID],
+        }],
+        imported_source={
+            "manifest": manifest,
+            "source_currency": "USD",
+            "items": [
+                {**raw_template, "line_id": FIRST_LINE_ID},
+                {
+                    **raw_template,
+                    "line_id": SECOND_LINE_ID,
+                    "quantity": "2",
+                },
+            ],
+        },
+        project_context=project_context(project, "project-imported", 1),
+        today=date(2026, 7, 19),
+    )
+
+    items = payload["imported_source"]["items"]
+    assert [item["line_id"] for item in items] == [
+        FIRST_LINE_ID,
+        SECOND_LINE_ID,
+    ]
+    assert items[0]["canonical_key"] == items[1]["canonical_key"]
+    assert payload["sections"][0]["line_ids"] == [
+        FIRST_LINE_ID,
+        SECOND_LINE_ID,
+    ]
+
+
+def test_legacy_imported_duplicate_source_row_remains_rejected(
+    tmp_path,
+    mixed_catalogs,
+    rate_rows,
+):
+    source = write_import_fixture(tmp_path / "duplicate-legacy-import.xlsx")
+    manifest, _images = build_import_manifest(
+        source.read_bytes(), IMPORT_ID, source.name
+    )
+    imported = {
+        "kind": "imported",
+        "import_id": IMPORT_ID,
+        "source_row": 11,
+        "source_currency": "USD",
+        "quantity": "1",
+        "overrides": {
+            "name": "Alien Task Chair",
+            "description": "Silla operativa",
+            "dimension": "630 x 565 x 1000 mm",
+            "unit_price": "82.00",
+            "provider": "Sunon",
+        },
+    }
+
+    with pytest.raises(ValueError, match="Fila importada invalida"):
+        build_mixed_catalog_cart_payload(
+            [],
+            catalogs=mixed_catalogs,
+            rate_rows=rate_rows,
+            quote_currency="MXN",
+            commercial_discount_percent="40",
+            imported_source={
+                "manifest": manifest,
+                "source_currency": "USD",
+                "items": [imported, deepcopy(imported)],
+            },
+            today=date(2026, 7, 19),
+        )
+
+
 def test_project_context_must_be_exact_and_reference_every_occurrence(
     mixed_catalogs,
     rate_rows,

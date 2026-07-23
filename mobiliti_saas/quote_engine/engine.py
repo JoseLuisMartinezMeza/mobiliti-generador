@@ -2559,6 +2559,7 @@ def _bind_authoritative_canonical_rows(
     lines: Sequence[_OfficialPresentationLine],
     canonical_rows: Sequence[QuotationDataRow],
     source: Path | bytes,
+    metadata: dict[str, Any],
 ) -> tuple[
     tuple[_OfficialPresentationLine, ...],
     tuple[SectionNeed, ...],
@@ -2567,6 +2568,25 @@ def _bind_authoritative_canonical_rows(
     base_lines = tuple(line for line in lines if line.origin != "lumbro")
     if len(base_lines) != len(canonical_rows):
         raise ValueError("La cantidad canónica no coincide con la presentación")
+
+    catalog_lines = tuple(
+        line for line in base_lines if line.origin != "imported"
+    )
+    catalogs_by_source_hash: dict[str, str] = {}
+    if catalog_lines:
+        catalog_source_hashes = metadata.get("catalog_source_hashes")
+        if not isinstance(catalog_source_hashes, dict) or not catalog_source_hashes:
+            raise ValueError("Hashes fuente de catalogo ausentes")
+        for catalog, source_hash in catalog_source_hashes.items():
+            if (
+                catalog not in MIXED_CATALOG_ORDER
+                or not isinstance(source_hash, str)
+                or re.fullmatch(r"[0-9a-f]{64}", source_hash) is None
+            ):
+                raise ValueError("Hashes fuente de catalogo invalidos")
+            if source_hash in catalogs_by_source_hash:
+                raise ValueError("Hash fuente de catalogo ambiguo")
+            catalogs_by_source_hash[source_hash] = catalog
 
     bound_bases: dict[str, _OfficialPresentationLine] = {}
     canonical_by_source_key: dict[str, QuotationDataRow] = {}
@@ -2589,8 +2609,15 @@ def _bind_authoritative_canonical_rows(
             ):
                 raise ValueError("Identidad técnica ausente: upstream_row_hash")
             origin_matches = canonical.origin == expected_origin
+        elif canonical.source_hash != item.source_hash:
+            # Conserva el diagnóstico de identidad técnica antes de resolver
+            # el catálogo autoritativo asociado al hash.
+            origin_matches = False
         else:
-            origin_matches = canonical.origin in MIXED_CATALOG_ORDER
+            expected_origin = catalogs_by_source_hash.get(item.source_hash)
+            if expected_origin is None:
+                raise ValueError("Hash fuente de catalogo ausente")
+            origin_matches = canonical.origin == expected_origin
         comparisons = {
             "item_key": canonical.item_key == item.canonical_key,
             "source_hash": canonical.source_hash == item.source_hash,
@@ -2995,6 +3022,7 @@ def generate_quote(
             lines,
             handed_off_rows,
             normalized_source,
+            metadata,
         )
     mobiliti = _build_official_mobiliti(
         base,

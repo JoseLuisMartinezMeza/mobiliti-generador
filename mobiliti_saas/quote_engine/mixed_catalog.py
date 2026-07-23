@@ -314,6 +314,7 @@ def _normalize_imported_source(
     quote_currency: str,
     rate_rows: list[dict],
     discount: Decimal,
+    allow_duplicate_occurrences: bool,
 ) -> dict[str, Any] | None:
     if imported_source is None:
         return None
@@ -330,6 +331,7 @@ def _normalize_imported_source(
     }
     normalized_inputs: list[dict[str, Any]] = []
     occurrence_metadata: list[dict[str, str]] = []
+    source_row_occurrences: dict[int, list[bool]] = {}
     manifest_by_row = {
         item["source_row"]: item
         for item in manifest.get("items", [])
@@ -344,6 +346,10 @@ def _normalize_imported_source(
             limit=MAX_MIXED_TEXT,
         )
         source_row = raw.get("source_row")
+        if type(source_row) is int:
+            source_row_occurrences.setdefault(source_row, []).append(
+                "line_id" in raw
+            )
         authoritative = manifest_by_row.get(source_row, {})
         metadata = {
             "line_id": line_id,
@@ -370,6 +376,19 @@ def _normalize_imported_source(
             key: value for key, value in raw.items() if key not in project_fields
         })
         occurrence_metadata.append(metadata)
+    duplicate_source_rows = {
+        source_row: explicit_line_ids
+        for source_row, explicit_line_ids in source_row_occurrences.items()
+        if len(explicit_line_ids) > 1
+    }
+    if duplicate_source_rows and (
+        not allow_duplicate_occurrences
+        or any(
+            not all(explicit_line_ids)
+            for explicit_line_ids in duplicate_source_rows.values()
+        )
+    ):
+        raise ValueError("Fila importada invalida")
     items = normalize_imported_items(
         normalized_inputs,
         manifest,
@@ -377,6 +396,7 @@ def _normalize_imported_source(
         quote_currency=quote_currency,
         rate_rows=rate_rows,
         discount_percent=str(discount),
+        allow_duplicate_source_rows=allow_duplicate_occurrences,
     )
     items = [{
         **metadata,
@@ -605,6 +625,7 @@ def build_mixed_catalog_cart_payload(
         quote_currency=quote_currency,
         rate_rows=rate_rows,
         discount=discount,
+        allow_duplicate_occurrences=project_context is not None,
     )
     if not ordered_rows and normalized_import is None:
         raise ValueError("La cotizacion debe contener al menos una linea")
@@ -935,7 +956,6 @@ def _validate_imported_payload_source(value: object, quote_currency: str) -> tup
     if not isinstance(items, list) or not 1 <= len(items) <= MAX_MIXED_CATALOG_LINES:
         raise ValueError("Fuente importada invalida")
     seen_line_ids: set[str] = set()
-    seen_canonical_keys: set[str] = set()
     currencies: set[str] = set()
     for line in items:
         if not isinstance(line, dict) or set(line) != MIXED_IMPORTED_LINE_FIELDS:
@@ -949,14 +969,12 @@ def _validate_imported_payload_source(value: object, quote_currency: str) -> tup
             or type(row) is not int
             or row <= 7
             or key != f"import:{import_id}:{row}"
-            or key in seen_canonical_keys
             or line_id in seen_line_ids
             or line["source_hash"] != source_hash
             or not isinstance(line["row_hash"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", line["row_hash"])
         ):
             raise ValueError("Linea importada invalida")
-        seen_canonical_keys.add(key)
         seen_line_ids.add(line_id)
         for field, required, limit in (
             ("category", False, MAX_MIXED_TEXT), ("name", True, MAX_MIXED_TEXT),
