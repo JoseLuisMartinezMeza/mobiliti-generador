@@ -2284,6 +2284,49 @@ def test_local_dev_client_rejects_patch_from_lost_attempt(monkeypatch, tmp_path)
     assert current[0]["status"] == "completed"
 
 
+def test_local_dev_client_save_never_exposes_a_truncated_json_snapshot(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(quote_worker, "DEV_STORE_DIR", tmp_path)
+    client = quote_worker.LocalDevClient()
+    client.db_path.parent.mkdir(parents=True, exist_ok=True)
+    initial = {"quote_jobs": [{"id": "before"}]}
+    updated = {"quote_jobs": [{"id": "after"}], "payload": "x" * 1000}
+    client.db_path.write_text(json.dumps(initial), encoding="utf-8")
+    target_was_truncated = threading.Event()
+    allow_direct_write_to_finish = threading.Event()
+    original_write_text = Path.write_text
+
+    def delayed_direct_write(path, content, *args, **kwargs):
+        if path == client.db_path:
+            encoding = kwargs.get("encoding", "utf-8")
+            with path.open("w", encoding=encoding) as stream:
+                stream.write("")
+                stream.flush()
+                target_was_truncated.set()
+                assert allow_direct_write_to_finish.wait(5)
+                stream.write(content)
+            return len(content)
+        return original_write_text(path, content, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", delayed_direct_write)
+    writer = threading.Thread(target=client._save, args=(updated,))
+    writer.start()
+    try:
+        if target_was_truncated.wait(0.5):
+            snapshot = client._load()
+        else:
+            writer.join(5)
+            snapshot = client._load()
+    finally:
+        allow_direct_write_to_finish.set()
+        writer.join(5)
+
+    assert not writer.is_alive()
+    assert snapshot in (initial, updated)
+    assert json.loads(client.db_path.read_text(encoding="utf-8")) == updated
+
+
 def test_local_dev_client_serializes_heartbeat_and_progress_read_modify_write(
     monkeypatch, tmp_path,
 ):

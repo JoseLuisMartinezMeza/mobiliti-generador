@@ -6,7 +6,7 @@ from pathlib import Path
 import struct
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 import mobiliti_saas.quote_engine.quotation_import as quotation_import
 from mobiliti_saas.quote_engine.quotation_import import (
@@ -67,6 +67,104 @@ def test_build_import_manifest_detects_explicit_currency(tmp_path):
     assert len({item["row_hash"] for item in manifest["items"]}) == 7
 
 
+def test_build_import_manifest_normalizes_multiline_workbook_descriptions(tmp_path):
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    workbook = load_workbook(source)
+    workbook["Quotation"]["B9"] = "Mesa\nprincipal"
+    workbook["Quotation"]["D9"] = "Linea uno\nLinea dos\r\nLinea tres\tfin"
+    workbook["Quotation"]["E9"] = None
+    workbook.save(source)
+    workbook.close()
+
+    manifest, _ = build_import_manifest(
+        source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+    )
+
+    assert manifest["items"][0]["name"] == "Mesa principal"
+    assert manifest["items"][0]["description"] == "Linea uno Linea dos Linea tres fin"
+    assert manifest["items"][0]["dimension"] == ""
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_provider"),
+    [
+        (None, ""),
+        ("", ""),
+        ("SUNON\nTECHNOLOGY\rCO.\tLTD.", "SUNON TECHNOLOGY CO. LTD."),
+    ],
+)
+def test_build_import_manifest_normalizes_section_and_optional_provider_workbook_text(
+    tmp_path, provider, expected_provider
+):
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    workbook = load_workbook(source)
+    sheet = workbook["Quotation"]
+    sheet["A1"] = provider
+    sheet["A8"] = "- SALA\nDE\rJUNTAS\tNORTE"
+    workbook.save(source)
+    workbook.close()
+
+    manifest, _ = build_import_manifest(
+        source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+    )
+
+    assert manifest["provider"] == expected_provider
+    assert manifest["sections"][0]["title"] == "SALA DE JUNTAS NORTE"
+
+
+@pytest.mark.parametrize(
+    ("cell", "value"),
+    [
+        ("A1", "=SUM(A2:A3)"),
+        ("A8", "- =SUM(A2:A3)"),
+    ],
+)
+def test_build_import_manifest_rejects_formulas_in_provider_and_section_titles(
+    tmp_path, cell, value
+):
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    workbook = load_workbook(source)
+    workbook["Quotation"][cell] = value
+    workbook.save(source)
+    workbook.close()
+
+    with pytest.raises(ValueError):
+        build_import_manifest(
+            source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+        )
+
+
+def test_workbook_text_only_accepts_none_for_explicit_optional_fields():
+    with pytest.raises(ValueError, match="Descripcion"):
+        quotation_import._workbook_text(None, "Descripcion", allow_empty=True)
+    with pytest.raises(ValueError, match="Nombre"):
+        quotation_import._workbook_text(None, "Nombre")
+    with pytest.raises(ValueError, match="Categoria"):
+        quotation_import._workbook_text(None, "Categoria")
+
+    assert quotation_import._workbook_text(
+        None, "Dimension", allow_empty=True, allow_none=True
+    ) == ""
+    assert quotation_import._workbook_text(
+        None, "Proveedor", allow_empty=True, allow_none=True
+    ) == ""
+
+
+@pytest.mark.parametrize("value", ["=SUM(A1:A2)", "+cmd", "texto\x0bcontrol"])
+def test_workbook_text_normalization_keeps_formula_and_control_rejection(value):
+    with pytest.raises(ValueError, match="Campo"):
+        quotation_import._workbook_text(value, "Campo", allow_empty=True)
+
+
+def test_quotation_import_module_copies_are_byte_identical():
+    paths = [
+        Path("mobiliti_saas/quote_engine/quotation_import.py"),
+        Path("mobiliti_saas/web/mobiliti_saas/quote_engine/quotation_import.py"),
+    ]
+
+    assert len({path.read_bytes() for path in paths}) == 1
+
+
 def test_normalize_imported_items_uses_selected_currency_and_allowed_overrides(import_manifest):
     rows = normalize_imported_items(
         [
@@ -103,6 +201,61 @@ def test_normalize_imported_items_uses_selected_currency_and_allowed_overrides(i
     assert rows[0]["unit_price"] == "1517.00"
     assert rows[0]["frozen_exchange_rate"] == "18.500000"
     assert rows[0]["source_reference"].endswith("#Quotation!11")
+
+
+@pytest.mark.parametrize("field", ("quantity", "unit_price"))
+@pytest.mark.parametrize(
+    "value",
+    (
+        True,
+        1,
+        1.0,
+        float("nan"),
+        float("inf"),
+        "NaN",
+        "Infinity",
+        "1e0",
+        "1.0000001",
+        "+1",
+        "01",
+        " 1",
+        "1 ",
+        "1\t",
+        "1١",
+        "1.١",
+    ),
+)
+def test_normalize_imported_items_rejects_noncanonical_wire_decimals(
+    import_manifest, field, value
+):
+    item = {
+        "kind": "imported",
+        "import_id": import_manifest["import_id"],
+        "source_row": 11,
+        "source_currency": "MXN",
+        "quantity": "1",
+        "overrides": {
+            "name": "Alien Task Chair",
+            "description": "Silla operativa",
+            "dimension": "630 x 565 x 1000 mm",
+            "unit_price": "82.00",
+            "provider": "Sunon",
+        },
+    }
+    if field == "quantity":
+        item["quantity"] = value
+    else:
+        item["overrides"]["unit_price"] = value
+
+    with pytest.raises(ValueError):
+        normalize_imported_items(
+            [item],
+            import_manifest,
+            source_currency="MXN",
+            quote_currency="MXN",
+            rate_rows=[],
+            discount_percent="40",
+        )
 
 
 def test_normalize_imported_items_rejects_payload_currency_that_replaces_explicit_row_currency(tmp_path):

@@ -4,9 +4,11 @@ from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
+from mobiliti_saas.quote_engine import catalog_cart
 from mobiliti_saas.quote_engine.mixed_catalog import (
     MIXED_CATALOG_ORDER,
     build_mixed_catalog_cart_payload,
@@ -16,7 +18,234 @@ from mobiliti_saas.quote_engine.mixed_catalog import (
     validate_mixed_catalog_payload,
 )
 from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+from mobiliti_saas.quote_engine.quotation_import import build_import_manifest
 from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
+from quotation_import_fixtures import write_import_fixture
+
+
+MIXED_CART_MODULE = Path("mobiliti_saas/web/src/mixedCart.js")
+MIXED_CART_EXPORTS = (
+    "createImportedCartBundle",
+    "replaceImportedCartBundle",
+    "toMixedQuoteItem",
+    "updateImportedCartLine",
+)
+IMPORT_ID = "7b1d6d42-236a-4bc1-9aa8-8d9db793c30b"
+
+
+def run_mixed_cart_js(function_name, *args):
+    module_url = MIXED_CART_MODULE.resolve().as_uri()
+    script = (
+        f'import {{ {", ".join(MIXED_CART_EXPORTS)} }} from {json.dumps(module_url)};\n'
+        f"console.log(JSON.stringify({function_name}(...{json.dumps(args)})));"
+    )
+    return _run_mixed_cart_script(script)
+
+
+def _run_mixed_cart_script(script):
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=script,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
+def imported_preview(import_id=IMPORT_ID):
+    items = [
+        {
+            "key": f"import:{import_id}:{row}",
+            "source_row": row,
+            "name": f"Producto {row}",
+            "description": f"Descripcion {row}",
+            "dimension": "600 x 600 mm",
+            "quantity": "1",
+            "unit_price": "688.50" if row == 9 else "10",
+            "image_url": f"https://storage.invalid/preview/{row}.png",
+        }
+        for row in range(9, 16)
+    ]
+    return {
+        "import_id": import_id,
+        "original_filename": "CET PRUEBAS.xlsx",
+        "provider": "Proveedor detectado",
+        "source_currency": None,
+        "sections": [
+            {"id": "import-section-1", "title": "Sala de juntas", "item_keys": [item["key"] for item in items[:3]]},
+            {"id": "import-section-2", "title": "Muestras", "item_keys": [item["key"] for item in items[3:5]]},
+            {"id": "import-section-3", "title": "Consejo", "item_keys": [item["key"] for item in items[5:]]},
+        ],
+        "items": items,
+    }
+
+
+def test_imported_preview_becomes_editable_global_cart_lines():
+    result = run_mixed_cart_js(
+        "createImportedCartBundle",
+        imported_preview(),
+        "USD",
+        "Sunon",
+        [{"id": "section-1", "concept": "Recepcion"}],
+    )
+
+    assert len(result["lines"]) == 7
+    assert result["lines"][0]["kind"] == "imported"
+    assert result["lines"][0]["key"] == f"import:{IMPORT_ID}:9"
+    assert result["lines"][0]["sectionId"] == result["sections"][0]["id"]
+    assert result["lines"][0]["sourceCurrency"] == "USD"
+    assert result["lines"][0]["edits"]["unitPrice"] == "688.50"
+    assert result["lines"][0]["edits"]["provider"] == "Sunon"
+    assert result["sections"] == [
+        {"id": "section-1", "concept": "Sala de juntas"},
+        {"id": "section-2", "concept": "Muestras"},
+        {"id": "section-3", "concept": "Consejo"},
+    ]
+
+
+def test_imported_preview_creates_mapped_sections_from_an_empty_cart():
+    preview = imported_preview()
+
+    result = run_mixed_cart_js(
+        "createImportedCartBundle", preview, "USD", "Sunon", []
+    )
+
+    assert result["sections"] == [
+        {"id": "section-1", "concept": "Sala de juntas"},
+        {"id": "section-2", "concept": "Muestras"},
+        {"id": "section-3", "concept": "Consejo"},
+    ]
+    assert [line["key"] for line in result["lines"]] == [
+        item["key"] for item in preview["items"]
+    ]
+    assert [line["sectionId"] for line in result["lines"]] == [
+        "section-1", "section-1", "section-1", "section-2", "section-2", "section-3", "section-3",
+    ]
+    assert {line["sectionId"] for line in result["lines"]} == {
+        section["id"] for section in result["sections"]
+    }
+
+
+def test_imported_line_checkout_contains_only_reference_and_allowed_overrides():
+    bundle = run_mixed_cart_js(
+        "createImportedCartBundle",
+        imported_preview(),
+        "EUR",
+        "Sunon",
+        [{"id": "section-1", "concept": "Recepcion"}],
+    )
+    item = run_mixed_cart_js("toMixedQuoteItem", bundle["lines"][0])
+
+    assert set(item) == {
+        "kind", "import_id", "source_row", "source_currency", "quantity", "overrides",
+    }
+    assert item["kind"] == "imported"
+    assert item["import_id"] == IMPORT_ID
+    assert item["source_row"] == 9
+    assert item["source_currency"] == "EUR"
+    assert item["overrides"] == {
+        "name": "Producto 9",
+        "description": "Descripcion 9",
+        "dimension": "600 x 600 mm",
+        "unit_price": "688.50",
+        "provider": "Sunon",
+    }
+
+
+def test_imported_edits_are_immutable_and_reject_unsafe_text_or_invalid_money():
+    preview = imported_preview()
+    module_url = MIXED_CART_MODULE.resolve().as_uri()
+    result = _run_mixed_cart_script(
+        f'import {{ {", ".join(MIXED_CART_EXPORTS)} }} from {json.dumps(module_url)};\n'
+        f"const preview = {json.dumps(preview)};\n"
+        "const bundle = createImportedCartBundle(preview, 'USD', 'Sunon', [{id: 'section-1', concept: 'Recepcion'}]);\n"
+        "const original = bundle.lines;\n"
+        "const updated = updateImportedCartLine(original, original[0].key, {name: 'Nombre revisado'});\n"
+        "const errors = [];\n"
+        "for (const edits of [{name: '=SUM(A1:A2)'}, {unitPrice: '-1'}, {provider: ''}, {unknown: 'x'}]) {\n"
+        "  try { updateImportedCartLine(original, original[0].key, edits); errors.push('accepted'); }\n"
+        "  catch (error) { errors.push(error.message); }\n"
+        "}\n"
+        "console.log(JSON.stringify({originalName: original[0].edits.name, updatedName: updated[0].edits.name, "
+        "unrelatedPreserved: original[1] === updated[1], errors}));"
+    )
+
+    assert result["originalName"] == "Producto 9"
+    assert result["updatedName"] == "Nombre revisado"
+    assert result["unrelatedPreserved"] is True
+    assert all(error != "accepted" for error in result["errors"])
+
+
+def test_replacing_import_keeps_catalog_lines_and_removes_previous_import():
+    previous = run_mixed_cart_js(
+        "createImportedCartBundle",
+        imported_preview(),
+        "USD",
+        "Sunon",
+        [{"id": "section-1", "concept": "Recepcion"}],
+    )
+    catalog_line = {
+        "key": "alma:[\\\"alma:desk\\\",\\\"\\\",[]]",
+        "catalog": "alma",
+        "sectionId": "section-1",
+    }
+    replacement = run_mixed_cart_js(
+        "createImportedCartBundle",
+        imported_preview("0e061c8a-0085-446f-a4d3-b4d4b43f0f2a"),
+        "MXN",
+        "Otro proveedor",
+        previous["sections"],
+    )
+
+    result = run_mixed_cart_js(
+        "replaceImportedCartBundle",
+        [catalog_line, *previous["lines"]],
+        previous["sections"],
+        replacement,
+    )
+
+    assert [line["key"] for line in result["lines"]] == [
+        catalog_line["key"],
+        *[line["key"] for line in replacement["lines"]],
+    ]
+    assert all(line.get("kind") != "imported" or line["importId"] == replacement["lines"][0]["importId"] for line in result["lines"])
+    assert {line["sectionId"] for line in result["lines"]} <= {section["id"] for section in result["sections"]}
+
+
+def test_replacing_import_from_empty_lines_and_sections_keeps_only_imported_sections():
+    bundle = run_mixed_cart_js(
+        "createImportedCartBundle", imported_preview(), "USD", "Sunon", []
+    )
+
+    result = run_mixed_cart_js("replaceImportedCartBundle", [], [], bundle)
+
+    assert result == bundle
+
+
+def test_first_import_appends_after_the_initial_section_when_catalog_lines_exist():
+    sections = [{"id": "section-1", "concept": "Recepcion"}]
+    catalog_line = {
+        "key": "tarkett:25731726",
+        "catalog": "tarkett",
+        "sectionId": "section-1",
+    }
+    bundle = run_mixed_cart_js(
+        "createImportedCartBundle", imported_preview(), "USD", "Sunon", sections
+    )
+
+    result = run_mixed_cart_js(
+        "replaceImportedCartBundle", [catalog_line], sections, bundle
+    )
+
+    assert result["sections"][0] == sections[0]
+    assert result["lines"][0] == catalog_line
+    assert result["lines"][1]["sectionId"] == "section-2"
+    assert [section["concept"] for section in result["sections"]] == [
+        "Recepcion", "Sala de juntas", "Muestras", "Consejo",
+    ]
 
 
 def _supplier_item(catalog, *, internal_id, price="100.000000", stock="5.000000", availability="stocked"):
@@ -116,11 +345,144 @@ def test_mixed_payload_accepts_700_lines_across_35_sections(rate_rows):
     assert len(payload["sections"]) == 35
 
 
+def test_mixed_payload_keeps_catalog_groups_and_imported_source_separate(
+    tmp_path, mixed_catalogs, rate_rows
+):
+    source = write_import_fixture(tmp_path / "mixed-import.xlsx")
+    manifest, _images = build_import_manifest(source.read_bytes(), IMPORT_ID, source.name)
+    catalog_item = {"catalog": "offiho", "inventory_key": "offiho:desk-1", "quantity": "1"}
+    imported_item = {
+        "kind": "imported",
+        "import_id": IMPORT_ID,
+        "source_row": 11,
+        "source_currency": "USD",
+        "quantity": "2",
+        "overrides": {
+            "name": "Alien Task Chair revisada",
+            "description": "Silla operativa revisada",
+            "dimension": "630 x 565 x 1000 mm",
+            "unit_price": "82.00",
+            "provider": "Sunon",
+        },
+    }
+    catalog_key = mixed_cart_key(catalog_item)
+    imported_key = f"import:{IMPORT_ID}:11"
+    sections = [{
+        "id": "section-1",
+        "title": "Recepcion",
+        "item_keys": [catalog_key, imported_key],
+    }]
+
+    payload = build_mixed_catalog_cart_payload(
+        [catalog_item],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=sections,
+        imported_source={
+            "manifest": manifest,
+            "items": [imported_item],
+            "source_currency": "USD",
+        },
+        today=date(2026, 7, 19),
+    )
+
+    assert payload["groups"][0]["catalog"] == "offiho"
+    assert payload["imported_source"]["items"][0]["canonical_key"] == imported_key
+    assert payload["sections"][0]["item_keys"] == [catalog_key, imported_key]
+    assert build_mixed_reservation_groups(payload) == [{
+        "catalog": "offiho",
+        "items": [{
+            "identity": "offiho:desk-1",
+            "sku": "OHE-1",
+            "quantity": "1.000000",
+            "stock": "8.000000",
+        }],
+    }]
+
+
 def test_mixed_cart_groups_seven_catalogs_in_canonical_order(mixed_catalogs, rate_rows):
     payload = build_mixed_catalog_cart_payload(browser_rows_for_all_catalogs(), catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
     assert payload["source_type"] == "mixed_catalog_cart"
     assert [group["catalog"] for group in payload["groups"]] == list(MIXED_CATALOG_ORDER)
     assert sum(len(group["items"]) for group in payload["groups"]) == 7
+
+
+def test_mixed_cart_preserves_manual_sections_independent_from_catalog_groups(
+    mixed_catalogs, rate_rows
+):
+    rows = [
+        {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"},
+        {"catalog": "offiho", "inventory_key": "offiho:desk-1", "quantity": "1"},
+        {"catalog": "sonara", "internal_id": "sonara:desk-1", "quantity": "1"},
+    ]
+    keys = [mixed_cart_key(row) for row in rows]
+    sections = [
+        {"id": "section-1", "title": "Recepción", "item_keys": keys[:2]},
+        {"id": "section-2", "title": "Privados", "item_keys": keys[2:]},
+    ]
+
+    payload = build_mixed_catalog_cart_payload(
+        rows,
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=sections,
+        today=date(2026, 7, 19),
+    )
+
+    assert payload["sections"] == sections
+    assert [group["catalog"] for group in payload["groups"]] == [
+        "offiho",
+        "sonara",
+        "alma",
+    ]
+
+
+def test_mixed_cart_without_sections_uses_one_reception_section_in_request_order(
+    mixed_catalogs, rate_rows
+):
+    rows = [
+        {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"},
+        {"catalog": "tarkett", "code": "25731726", "quantity": "1"},
+    ]
+    payload = build_mixed_catalog_cart_payload(
+        rows,
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+    assert payload["sections"] == [{
+        "id": "section-1",
+        "title": "Recepción",
+        "item_keys": [mixed_cart_key(row) for row in rows],
+    }]
+
+
+@pytest.mark.parametrize(
+    "sections",
+    (
+        [{"id": "section-1", "title": "Recepción", "item_keys": []}],
+        [{"id": "section-1", "title": "", "item_keys": ["alma:[\"alma:desk-1\",\"\",[]]"]}],
+        [{"id": "section-1", "title": "Recepción", "item_keys": ["alma:unknown"]}],
+        [{"id": "section-1", "title": "Recepción", "item_keys": ["alma:[\"alma:desk-1\",\"\",[]]"], "extra": True}],
+    ),
+)
+def test_mixed_cart_rejects_invalid_manual_sections(mixed_catalogs, rate_rows, sections):
+    with pytest.raises((TypeError, ValueError), match="(?i)section|seccion|presentation_sections"):
+        build_mixed_catalog_cart_payload(
+            [{"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"}],
+            catalogs=mixed_catalogs,
+            rate_rows=rate_rows,
+            quote_currency="MXN",
+            commercial_discount_percent="40",
+            presentation_sections=sections,
+            today=date(2026, 7, 19),
+        )
 
 
 @pytest.mark.parametrize("field", ("unit_price", "base_currency", "exchange_rate", "stock", "image_url", "product_url", "supplier", "warnings"))
@@ -267,11 +629,19 @@ def test_mixed_cart_freezes_conversion_without_double_conversion(mixed_catalogs,
     assert payload["auto_electrification_rate"]["exchange_rate"] == automatic_rate
 
 
-def test_mixed_cart_applies_discount_only_to_legacy_catalogs(mixed_catalogs, rate_rows):
+def test_mixed_cart_preserves_per_line_discount_audit_by_price_mode(mixed_catalogs, rate_rows):
     payload = build_mixed_catalog_cart_payload(browser_rows_for_all_catalogs(), catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
     discounts = {group["catalog"]: group["items"][0]["discount_percent"] for group in payload["groups"]}
-    assert discounts["tarkett"] == discounts["offiho"] == "40.000000"
-    assert all(discounts[catalog] == "0.000000" for catalog in MIXED_CATALOG_ORDER[2:])
+    assert set(discounts) == set(MIXED_CATALOG_ORDER)
+    assert discounts == {
+        "tarkett": "40.000000",
+        "offiho": "40.000000",
+        "cr-global": "0.000000",
+        "sonara": "0.000000",
+        "sunon": "0.000000",
+        "alma": "0.000000",
+        "lumbro": "0.000000",
+    }
 
 
 def test_mixed_cart_rejects_non_sixteen_percent_tax(mixed_catalogs, rate_rows):
@@ -360,7 +730,7 @@ def test_mixed_constructor_rejects_wrong_direct_rate_base_currency(monkeypatch, 
 
 
 def test_quote_engine_module_copies_are_byte_identical():
-    for module in ("catalog_cart.py", "mixed_catalog.py"):
+    for module in ("catalog_cart.py", "mixed_catalog.py", "quotation_import.py"):
         paths = [
             Path("mobiliti_saas/quote_engine") / module,
             Path("mobiliti_saas/web/mobiliti_saas/quote_engine") / module,
@@ -481,6 +851,42 @@ def test_mixed_payload_rejects_non_string_quote_currency_stably(frozen_mixed_pay
 def test_mixed_payload_rejects_noncommercial_url_shapes(frozen_mixed_payload, field, url):
     payload = deepcopy(frozen_mixed_payload)
     payload["groups"][2]["items"][0][field] = url
+    with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+        validate_mixed_catalog_payload(payload)
+
+
+def test_mixed_payload_allows_only_exact_published_dev_asset_url(
+    frozen_mixed_payload, monkeypatch, tmp_path
+):
+    object_name = f"{'a' * 64}.png"
+    project_root = tmp_path / "repo"
+    (project_root / ".git").mkdir(parents=True)
+    module_dir = project_root / "mobiliti_saas" / "quote_engine"
+    module_dir.mkdir(parents=True)
+    monkeypatch.setattr(catalog_cart, "__file__", str(module_dir / "catalog_cart.py"))
+    asset_dir = project_root / ".mobiliti_dev_store" / "catalog-assets"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / object_name).write_bytes(b"published-dev-asset")
+    monkeypatch.setenv("MOBILITI_DEV_MODE", "1")
+    monkeypatch.setenv("MOBILITI_DEV_PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.delenv("MOBILITI_DEV_STORE_DIR", raising=False)
+
+    payload = deepcopy(frozen_mixed_payload)
+    line = payload["groups"][2]["items"][0]
+    line["image_url"] = f"http://127.0.0.1:8000/dev/catalog-assets/{object_name}"
+    assert validate_mixed_catalog_payload(payload) is payload
+
+    for invalid_url in (
+        f"http://localhost:8000/dev/catalog-assets/{object_name}",
+        f"http://127.0.0.1:8000/other/{object_name}",
+        f"http://127.0.0.1:8000/dev/catalog-assets/{object_name}?raw=1",
+    ):
+        line["image_url"] = invalid_url
+        with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
+            validate_mixed_catalog_payload(payload)
+
+    line["image_url"] = f"http://127.0.0.1:8000/dev/catalog-assets/{object_name}"
+    monkeypatch.delenv("MOBILITI_DEV_MODE")
     with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
         validate_mixed_catalog_payload(payload)
 
@@ -642,7 +1048,7 @@ def test_mixed_payload_rejects_individually_valid_but_inconsistent_currencies(fr
         validate_mixed_catalog_payload(payload)
 
 
-def test_mixed_payload_rejects_net_mode_with_nonzero_discount(frozen_mixed_payload):
+def test_mixed_payload_rejects_nonzero_line_discount_for_net_price_mode(frozen_mixed_payload):
     payload = deepcopy(frozen_mixed_payload)
     payload["groups"][2]["items"][0]["discount_percent"] = "1.000000"
     with pytest.raises(ValueError, match="Grupos mixtos invalidos"):

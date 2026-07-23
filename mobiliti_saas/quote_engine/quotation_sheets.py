@@ -838,6 +838,71 @@ def remap_source_styles(
     return remapped_sheet, merged_styles
 
 
+def _strip_external_image_links_with_embedded_fallback(
+    closure: Mapping[str, bytes],
+) -> dict[str, bytes]:
+    """Retira links locales redundantes si la imagen ya está embebida."""
+
+    cleaned = dict(closure)
+    image_types = relationship_type_uris("image")
+    embed_name = f"{{{OFFICE_DOCUMENT_RELATIONSHIPS}}}embed"
+    link_name = f"{{{OFFICE_DOCUMENT_RELATIONSHIPS}}}link"
+    for rels_name, content in tuple(closure.items()):
+        if not rels_name.endswith(".rels"):
+            continue
+        owner = relationship_owner(rels_name)
+        if owner is None or owner not in closure:
+            continue
+        try:
+            relationships = ET.fromstring(content)
+        except ET.ParseError as error:
+            raise ValueError(f"Relaciones OOXML inválidas: {rels_name}") from error
+        external_images = [
+            relationship
+            for relationship in relationships
+            if relationship.attrib.get("Type") in image_types
+            and relationship.attrib.get("TargetMode", "").casefold() == "external"
+        ]
+        if not external_images:
+            continue
+        if not owner.startswith("xl/drawings/") or not owner.endswith(".xml"):
+            raise ValueError("TargetMode externo no permitido para image")
+        try:
+            drawing = ET.fromstring(closure[owner])
+        except ET.ParseError as error:
+            raise ValueError("Drawing Quotation inválido") from error
+        image_relationships = list(relationships)
+        for external in external_images:
+            relationship_id = external.attrib.get("Id", "")
+            linked_blips = [
+                blip
+                for blip in drawing.iter(f"{{{_DRAWING_MAIN}}}blip")
+                if blip.attrib.get(link_name) == relationship_id
+            ]
+            if not relationship_id or not linked_blips:
+                raise ValueError("TargetMode externo no permitido para image")
+            for blip in linked_blips:
+                embedded_id = blip.attrib.get(embed_name, "")
+                embedded = [
+                    relationship
+                    for relationship in image_relationships
+                    if relationship.attrib.get("Id") == embedded_id
+                    and relationship.attrib.get("Type") in image_types
+                    and relationship.attrib.get("TargetMode", "").casefold()
+                    in {"", "internal"}
+                ]
+                if len(embedded) != 1:
+                    raise ValueError("TargetMode externo no permitido para image")
+                del blip.attrib[link_name]
+            relationships.remove(external)
+        cleaned[owner] = _xml_bytes(
+            drawing,
+            {"xdr": _DRAWING, "a": _DRAWING_MAIN, "r": OFFICE_DOCUMENT_RELATIONSHIPS},
+        )
+        cleaned[rels_name] = _xml_bytes(relationships, {"": PACKAGE_RELATIONSHIPS})
+    return cleaned
+
+
 def transplant_quotation(
     source: Path | bytes | None,
     destination_package: XlsxPackage,
@@ -859,7 +924,9 @@ def transplant_quotation(
     except KeyError:
         return None
     source_state = source_package.sheet_state("Quotation")
-    closure = source_package.relationship_closure(source_sheet)
+    closure = _strip_external_image_links_with_embedded_fallback(
+        source_package.relationship_closure(source_sheet)
+    )
     _validate_passive_closure(source_package, closure, source_sheet)
     source_theme_part = source_package.workbook_related_part("theme")
     source_theme = (

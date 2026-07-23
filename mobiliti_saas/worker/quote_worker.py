@@ -511,6 +511,39 @@ def _parse_rest_filters(path: str) -> list[tuple[str, str, str | None]]:
 _LOCAL_DEV_STORE_LOCK = threading.RLock()
 
 
+def _write_json_snapshot(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2, ensure_ascii=False)
+    temporary = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+    )
+    with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    for attempt in range(20):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.01)
+
+
+def _read_json_snapshot(path: Path) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            last_error = exc
+            if attempt < 4:
+                time.sleep(0.01)
+    assert last_error is not None
+    raise last_error
+
+
 class LocalDevClient:
     def __init__(self) -> None:
         self.db_path = DEV_STORE_DIR / "db.json"
@@ -519,11 +552,10 @@ class LocalDevClient:
     def _load(self) -> dict:
         if not self.db_path.exists():
             raise RuntimeError("Store dev no existe. Inicia backend con MOBILITI_DEV_MODE=1 y haz login/upload primero.")
-        return json.loads(self.db_path.read_text(encoding="utf-8"))
+        return _read_json_snapshot(self.db_path)
 
     def _save(self, data: dict) -> None:
-        DEV_STORE_DIR.mkdir(parents=True, exist_ok=True)
-        self.db_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        _write_json_snapshot(self.db_path, data)
 
     def rest(self, method: str, path: str, params: dict | None = None, data: dict | None = None):
         with _LOCAL_DEV_STORE_LOCK:

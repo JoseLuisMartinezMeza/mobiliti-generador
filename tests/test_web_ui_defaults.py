@@ -40,6 +40,23 @@ def test_download_and_generation_timers_are_visible():
     assert ".download-line.active" in styles
 
 
+def test_unsubmitted_drafts_are_not_reported_as_stalled_generation_jobs():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert 'draft: "Borrador sin enviar"' in source
+    assert "draft: 0" in source
+    assert 'return ["queued", "processing"].includes(job?.status);' in source
+    assert 'if (job?.status === "draft") return "Pendiente de enviar";' in source
+    assert 'active: jobs.filter((job) => ["queued", "processing"].includes(job.status)).length' in source
+    assert 'drafts: jobs.filter((job) => job.status === "draft").length' in source
+    assert '<StatCard label="Borradores" value={stats.drafts} />' in source
+    assert '<option value="draft">Borradores</option>' in source
+    assert 'onDelete={deleteJob}' in source
+    assert "Descartar borrador" in source
+    assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in styles
+
+
 def test_expired_session_is_cleared_instead_of_showing_raw_token_error():
     source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
     styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")

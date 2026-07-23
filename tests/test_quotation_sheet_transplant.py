@@ -15,6 +15,7 @@ import pytest
 import mobiliti_saas.quote_engine.quotation_sheets as quotation_sheets_module
 
 from mobiliti_saas.quote_engine.ooxml_package import PackageMutation, XlsxPackage
+from mobiliti_saas.quote_engine.engine import _source_product_images
 from mobiliti_saas.quote_engine.quotation_sheets import (
     LocalDefinedName,
     SheetAddition,
@@ -1105,6 +1106,60 @@ def test_relationship_profiles_validate_external_schemes_target_mode_and_printer
         malformed = _rewrite_package(source, tmp_path / filename, replacements)
         with pytest.raises(ValueError, match=message):
             transplant_quotation(malformed, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+
+def test_linked_image_with_embedded_fallback_imports_without_external_file_reference(tmp_path):
+    source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
+    drawing_name = "xl/drawings/drawing7.xml"
+    drawing_rels_name = "xl/drawings/_rels/drawing7.xml.rels"
+    linked = _rewrite_package(
+        source,
+        tmp_path / "linked-image.xlsx",
+        {
+            drawing_name: _part_bytes(source, drawing_name).replace(
+                b'<a:blip r:embed="rIdImage"/>',
+                b'<a:blip r:embed="rIdImage" r:link="rIdLinkedImage"/>',
+            ),
+            drawing_rels_name: _append_relationship(
+                _part_bytes(source, drawing_rels_name),
+                (
+                    "rIdLinkedImage",
+                    f"{OFFICE_REL}/image",
+                    "file:///C:/Temp/vendor-source.png",
+                    "External",
+                ),
+            ),
+        },
+    )
+
+    images = _source_product_images(linked)
+    addition = transplant_quotation(linked, XlsxPackage.read(OFFICIAL_TEMPLATE))
+
+    assert images.keys() == {9}
+    assert addition is not None
+    transplanted_drawing = next(
+        content
+        for name, content in addition.parts.items()
+        if name.startswith("xl/drawings/") and name.endswith(".xml")
+    )
+    transplanted_rels = next(
+        content
+        for name, content in addition.parts.items()
+        if name.startswith("xl/drawings/_rels/") and name.endswith(".rels")
+    )
+    blip = ET.fromstring(transplanted_drawing).find(
+        ".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
+    )
+    relationships = ET.fromstring(transplanted_rels)
+
+    assert blip is not None
+    assert f"{{{OFFICE_REL}}}embed" in blip.attrib
+    assert f"{{{OFFICE_REL}}}link" not in blip.attrib
+    assert not any(
+        relationship.attrib.get("TargetMode") == "External"
+        and relationship.attrib.get("Type") == f"{OFFICE_REL}/image"
+        for relationship in relationships
+    )
 
 
 def test_exact_transitional_relationship_uris_are_enforced_and_strict_types_rejected(tmp_path):

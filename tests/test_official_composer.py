@@ -65,6 +65,7 @@ from mobiliti_saas.quote_engine.quotation_sheets import (  # noqa: E402
     LocalDefinedName,
     QuotationDataRow,
     SheetAddition,
+    _parse_xml_document,
     _with_canonical_hash,
     build_quotation_data_sheet,
     transplant_quotation,
@@ -107,6 +108,7 @@ def _write_engine_source(
         2: "Item",
         4: "Description",
         5: "Dimension",
+        6: "Volume",
         7: "Qty",
         10: "List Price",
         12: "Supplier",
@@ -126,6 +128,7 @@ def _write_engine_source(
         quotation.cell(offset, 2).value = product["name"]
         quotation.cell(offset, 4).value = product.get("description", "")
         quotation.cell(offset, 5).value = product.get("dimension", "")
+        quotation.cell(offset, 6).value = product.get("m3")
         quotation.cell(offset, 7).value = product.get("quantity", 1)
         quotation.cell(offset, 10).value = product.get("price", 0)
         quotation.cell(offset, 12).value = product.get("provider", "")
@@ -302,6 +305,22 @@ def _calc_chain_entries_except_sheet(
     return tuple(entries)
 
 
+def _calc_chain_entries_except_sheets(
+    payload: bytes,
+    sheet_ids: set[int],
+) -> tuple[tuple[str | None, bytes], ...]:
+    root = ET.fromstring(payload)
+    excluded = {str(sheet_id) for sheet_id in sheet_ids}
+    effective_sheet_id: str | None = None
+    entries: list[tuple[str | None, bytes]] = []
+    for cell in root.findall(f"{{{MAIN}}}c"):
+        if "i" in cell.attrib:
+            effective_sheet_id = cell.attrib["i"]
+        if effective_sheet_id not in excluded:
+            entries.append((effective_sheet_id, ET.tostring(cell)))
+    return tuple(entries)
+
+
 def _calc_chain_metadata_for_sheet(
     payload: bytes,
     sheet_id: int,
@@ -411,7 +430,7 @@ def _request_for_sections(output: Path, section_sizes: tuple[int, ...]) -> Compo
 
 
 @pytest.mark.parametrize("product_count", (1, 2, 9))
-def test_calc_chain_exactly_matches_every_final_cotizacion_formula(
+def test_calc_chain_prunes_mutated_sheets_and_forces_full_recalculation(
     tmp_path: Path,
     product_count: int,
 ) -> None:
@@ -425,66 +444,63 @@ def test_calc_chain_exactly_matches_every_final_cotizacion_formula(
 
     calc_part = official_composer_module._calc_chain_part(base)
     assert calc_part is not None
-    sheet_id = official_composer_module._workbook_sheet_id(base, "Cotizacion")
+    cotizacion_sheet_id = official_composer_module._workbook_sheet_id(
+        base, "Cotizacion"
+    )
+    mobiliti_sheet_id = official_composer_module._workbook_sheet_id(base, "Mobiliti")
     cotizacion_part = base.sheet_part("Cotizacion")
     formula_coordinates = _worksheet_formula_coordinates(
         mutation.replacements[cotizacion_part]
     )
     assert len(formula_coordinates) == len(set(formula_coordinates))
-    assert {"P20", "L121"}.issubset(formula_coordinates)
-    coordinates = _calc_chain_coordinates_for_sheet(
+    assert {"P19", "L122"}.issubset(formula_coordinates)
+    assert _calc_chain_coordinates_for_sheet(
         mutation.replacements[calc_part],
-        sheet_id,
-    )
-    assert len(coordinates) == len(set(coordinates))
-    assert set(coordinates) == set(formula_coordinates)
-
-    expected_product_coordinates = {
-        f"{column}{row}"
-        for row in request.cotizacion.product_rows
-        for column in ("F", "H", "I", "J")
-    }
-    expected_product_coordinates.update(
-        f"G{row}" for row in request.cotizacion.product_rows[1:]
-    )
-    assert expected_product_coordinates.issubset(coordinates)
-    subtotal_row = request.cotizacion.total_row - 5
-    expected_total_coordinates = {
-        f"H{subtotal_row + offset}" for offset in (0, 1, 3, 4, 5)
-    }
-    assert expected_total_coordinates.issubset(coordinates)
-    chain_metadata = _calc_chain_metadata_for_sheet(
+        cotizacion_sheet_id,
+    ) == []
+    assert _calc_chain_coordinates_for_sheet(
         mutation.replacements[calc_part],
-        sheet_id,
-    )
-    for row in request.cotizacion.product_rows:
-        assert dict(chain_metadata[f"F{row}"])["l"] == "1"
-        assert dict(chain_metadata[f"J{row}"])["s"] == "1"
-    assert dict(chain_metadata[f"H{subtotal_row}"])["a"] == "1"
-    base_metadata = _calc_chain_metadata_for_sheet(base.parts[calc_part], sheet_id)
-    assert chain_metadata["P20"] == base_metadata["P20"]
-    assert chain_metadata["L121"] == base_metadata["L121"]
-
-    mobiliti_only = official_composer_module.translate_calc_chain(
+        mobiliti_sheet_id,
+    ) == []
+    mutated_sheet_ids = {cotizacion_sheet_id, mobiliti_sheet_id}
+    assert _calc_chain_entries_except_sheets(
+        mutation.replacements[calc_part],
+        mutated_sheet_ids,
+    ) == _calc_chain_entries_except_sheets(
         base.parts[calc_part],
-        sheet_id=official_composer_module._workbook_sheet_id(base, "Mobiliti"),
-        coordinate_map=official_composer_module._mobiliti_calc_map(
-            base.parts[base.sheet_part("Mobiliti")],
-            request.mobiliti.row_map,
-        ),
+        mutated_sheet_ids,
     )
-    assert isinstance(mobiliti_only, bytes)
-    assert _calc_chain_entries_except_sheet(
-        mutation.replacements[calc_part],
-        sheet_id,
-    ) == _calc_chain_entries_except_sheet(mobiliti_only, sheet_id)
 
     before_workbook = ET.fromstring(base.parts["xl/workbook.xml"])
     after_workbook = ET.fromstring(mutation.replacements["xl/workbook.xml"])
     before_calc = before_workbook.find(f"{{{MAIN}}}calcPr")
     after_calc = after_workbook.find(f"{{{MAIN}}}calcPr")
     assert before_calc is not None and after_calc is not None
-    assert ET.tostring(after_calc) == ET.tostring(before_calc)
+    expected_attributes = dict(before_calc.attrib)
+    expected_attributes.update(
+        {"calcMode": "auto", "fullCalcOnLoad": "1", "forceFullCalc": "1"}
+    )
+    assert after_calc.attrib == expected_attributes
+
+
+def test_mutated_xml_preserves_markup_compatibility_prefixes(tmp_path: Path) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _minimal_request(tmp_path / "mc-prefixes.xlsx")
+
+    mutation = build_allowlisted_mutation(base, request)
+
+    parts = {
+        "xl/workbook.xml",
+        base.sheet_part("Cotizacion"),
+        base.sheet_part("Mobiliti"),
+        base.sheet_part("Fletes"),
+        base.sheet_part("Estrategia Comercial "),
+    }
+    for part in parts:
+        _parse_xml_document(
+            mutation.replacements[part],
+            f"XML mutado invalido: {part}",
+        )
 
 
 def test_composer_preserves_protected_official_package_and_updates_dependents(
@@ -499,7 +515,7 @@ def test_composer_preserves_protected_official_package_and_updates_dependents(
     result = XlsxPackage.read(output)
     assert result.sheet_state("Fletes") == "hidden"
     assert result.sheet_state("Quotation_Data") == "veryHidden"
-    assert "sheep" not in {name.casefold() for name, *_rest in result._sheet_rows()}
+    assert result.sheet_state("sheep") == "visible"
     assert sum(name.startswith("xl/externalLinks/") for name in result.parts) == 12
     assert sum(
         len(
@@ -511,7 +527,7 @@ def test_composer_preserves_protected_official_package_and_updates_dependents(
     workbook = ET.fromstring(result.parts["xl/workbook.xml"])
     assert len(
         workbook.findall(f"{{{MAIN}}}definedNames/{{{MAIN}}}definedName")
-    ) == 29
+    ) == 31
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     for prefix in request.contract.protected_prefixes:
         for name, payload in base.parts.items():
@@ -863,7 +879,6 @@ def test_cotizacion_product_requires_nonempty_identity_fields() -> None:
 
 def test_active_engine_routes_through_official_composer_without_legacy_writers(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source.xlsx"
     workbook = Workbook()
@@ -888,17 +903,6 @@ def test_active_engine_routes_through_official_composer_without_legacy_writers(
     workbook.save(source)
     workbook.close()
 
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("el writer legacy no debe tener un caller activo")
-
-    for name in (
-        "_ensure_mobiliti_formula_layout",
-        "_write_mobiliti_row_formulas",
-        "_normalize_mobiliti_row_formulas",
-        "_set_mobiliti_subtotal_formulas",
-    ):
-        monkeypatch.setattr(f"mobiliti_saas.quote_engine.engine.{name}", forbidden)
-
     output = tmp_path / "engine.xlsx"
     result = generate_quote(
         source,
@@ -911,6 +915,44 @@ def test_active_engine_routes_through_official_composer_without_legacy_writers(
     package = XlsxPackage.read(output)
     assert package.sheet_state("Quotation_Data") == "veryHidden"
     assert package.sheet_part("Quotation")
+
+
+def test_active_engine_writes_numeric_m3_without_overwriting_visible_dimensions(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "m3-source.xlsx"
+    _write_engine_source(
+        source,
+        (
+            {
+                "name": "Mesa con volumen",
+                "dimension": "240 x 120 cm",
+                "m3": 0.42,
+                "quantity": 1,
+                "price": 1000,
+            },
+            {
+                "name": "Silla sin volumen",
+                "dimension": "60 x 60 x 90 cm",
+                "quantity": 1,
+                "price": 250,
+            },
+        ),
+    )
+    output = tmp_path / "m3-official.xlsx"
+
+    generate_quote(source, output, {"cotizacion": "M3-E2E"}, OFFICIAL_TEMPLATE)
+
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        mobiliti = workbook["Mobiliti"]
+        cotizacion = workbook["Cotizacion"]
+        assert mobiliti["K14"].value == pytest.approx(0.42)
+        assert mobiliti["K15"].value == 0
+        assert cotizacion["D17"].value == "240 x 120 cm"
+        assert cotizacion["D18"].value == "60 x 60 x 90 cm"
+    finally:
+        workbook.close()
 
 
 def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
@@ -2431,11 +2473,12 @@ def test_output_contract_rejects_unexpected_defined_name(tmp_path: Path) -> None
         )
 
 
-def test_cotizacion_declares_audited_formula_contract_for_contaminated_f_i() -> None:
+def test_cotizacion_declares_audited_formula_contract_for_official_f_i() -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
-    assert _cell(source, "F17").findtext(f"{{{MAIN}}}f") == "#REF!"
-    assert _cell(source, "I17").find(f"{{{MAIN}}}f") is None
+    assert _cell(source, "F17").find(f"{{{MAIN}}}f") is None
+    assert _cell(source, "F17").find(f"{{{MAIN}}}v") is None
+    assert _cell(source, "I17").findtext(f"{{{MAIN}}}f") == "F17-H17"
 
     contract = official_composer_module.CotizacionFormulaContract()
     formulas = contract.product_formulas(mobiliti_row=14, target_row=17)

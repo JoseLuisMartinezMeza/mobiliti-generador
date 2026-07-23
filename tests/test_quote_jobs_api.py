@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import threading
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from datetime import date, timedelta
@@ -13,6 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image, PngImagePlugin
+from quotation_import_fixtures import write_import_fixture
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "vercel_deploy", "api"))
 
@@ -106,6 +108,46 @@ def _client():
     return TestClient(index.app)
 
 
+def test_dev_save_never_exposes_a_truncated_json_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(index, "DEV_STORE_DIR", tmp_path)
+    db_path = tmp_path / "db.json"
+    initial = {"quote_jobs": [{"id": "before"}]}
+    updated = {"quote_jobs": [{"id": "after"}], "payload": "x" * 1000}
+    db_path.write_text(json.dumps(initial), encoding="utf-8")
+    target_was_truncated = threading.Event()
+    allow_direct_write_to_finish = threading.Event()
+    original_write_text = Path.write_text
+
+    def delayed_direct_write(path, content, *args, **kwargs):
+        if path == db_path:
+            encoding = kwargs.get("encoding", "utf-8")
+            with path.open("w", encoding=encoding) as stream:
+                stream.write("")
+                stream.flush()
+                target_was_truncated.set()
+                assert allow_direct_write_to_finish.wait(5)
+                stream.write(content)
+            return len(content)
+        return original_write_text(path, content, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", delayed_direct_write)
+    writer = threading.Thread(target=index._dev_save, args=(updated,))
+    writer.start()
+    try:
+        if target_was_truncated.wait(0.5):
+            snapshot = index._dev_load()
+        else:
+            writer.join(5)
+            snapshot = index._dev_load()
+    finally:
+        allow_direct_write_to_finish.set()
+        writer.join(5)
+
+    assert not writer.is_alive()
+    assert snapshot in (initial, updated)
+    assert json.loads(db_path.read_text(encoding="utf-8")) == updated
+
+
 def _token(user_id=7, email="cliente@example.com"):
     return index.create_access_token({"sub": str(user_id), "email": email})
 
@@ -139,6 +181,328 @@ def _mock_user(monkeypatch, user_id=7, active=True, email="cliente@example.com",
         },
     )
     monkeypatch.setattr(index, "_enforce_active_quote_limit", lambda *_args, **_kwargs: None)
+
+
+def uploaded_draft_quote(monkeypatch, tmp_path, fixture="quotation-import.xlsx", user_id=7):
+    _mock_user(monkeypatch, user_id=user_id)
+    job_id = JOB_MIXED_UUID
+    source = write_import_fixture(tmp_path / fixture)
+    state = {
+        "job": {
+            "id": job_id,
+            "usuario_id": user_id,
+            "status": "draft",
+            "input_path": f"users/{user_id}/jobs/{job_id}/input.xlsx",
+            "metadata": {"original_filename": source.name},
+        },
+        "uploads": [],
+    }
+
+    monkeypatch.setattr(index, "db_get_quote_job", lambda requested_id: state["job"] if requested_id == job_id else None)
+    monkeypatch.setattr(index, "_storage_download_bytes", lambda path: source.read_bytes())
+    monkeypatch.setattr(
+        index,
+        "_storage_upload_bytes",
+        lambda path, content, content_type="application/octet-stream": state["uploads"].append(
+            (path, content, content_type)
+        ),
+    )
+    monkeypatch.setattr(index, "_create_signed_download", lambda path: f"https://storage.example/{path}")
+
+    def update_job(requested_id, updates, *, expected_status=None):
+        if requested_id != job_id or (expected_status and state["job"]["status"] != expected_status):
+            return {}
+        state["job"].update(updates)
+        return state["job"]
+
+    monkeypatch.setattr(index, "db_update_quote_job", update_job)
+    return _client(), _token(user_id), job_id, state
+
+
+def test_import_preview_returns_manifest_and_signed_images(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+
+    response = client.post(
+        f"/cotizaciones/{job_id}/import-preview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["import_id"] == job_id
+    assert body["currency_status"] == "required"
+    assert len(body["items"]) == 7
+    assert body["items"][0]["image_url"].startswith("http")
+    assert state["job"]["metadata"]["import_item_count"] == 7
+    uploads = {path: (content, content_type) for path, content, content_type in state["uploads"]}
+    manifest_path = state["job"]["metadata"]["import_manifest_path"]
+    manifest_bytes, manifest_type = uploads[manifest_path]
+    stored_manifest = json.loads(manifest_bytes)
+    assert manifest_type == "application/json"
+    assert stored_manifest["import_id"] == job_id
+    assert stored_manifest["preview_image_paths"] == state["job"]["metadata"]["import_preview_paths"]
+    for row, image_path in stored_manifest["preview_image_paths"].items():
+        _content, content_type = uploads[image_path]
+        assert row.isdigit()
+        assert content_type in {"image/png", "image/jpeg", "image/webp"}
+
+
+def test_import_preview_omits_disallowed_or_signature_mismatched_images(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    png_buffer = BytesIO()
+    Image.new("RGBA", (900, 450), (10, 20, 30, 180)).save(png_buffer, format="PNG")
+    png_bytes = png_buffer.getvalue()
+    jpeg_buffer = BytesIO()
+    Image.new("RGB", (320, 160), (40, 50, 60)).save(jpeg_buffer, format="JPEG")
+    jpeg_bytes = jpeg_buffer.getvalue()
+    gif_bytes = b"GIF89a-not-a-png"
+    manifest = {
+        "import_id": job_id,
+        "source_hash": "a" * 64,
+        "original_filename": "quotation-import.xlsx",
+        "provider": "",
+        "source_currency": None,
+        "currency_status": "required",
+        "sections": [{"id": "import-section-1", "title": "Productos", "item_keys": []}],
+        "items": [
+            {"key": f"import:{job_id}:9", "source_row": 9},
+            {"key": f"import:{job_id}:10", "source_row": 10},
+            {"key": f"import:{job_id}:11", "source_row": 11},
+            {"key": f"import:{job_id}:12", "source_row": 12},
+        ],
+    }
+    image_map = {
+        9: (png_bytes, "image/png"),
+        10: (gif_bytes, "image/png"),
+        11: (gif_bytes, "image/gif"),
+        12: (jpeg_bytes, ".jpeg"),
+    }
+    monkeypatch.setattr(index, "build_import_manifest", lambda *_args: (manifest, image_map))
+
+    response = client.post(
+        f"/cotizaciones/{job_id}/import-preview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["image_url"] for item in body["items"]] == [
+        f"https://storage.example/users/7/jobs/{job_id}/preview/{manifest['source_hash'][:16]}/row-9.png",
+        "",
+        "",
+        f"https://storage.example/users/7/jobs/{job_id}/preview/{manifest['source_hash'][:16]}/row-12.png",
+    ]
+    uploads = {path: (content, content_type) for path, content, content_type in state["uploads"]}
+    preview_prefix = f"users/7/jobs/{job_id}/preview/{manifest['source_hash'][:16]}"
+    for row in (9, 12):
+        normalized, content_type = uploads[f"{preview_prefix}/row-{row}.png"]
+        assert content_type == "image/png"
+        assert len(normalized) <= index.IMPORT_PREVIEW_IMAGE_MAX_BYTES
+        with Image.open(BytesIO(normalized)) as preview_image:
+            assert preview_image.format == "PNG"
+            assert preview_image.width <= index.IMPORT_PREVIEW_THUMBNAIL_MAX_SIDE
+            assert preview_image.height <= index.IMPORT_PREVIEW_THUMBNAIL_MAX_SIDE
+    assert all(content != gif_bytes for path, (content, _type) in uploads.items() if path != f"{preview_prefix}/manifest.json")
+    manifest_bytes, manifest_type = uploads[f"{preview_prefix}/manifest.json"]
+    assert manifest_type == "application/json"
+    assert json.loads(manifest_bytes)["preview_image_paths"] == {
+        "9": f"{preview_prefix}/row-9.png",
+        "12": f"{preview_prefix}/row-12.png",
+    }
+    assert state["job"]["metadata"]["import_preview_paths"] == {
+        "9": f"{preview_prefix}/row-9.png",
+        "12": f"{preview_prefix}/row-12.png",
+    }
+
+
+def test_import_preview_image_normalization_rejects_size_pixels_bomb_and_mime_mismatch():
+    safe_buffer = BytesIO()
+    Image.new("RGB", (1200, 600), "white").save(safe_buffer, format="JPEG", quality=90)
+    normalized = index._normalize_import_preview_image(safe_buffer.getvalue(), "image/jpeg")
+    assert normalized is not None
+    content, suffix, content_type = normalized
+    assert suffix == ".png"
+    assert content_type == "image/png"
+    assert len(content) <= index.IMPORT_PREVIEW_IMAGE_MAX_BYTES
+    with Image.open(BytesIO(content)) as image:
+        assert image.format == "PNG"
+        assert image.size == (index.IMPORT_PREVIEW_THUMBNAIL_MAX_SIDE, 320)
+
+    assert index._normalize_import_preview_image(
+        b"\x89PNG\r\n\x1a\n" + b"0" * index.IMPORT_PREVIEW_IMAGE_MAX_BYTES,
+        "image/png",
+    ) is None
+
+    too_many_pixels = BytesIO()
+    Image.new("1", (5001, 5000), 1).save(too_many_pixels, format="PNG")
+    assert index._normalize_import_preview_image(too_many_pixels.getvalue(), "image/png") is None
+    assert index._normalize_import_preview_image(safe_buffer.getvalue(), "image/png") is None
+
+
+@pytest.mark.parametrize(
+    "case,expected_status",
+    [
+        ("other-user", 403),
+        ("queued", 409),
+        ("pdf", 409),
+        ("missing-input", 400),
+        ("too-many-products", 400),
+    ],
+)
+def test_import_preview_rejects_invalid_source_cases(monkeypatch, tmp_path, case, expected_status):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    if case == "other-user":
+        token = _token(8, "other@example.com")
+    elif case == "queued":
+        state["job"]["status"] = "queued"
+    elif case == "pdf":
+        state["job"]["input_path"] = state["job"]["input_path"].replace(".xlsx", ".pdf")
+    elif case == "missing-input":
+        state["job"]["input_path"] = None
+    else:
+        monkeypatch.setattr(
+            index,
+            "build_import_manifest",
+            lambda *_args: (_ for _ in ()).throw(
+                ValueError("La cotizacion requiere una fila fuera del limite XLSX")
+            ),
+        )
+
+    response = client.post(
+        f"/cotizaciones/{job_id}/import-preview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == expected_status
+    assert "import_source_hash" not in state["job"]["metadata"]
+
+
+def test_import_preview_is_repeatable_without_reuploading_the_source(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    downloads = []
+    original_download = index._storage_download_bytes
+    monkeypatch.setattr(
+        index,
+        "_storage_download_bytes",
+        lambda path: downloads.append(path) or original_download(path),
+    )
+
+    first = client.post(f"/cotizaciones/{job_id}/import-preview", headers={"Authorization": f"Bearer {token}"})
+    second = client.post(f"/cotizaciones/{job_id}/import-preview", headers={"Authorization": f"Bearer {token}"})
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["source_hash"] == second.json()["source_hash"]
+    assert downloads == [state["job"]["input_path"], state["job"]["input_path"]]
+    assert all("/input.xlsx" not in path for path, _content, _type in state["uploads"])
+
+
+def test_import_preview_does_not_persist_metadata_when_draft_cas_loses_race(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    deleted = []
+    monkeypatch.setattr(index, "_delete_storage_paths", lambda paths: deleted.extend(paths))
+    monkeypatch.setattr(index, "db_update_quote_job", lambda *_args, **_kwargs: {})
+
+    response = client.post(
+        f"/cotizaciones/{job_id}/import-preview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 409
+    assert "import_manifest_path" not in state["job"]["metadata"]
+    assert "import_source_hash" not in state["job"]["metadata"]
+    assert deleted
+    assert set(deleted) == {path for path, _content, _type in state["uploads"]}
+
+
+def test_import_preview_replacement_cleans_stale_manifest_and_removed_rows(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    old_prefix = f"users/7/jobs/{job_id}/preview/{'b' * 16}"
+    state["job"]["metadata"].update({
+        "import_manifest_path": f"{old_prefix}/manifest.json",
+        "import_preview_paths": {
+            "9": f"{old_prefix}/row-9.png",
+            "10": f"{old_prefix}/row-10.png",
+        },
+    })
+    deleted = []
+    monkeypatch.setattr(index, "_delete_storage_paths", lambda paths: deleted.extend(paths))
+
+    response = client.post(
+        f"/cotizaciones/{job_id}/import-preview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert set(deleted) == {
+        f"{old_prefix}/manifest.json",
+        f"{old_prefix}/row-9.png",
+        f"{old_prefix}/row-10.png",
+    }
+    assert state["job"]["metadata"]["import_manifest_path"] not in deleted
+
+
+def test_quote_storage_paths_include_only_owned_import_preview_objects():
+    job = {
+        "id": JOB_MIXED_UUID,
+        "usuario_id": 7,
+        "input_path": f"users/7/jobs/{JOB_MIXED_UUID}/input.xlsx",
+        "output_path": f"users/7/jobs/{JOB_MIXED_UUID}/output.xlsx",
+        "metadata": {
+            "import_source_path": f"users/7/jobs/{JOB_MIXED_UUID}/import-source.xlsx",
+            "import_manifest_path": f"users/7/jobs/{JOB_MIXED_UUID}/preview/manifest.json",
+            "import_preview_paths": {
+                "9": f"users/7/jobs/{JOB_MIXED_UUID}/preview/row-9.png",
+                "10": "users/8/jobs/not-owned/preview/row-10.png",
+            },
+        },
+    }
+
+    assert index._quote_storage_paths(job) == [
+        f"users/7/jobs/{JOB_MIXED_UUID}/input.xlsx",
+        f"users/7/jobs/{JOB_MIXED_UUID}/output.xlsx",
+        f"users/7/jobs/{JOB_MIXED_UUID}/import-source.xlsx",
+        f"users/7/jobs/{JOB_MIXED_UUID}/preview/manifest.json",
+        f"users/7/jobs/{JOB_MIXED_UUID}/preview/row-9.png",
+    ]
+
+
+@pytest.mark.parametrize(
+    "import_source_path",
+    (
+        f"users/8/jobs/{JOB_MIXED_UUID}/import-source.xlsx",
+        f"users/7/jobs/{JOB_MIXED_UUID}-shadow/import-source.xlsx",
+        f"users/7/jobs/{JOB_A_UUID}/import-source.xlsx",
+    ),
+)
+def test_quote_storage_paths_reject_import_source_outside_exact_job_prefix(
+    import_source_path,
+):
+    job = {
+        "id": JOB_MIXED_UUID,
+        "usuario_id": 7,
+        "input_path": None,
+        "output_path": None,
+        "metadata": {"import_source_path": import_source_path},
+    }
+
+    assert index._quote_storage_paths(job) == []
+
+
+def test_quote_job_database_error_does_not_leak_connection_secret(monkeypatch, capsys):
+    secret = "postgresql://admin:simulated-token@internal.example/private"
+    monkeypatch.setattr(
+        index,
+        "db_get_quote_job",
+        lambda _job_id: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+
+    with pytest.raises(index.HTTPException) as error:
+        index._quote_job_for_user(JOB_MIXED_UUID, 7)
+
+    captured = capsys.readouterr()
+    assert error.value.status_code == 503
+    assert error.value.detail == "Servicio de cotizaciones no disponible"
+    assert secret not in f"{captured.out}{captured.err}"
 
 
 def test_init_upload_requires_token():
@@ -327,7 +691,7 @@ def _mock_mixed_quote_dependencies(monkeypatch):
     state = {
         "jobs": [], "uploads": [], "events": [], "requested_catalogs": [],
         "loaded_catalogs": [], "rate_calls": 0, "released": [],
-        "deleted_jobs": [], "deleted_inputs": [],
+        "deleted_jobs": [], "deleted_inputs": [], "reserved_groups": [],
     }
     def tarkett_catalog():
         state["loaded_catalogs"].append("tarkett")
@@ -383,6 +747,7 @@ def _mock_mixed_quote_dependencies(monkeypatch):
 
     def reserve(usuario_id, job_id, groups):
         state["events"].append("reserve_mixed")
+        state["reserved_groups"].append(deepcopy(groups))
         return [
             {
                 "catalog": group["catalog"], "identity": item["identity"],
@@ -409,6 +774,436 @@ def _mock_mixed_quote_dependencies(monkeypatch):
     monkeypatch.setattr(index, "_storage_upload_bytes", upload)
     monkeypatch.setattr(index, "_wake_worker", lambda: state["events"].append("wake"))
     return state
+
+
+def _imported_mixed_quote_case(monkeypatch, tmp_path, *, explicit_currency=None):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    source = write_import_fixture(
+        tmp_path / "quotation-import.xlsx", currency=explicit_currency
+    )
+    source_bytes = source.read_bytes()
+    manifest, _images = index.build_import_manifest(
+        source_bytes, JOB_A_UUID, source.name
+    )
+    manifest_path = f"users/7/jobs/{JOB_A_UUID}/preview/{manifest['source_hash'][:16]}/manifest.json"
+    source_path = f"users/7/jobs/{JOB_A_UUID}/input.xlsx"
+    import_job = {
+        "id": JOB_A_UUID,
+        "usuario_id": 7,
+        "status": "draft",
+        "input_path": source_path,
+        "metadata": {
+            "original_filename": source.name,
+            "import_manifest_path": manifest_path,
+            "import_preview_paths": {},
+            "import_source_hash": manifest["source_hash"],
+            "import_item_count": len(manifest["items"]),
+        },
+    }
+    stored_manifest = {**manifest, "preview_image_paths": {}}
+    objects = {
+        source_path: source_bytes,
+        manifest_path: json.dumps(
+            stored_manifest, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8"),
+    }
+
+    def get_job(requested_id):
+        if requested_id == JOB_A_UUID:
+            return import_job
+        return next((job for job in state["jobs"] if job["id"] == requested_id), None)
+
+    def update_job(requested_id, updates, *, expected_status=None):
+        job = get_job(requested_id)
+        if not job or (expected_status is not None and job.get("status") != expected_status):
+            return {}
+        job.update(deepcopy(updates))
+        return job
+
+    monkeypatch.setattr(index, "db_get_quote_job", get_job)
+    monkeypatch.setattr(index, "db_update_quote_job", update_job)
+
+    def upload(path, content, content_type="application/octet-stream"):
+        state["events"].append("upload")
+        state["uploads"].append({
+            "path": path, "content": content, "content_type": content_type,
+        })
+        objects[path] = content
+
+    monkeypatch.setattr(index, "_storage_upload_bytes", upload)
+    monkeypatch.setattr(index, "_storage_download_bytes", lambda path: objects[path])
+    item = {
+        "kind": "imported",
+        "import_id": JOB_A_UUID,
+        "source_row": 11,
+        "source_currency": explicit_currency or "USD",
+        "quantity": "2",
+        "overrides": {
+            "name": "Alien Task Chair revisada",
+            "description": "Silla operativa revisada",
+            "dimension": "630 x 565 x 1000 mm",
+            "unit_price": "82.00",
+            "provider": "Sunon",
+        },
+    }
+    return state, import_job, manifest, source_bytes, objects, item
+
+
+def test_mixed_quote_validates_and_copies_imported_source_without_reserving_it(
+    monkeypatch, tmp_path
+):
+    state, import_job, manifest, source_bytes, _objects, imported = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path)
+    )
+    catalog = {"catalog": "tarkett", "code": "25731726", "quantity": "1"}
+    body = _valid_mixed_body([catalog, imported])
+    body["sections"] = [{
+        "id": "section-1",
+        "title": "Recepcion",
+        "item_keys": ["tarkett:25731726", f"import:{JOB_A_UUID}:11"],
+    }]
+
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=body
+    )
+
+    assert response.status_code == 200, response.json()
+    final_job_id = state["jobs"][0]["id"]
+    source_copy_path = f"users/7/jobs/{final_job_id}/import-source.xlsx"
+    uploads = {upload["path"]: upload for upload in state["uploads"]}
+    assert uploads[source_copy_path]["content"] == source_bytes
+    payload_upload = uploads[f"users/7/jobs/{final_job_id}/input.json"]
+    payload = json.loads(payload_upload["content"])
+    assert payload["groups"][0]["catalog"] == "tarkett"
+    assert payload["imported_source"]["source_path"] == source_copy_path
+    assert payload["imported_source"]["source_hash"] == manifest["source_hash"]
+    assert payload["imported_source"]["items"][0]["canonical_key"] == f"import:{JOB_A_UUID}:11"
+    assert payload["sections"] == body["sections"]
+    metadata = state["jobs"][0]["metadata"]
+    assert metadata["import_source_path"] == source_copy_path
+    assert metadata["import_item_count"] == 1
+    assert metadata["import_source_currencies"] == ["USD"]
+    assert "preview_image_paths" not in metadata
+    assert all("import" not in group["catalog"] for group in payload["groups"])
+    assert state["reserved_groups"] == [[{
+        "catalog": "tarkett",
+        "items": [{
+            "identity": "25731726", "sku": "25731726",
+            "quantity": "1.000000", "stock": "970.200000",
+        }],
+    }]]
+    assert import_job["status"] == "failed"
+    assert import_job["metadata"]["import_consumed_by_job_id"] == final_job_id
+
+
+def test_failed_mixed_job_releases_consumed_import_for_retry(monkeypatch, tmp_path):
+    state, import_job, _manifest, _source, _objects, imported = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path)
+    )
+    body = _valid_mixed_body([imported])
+
+    first = _client().post("/catalogs/mixed-quote", headers=_auth_headers(), json=body)
+    assert first.status_code == 200, first.json()
+    first_job_id = first.json()["job"]["id"]
+    assert import_job["metadata"]["import_consumed_by_job_id"] == first_job_id
+    next(job for job in state["jobs"] if job["id"] == first_job_id)["status"] = "failed"
+
+    second = _client().post("/catalogs/mixed-quote", headers=_auth_headers(), json=body)
+    assert second.status_code == 200, second.json()
+    second_job_id = second.json()["job"]["id"]
+    assert second_job_id != first_job_id
+    assert import_job["status"] == "failed"
+    assert import_job["metadata"]["import_consumed_by_job_id"] == second_job_id
+
+
+def test_active_quote_limit_ignores_consumed_import_sources(monkeypatch):
+    monkeypatch.setattr(index, "MAX_ACTIVE_QUOTE_JOBS_PER_USER", 3)
+    monkeypatch.setattr(index, "db_list_quote_jobs", lambda _user_id: [
+        {"id": "source-a", "status": "failed", "metadata": {"import_consumed_by_job_id": "final-a"}},
+        {"id": "source-b", "status": "failed", "metadata": {"import_consumed_by_job_id": "final-b"}},
+        {"id": "source-c", "status": "failed", "metadata": {"import_consumed_by_job_id": "final-c"}},
+    ])
+
+    index._enforce_active_quote_limit(7)
+
+
+def test_mixed_quote_allows_imported_only_and_omitted_manifest_rows(
+    monkeypatch, tmp_path
+):
+    state, _job, _manifest, _source, _objects, imported = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path)
+    )
+
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(),
+        json=_valid_mixed_body([imported]),
+    )
+
+    assert response.status_code == 200, response.json()
+    payload = json.loads(next(
+        upload["content"] for upload in state["uploads"]
+        if upload["path"].endswith("/input.json")
+    ))
+    assert payload["groups"] == []
+    assert payload["item_count"] == 1
+    assert len(payload["imported_source"]["items"]) == 1
+    assert payload["sections"] == [{
+        "id": "section-1", "title": "Recepción",
+        "item_keys": [f"import:{JOB_A_UUID}:11"],
+    }]
+    assert state["reserved_groups"] == [[]]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("other-user", 403),
+        ("not-draft", 409),
+        ("missing-row", 400),
+        ("duplicate-row", 400),
+        ("unknown-field", 400),
+        ("negative-price", 400),
+        ("nonfinite-price", 400),
+        ("too-precise-price", 400),
+        ("missing-currency", 400),
+        ("second-import-id", 400),
+        ("changed-source", 409),
+        ("changed-hash", 409),
+        ("changed-manifest", 409),
+        ("changed-preview-metadata", 409),
+        ("changed-source-path", 409),
+    ),
+)
+def test_mixed_quote_rejects_invalid_imported_items_without_creating_job(
+    monkeypatch, tmp_path, mutation, expected
+):
+    state, import_job, manifest, source_bytes, objects, item = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path)
+    )
+    items = [item]
+    if mutation == "other-user":
+        import_job["usuario_id"] = 8
+    elif mutation == "not-draft":
+        import_job["status"] = "queued"
+    elif mutation == "missing-row":
+        item["source_row"] = 999
+    elif mutation == "duplicate-row":
+        items.append(deepcopy(item))
+    elif mutation == "unknown-field":
+        item["source_path"] = import_job["input_path"]
+    elif mutation == "negative-price":
+        item["overrides"]["unit_price"] = "-1"
+    elif mutation == "nonfinite-price":
+        item["overrides"]["unit_price"] = "NaN"
+    elif mutation == "too-precise-price":
+        item["overrides"]["unit_price"] = "1.0000001"
+    elif mutation == "missing-currency":
+        item["source_currency"] = None
+    elif mutation == "second-import-id":
+        second = deepcopy(item)
+        second["import_id"] = JOB_B_UUID
+        second["source_row"] = 12
+        items.append(second)
+    elif mutation == "changed-source":
+        objects[import_job["input_path"]] = source_bytes + b"changed"
+    elif mutation == "changed-hash":
+        import_job["metadata"]["import_source_hash"] = "0" * 64
+    elif mutation == "changed-preview-metadata":
+        import_job["metadata"]["import_preview_paths"] = {
+            "11": "users/8/jobs/not-owned/preview/row-11.png",
+        }
+    elif mutation == "changed-source-path":
+        import_job["input_path"] = f"users/7/jobs/{JOB_A_UUID}/other.xlsx"
+    else:
+        stored = json.loads(objects[import_job["metadata"]["import_manifest_path"]])
+        stored["items"][0]["name"] = "Manifest changed"
+        objects[import_job["metadata"]["import_manifest_path"]] = json.dumps(stored).encode()
+
+    response = _client().post(
+        "/catalogs/mixed-quote",
+        headers=_auth_headers(),
+        json=_valid_mixed_body(items),
+    )
+
+    assert response.status_code == expected
+    assert state["jobs"] == []
+    assert state["uploads"] == []
+    detail = response.json()["detail"]
+    assert import_job["input_path"] not in detail
+    assert manifest["source_hash"] not in detail
+
+
+def test_mixed_quote_rejects_overridden_explicit_currency_without_creating_job(
+    monkeypatch, tmp_path
+):
+    state, _job, _manifest, _source, _objects, item = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path, explicit_currency="USD")
+    )
+    item["source_currency"] = "EUR"
+
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(),
+        json=_valid_mixed_body([item]),
+    )
+
+    assert response.status_code == 400
+    assert state["jobs"] == []
+
+
+@pytest.mark.parametrize("stage", ("copy", "verify", "create", "queue"))
+def test_mixed_quote_import_failures_do_not_queue_or_wake(
+    monkeypatch, tmp_path, stage
+):
+    state, _job, _manifest, _source, objects, item = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path)
+    )
+    original_upload = index._storage_upload_bytes
+    original_download = index._storage_download_bytes
+    if stage == "copy":
+        monkeypatch.setattr(
+            index, "_storage_upload_bytes",
+            lambda path, *_args: (_ for _ in ()).throw(RuntimeError("copy failed"))
+            if path.endswith("/import-source.xlsx") else original_upload(path, *_args),
+        )
+    elif stage == "verify":
+        monkeypatch.setattr(
+            index, "_storage_download_bytes",
+            lambda path: b"corrupt" if path.endswith("/import-source.xlsx") else original_download(path),
+        )
+    elif stage == "create":
+        monkeypatch.setattr(
+            index, "db_create_quote_job",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("create failed")),
+        )
+    else:
+        monkeypatch.setattr(
+            index, "db_queue_mixed_quote_job",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("queue failed")),
+        )
+
+    response = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(),
+        json=_valid_mixed_body([item]),
+    )
+
+    assert response.status_code == 503
+    assert "wake" not in state["events"]
+    assert state["released"] == ([] if stage == "create" else [state["jobs"][0]["id"]])
+    assert state["deleted_jobs"] == ([] if stage == "create" else [state["jobs"][0]["id"]])
+
+
+@pytest.mark.parametrize("restore_failure", ("false", "raise"))
+def test_import_checkout_rollback_preserves_consumer_when_source_restore_fails_and_allows_retry(
+    monkeypatch, tmp_path, restore_failure
+):
+    state, import_job, _manifest, _source, _objects, item = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path)
+    )
+    original_queue = index.db_queue_mixed_quote_job
+    original_restore = index._restore_consumed_import_draft
+    monkeypatch.setattr(
+        index,
+        "db_queue_mixed_quote_job",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("queue failed")),
+    )
+    if restore_failure == "false":
+        monkeypatch.setattr(index, "_restore_consumed_import_draft", lambda *_args: False)
+    else:
+        monkeypatch.setattr(
+            index,
+            "_restore_consumed_import_draft",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("restore failed")),
+        )
+
+    failed = _client().post(
+        "/catalogs/mixed-quote",
+        headers=_auth_headers(),
+        json=_valid_mixed_body([item]),
+    )
+
+    assert failed.status_code == 503
+    first_consumer = state["jobs"][0]
+    first_consumer_id = first_consumer["id"]
+    assert first_consumer_id not in state["deleted_jobs"]
+    assert first_consumer["status"] == "failed"
+    assert import_job["status"] == "failed"
+    assert import_job["metadata"]["import_consumed_by_job_id"] == first_consumer_id
+    assert any(job["id"] == first_consumer_id for job in state["jobs"])
+
+    monkeypatch.setattr(index, "db_queue_mixed_quote_job", original_queue)
+    monkeypatch.setattr(index, "_restore_consumed_import_draft", original_restore)
+    retried = _client().post(
+        "/catalogs/mixed-quote",
+        headers=_auth_headers(),
+        json=_valid_mixed_body([item]),
+    )
+
+    assert retried.status_code == 200, retried.json()
+    assert retried.json()["job"]["id"] != first_consumer_id
+    assert import_job["metadata"]["import_consumed_by_job_id"] == retried.json()["job"]["id"]
+
+
+@pytest.mark.parametrize("stage", ("readback", "reserve", "input-upload", "cas"))
+def test_mixed_quote_post_copy_failures_leave_no_final_job_storage_orphans(
+    monkeypatch, tmp_path, stage
+):
+    state, _job, _manifest, _source, objects, item = _imported_mixed_quote_case(
+        monkeypatch, tmp_path
+    )
+    original_upload = index._storage_upload_bytes
+    original_download = index._storage_download_bytes
+
+    def delete_storage(paths):
+        state["deleted_inputs"].extend(paths)
+        for path in paths:
+            objects.pop(path, None)
+
+    monkeypatch.setattr(index, "_delete_storage_paths", delete_storage)
+    if stage == "readback":
+        monkeypatch.setattr(
+            index,
+            "_storage_download_bytes",
+            lambda path: (_ for _ in ()).throw(RuntimeError("readback failed"))
+            if path.endswith("/import-source.xlsx")
+            else original_download(path),
+        )
+    elif stage == "reserve":
+        monkeypatch.setattr(
+            index,
+            "db_reserve_mixed_cart",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("reserve failed")),
+        )
+    elif stage == "input-upload":
+        def upload_then_fail(path, content, content_type="application/octet-stream"):
+            original_upload(path, content, content_type)
+            if path.endswith("/input.json"):
+                raise RuntimeError("input upload failed")
+
+        monkeypatch.setattr(index, "_storage_upload_bytes", upload_then_fail)
+    else:
+        monkeypatch.setattr(
+            index,
+            "db_queue_mixed_quote_job",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("CAS failed")),
+        )
+
+    response = _client().post(
+        "/catalogs/mixed-quote",
+        headers=_auth_headers(),
+        json=_valid_mixed_body([item]),
+    )
+
+    assert response.status_code == 503
+    assert len(state["jobs"]) == 1
+    final_job_id = state["jobs"][0]["id"]
+    final_prefix = f"users/7/jobs/{final_job_id}/"
+    input_path = f"{final_prefix}input.json"
+    source_copy_path = f"{final_prefix}import-source.xlsx"
+    assert state["deleted_inputs"] == [input_path, source_copy_path]
+    assert not any(path.startswith(final_prefix) for path in objects)
+    assert state["released"] == [final_job_id]
+    assert state["deleted_jobs"] == [final_job_id]
+    assert "wake" not in state["events"]
 
 
 def test_mixed_quote_route_is_registered_before_supplier_quote_route():
@@ -599,6 +1394,21 @@ def test_mixed_quote_creates_one_authoritative_job_upload_queue_and_wake(monkeyp
         {"catalog": "sonara", "internal_id": "sonara:desk-1", "quantity": "2"},
         {"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "3"},
     ])
+    body["sections"] = [
+        {
+            "id": "section-1",
+            "title": "Recepción",
+            "item_keys": [
+                "tarkett:25731726",
+                'sonara:["sonara:desk-1","",[]]',
+            ],
+        },
+        {
+            "id": "section-2",
+            "title": "Privados",
+            "item_keys": ['alma:["alma:desk-1","",[]]'],
+        },
+    ]
 
     response = _client().post("/catalogs/mixed-quote", headers=_auth_headers(), json=body)
 
@@ -610,12 +1420,14 @@ def test_mixed_quote_creates_one_authoritative_job_upload_queue_and_wake(monkeyp
     payload = json.loads(state["uploads"][0]["content"])
     assert payload["source_type"] == "mixed_catalog_cart"
     assert payload["item_count"] == 3
+    assert payload["sections"] == body["sections"]
     assert {group["catalog"] for group in payload["groups"]} == {"tarkett", "sonara", "alma"}
     assert payload["groups"][0]["items"][0]["unit_price"] == "472.63"
     assert response.json()["job"]["id"] == state["jobs"][0]["id"]
     metadata = state["jobs"][0]["metadata"]
     assert metadata["source_type"] == "mixed_catalog_cart"
     assert metadata["mixed_item_count"] == 3
+    assert metadata["mixed_section_count"] == 2
     assert metadata["catalog_item_counts"] == {"tarkett": 1, "sonara": 1, "alma": 1}
     assert metadata["catalog_source_hashes"] == {
         group["catalog"]: group["catalog_source_hash"] for group in payload["groups"]
@@ -2548,6 +3360,33 @@ def test_published_catalog_hydrates_approved_asset_without_changing_contract(mon
     assert catalog["items"][0]["attributes"]["price_evidence"] == [{"kind": "base"}]
 
 
+def test_catalog_asset_public_url_uses_local_dev_endpoint(monkeypatch):
+    object_name = f"{'d' * 64}.png"
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "DEV_PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+
+    assert index._catalog_asset_public_url(object_name) == (
+        f"http://127.0.0.1:8000/dev/catalog-assets/{object_name}"
+    )
+
+
+def test_dev_catalog_asset_download_serves_hash_named_png(monkeypatch, tmp_path):
+    object_name = f"{'e' * 64}.png"
+    content = b"\x89PNG\r\n\x1a\nlocal-catalog-image"
+    destination = tmp_path / "catalog-assets" / object_name
+    destination.parent.mkdir(parents=True)
+    destination.write_bytes(content)
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "DEV_STORE_DIR", tmp_path)
+
+    response = _client().get(f"/dev/catalog-assets/{object_name}")
+
+    assert response.status_code == 200
+    assert response.content == content
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
 def test_published_catalog_hydrates_legacy_asset_with_safe_existing_kind(monkeypatch):
     payload = _mock_supplier_catalog()
     payload["items"][0]["image_kind"] = "official"
@@ -3301,6 +4140,60 @@ def test_deployable_api_copies_have_identical_sha256():
     hashes = {hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
     assert len(hashes) == 1
+
+
+@pytest.mark.parametrize(
+    "object_path",
+    [
+        "C:/Windows/win.ini",
+        r"C:\Windows\win.ini",
+        "C:relative.xlsx",
+        r"\\server\share\quotation.xlsx",
+        "/etc/passwd",
+        r"\Windows\win.ini",
+        "../escape.xlsx",
+        "users/7/../escape.xlsx",
+        "users//7/input.xlsx",
+        "users/./7/input.xlsx",
+        "users/7/input.xlsx/",
+        "users/7/in\x00put.xlsx",
+    ],
+)
+def test_dev_storage_path_rejects_absolute_traversal_and_anomalous_paths(
+    monkeypatch, tmp_path, object_path
+):
+    monkeypatch.setattr(index, "DEV_STORE_DIR", tmp_path / "synthetic-dev-store")
+
+    with pytest.raises(RuntimeError, match="^Ruta de storage invalida$"):
+        index._dev_storage_file(object_path)
+
+
+def test_dev_storage_path_resolves_valid_internal_separators_under_exact_root(
+    monkeypatch, tmp_path
+):
+    store = tmp_path / "synthetic-dev-store"
+    monkeypatch.setattr(index, "DEV_STORE_DIR", store)
+
+    candidate = index._dev_storage_file(r"users\7\jobs\job-1\input.xlsx")
+    root = (store / "storage" / index.QUOTE_STORAGE_BUCKET).resolve()
+
+    assert candidate == root / "users" / "7" / "jobs" / "job-1" / "input.xlsx"
+    assert candidate.relative_to(root).as_posix() == "users/7/jobs/job-1/input.xlsx"
+
+
+@pytest.mark.parametrize("helper_name", ["_storage_download_bytes", "_storage_upload_bytes"])
+def test_dev_storage_read_and_upload_helpers_preserve_path_rejection(
+    monkeypatch, tmp_path, helper_name
+):
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "DEV_STORE_DIR", tmp_path / "synthetic-dev-store")
+    helper = getattr(index, helper_name)
+
+    with pytest.raises(RuntimeError, match="^Ruta de storage invalida$"):
+        if helper_name == "_storage_upload_bytes":
+            helper("/absolute/input.xlsx", b"synthetic")
+        else:
+            helper("/absolute/input.xlsx")
 
 
 def test_mixed_dev_reservation_saves_once_only_after_all_groups_validate(monkeypatch):
@@ -4193,6 +5086,156 @@ def test_delete_quote_releases_tarkett_reservations(monkeypatch):
         ("delete", "job-1"),
         ("storage", "job-1"),
     ]
+
+
+@pytest.mark.parametrize("consumer_status", ("queued", "failed"))
+def test_delete_import_consumer_restores_source_before_delete_and_source_can_retry(
+    monkeypatch, tmp_path, consumer_status
+):
+    state, import_job, _manifest, _source, _objects, item = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path)
+    )
+    created = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body([item])
+    )
+    assert created.status_code == 200, created.json()
+    consumer_id = created.json()["job"]["id"]
+    consumer = next(job for job in state["jobs"] if job["id"] == consumer_id)
+    consumer["status"] = consumer_status
+    assert import_job["metadata"]["import_consumed_by_job_id"] == consumer_id
+
+    deleted = _client().delete(f"/cotizaciones/{consumer_id}", headers=_auth_headers())
+
+    assert deleted.status_code == 200, deleted.json()
+    assert consumer_id in state["deleted_jobs"]
+    assert import_job["status"] == "draft"
+    assert "import_consumed_by_job_id" not in import_job["metadata"]
+
+    retried = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body([item])
+    )
+    assert retried.status_code == 200, retried.json()
+    assert retried.json()["job"]["id"] != consumer_id
+
+
+@pytest.mark.parametrize("restore_failure", ("false", "raise"))
+def test_delete_import_consumer_is_blocked_when_source_cannot_be_restored(
+    monkeypatch, tmp_path, restore_failure
+):
+    state, import_job, _manifest, _source, _objects, item = (
+        _imported_mixed_quote_case(monkeypatch, tmp_path)
+    )
+    created = _client().post(
+        "/catalogs/mixed-quote", headers=_auth_headers(), json=_valid_mixed_body([item])
+    )
+    assert created.status_code == 200, created.json()
+    consumer_id = created.json()["job"]["id"]
+    consumer = next(job for job in state["jobs"] if job["id"] == consumer_id)
+    consumer["status"] = "failed"
+    if restore_failure == "false":
+        monkeypatch.setattr(index, "_restore_consumed_import_draft", lambda *_args: False)
+    else:
+        monkeypatch.setattr(
+            index,
+            "_restore_consumed_import_draft",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("restore failed")),
+        )
+
+    deleted = _client().delete(f"/cotizaciones/{consumer_id}", headers=_auth_headers())
+
+    assert deleted.status_code in {409, 503}
+    assert consumer_id not in state["deleted_jobs"]
+    assert consumer_id not in state["released"]
+    assert import_job["status"] == "failed"
+    assert import_job["metadata"]["import_consumed_by_job_id"] == consumer_id
+
+
+def test_delete_completed_import_consumer_detaches_cleaned_source_without_restoring_it(
+    monkeypatch,
+):
+    _mock_user(monkeypatch)
+    source_id = JOB_A_UUID
+    consumer_id = JOB_B_UUID
+    source = {
+        "id": source_id,
+        "usuario_id": 7,
+        "status": "failed",
+        "input_path": None,
+        "metadata": {
+            "import_consumed_by_job_id": consumer_id,
+            "import_consumed_at": "2026-07-21T12:00:00+00:00",
+            "import_consumed_cleanup_at": "2026-07-21T12:01:00+00:00",
+        },
+    }
+    consumer = {
+        "id": consumer_id,
+        "usuario_id": 7,
+        "status": "completed",
+        "input_path": None,
+        "output_path": f"users/7/jobs/{consumer_id}/output.xlsx",
+        "metadata": {"import_source": {"import_id": source_id}},
+    }
+    jobs = {source_id: source, consumer_id: consumer}
+    calls = []
+
+    def update_job(job_id, updates, *, expected_status=None):
+        job = jobs.get(job_id)
+        if not job or (expected_status is not None and job["status"] != expected_status):
+            return {}
+        job.update(deepcopy(updates))
+        return job
+
+    monkeypatch.setattr(index, "db_get_quote_job", jobs.get)
+    monkeypatch.setattr(index, "db_update_quote_job", update_job)
+    monkeypatch.setattr(index, "_release_quote_reservations", lambda job: calls.append("release"))
+    monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: calls.append("delete"))
+    monkeypatch.setattr(index, "_delete_quote_storage", lambda job: calls.append("storage"))
+
+    deleted = _client().delete(f"/cotizaciones/{consumer_id}", headers=_auth_headers())
+
+    assert deleted.status_code == 200, deleted.json()
+    assert source["status"] == "failed"
+    assert source["input_path"] is None
+    assert "import_consumed_by_job_id" not in source["metadata"]
+    assert calls == ["release", "delete", "storage"]
+
+
+def test_delete_completed_import_consumer_waits_for_source_cleanup_marker(monkeypatch):
+    _mock_user(monkeypatch)
+    source_id = JOB_A_UUID
+    consumer_id = JOB_B_UUID
+    source = {
+        "id": source_id,
+        "usuario_id": 7,
+        "status": "failed",
+        "input_path": f"users/7/jobs/{source_id}/input.xlsx",
+        "metadata": {
+            "import_consumed_by_job_id": consumer_id,
+            "import_consumed_at": "2026-07-21T12:00:00+00:00",
+        },
+    }
+    consumer = {
+        "id": consumer_id,
+        "usuario_id": 7,
+        "status": "completed",
+        "metadata": {"import_source": {"import_id": source_id}},
+    }
+    calls = []
+    monkeypatch.setattr(
+        index,
+        "db_get_quote_job",
+        lambda job_id: source if job_id == source_id else consumer,
+    )
+    monkeypatch.setattr(index, "db_update_quote_job", lambda *_args, **_kwargs: calls.append("update"))
+    monkeypatch.setattr(index, "_release_quote_reservations", lambda job: calls.append("release"))
+    monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: calls.append("delete"))
+    monkeypatch.setattr(index, "_delete_quote_storage", lambda job: calls.append("storage"))
+
+    deleted = _client().delete(f"/cotizaciones/{consumer_id}", headers=_auth_headers())
+
+    assert deleted.status_code == 409
+    assert source["metadata"]["import_consumed_by_job_id"] == consumer_id
+    assert calls == []
 
 
 def test_download_returns_signed_url(monkeypatch):

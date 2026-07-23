@@ -32,12 +32,22 @@ import SupplierCatalogView from "./SupplierCatalogView";
 import CatalogAdminPanel from "./CatalogAdminPanel";
 import MixedCartDrawer from "./MixedCartDrawer";
 import {
+  closeMixedCartSection,
+  compactMixedCartSections,
+  createImportedCartBundle,
+  createInitialMixedCartSections,
   createMixedCartLine,
+  createMixedQuoteRequestSnapshot,
   lineNeedsAvailabilityConfirmation,
   lineNeedsPriceConfirmation,
+  mergeMixedCartSection,
+  moveMixedCartLine,
+  moveMixedCartLineToSection,
   removeMixedCartLine,
-  toMixedQuoteItem,
+  replaceImportedCartBundle,
+  renameMixedCartSection,
   updateMixedCartQuantity,
+  updateImportedCartLine,
   upsertMixedCartLine,
   validateLineQuantity,
 } from "./mixedCart.js";
@@ -215,7 +225,7 @@ function stockLimit(item) {
 }
 
 const statusLabels = {
-  draft: "Archivo preparado",
+  draft: "Borrador sin enviar",
   queued: "En cola",
   processing: "Procesando datos",
   completed: "Cotizacion lista",
@@ -223,7 +233,7 @@ const statusLabels = {
 };
 
 const fallbackProgress = {
-  draft: 10,
+  draft: 0,
   queued: 30,
   processing: 70,
   completed: 100,
@@ -237,7 +247,7 @@ function jobProgress(job) {
 }
 
 function isActiveJob(job) {
-  return ["draft", "queued", "processing"].includes(job?.status);
+  return ["queued", "processing"].includes(job?.status);
 }
 
 function jobDurationMs(job, now = Date.now()) {
@@ -293,7 +303,8 @@ function generationLabel(job, now = Date.now()) {
   const elapsed = jobDurationMs(job, now);
   if (job?.status === "completed") return `Tardo ${formatDuration(elapsed)}`;
   if (job?.status === "failed") return `Fallo tras ${formatDuration(elapsed)}`;
-  if (job?.status === "draft" || job?.status === "queued") {
+  if (job?.status === "draft") return "Pendiente de enviar";
+  if (job?.status === "queued") {
     return `Estimado aprox. ${formatDurationApprox(estimatedJobDurationMs(job, now))}`;
   }
   if (job?.status === "processing") {
@@ -494,7 +505,11 @@ function Header({ user, subscription, cartCount, onOpenCart }) {
   );
 }
 
-function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory }) {
+function previewNeedsSourceCurrency(preview) {
+  return preview?.currency_status === "required";
+}
+
+function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory, onImportPreview }) {
   const { request } = useApi(token);
   const [form, setForm] = useState(emptyQuote);
   const [file, setFile] = useState(null);
@@ -503,8 +518,14 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
   const [downloadState, setDownloadState] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [importPreview, setImportPreview] = useState(null);
+  const [importCurrency, setImportCurrency] = useState("");
+  const [importProvider, setImportProvider] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef(null);
+  const uploadDraftRef = useRef(null);
+  const requestInFlightRef = useRef(false);
+  const requestEpochRef = useRef(0);
 
   useEffect(() => {
     if (!job?.id || !["queued", "processing", "draft"].includes(job.status)) return;
@@ -537,7 +558,13 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
   }
 
   function selectFile(nextFile) {
+    if (busy) return;
+    requestEpochRef.current += 1;
     setError("");
+    setImportPreview(null);
+    setImportCurrency("");
+    setImportProvider("");
+    uploadDraftRef.current = null;
     if (!nextFile) {
       setFile(null);
       return;
@@ -561,35 +588,26 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
     selectFile(event.dataTransfer.files?.[0] || null);
   }
 
-  async function createQuote(event) {
-    event.preventDefault();
-    setError("");
-    setDownloadUrl("");
-    setDownloadState(null);
-
-    if (!file) {
-      setError("Selecciona un archivo .xlsx o .pdf primero.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const init = await request("/cotizaciones/init-upload", {
+  async function uploadQuoteDraft(selectedFile, template) {
+    const existing = uploadDraftRef.current;
+    if (existing?.file === selectedFile && existing.template === template) return existing;
+    const init = await request("/cotizaciones/init-upload", {
         method: "POST",
-        body: JSON.stringify({ filename: file.name, size: file.size, template: form.template })
+        body: JSON.stringify({ filename: selectedFile.name, size: selectedFile.size, template })
       });
       if (init.signed_upload_url) {
         const uploadRes = await fetch(init.signed_upload_url, {
           method: "PUT",
           headers: {
-            "Content-Type": quoteInputContentType(file.name)
+            "Content-Type": quoteInputContentType(selectedFile.name)
           },
-          body: file
+          body: selectedFile
         });
         const uploadData = await uploadRes.json().catch(() => ({}));
         if (!uploadRes.ok) throw new Error(uploadData.message || uploadData.error || "Error subiendo archivo");
       } else if (init.upload_url) {
         const body = new FormData();
-        body.append("file", file);
+        body.append("file", selectedFile);
         const uploadRes = await fetch(apiUrl(init.upload_url), {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
@@ -600,19 +618,86 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
       } else {
         throw new Error("La API no devolvio una ruta de carga valida.");
       }
+      const draft = { job_id: init.job_id, file: selectedFile, template };
+      uploadDraftRef.current = draft;
+      return draft;
+  }
 
-      const submitted = await request(`/cotizaciones/${init.job_id}/submit`, {
+  async function createQuote(event) {
+    event.preventDefault();
+    if (requestInFlightRef.current) return;
+    setError("");
+    setDownloadUrl("");
+    setDownloadState(null);
+
+    if (!file) {
+      setError("Selecciona un archivo .xlsx o .pdf primero.");
+      return;
+    }
+    const requestEpoch = ++requestEpochRef.current;
+    requestInFlightRef.current = true;
+    setBusy(true);
+    try {
+      const draft = await uploadQuoteDraft(file, form.template);
+
+      const submitted = await request(`/cotizaciones/${draft.job_id}/submit`, {
         method: "POST",
         body: JSON.stringify(form)
       });
+      if (requestEpoch !== requestEpochRef.current) return;
       setJob(submitted.job);
       onJobChange(submitted.job);
       refreshJobs();
+      setImportPreview(null);
+      uploadDraftRef.current = null;
     } catch (err) {
-      setError(err.message);
+      if (requestEpoch === requestEpochRef.current) setError(err.message);
     } finally {
-      setBusy(false);
+      if (requestEpoch === requestEpochRef.current) {
+        requestInFlightRef.current = false;
+        setBusy(false);
+      }
     }
+  }
+
+  async function previewImport() {
+    if (requestInFlightRef.current) return;
+    if (!file) {
+      setError("Selecciona un archivo .xlsx para previsualizar.");
+      return;
+    }
+    if (!/\.xlsx$/i.test(file.name)) {
+      setError("La importacion editable solo admite archivos .xlsx con hoja Quotation.");
+      return;
+    }
+    const requestEpoch = ++requestEpochRef.current;
+    requestInFlightRef.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const draft = await uploadQuoteDraft(file, form.template);
+      const preview = await request(`/cotizaciones/${draft.job_id}/import-preview`, { method: "POST" });
+      if (requestEpoch !== requestEpochRef.current) return;
+      setImportPreview(preview);
+      setImportCurrency(preview.source_currency || "");
+      setImportProvider(preview.provider || "");
+    } catch (err) {
+      if (requestEpoch === requestEpochRef.current) setError(err.message);
+    } finally {
+      if (requestEpoch === requestEpochRef.current) {
+        requestInFlightRef.current = false;
+        setBusy(false);
+      }
+    }
+  }
+
+  function confirmImport() {
+    const detectedCurrency = importPreview?.source_currency || "";
+    const sourceCurrency = detectedCurrency || importCurrency;
+    const provider = importProvider.trim();
+    if (!importPreview || (previewNeedsSourceCurrency(importPreview) && !sourceCurrency) || !provider) return;
+    const imported = onImportPreview(importPreview, { sourceCurrency, provider, quoteForm: form });
+    if (imported) setImportPreview(null);
   }
 
   async function download(jobToDownload = job) {
@@ -653,6 +738,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
           <button
             className={`dropzone ${isDragging ? "dragging" : ""}`}
             type="button"
+            disabled={busy}
             onClick={() => inputRef.current?.click()}
             onDragOver={(event) => {
               event.preventDefault();
@@ -665,6 +751,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
               ref={inputRef}
               type="file"
               accept=".xlsx,.pdf"
+              disabled={busy}
               onChange={(event) => selectFile(event.target.files?.[0] || null)}
               hidden
             />
@@ -683,33 +770,34 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
               required={false}
               readOnly
               placeholder="Automatico por usuario"
+              disabled={busy}
             />
-            <Field label="Proyecto" value={form.proyecto} onChange={(value) => updateField("proyecto", value)} />
-            <Field label="Cliente" value={form.cliente} onChange={(value) => updateField("cliente", value)} />
-            <Field label="Correo" type="email" value={form.correo} onChange={(value) => updateField("correo", value)} />
-            <Field label="Telefono" value={form.telefono} onChange={(value) => updateField("telefono", value)} />
-            <Field label="Direccion" value={form.direccion} onChange={(value) => updateField("direccion", value)} />
-            <Field label="Descuento (%)" type="number" min="0" max="100" value={form.descuento} onChange={updateDiscount} />
-            <Field label="Razon social" value={form.razon_social} onChange={(value) => updateField("razon_social", value)} wide />
+            <Field label="Proyecto" value={form.proyecto} onChange={(value) => updateField("proyecto", value)} disabled={busy} />
+            <Field label="Cliente" value={form.cliente} onChange={(value) => updateField("cliente", value)} disabled={busy} />
+            <Field label="Correo" type="email" value={form.correo} onChange={(value) => updateField("correo", value)} disabled={busy} />
+            <Field label="Telefono" value={form.telefono} onChange={(value) => updateField("telefono", value)} disabled={busy} />
+            <Field label="Direccion" value={form.direccion} onChange={(value) => updateField("direccion", value)} disabled={busy} />
+            <Field label="Descuento (%)" type="number" min="0" max="100" value={form.descuento} onChange={updateDiscount} disabled={busy} />
+            <Field label="Razon social" value={form.razon_social} onChange={(value) => updateField("razon_social", value)} wide disabled={busy} />
           </div>
 
           <h3>3. Plantilla y render</h3>
           <div className="template-grid">
-            <select value={form.template} onChange={(event) => updateField("template", event.target.value)}>
+            <select value={form.template} disabled={busy} onChange={(event) => updateField("template", event.target.value)}>
               <option>Formato Cotizacion 2026 GDL (1).xlsx</option>
               <option>Plantilla Corporativa Mobiliti 2025</option>
             </select>
-            <select value={form.description_language} onChange={(event) => updateField("description_language", event.target.value)}>
+            <select value={form.description_language} disabled={busy} onChange={(event) => updateField("description_language", event.target.value)}>
               <option value="es">Descripciones en espanol</option>
               <option value="en">Descripciones en ingles</option>
             </select>
-            <select value={form.image_provider} onChange={(event) => updateField("image_provider", event.target.value)}>
+            <select value={form.image_provider} disabled={busy} onChange={(event) => updateField("image_provider", event.target.value)}>
               <option value="dezgo">IA Dezgo recomendado - genera faltantes realistas</option>
               <option value="sunon_catalog">Catalogo Sunon preciso - solo codigo exacto</option>
               <option value="sunon_web">Sunon web experimental - buscar por codigo</option>
               <option value="pillow">Local sin IA - no inventa imagenes faltantes</option>
             </select>
-            <select value={form.image_cleanup_strength} onChange={(event) => updateField("image_cleanup_strength", event.target.value)}>
+            <select value={form.image_cleanup_strength} disabled={busy} onChange={(event) => updateField("image_cleanup_strength", event.target.value)}>
               <option value="balanced">Limpieza balanceada</option>
               <option value="normal">Limpieza conservadora</option>
               <option value="aggressive">Limpieza fuerte</option>
@@ -730,6 +818,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
               Prompt para imagenes
               <textarea
                 value={form.image_prompt}
+                disabled={busy}
                 onChange={(event) => updateField("image_prompt", event.target.value)}
                 placeholder={DEFAULT_IMAGE_PROMPT}
                 rows={3}
@@ -737,11 +826,55 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
             </label>
           </div>
 
-          {error ? <div className="error-line">{error}</div> : null}
+          {error ? <div className="error-line" role="alert">{error}</div> : null}
+          {busy ? <div className="sr-only" role="status" aria-live="polite">Procesando archivo, espera antes de continuar.</div> : null}
           <DownloadStatusLine state={downloadState} />
           {downloadUrl && !downloadState ? <div className="download-line">Ultima descarga: {downloadUrl}</div> : null}
 
+          {importPreview ? (
+            <section className="quotation-import-preview" aria-label="Previsualizacion de importacion">
+              <h3>Previsualizacion: {importPreview.original_filename || file?.name}</h3>
+              <p>{importPreview.items?.length || 0} producto(s) en {importPreview.sections?.length || 0} seccion(es).</p>
+              {previewNeedsSourceCurrency(importPreview) || importPreview.source_currency ? <label>
+                Moneda de origen {importPreview.source_currency ? "detectada" : "*"}
+                <select
+                  value={importPreview.source_currency || importCurrency}
+                  disabled={busy || Boolean(importPreview.source_currency)}
+                  required={!importPreview.source_currency}
+                  aria-describedby="import-currency-help"
+                  onChange={(event) => setImportCurrency(event.target.value)}
+                >
+                  {!importPreview.source_currency ? <option value="">Selecciona una moneda</option> : null}
+                  {['MXN', 'USD', 'EUR'].map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+                </select>
+              </label> : null}
+              <small id="import-currency-help">{
+                importPreview.source_currency
+                  ? "La moneda detectada no se puede reemplazar."
+                  : previewNeedsSourceCurrency(importPreview)
+                    ? "Selecciona la moneda antes de confirmar la importacion."
+                    : "Las monedas explicitas de cada producto se conservaran sin una seleccion global."
+              }</small>
+              <label>
+                Proveedor *
+                <input name="import-provider" value={importProvider} disabled={busy} required onChange={(event) => setImportProvider(event.target.value)} />
+              </label>
+              <button
+                type="button"
+                className="primary-action"
+                disabled={busy || !importProvider.trim() || (previewNeedsSourceCurrency(importPreview) && !(importPreview.source_currency || importCurrency))}
+                onClick={confirmImport}
+              >
+                Confirmar importacion al carrito
+              </button>
+            </section>
+          ) : null}
+
           <div className="actions-row">
+            <button className="secondary-action" type="button" disabled={busy} onClick={previewImport}>
+              {busy ? <Loader2 className="spin" size={18} /> : <UploadCloud size={18} />}
+              Previsualizar e importar al carrito
+            </button>
             <button className="primary-action" disabled={busy}>
               {busy ? <Loader2 className="spin" size={18} /> : <FileSpreadsheet size={18} />}
               Generar cotizacion
@@ -757,7 +890,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
   );
 }
 
-function Field({ label, value, onChange, type = "text", wide = false, min, max, required = true, readOnly = false, placeholder = "" }) {
+function Field({ label, value, onChange, type = "text", wide = false, min, max, required = true, readOnly = false, placeholder = "", disabled = false }) {
   return (
     <label className={wide ? "wide" : ""}>
       {label}{required ? " *" : ""}
@@ -769,6 +902,7 @@ function Field({ label, value, onChange, type = "text", wide = false, min, max, 
         onChange={(event) => onChange(event.target.value)}
         required={required}
         readOnly={readOnly}
+        disabled={disabled}
         placeholder={placeholder}
       />
     </label>
@@ -1365,14 +1499,15 @@ function RecentOutputs({ jobs, onDownload, onRetry, onOpenHistory, downloadState
   );
 }
 
-function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downloadState }) {
+function QuotesView({ jobs, onDownload, onRetry, onDelete, onCreateNew, refreshJobs, downloadState, deleteState }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
   const stats = useMemo(() => ({
     total: jobs.length,
     completed: jobs.filter((job) => job.status === "completed").length,
-    active: jobs.filter((job) => ["draft", "queued", "processing"].includes(job.status)).length,
+    drafts: jobs.filter((job) => job.status === "draft").length,
+    active: jobs.filter((job) => ["queued", "processing"].includes(job.status)).length,
     failed: jobs.filter((job) => job.status === "failed").length
   }), [jobs]);
 
@@ -1408,6 +1543,7 @@ function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downl
       <div className="stats-grid">
         <StatCard label="Total" value={stats.total} />
         <StatCard label="Listas" value={stats.completed} />
+        <StatCard label="Borradores" value={stats.drafts} />
         <StatCard label="En proceso" value={stats.active} />
         <StatCard label="Con error" value={stats.failed} tone={stats.failed ? "danger" : ""} />
       </div>
@@ -1420,6 +1556,7 @@ function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downl
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
           <option value="all">Todos los estados</option>
           <option value="completed">Listas</option>
+          <option value="draft">Borradores</option>
           <option value="processing">Procesando</option>
           <option value="queued">En cola</option>
           <option value="failed">Con error</option>
@@ -1454,6 +1591,16 @@ function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downl
                 <button className="ghost-action" type="button" onClick={() => onRetry(job)}>
                   <Clock3 size={16} />
                   Reintentar
+                </button>
+              ) : job.status === "draft" ? (
+                <button
+                  className="danger-action"
+                  type="button"
+                  onClick={() => onDelete(job)}
+                  disabled={deleteState?.jobId === job.id}
+                >
+                  {deleteState?.jobId === job.id ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                  {deleteState?.jobId === job.id ? "Descartando" : "Descartar borrador"}
                 </button>
               ) : (
                 <DownloadButton job={job} onDownload={onDownload} downloadState={downloadState} />
@@ -1710,10 +1857,13 @@ function AdminView({ token }) {
 
 function createMixedQuoteController({
   cartRef: mixedCartRef,
+  sectionsRef: mixedSectionsRef = null,
   submittingRef: mixedQuoteSubmittingRef,
   sessionEpochRef: mixedQuoteSessionEpochRef,
+  importRevisionRef: mixedImportRevisionRef = null,
   emptyForm,
   replaceCart,
+  replaceSections = null,
   setOpen,
   setForm,
   getForm,
@@ -1723,7 +1873,15 @@ function createMixedQuoteController({
   setJobs,
   request,
   confirmQuote,
+  confirmImport,
+  waitForJobResult,
 }) {
+  mixedSectionsRef = mixedSectionsRef || { current: createInitialMixedCartSections() };
+  replaceSections = replaceSections || (() => {});
+  const askImport = confirmImport || (() => true);
+  const awaitJobResult = waitForJobResult || (async (job) => ({ ...job, status: "completed" }));
+  mixedImportRevisionRef = mixedImportRevisionRef || { current: 0 };
+
   function add(line) {
     if (mixedQuoteSubmittingRef.current) {
       setError("Espera a que termine la cotizacion en curso");
@@ -1731,7 +1889,12 @@ function createMixedQuoteController({
       return false;
     }
     try {
-      const next = upsertMixedCartLine(mixedCartRef.current, line);
+      const activeSection = mixedSectionsRef.current[mixedSectionsRef.current.length - 1]
+        || createInitialMixedCartSections()[0];
+      const next = upsertMixedCartLine(
+        mixedCartRef.current,
+        { ...line, sectionId: activeSection.id },
+      );
       replaceCart(next);
       setError("");
       setNotice("");
@@ -1749,9 +1912,96 @@ function createMixedQuoteController({
     replaceCart(updateMixedCartQuantity(mixedCartRef.current, key, quantity));
   }
 
+  function updateImported(key, edits) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceCart(updateImportedCartLine(mixedCartRef.current, key, edits));
+  }
+
+  function importPreview(preview, { sourceCurrency, provider }) {
+    if (mixedQuoteSubmittingRef.current) {
+      setError("Espera a que termine la cotizacion en curso");
+      setOpen(true);
+      return false;
+    }
+    const hasImportedLines = mixedCartRef.current.some((line) => line.kind === "imported");
+    if (hasImportedLines && !askImport("Se reemplazaran solo los productos importados actuales. Los productos de catalogo se conservaran. ¿Continuar?")) {
+      return false;
+    }
+    try {
+      const bundle = createImportedCartBundle(
+        preview,
+        sourceCurrency,
+        provider,
+        mixedSectionsRef.current,
+      );
+      mixedImportRevisionRef.current += 1;
+      bundle.lines = bundle.lines.map((line) => ({
+        ...line,
+        editorRevision: mixedImportRevisionRef.current,
+      }));
+      const next = replaceImportedCartBundle(
+        mixedCartRef.current,
+        mixedSectionsRef.current,
+        bundle,
+      );
+      replaceCart(next.lines);
+      replaceSections(next.sections);
+      setError("");
+      setNotice("");
+      setOpen(true);
+      return true;
+    } catch (cartFailure) {
+      setError(cartFailure.message || "No se pudo importar la previsualizacion");
+      setOpen(true);
+      return false;
+    }
+  }
+
   function remove(key) {
     if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
-    replaceCart(removeMixedCartLine(mixedCartRef.current, key));
+    const nextLines = removeMixedCartLine(mixedCartRef.current, key);
+    const compacted = compactMixedCartSections(mixedSectionsRef.current, nextLines);
+    replaceCart(compacted.lines);
+    replaceSections(compacted.sections);
+  }
+
+  function closeSection() {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceSections(closeMixedCartSection(mixedSectionsRef.current, mixedCartRef.current));
+  }
+
+  function renameSection(sectionId, concept) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceSections(renameMixedCartSection(mixedSectionsRef.current, sectionId, concept));
+  }
+
+  function mergeSection(sectionId) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    const merged = mergeMixedCartSection(
+      mixedSectionsRef.current,
+      mixedCartRef.current,
+      sectionId,
+    );
+    replaceCart(merged.lines);
+    replaceSections(merged.sections);
+  }
+
+  function moveLine(key, direction) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceCart(moveMixedCartLine(mixedCartRef.current, key, direction));
+  }
+
+  function moveLineToSection(key, sectionId) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    const nextLines = moveMixedCartLineToSection(
+      mixedCartRef.current,
+      mixedSectionsRef.current,
+      key,
+      sectionId,
+    );
+    const compacted = compactMixedCartSections(mixedSectionsRef.current, nextLines);
+    replaceCart(compacted.lines);
+    replaceSections(compacted.sections);
   }
 
   function updateField(field, value) {
@@ -1761,16 +2011,18 @@ function createMixedQuoteController({
 
   function resetSession() {
     mixedQuoteSessionEpochRef.current += 1;
+    mixedImportRevisionRef.current = 0;
     mixedQuoteSubmittingRef.current = false;
     setBusy(false);
     replaceCart([]);
+    replaceSections(createInitialMixedCartSections());
     setOpen(false);
     setForm({ ...emptyForm });
     setError("");
     setNotice("");
   }
 
-  async function submit(event, submissionLines = mixedCartRef.current) {
+  async function submit(event, submissionLines = mixedCartRef.current, preparedRequest = null) {
     event.preventDefault();
     if (mixedQuoteSubmittingRef.current || !submissionLines.length) return;
 
@@ -1799,29 +2051,36 @@ function createMixedQuoteController({
     setError("");
     setNotice("");
     try {
+      const mixedRequest = preparedRequest || createMixedQuoteRequestSnapshot(
+        getForm(),
+        mixedSectionsRef.current,
+        committedLines,
+      );
       const data = await request("/catalogs/mixed-quote", {
         method: "POST",
-        body: JSON.stringify({
-          ...getForm(),
-          items: committedLines.map(toMixedQuoteItem),
-        }),
+        body: JSON.stringify(mixedRequest),
       });
       if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
       if (!data?.job?.id) throw new Error("Respuesta de trabajo mixto invalida");
       setJobs((current) => [data.job, ...current.filter((job) => job.id !== data.job.id)]);
-      replaceCart([]);
-      setOpen(false);
       setNotice("Cotizacion mixta en cola. Revisa el avance en Cotizaciones.");
-      try {
-        const refreshed = await request("/cotizaciones");
-        if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
-          setJobs(refreshed.cotizaciones || []);
-        }
-      } catch {
-        if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
-          setNotice("Cotizacion mixta en cola. Actualiza Cotizaciones para ver el avance.");
-        }
+      const finalJob = await awaitJobResult(
+        data.job,
+        () => submissionEpoch === mixedQuoteSessionEpochRef.current,
+      );
+      if (submissionEpoch !== mixedQuoteSessionEpochRef.current || !finalJob) return;
+      setJobs((current) => [finalJob, ...current.filter((job) => job.id !== finalJob.id)]);
+      if (finalJob.status === "failed") {
+        setError(finalJob.error_message || "La cotizacion fallo; el carrito se conservo para reintentar.");
+        setNotice("");
+        setOpen(true);
+        return;
       }
+      if (finalJob.status !== "completed") throw new Error("Estado final de cotizacion invalido");
+      replaceCart([]);
+      replaceSections(createInitialMixedCartSections());
+      setOpen(false);
+      setNotice("Cotizacion mixta lista. Revisa el archivo en Cotizaciones.");
     } catch (quoteFailure) {
       if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
       setError(quoteFailure.message || "No se pudo generar la cotizacion mixta");
@@ -1833,7 +2092,21 @@ function createMixedQuoteController({
     }
   }
 
-  return { add, update, remove, updateField, resetSession, submit };
+  return {
+    add,
+    update,
+    updateImported,
+    importPreview,
+    remove,
+    closeSection,
+    renameSection,
+    mergeSection,
+    moveLine,
+    moveLineToSection,
+    updateField,
+    resetSession,
+    submit,
+  };
 }
 
 function App() {
@@ -1853,6 +2126,10 @@ function App() {
   const [deleteState, setDeleteState] = useState(null);
   const [mixedCart, setMixedCart] = useState([]);
   const mixedCartRef = useRef([]);
+  const [mixedCartSections, setMixedCartSections] = useState(
+    () => createInitialMixedCartSections(),
+  );
+  const mixedCartSectionsRef = useRef(createInitialMixedCartSections());
   const [mixedCartOpen, setMixedCartOpen] = useState(false);
   const [mixedQuote, setMixedQuote] = useState({ ...EMPTY_MIXED_QUOTE });
   const [mixedQuoteBusy, setMixedQuoteBusy] = useState(false);
@@ -1860,19 +2137,44 @@ function App() {
   const [mixedQuoteNotice, setMixedQuoteNotice] = useState("");
   const mixedQuoteSubmittingRef = useRef(false);
   const mixedQuoteSessionEpochRef = useRef(0);
+  const mixedImportRevisionRef = useRef(0);
   const { request } = useApi(session?.access_token);
+  const mixedRequest = useMemo(
+    () => createMixedQuoteRequestSnapshot({}, mixedCartSections, mixedCart),
+    [mixedCart, mixedCartSections],
+  );
+
+  async function waitForMixedQuoteJob(job, isCurrent) {
+    let current = job;
+    while (isCurrent() && !["completed", "failed"].includes(current?.status)) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      if (!isCurrent()) return null;
+      const response = await request(`/cotizaciones/${job.id}`);
+      current = response?.job;
+      if (!current?.id) throw new Error("Respuesta de estado de cotizacion invalida");
+    }
+    return isCurrent() ? current : null;
+  }
 
   function replaceMixedCart(next) {
     mixedCartRef.current = next;
     setMixedCart(next);
   }
 
+  function replaceMixedCartSections(next) {
+    mixedCartSectionsRef.current = next;
+    setMixedCartSections(next);
+  }
+
   const mixedQuoteController = createMixedQuoteController({
     cartRef: mixedCartRef,
+    sectionsRef: mixedCartSectionsRef,
     submittingRef: mixedQuoteSubmittingRef,
     sessionEpochRef: mixedQuoteSessionEpochRef,
+    importRevisionRef: mixedImportRevisionRef,
     emptyForm: EMPTY_MIXED_QUOTE,
     replaceCart: replaceMixedCart,
+    replaceSections: replaceMixedCartSections,
     setOpen: setMixedCartOpen,
     setForm: setMixedQuote,
     getForm: () => mixedQuote,
@@ -1882,6 +2184,8 @@ function App() {
     setJobs,
     request,
     confirmQuote: (message) => window.confirm(message),
+    confirmImport: (message) => window.confirm(message),
+    waitForJobResult: waitForMixedQuoteJob,
   });
 
   function resetMixedQuoteSession() {
@@ -1951,8 +2255,44 @@ function App() {
     mixedQuoteController.update(key, quantity);
   }
 
+  function updateImportedCartLineFromApp(key, edits) {
+    try {
+      mixedQuoteController.updateImported(key, edits);
+      setMixedQuoteError("");
+      return "";
+    } catch (cartFailure) {
+      const message = cartFailure.message || "No se pudo editar el producto importado";
+      setMixedQuoteError(message);
+      return message;
+    }
+  }
+
+  function importQuotationPreview(preview, options) {
+    return mixedQuoteController.importPreview(preview, options);
+  }
+
   function removeMixedCartLineFromApp(key) {
     mixedQuoteController.remove(key);
+  }
+
+  function closeMixedCartSectionFromApp() {
+    mixedQuoteController.closeSection();
+  }
+
+  function renameMixedCartSectionFromApp(sectionId, concept) {
+    mixedQuoteController.renameSection(sectionId, concept);
+  }
+
+  function mergeMixedCartSectionFromApp(sectionId) {
+    mixedQuoteController.mergeSection(sectionId);
+  }
+
+  function moveMixedCartLineFromApp(key, direction) {
+    mixedQuoteController.moveLine(key, direction);
+  }
+
+  function moveMixedCartLineToSectionFromApp(key, sectionId) {
+    mixedQuoteController.moveLineToSection(key, sectionId);
   }
 
   function updateMixedQuoteField(field, value) {
@@ -1964,7 +2304,10 @@ function App() {
   }
 
   async function submitMixedQuote(event, submissionLines = mixedCartRef.current) {
-    return mixedQuoteController.submit(event, submissionLines);
+    const preparedRequest = submissionLines === mixedCartRef.current
+      ? Object.freeze({ ...mixedQuote, ...mixedRequest })
+      : null;
+    return mixedQuoteController.submit(event, submissionLines, preparedRequest);
   }
   async function downloadJob(job) {
     try {
@@ -2000,13 +2343,14 @@ function App() {
       recentJobs={jobs}
       refreshJobs={refreshJobs}
       onOpenHistory={() => setView("historial")}
+      onImportPreview={importQuotationPreview}
       onJobChange={(job) => {
         setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       }}
     />
   );
   const mainView = view === "cotizaciones"
-    ? <QuotesView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onCreateNew={() => setView("nueva")} refreshJobs={refreshJobs} downloadState={downloadState} />
+    ? <QuotesView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} onCreateNew={() => setView("nueva")} refreshJobs={refreshJobs} downloadState={downloadState} deleteState={deleteState} />
     : view === "nueva"
       ? quoteForm
       : view === "historial"
@@ -2034,6 +2378,7 @@ function App() {
         {mainView}
         <MixedCartDrawer
           lines={mixedCart}
+          sections={mixedCartSections}
           open={mixedCartOpen}
           form={mixedQuote}
           busy={mixedQuoteBusy}
@@ -2042,7 +2387,13 @@ function App() {
           onClose={() => setMixedCartOpen(false)}
           onFieldChange={updateMixedQuoteField}
           onQuantityChange={updateMixedCartLine}
+          onImportedLineChange={updateImportedCartLineFromApp}
           onRemove={removeMixedCartLineFromApp}
+          onCloseSection={closeMixedCartSectionFromApp}
+          onRenameSection={renameMixedCartSectionFromApp}
+          onMergeSection={mergeMixedCartSectionFromApp}
+          onMoveLine={moveMixedCartLineFromApp}
+          onMoveLineToSection={moveMixedCartLineToSectionFromApp}
           onSubmit={submitMixedQuote}
         />
       </main>

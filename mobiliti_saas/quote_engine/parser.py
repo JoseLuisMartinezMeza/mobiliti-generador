@@ -21,6 +21,7 @@ class QuoteItem:
     nombre: Any = ""
     descripcion: Any = ""
     dimension: Any = ""
+    m3: Any = None
     cantidad: Any = None
     precio: Any = None
     categoria: str = ""
@@ -163,6 +164,7 @@ def read_items(source_path: str | Path) -> tuple[list[QuoteItem], dict[str, str]
                     nombre=item_name,
                     descripcion=descripcion,
                     dimension=dimension,
+                    m3=optional_value(row, "m3", None),
                     cantidad=ws.cell(row=row, column=qty_col).value,
                     precio=ws.cell(row=row, column=price_col).value,
                     categoria=current_category,

@@ -7,6 +7,7 @@ import hashlib
 from zipfile import ZipFile
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image as WorkbookImage
 from PIL import Image
 import pytest
 
@@ -19,9 +20,12 @@ from mobiliti_saas.quote_engine.catalog_cart import (
 from mobiliti_saas.quote_engine.mixed_catalog import (
     build_mixed_catalog_cart_payload,
     create_mixed_catalog_quotation_workbook,
+    validate_mixed_catalog_payload,
 )
 from mobiliti_saas.quote_engine.offiho_catalog import OffihoCatalogItem
+from mobiliti_saas.quote_engine.quotation_import import build_import_manifest
 from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem
+from quotation_import_fixtures import write_import_fixture
 
 
 def _supplier_item(catalog, *, currency, internal_id):
@@ -100,6 +104,11 @@ def frozen_payload():
         rate_rows=rates,
         quote_currency="MXN",
         commercial_discount_percent="40",
+        presentation_sections=[
+            {"id": "section-1", "title": "Tarkett", "item_keys": ["tarkett:25731726"]},
+            {"id": "section-2", "title": "Sonara", "item_keys": ["sonara:[\"sonara:desk-1\",\"\",[]]"]},
+            {"id": "section-3", "title": "ALMA", "item_keys": ["alma:[\"alma:desk-1\",\"\",[]]"]},
+        ],
         today=date(2026, 7, 19),
     )
 
@@ -108,6 +117,41 @@ def _png_bytes(color):
     stream = BytesIO()
     Image.new("RGB", (2, 2), color).save(stream, format="PNG")
     return stream.getvalue()
+
+
+def _write_two_product_import_fixture(path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Quotation"
+    for column, title in {
+        1: "No.",
+        2: "Item Name",
+        3: "Photo",
+        4: "Description",
+        5: "Dimension",
+        7: "Q'ty",
+        10: "Unit Price",
+    }.items():
+        sheet.cell(7, column, title)
+    sheet["A1"] = "Proveedor prueba"
+    image_streams = []
+    for row, index, category, name, color in (
+        (9, 1, "SECCION A", "Producto A", "navy"),
+        (11, 2, "SECCION B", "Producto B", "orange"),
+    ):
+        sheet.cell(row - 1, 1, f"- {category}")
+        sheet.cell(row, 1, index)
+        sheet.cell(row, 2, name)
+        sheet.cell(row, 4, f"Descripcion {name}")
+        sheet.cell(row, 5, f"Dimension {name}")
+        sheet.cell(row, 7, 1)
+        sheet.cell(row, 10, 100 + index)
+        stream = BytesIO(_png_bytes(color))
+        image_streams.append(stream)
+        sheet.add_image(WorkbookImage(stream), f"C{row}")
+    workbook.save(path)
+    workbook.close()
+    return path
 
 
 def _stub_catalog_image_transport(monkeypatch, responses):
@@ -186,12 +230,13 @@ def _three_image_payload():
             "items": [alma],
         },
     }
+    rows = [
+        {"catalog": "tarkett", "code": tarkett.code, "quantity": "1"},
+        {"catalog": "offiho", "inventory_key": offiho.inventory_key, "quantity": "1"},
+        {"catalog": "alma", "internal_id": alma["internal_id"], "quantity": "1"},
+    ]
     return build_mixed_catalog_cart_payload(
-        [
-            {"catalog": "tarkett", "code": tarkett.code, "quantity": "1"},
-            {"catalog": "offiho", "inventory_key": offiho.inventory_key, "quantity": "1"},
-            {"catalog": "alma", "internal_id": alma["internal_id"], "quantity": "1"},
-        ],
+        rows,
         catalogs=catalogs,
         rate_rows=[
             {
@@ -203,6 +248,17 @@ def _three_image_payload():
         ],
         quote_currency="MXN",
         commercial_discount_percent="40",
+        presentation_sections=[
+            {"id": f"section-{index}", "title": title, "item_keys": [key]}
+            for index, (title, key) in enumerate(
+                (
+                    ("Tarkett", "tarkett:25731726"),
+                    ("Offiho", "offiho:offiho:desk-1"),
+                    ("ALMA", "alma:[\"alma:desk-1\",\"\",[]]"),
+                ),
+                1,
+            )
+        ],
         today=date(2026, 7, 19),
     )
 
@@ -247,6 +303,391 @@ def test_mixed_workbook_has_one_quotation_with_provider_sections_and_audit_colum
     assert ws["S11"].value is False
     assert ws["S13"].value is False
     wb.close()
+
+
+def test_mixed_workbook_uses_manual_sections_and_interleaved_supplier_order(tmp_path):
+    payload = frozen_payload()
+    tarkett_key = payload["groups"][0]["items"][0]["canonical_key"]
+    sonara_key = payload["groups"][1]["items"][0]["canonical_key"]
+    alma_key = payload["groups"][2]["items"][0]["canonical_key"]
+    payload["sections"] = [
+        {"id": "section-1", "title": "Recepción", "item_keys": [alma_key, tarkett_key]},
+        {"id": "section-2", "title": "Privados", "item_keys": [sonara_key]},
+    ]
+
+    output = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "manual-sections.xlsx",
+        image_dir=tmp_path / "images",
+    )
+    wb = load_workbook(output, data_only=False)
+    ws = wb["Quotation"]
+    assert [ws.cell(row, 1).value for row in (8, 11)] == [
+        "- Recepción",
+        "- Privados",
+    ]
+    assert [ws.cell(row, 12).value for row in (9, 10, 12)] == [
+        "ALMA",
+        "Tarkett",
+        "Sonara",
+    ]
+    assert [ws.cell(row, 1).value for row in (9, 10, 12)] == [1, 2, 3]
+    wb.close()
+
+
+def test_mixed_workbook_interleaves_catalog_and_imported_rows_with_original_image(
+    monkeypatch, tmp_path
+):
+    source = write_import_fixture(tmp_path / "imported-source.xlsx")
+    source_hash_before = hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest, image_map = build_import_manifest(
+        source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=source.name,
+    )
+    imported = build_mixed_catalog_cart_payload(
+        [],
+        catalogs={},
+        rate_rows=[{
+            "currency": "USD",
+            "effective_date": "2026-07-21",
+            "mxn_per_unit": "18.500000",
+            "retrieved_at": "2026-07-21T00:00:00Z",
+        }],
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Recepción",
+            "item_keys": [f"import:{manifest['import_id']}:11"],
+        }],
+        imported_source={
+            "manifest": manifest,
+            "items": [{
+                "kind": "imported",
+                "import_id": manifest["import_id"],
+                "source_row": 11,
+                "source_currency": "USD",
+                "quantity": "2",
+                "overrides": {
+                    "name": "Alien Task Chair revisada",
+                    "description": "Silla operativa revisada",
+                    "dimension": "630 x 565 x 1000 mm",
+                    "unit_price": "82.00",
+                    "provider": "Sunon",
+                },
+            }],
+            "source_currency": "USD",
+        },
+        today=date(2026, 7, 21),
+    )
+    payload = _three_image_payload()
+    catalog_key = payload["groups"][0]["items"][0]["canonical_key"]
+    offiho_key = payload["groups"][1]["items"][0]["canonical_key"]
+    alma_key = payload["groups"][2]["items"][0]["canonical_key"]
+    for group in payload["groups"][1:]:
+        group["items"][0]["image_url"] = ""
+        group["items"][0]["image_kind"] = "placeholder"
+    imported_key = imported["imported_source"]["items"][0]["canonical_key"]
+    payload["imported_source"] = imported["imported_source"]
+    payload["sections"] = [
+        {
+            "id": "section-1",
+            "title": "Recepción",
+            "item_keys": [catalog_key, imported_key],
+        },
+        {"id": "section-2", "title": "Operación", "item_keys": [offiho_key]},
+        {"id": "section-3", "title": "Dirección", "item_keys": [alma_key]},
+    ]
+    payload["item_count"] += 1
+
+    catalog_image = _png_bytes("navy")
+
+    def fake_download(url, image_dir, code, source_type, destination_key=None):
+        path = image_dir / "catalog.png"
+        path.write_bytes(catalog_image)
+        return path
+
+    monkeypatch.setattr(catalog_cart, "_download_catalog_image", fake_download)
+    output = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "mixed-imported.xlsx",
+        image_dir=tmp_path / "images",
+        imported_source_path=source,
+    )
+
+    workbook = load_workbook(output)
+    quotation = workbook["Quotation"]
+    assert quotation["A8"].value == "- Recepción"
+    assert quotation["B9"].value == "Piso Tarkett"
+    assert quotation["B10"].value == "Alien Task Chair revisada"
+    assert quotation["D10"].value.startswith("Silla operativa revisada")
+    assert quotation["E10"].value == "630 x 565 x 1000 mm"
+    assert quotation["G10"].value == 2
+    assert quotation["J10"].value == 1517
+    assert quotation["K10"].value is None
+    assert quotation["L10"].value == "Sunon"
+    assert quotation["N10"].value == "USD"
+    assert quotation["O10"].value == 82
+    assert quotation["P10"].value == 18.5
+    assert quotation["Q10"].value == f"{source.name}#Quotation!11"
+    assert quotation["R10"].value == "imported"
+    assert quotation["S10"].value is False
+    anchored_hashes = {
+        image.anchor._from.row + 1: hashlib.sha256(image._data()).hexdigest()
+        for image in quotation._images
+    }
+    assert anchored_hashes == {
+        9: hashlib.sha256(catalog_image).hexdigest(),
+        10: hashlib.sha256(image_map[11][0]).hexdigest(),
+    }
+    workbook.close()
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash_before
+
+
+def test_imported_only_workbook_keeps_duplicate_names_bound_to_distinct_source_rows(
+    tmp_path
+):
+    source = write_import_fixture(tmp_path / "duplicate-names.xlsx")
+    source_workbook = load_workbook(source)
+    source_sheet = source_workbook["Quotation"]
+    source_sheet._images = [
+        image
+        for image in source_sheet._images
+        if image.anchor._from.row + 1 != 9
+    ]
+    source_workbook.save(source)
+    source_workbook.close()
+    source_hash_before = hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest, image_map = build_import_manifest(
+        source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=source.name,
+    )
+    imported_keys = [
+        f"import:{manifest['import_id']}:9",
+        f"import:{manifest['import_id']}:17",
+    ]
+    items = [
+        {
+            "kind": "imported",
+            "import_id": manifest["import_id"],
+            "source_row": source_row,
+            "source_currency": "MXN",
+            "quantity": "1",
+            "overrides": {
+                "name": "Mesa DV74 repetida",
+                "description": f"Fila original {source_row}",
+                "dimension": f"Dimension {source_row}",
+                "unit_price": "100.00",
+                "provider": "Sunon",
+            },
+        }
+        for source_row in (9, 17)
+    ]
+    payload = build_mixed_catalog_cart_payload(
+        [],
+        catalogs={},
+        rate_rows=[],
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Mesas",
+            "item_keys": imported_keys,
+        }],
+        imported_source={
+            "manifest": manifest,
+            "items": items,
+            "source_currency": "MXN",
+        },
+        today=date(2026, 7, 21),
+    )
+
+    output = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "imported-only.xlsx",
+        imported_source_path=source,
+    )
+    workbook = load_workbook(output)
+    quotation = workbook["Quotation"]
+    assert payload["groups"] == []
+    assert [quotation.cell(row, 1).value for row in (9, 10)] == [1, 2]
+    assert [quotation.cell(row, 2).value for row in (9, 10)] == [
+        "Mesa DV74 repetida",
+        "Mesa DV74 repetida",
+    ]
+    assert [quotation.cell(row, 5).value for row in (9, 10)] == [
+        "Dimension 9",
+        "Dimension 17",
+    ]
+    assert [quotation.cell(row, 17).value for row in (9, 10)] == [
+        f"{source.name}#Quotation!9",
+        f"{source.name}#Quotation!17",
+    ]
+    assert {
+        image.anchor._from.row + 1: hashlib.sha256(image._data()).hexdigest()
+        for image in quotation._images
+    } == {10: hashlib.sha256(image_map[17][0]).hexdigest()}
+    workbook.close()
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_hash_before
+
+
+def test_mixed_workbook_rejects_changed_import_source_before_creating_output_paths(
+    tmp_path
+):
+    source = write_import_fixture(tmp_path / "changed-source.xlsx")
+    manifest, _images = build_import_manifest(
+        source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=source.name,
+    )
+    imported_key = f"import:{manifest['import_id']}:11"
+    payload = build_mixed_catalog_cart_payload(
+        [],
+        catalogs={},
+        rate_rows=[],
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Recepción",
+            "item_keys": [imported_key],
+        }],
+        imported_source={
+            "manifest": manifest,
+            "items": [{
+                "kind": "imported",
+                "import_id": manifest["import_id"],
+                "source_row": 11,
+                "source_currency": "MXN",
+                "quantity": "1",
+                "overrides": {
+                    "name": "Alien Task Chair",
+                    "description": "Silla operativa",
+                    "dimension": "630 x 565 x 1000 mm",
+                    "unit_price": "82.00",
+                    "provider": "Sunon",
+                },
+            }],
+            "source_currency": "MXN",
+        },
+        today=date(2026, 7, 21),
+    )
+    altered = source.read_bytes() + b"changed"
+    output = tmp_path / "output" / "changed.xlsx"
+    images = tmp_path / "images"
+
+    with pytest.raises(ValueError, match="fuente importada cambio"):
+        create_mixed_catalog_quotation_workbook(
+            payload,
+            output,
+            image_dir=images,
+            imported_source_path=altered,
+        )
+
+    assert not output.parent.exists()
+    assert not images.exists()
+
+
+def test_mixed_workbook_rejects_self_consistent_imported_row_remap_before_output(
+    tmp_path,
+):
+    source = _write_two_product_import_fixture(tmp_path / "two-products.xlsx")
+    manifest, _image_map = build_import_manifest(
+        source.read_bytes(),
+        import_id="7b1d6d42-236a-4bc1-9aa8-8d9db793c30b",
+        original_filename=source.name,
+    )
+    original_key = f"import:{manifest['import_id']}:11"
+    payload = build_mixed_catalog_cart_payload(
+        [],
+        catalogs={},
+        rate_rows=[],
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Presentacion editable",
+            "item_keys": [original_key],
+        }],
+        imported_source={
+            "manifest": manifest,
+            "items": [{
+                "kind": "imported",
+                "import_id": manifest["import_id"],
+                "source_row": 11,
+                "source_currency": "MXN",
+                "quantity": "1",
+                "overrides": {
+                    "name": "Producto B editado",
+                    "description": "Descripcion comercial permitida",
+                    "dimension": "Dimension editada",
+                    "unit_price": "222.00",
+                    "provider": "Proveedor editado",
+                },
+            }],
+            "source_currency": "MXN",
+        },
+        today=date(2026, 7, 21),
+    )
+    authoritative_row_9 = next(
+        item for item in manifest["items"] if item["source_row"] == 9
+    )
+    remapped_key = f"import:{manifest['import_id']}:9"
+    imported_line = payload["imported_source"]["items"][0]
+    imported_line.update(
+        source_row=9,
+        canonical_key=remapped_key,
+        source_reference=f"{source.name}#Quotation!9",
+        row_hash=authoritative_row_9["row_hash"],
+    )
+    payload["sections"][0]["item_keys"] = [remapped_key]
+
+    # El validador estructural no puede ligar la fila al XLSX; el builder si debe.
+    assert validate_mixed_catalog_payload(payload) is payload
+    output = tmp_path / "output" / "remapped.xlsx"
+    images = tmp_path / "images"
+    with pytest.raises(ValueError, match="fila importada"):
+        create_mixed_catalog_quotation_workbook(
+            payload,
+            output,
+            image_dir=images,
+            imported_source_path=source,
+        )
+
+    assert not output.parent.exists()
+    assert not images.exists()
+
+
+def test_local_image_data_enforces_byte_limit_before_decode_and_anchor(monkeypatch):
+    workbook = Workbook()
+    sheet = workbook.active
+    calls = []
+    monkeypatch.setattr(catalog_cart, "MAX_IMAGE_BYTES", 4)
+    monkeypatch.setattr(
+        catalog_cart,
+        "_validated_catalog_image_suffix",
+        lambda data, content_type: calls.append(("validate", data, content_type)),
+    )
+    monkeypatch.setattr(
+        catalog_cart,
+        "_anchor_catalog_image",
+        lambda ws, row, source: calls.append(("anchor", row, source.read())),
+    )
+
+    catalog_cart._add_local_catalog_image(sheet, 9, (b"1234", "image/png"))
+    assert calls == [
+        ("validate", b"1234", "image/png"),
+        ("anchor", 9, b"1234"),
+    ]
+
+    catalog_cart._add_local_catalog_image(sheet, 10, (b"12345", "image/png"))
+    assert calls == [
+        ("validate", b"1234", "image/png"),
+        ("anchor", 9, b"1234"),
+    ]
+    workbook.close()
 
 
 def test_mixed_workbook_preserves_configuration_review_warning_and_safe_text(tmp_path):
@@ -478,11 +919,11 @@ def test_mixed_workbook_keeps_structured_visual_semantics(tmp_path):
     output = create_mixed_catalog_quotation_workbook(payload, tmp_path / "visual.xlsx")
     wb = load_workbook(output)
     ws = wb["Quotation"]
-    descriptions = {9: ws["D9"].value, 11: ws["D11"].value, 13: ws["D13"].value}
+    descriptions = {9: ws["D9"].value, 10: ws["D10"].value, 11: ws["D11"].value}
     for expected in ("Variante: Negro", "PRECIO POR CONFIRMAR", "EXISTENCIA INSUFICIENTE"):
         assert descriptions[9].count(expected) == 1
-    assert descriptions[11].count("Imagen de referencia") == 1
-    assert descriptions[13].count("Entrega: 6 semanas") == 1
+    assert descriptions[10].count("Imagen de referencia") == 1
+    assert descriptions[11].count("Entrega: 6 semanas") == 1
     wb.close()
 
 
@@ -585,6 +1026,7 @@ def test_mixed_workbook_downloads_each_unique_image_url_once(monkeypatch, tmp_pa
         source_reference="alma:source:second",
     )
     alma_group["items"].append(second)
+    payload["sections"][2]["item_keys"].append(second["canonical_key"])
     payload["item_count"] += 1
     calls = []
     image_path = tmp_path / "shared.png"
@@ -616,6 +1058,36 @@ def test_catalog_downloader_validates_real_png_before_writing(monkeypatch, tmp_p
     )
 
     assert result == tmp_path / "VALID.png"
+    assert result.read_bytes() == body
+
+
+def test_catalog_downloader_reads_exact_published_dev_asset_without_network(
+    monkeypatch, tmp_path
+):
+    body = _png_bytes("blue")
+    object_name = f"{hashlib.sha256(body).hexdigest()}.png"
+    asset_dir = tmp_path / "catalog-assets"
+    asset_dir.mkdir()
+    (asset_dir / object_name).write_bytes(body)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    monkeypatch.setenv("MOBILITI_DEV_MODE", "1")
+    monkeypatch.setenv("MOBILITI_DEV_PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+    monkeypatch.setenv("MOBILITI_DEV_STORE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        catalog_cart.urllib.request,
+        "build_opener",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("network used")),
+    )
+
+    result = catalog_cart._download_catalog_image(
+        f"http://127.0.0.1:8000/dev/catalog-assets/{object_name}",
+        output_dir,
+        "LOCAL",
+        "supplier_cart",
+    )
+
+    assert result == output_dir / "LOCAL.png"
     assert result.read_bytes() == body
 
 

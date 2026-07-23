@@ -76,6 +76,10 @@ from mobiliti_saas.quote_engine.project_model import (  # noqa: E402
     normalize_project_payload,
     project_summary,
 )
+from mobiliti_saas.quote_engine.quotation_import import (  # noqa: E402
+    build_import_manifest,
+    validate_import_manifest,
+)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -101,7 +105,7 @@ WORKER_WAKE_URL = os.environ.get("WORKER_WAKE_URL") if WORKER_WAKE_ENABLED else 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
 MIXED_QUOTE_BODY_FIELDS = frozenset({
-    "items", "quote_currency", "descuento", "proyecto", "cliente", "correo",
+    "items", "sections", "quote_currency", "descuento", "proyecto", "cliente", "correo",
     "telefono", "direccion", "razon_social", "cotizacion", "template",
     "description_language", "image_provider", "image_cleanup_strength",
     "image_background", "image_prompt",
@@ -179,6 +183,11 @@ CATALOG_ASSET_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 CATALOG_ASSET_MAX_WIDTH = 8192
 CATALOG_ASSET_MAX_HEIGHT = 8192
 CATALOG_ASSET_MAX_PIXELS = 25_000_000
+IMPORT_PREVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+IMPORT_PREVIEW_IMAGE_MAX_WIDTH = 8192
+IMPORT_PREVIEW_IMAGE_MAX_HEIGHT = 8192
+IMPORT_PREVIEW_IMAGE_MAX_PIXELS = 25_000_000
+IMPORT_PREVIEW_THUMBNAIL_MAX_SIDE = 640
 CATALOG_ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:png|jpg|jpeg|webp)$")
 CATALOG_DIFF_LIMIT = 100
 CATALOG_DIFF_FIELDS = (
@@ -246,21 +255,75 @@ def _dev_db_path() -> Path:
 
 
 def _dev_storage_file(object_path: str) -> Path:
-    safe_path = object_path.replace("\\", "/").lstrip("/")
-    if ".." in safe_path.split("/"):
+    if (
+        not isinstance(object_path, str)
+        or not object_path
+        or object_path != object_path.strip()
+        or any(ord(character) < 32 for character in object_path)
+    ):
         raise RuntimeError("Ruta de storage invalida")
-    return DEV_STORE_DIR / "storage" / QUOTE_STORAGE_BUCKET / safe_path
+    normalized = object_path.replace("\\", "/")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise RuntimeError("Ruta de storage invalida")
+    parts = normalized.split("/")
+    if any(
+        part in {"", ".", ".."}
+        or ":" in part
+        or part != part.strip()
+        or part.endswith(".")
+        for part in parts
+    ):
+        raise RuntimeError("Ruta de storage invalida")
+    try:
+        root = (DEV_STORE_DIR / "storage" / QUOTE_STORAGE_BUCKET).resolve()
+        candidate = root.joinpath(*parts).resolve()
+        candidate.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RuntimeError("Ruta de storage invalida") from exc
+    return candidate
+
+
+def _write_json_snapshot(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2, ensure_ascii=False)
+    temporary = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+    )
+    with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    for attempt in range(20):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.01)
+
+
+def _read_json_snapshot(path: Path) -> dict:
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            last_error = exc
+            if attempt < 4:
+                time.sleep(0.01)
+    assert last_error is not None
+    raise last_error
 
 
 def _dev_save(data: dict):
-    DEV_STORE_DIR.mkdir(parents=True, exist_ok=True)
-    _dev_db_path().write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_json_snapshot(_dev_db_path(), data)
 
 
 def _dev_load() -> dict:
     path = _dev_db_path()
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        return _read_json_snapshot(path)
 
     now = _iso(datetime.now(timezone.utc))
     data = {
@@ -553,6 +616,11 @@ def _storage_req(method: str, path: str, json_data=None):
 
 def _storage_download_bytes(path: str) -> bytes:
     """Descarga un objeto privado del proveedor de storage desde backend."""
+    if DEV_MODE:
+        try:
+            return _dev_storage_file(path).read_bytes()
+        except OSError as exc:
+            raise RuntimeError("Dev storage download error") from exc
     if _use_r2_storage():
         try:
             obj = _r2_client().get_object(Bucket=R2_BUCKET, Key=path.strip("/"))
@@ -591,7 +659,7 @@ def _storage_upload_bytes(path: str, content: bytes, content_type: str = "applic
     if not clean_path:
         raise RuntimeError("Ruta de storage invalida")
     if DEV_MODE:
-        dest = _dev_storage_file(clean_path)
+        dest = _dev_storage_file(path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(content)
         return
@@ -2500,12 +2568,15 @@ def _require_enabled_catalog_supplier(supplier: str) -> str:
 
 
 def _catalog_asset_public_url(object_name: str) -> str:
-    if not CATALOG_ASSET_NAME_RE.fullmatch(str(object_name or "")):
+    clean_name = str(object_name or "")
+    if not CATALOG_ASSET_NAME_RE.fullmatch(clean_name):
         raise ValueError("Nombre de asset invalido")
+    if DEV_MODE:
+        return f"{DEV_PUBLIC_BASE_URL}/dev/catalog-assets/{quote(clean_name, safe='')}"
     base_url = str(SUPABASE_URL or "").strip().rstrip("/")
     if not base_url.startswith(("http://", "https://")):
         raise ValueError("SUPABASE_URL requerida para asset de catalogo")
-    return f"{base_url}/storage/v1/object/public/{CATALOG_ASSET_BUCKET}/{quote(object_name, safe='')}"
+    return f"{base_url}/storage/v1/object/public/{CATALOG_ASSET_BUCKET}/{quote(clean_name, safe='')}"
 
 
 def _hydrate_catalog_asset_urls(payload: dict) -> dict:
@@ -3299,7 +3370,13 @@ def _require_queued_quote_job(updated: dict) -> dict:
     return updated
 
 
-def _cleanup_failed_catalog_quote(job_id: str, input_path: str, release_reservations) -> None:
+def _cleanup_failed_catalog_quote(
+    job_id: str,
+    input_path: str,
+    release_reservations,
+    *,
+    additional_storage_paths: list[str] | None = None,
+) -> None:
     def mark_pending(stage: str) -> None:
         try:
             db_update_quote_job(
@@ -3324,7 +3401,8 @@ def _cleanup_failed_catalog_quote(job_id: str, input_path: str, release_reservat
         mark_pending("release_reservations")
         return
     try:
-        _delete_storage_paths([input_path])
+        storage_paths = [input_path, *(additional_storage_paths or [])]
+        _delete_storage_paths(list(dict.fromkeys(storage_paths)))
     except Exception:
         mark_pending("delete_input")
         return
@@ -3427,8 +3505,15 @@ def _require_active_subscription(usuario_id: int):
 def _quote_job_for_user(job_id: str, usuario_id: int):
     try:
         job = db_get_quote_job(job_id)
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=f"Error de conexion a base de datos: {e}")
+    except RuntimeError as exc:
+        print(json.dumps({
+            "event": "quote_job_lookup_failed",
+            "error_type": exc.__class__.__name__,
+        }, separators=(",", ":")))
+        raise HTTPException(
+            status_code=503,
+            detail="Servicio de cotizaciones no disponible",
+        ) from None
     if not job:
         raise HTTPException(status_code=404, detail="Cotizacion no encontrada")
     if int(job["usuario_id"]) != int(usuario_id):
@@ -3441,6 +3526,20 @@ def _quote_storage_paths(job: dict) -> list[str]:
     for key in ("input_path", "output_path"):
         path = str(job.get(key) or "").strip().lstrip("/")
         if path:
+            paths.append(path)
+    preview_prefix = f"users/{job.get('usuario_id')}/jobs/{job.get('id')}/preview/"
+    job_prefix = f"users/{job.get('usuario_id')}/jobs/{job.get('id')}/"
+    metadata = _quote_job_metadata(job)
+    import_source_path = str(metadata.get("import_source_path") or "").strip().lstrip("/")
+    if import_source_path.startswith(job_prefix):
+        paths.append(import_source_path)
+    preview_paths = [metadata.get("import_manifest_path")]
+    image_paths = metadata.get("import_preview_paths")
+    if isinstance(image_paths, dict):
+        preview_paths.extend(image_paths.values())
+    for raw_path in preview_paths:
+        path = str(raw_path or "").strip().lstrip("/")
+        if path.startswith(preview_prefix):
             paths.append(path)
     return list(dict.fromkeys(paths))
 
@@ -3459,13 +3558,14 @@ def _release_quote_reservations(job: dict) -> None:
 
 
 def _delete_storage_paths(paths: list[str]) -> None:
-    clean_paths = [str(path or "").strip().lstrip("/") for path in paths if str(path or "").strip()]
-    if not clean_paths:
+    raw_paths = [str(path or "") for path in paths if str(path or "").strip()]
+    if not raw_paths:
         return
     if DEV_MODE:
-        for path in clean_paths:
+        for path in raw_paths:
             _dev_storage_file(path).unlink(missing_ok=True)
         return
+    clean_paths = [path.strip().lstrip("/") for path in raw_paths]
     if _use_r2_storage():
         try:
             client = _r2_client()
@@ -4738,6 +4838,357 @@ async def _read_supplier_quote_body(request: Request) -> object:
         ) from exc
 
 
+def _split_mixed_quote_items(raw_items: list[dict]) -> tuple[list[dict], list[dict]]:
+    catalog_items: list[dict] = []
+    imported_items: list[dict] = []
+    import_ids: set[str] = set()
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            raise ValueError("Cada producto mixto debe ser un objeto")
+        kind = raw.get("kind")
+        if kind is None:
+            catalog_items.append(raw)
+            continue
+        if kind != "imported":
+            raise ValueError("Origen mixto no soportado")
+        imported_items.append(raw)
+        import_id = raw.get("import_id")
+        if not isinstance(import_id, str):
+            raise ValueError("import_id invalido")
+        import_ids.add(import_id)
+    if len(import_ids) > 1:
+        raise ValueError("Solo se permite una quotation importada")
+    return catalog_items, imported_items
+
+
+def _validated_import_source(usuario_id: int, imported_items: list[dict]) -> tuple[dict, dict, bytes]:
+    import_id = imported_items[0]["import_id"]
+    try:
+        canonical_import_id = str(uuid.UUID(import_id))
+    except (TypeError, ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="import_id invalido") from None
+    if canonical_import_id != import_id:
+        raise HTTPException(status_code=400, detail="import_id invalido")
+    job = _quote_job_for_user(canonical_import_id, usuario_id)
+    metadata = _quote_job_metadata(job)
+    consumed_by = metadata.get("import_consumed_by_job_id")
+    if job.get("status") == "failed" and isinstance(consumed_by, str):
+        try:
+            consumer_id = str(uuid.UUID(consumed_by))
+        except (TypeError, ValueError, AttributeError):
+            raise HTTPException(status_code=409, detail="La fuente debe volver a importarse") from None
+        consumer = _quote_job_for_user(consumer_id, usuario_id)
+        if consumer.get("status") != "failed":
+            raise HTTPException(status_code=409, detail="La fuente ya esta en uso")
+        restored_metadata = dict(metadata)
+        restored_metadata.pop("import_consumed_by_job_id", None)
+        restored_metadata.pop("import_consumed_at", None)
+        try:
+            restored = db_update_quote_job(
+                canonical_import_id,
+                {"status": "draft", "metadata": restored_metadata, "error_message": None},
+                expected_status="failed",
+            )
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="No se pudo recuperar la fuente importada") from None
+        if not restored:
+            raise HTTPException(status_code=409, detail="La fuente cambio de estado")
+        job = restored
+        metadata = restored_metadata
+        consumed_by = None
+    if job.get("status") != "draft" or consumed_by is not None:
+        raise HTTPException(status_code=409, detail="La fuente debe volver a importarse")
+    expected_prefix = f"users/{usuario_id}/jobs/{canonical_import_id}/"
+    input_path = str(job.get("input_path") or "").strip().lstrip("/")
+    manifest_path = str(metadata.get("import_manifest_path") or "").strip().lstrip("/")
+    expected_hash = metadata.get("import_source_hash")
+    expected_count = metadata.get("import_item_count")
+    preview_paths = metadata.get("import_preview_paths")
+    original_filename = metadata.get("original_filename")
+    if (
+        input_path != f"{expected_prefix}input.xlsx"
+        or manifest_path != f"{expected_prefix}preview/{expected_hash[:16]}/manifest.json"
+        or not isinstance(expected_hash, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+        or type(expected_count) is not int
+        or not isinstance(preview_paths, dict)
+        or not isinstance(original_filename, str)
+        or any(
+            not isinstance(row, str)
+            or not row.isdigit()
+            or not isinstance(path, str)
+            or path != f"{expected_prefix}preview/{expected_hash[:16]}/row-{row}.png"
+            for row, path in preview_paths.items()
+        )
+    ):
+        raise HTTPException(status_code=409, detail="La fuente debe volver a importarse")
+    try:
+        source_bytes = _storage_download_bytes(input_path)
+        manifest_bytes = _storage_download_bytes(manifest_path)
+        stored = json.loads(
+            manifest_bytes,
+            object_pairs_hook=_mixed_json_object,
+            parse_constant=_reject_mixed_json_constant,
+        )
+        if not isinstance(stored, dict) or set(stored) != {
+            "schema_version", "import_id", "source_hash", "original_filename", "provider",
+            "source_currency", "currency_status", "columns", "sections", "items",
+            "preview_image_paths",
+        }:
+            raise ValueError("manifest")
+        stored_preview_paths = stored.pop("preview_image_paths")
+        manifest = validate_import_manifest(stored)
+        reparsed, _images = build_import_manifest(
+            source_bytes, canonical_import_id, manifest["original_filename"]
+        )
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="No se pudo validar la fuente importada") from None
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+        raise HTTPException(status_code=409, detail="La fuente debe volver a importarse") from None
+    if (
+        manifest["import_id"] != canonical_import_id
+        or manifest["original_filename"] != original_filename
+        or manifest["source_hash"] != expected_hash
+        or len(manifest["items"]) != expected_count
+        or stored_preview_paths != preview_paths
+        or reparsed != manifest
+    ):
+        raise HTTPException(status_code=409, detail="La fuente debe volver a importarse")
+    return manifest, job, source_bytes
+
+
+def _consume_import_draft(job: dict, final_job_id: str) -> dict:
+    metadata = _quote_job_metadata(job)
+    if metadata.get("import_consumed_by_job_id") is not None:
+        raise RuntimeError("Import source already consumed")
+    consumed_metadata = {
+        **metadata,
+        "import_consumed_by_job_id": final_job_id,
+        "import_consumed_at": _iso(datetime.now(timezone.utc)),
+    }
+    updated = db_update_quote_job(
+        job["id"],
+        {
+            "status": "failed",
+            "metadata": consumed_metadata,
+            "error_message": f"import_consumed:{final_job_id}",
+        },
+        expected_status="draft",
+    )
+    if not updated:
+        raise RuntimeError("Import source changed before consumption")
+    return updated
+
+
+def _restore_consumed_import_draft(import_job_id: str, final_job_id: str) -> bool:
+    try:
+        current = db_get_quote_job(import_job_id)
+        metadata = _quote_job_metadata(current or {})
+        if (
+            not current
+            or current.get("status") != "failed"
+            or metadata.get("import_consumed_by_job_id") != final_job_id
+        ):
+            return False
+        metadata.pop("import_consumed_by_job_id", None)
+        metadata.pop("import_consumed_at", None)
+        return bool(db_update_quote_job(
+            import_job_id,
+            {"status": "draft", "metadata": metadata, "error_message": None},
+            expected_status="failed",
+        ))
+    except Exception:
+        return False
+
+
+def _consumer_import_source_id(job: dict) -> str | None:
+    imported = _quote_job_metadata(job).get("import_source")
+    if imported is None:
+        return None
+    if not isinstance(imported, dict):
+        raise RuntimeError("Consumidor con fuente importada invalida")
+    raw_import_id = imported.get("import_id")
+    try:
+        import_id = str(uuid.UUID(str(raw_import_id or "")))
+    except (TypeError, ValueError, AttributeError):
+        raise RuntimeError("Consumidor con fuente importada invalida") from None
+    if import_id != raw_import_id:
+        raise RuntimeError("Consumidor con fuente importada invalida")
+    return import_id
+
+
+def _import_source_references_consumer(
+    import_job_id: str,
+    final_job_id: str,
+    usuario_id: int,
+) -> bool:
+    source = db_get_quote_job(import_job_id)
+    if not source:
+        return False
+    if int(source.get("usuario_id") or 0) != int(usuario_id):
+        raise RuntimeError("Fuente importada fuera del usuario")
+    return _quote_job_metadata(source).get("import_consumed_by_job_id") == final_job_id
+
+
+def _preserve_failed_import_consumer(job_id: str, release_reservations) -> None:
+    failed = None
+    updates = {
+        "status": "failed",
+        "error_message": "import_source_restore_pending",
+    }
+    for expected_status in ("draft", "queued"):
+        try:
+            failed = db_update_quote_job(
+                job_id,
+                updates,
+                expected_status=expected_status,
+            )
+        except Exception:
+            failed = None
+        if failed:
+            break
+    if not failed:
+        try:
+            current = db_get_quote_job(job_id)
+        except Exception:
+            current = None
+        if not current or current.get("status") not in {"failed", "completed", "processing"}:
+            print(json.dumps({
+                "event": "import_consumer_preservation_pending",
+                "job_id": job_id,
+            }, separators=(",", ":")))
+            return
+        failed = current
+    if failed.get("status") != "failed":
+        return
+    try:
+        release_reservations(job_id)
+    except Exception:
+        print(json.dumps({
+            "event": "import_consumer_reservation_release_pending",
+            "job_id": job_id,
+        }, separators=(",", ":")))
+
+
+def _archive_completed_import_source(import_job_id: str, final_job: dict) -> None:
+    final_job_id = str(final_job.get("id") or "")
+    source = db_get_quote_job(import_job_id)
+    if not source:
+        return
+    if int(source.get("usuario_id") or 0) != int(final_job.get("usuario_id") or 0):
+        raise RuntimeError("Fuente importada fuera del usuario")
+    metadata = _quote_job_metadata(source)
+    if metadata.get("import_consumed_by_job_id") != final_job_id:
+        return
+    if source.get("input_path") is not None or not metadata.get("import_consumed_cleanup_at"):
+        raise HTTPException(
+            status_code=409,
+            detail="La fuente importada aun esta terminando su limpieza",
+        )
+    metadata.pop("import_consumed_by_job_id", None)
+    metadata.pop("import_consumed_at", None)
+    metadata["import_source_archived"] = True
+    metadata["import_consumer_deleted_at"] = _iso(datetime.now(timezone.utc))
+    updated = db_update_quote_job(
+        import_job_id,
+        {
+            "status": "failed",
+            "metadata": metadata,
+            "error_message": "import_source_archived",
+        },
+        expected_status="failed",
+    )
+    if updated:
+        return
+    if _import_source_references_consumer(
+        import_job_id,
+        final_job_id,
+        int(final_job.get("usuario_id") or 0),
+    ):
+        raise RuntimeError("No se pudo archivar la fuente importada")
+
+
+def _prepare_import_consumer_delete(job: dict) -> dict:
+    import_job_id = _consumer_import_source_id(job)
+    if import_job_id is None:
+        return job
+    job_id = str(job.get("id") or "")
+    usuario_id = int(job.get("usuario_id") or 0)
+    status = str(job.get("status") or "")
+    if status == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail="No se puede eliminar una cotizacion importada en proceso",
+        )
+    if status in {"draft", "queued"}:
+        cancelled = db_update_quote_job(
+            job_id,
+            {
+                "status": "failed",
+                "error_message": "import_consumer_cancelled",
+            },
+            expected_status=status,
+        )
+        if not cancelled:
+            raise HTTPException(
+                status_code=409,
+                detail="La cotizacion cambio de estado antes de eliminarse",
+            )
+        job = cancelled
+        status = "failed"
+    if status == "completed":
+        _archive_completed_import_source(import_job_id, job)
+        return job
+    if status != "failed":
+        raise HTTPException(
+            status_code=409,
+            detail="No se puede eliminar esta cotizacion importada",
+        )
+    try:
+        restored = _restore_consumed_import_draft(import_job_id, job_id)
+    except Exception:
+        restored = False
+    if not restored and _import_source_references_consumer(
+        import_job_id, job_id, usuario_id
+    ):
+        raise RuntimeError("No se pudo restaurar la fuente importada")
+    return job
+
+
+def _import_metadata(manifest: dict, imported_source: dict, quote_currency: str) -> dict:
+    originals = {item["source_row"]: item for item in manifest["items"]}
+    edited_fields: set[str] = set()
+    rates: dict[tuple[str, str], dict] = {}
+    for line in imported_source["items"]:
+        original = originals[line["source_row"]]
+        for field in ("name", "description", "dimension"):
+            if line[field] != original[field]:
+                edited_fields.add(field)
+        if line["quantity"] != original["quantity"]:
+            edited_fields.add("quantity")
+        if Decimal(line["original_unit_price"]) != Decimal(original["unit_price"]):
+            edited_fields.add("unit_price")
+        if line["provider"] != manifest["provider"]:
+            edited_fields.add("provider")
+        rate_key = (line["original_currency"], line["frozen_exchange_rate"])
+        rates[rate_key] = {
+            "source_currency": line["original_currency"],
+            "quote_currency": quote_currency,
+            "exchange_rate": line["frozen_exchange_rate"],
+        }
+    return {
+        "import_source": {
+            "import_id": imported_source["import_id"],
+            "original_filename": imported_source["original_filename"],
+            "source_hash": imported_source["source_hash"],
+        },
+        "import_item_count": len(imported_source["items"]),
+        "import_source_currencies": sorted({line["original_currency"] for line in imported_source["items"]}),
+        "import_edited_fields": sorted(edited_fields),
+        "import_rate_summary": [rates[key] for key in sorted(rates)],
+    }
+
+
 @app.post("/catalogs/mixed-quote")
 async def mixed_catalog_quote(
     request: Request,
@@ -4758,15 +5209,24 @@ async def mixed_catalog_quote(
         raise HTTPException(status_code=400, detail="Items mixtos debe ser una lista")
     try:
         validate_quote_size(section_counts=[len(raw_items)], encoded_bytes=0)
-        preflight_items = preflight_mixed_catalog_items(raw_items)
+        catalog_items, imported_items = _split_mixed_quote_items(raw_items)
+        preflight_items = preflight_mixed_catalog_items(catalog_items) if catalog_items else []
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    import_manifest = None
+    import_job = None
+    import_source_bytes = None
+    if imported_items:
+        import_manifest, import_job, import_source_bytes = _validated_import_source(
+            current_user["id"], imported_items
+        )
 
     requested_catalogs = {
         str(row.get("catalog") or "").strip().lower()
         for row in preflight_items
     }
-    if not requested_catalogs or not requested_catalogs <= set(MIXED_CATALOG_ORDER):
+    if not requested_catalogs <= set(MIXED_CATALOG_ORDER):
         raise HTTPException(status_code=400, detail="Catalogo mixto no soportado")
 
     try:
@@ -4791,6 +5251,12 @@ async def mixed_catalog_quote(
             rate_rows=rate_rows,
             quote_currency=str(body.get("quote_currency") or "MXN"),
             commercial_discount_percent=body.get("descuento", "40"),
+            presentation_sections=body.get("sections"),
+            imported_source={
+                "manifest": import_manifest,
+                "items": imported_items,
+                "source_currency": None,
+            } if imported_items else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4806,6 +5272,7 @@ async def mixed_catalog_quote(
         "storage_provider": _storage_provider_name(),
         "input_storage_provider": _storage_provider_name(),
         "mixed_item_count": cart_payload["item_count"],
+        "mixed_section_count": len(cart_payload["sections"]),
         "catalog_item_counts": {
             group["catalog"]: len(group["items"]) for group in cart_payload["groups"]
         },
@@ -4817,6 +5284,10 @@ async def mixed_catalog_quote(
         "auto_electrification_rate": cart_payload["auto_electrification_rate"],
         "estimated_duration_seconds": 120,
     })
+    if import_manifest is not None:
+        metadata.update(_import_metadata(
+            import_manifest, cart_payload["imported_source"], cart_payload["quote_currency"]
+        ))
 
     assigned_quote_number = _next_quote_number_for_user(current_user)
     if assigned_quote_number:
@@ -4827,12 +5298,36 @@ async def mixed_catalog_quote(
     template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
     if not template:
         raise HTTPException(status_code=400, detail="Template requerido")
-    _enforce_active_quote_limit(current_user["id"])
+    _enforce_active_quote_limit(
+        current_user["id"],
+        exclude_job_id=import_job["id"] if import_job is not None else None,
+    )
 
     job_id = str(uuid.uuid4())
     input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
+    source_copy_path = f"users/{current_user['id']}/jobs/{job_id}/import-source.xlsx"
+    job_created = False
+    import_consumed = False
+    additional_cleanup_paths: list[str] = []
     try:
         db_create_quote_job(current_user["id"], template, metadata, input_path, job_id=job_id)
+        job_created = True
+        if import_source_bytes is not None:
+            additional_cleanup_paths.append(source_copy_path)
+            _storage_upload_bytes(
+                source_copy_path,
+                import_source_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            copied_source = _storage_download_bytes(source_copy_path)
+            if not hmac.compare_digest(
+                hashlib.sha256(copied_source).hexdigest(),
+                cart_payload["imported_source"]["source_hash"],
+            ):
+                raise RuntimeError("Import source copy verification failed")
+            cart_payload["imported_source"]["source_path"] = source_copy_path
+            metadata["import_source_path"] = source_copy_path
+            validate_mixed_catalog_payload(cart_payload)
         snapshot = db_reserve_mixed_cart(
             current_user["id"], job_id, build_mixed_reservation_groups(cart_payload)
         )
@@ -4842,9 +5337,36 @@ async def mixed_catalog_quote(
             cart_payload, ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")
         _storage_upload_bytes(input_path, content, "application/json")
+        if import_job is not None:
+            _consume_import_draft(import_job, job_id)
+            import_consumed = True
         updated = db_queue_mixed_quote_job(job_id, metadata)
     except Exception as exc:
-        _cleanup_failed_catalog_quote(job_id, input_path, db_release_mixed_cart)
+        import_restored = not import_consumed
+        if import_consumed:
+            try:
+                import_restored = bool(
+                    _restore_consumed_import_draft(import_job["id"], job_id)
+                )
+            except Exception:
+                import_restored = False
+            if not import_restored:
+                try:
+                    import_restored = not _import_source_references_consumer(
+                        import_job["id"], job_id, current_user["id"]
+                    )
+                except Exception:
+                    import_restored = False
+        if job_created:
+            if import_consumed and not import_restored:
+                _preserve_failed_import_consumer(job_id, db_release_mixed_cart)
+            else:
+                _cleanup_failed_catalog_quote(
+                    job_id,
+                    input_path,
+                    db_release_mixed_cart,
+                    additional_storage_paths=additional_cleanup_paths,
+                )
         raise HTTPException(
             status_code=503, detail="No fue posible crear cotizacion mixta"
         ) from exc
@@ -5243,6 +5765,184 @@ def offiho_quote(body: dict, current_user: dict = Depends(get_current_user)):
     return {"mensaje": "Cotizacion Offiho en cola", "job": updated}
 
 
+def _normalize_import_preview_image(
+    content: object,
+    image_type: object,
+) -> tuple[bytes, str, str] | None:
+    if not isinstance(content, bytes) or not content or len(content) > IMPORT_PREVIEW_IMAGE_MAX_BYTES:
+        return None
+    declared_mime = {
+        ".png": "image/png", "image/png": "image/png",
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", "image/jpeg": "image/jpeg",
+        ".webp": "image/webp", "image/webp": "image/webp",
+    }.get(str(image_type or "").strip().lower())
+    detected = _catalog_image_type(content)
+    if declared_mime is None or detected is None or detected[1] != declared_mime:
+        return None
+    extension, _detected_mime = detected
+    if not _catalog_image_has_exact_end(content, extension):
+        return None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content)) as probe:
+                width, height = probe.size
+                if (
+                    probe.format not in {"PNG", "JPEG", "WEBP"}
+                    or width < 1 or height < 1
+                    or width > IMPORT_PREVIEW_IMAGE_MAX_WIDTH
+                    or height > IMPORT_PREVIEW_IMAGE_MAX_HEIGHT
+                    or width * height > IMPORT_PREVIEW_IMAGE_MAX_PIXELS
+                    or getattr(probe, "is_animated", False)
+                    or getattr(probe, "n_frames", 1) != 1
+                ):
+                    return None
+                probe.verify()
+            with Image.open(io.BytesIO(content)) as decoded:
+                decoded.load()
+                if getattr(decoded, "is_animated", False) or getattr(decoded, "n_frames", 1) != 1:
+                    return None
+                has_alpha = "A" in decoded.getbands() or "transparency" in decoded.info
+                thumbnail = decoded.convert("RGBA" if has_alpha else "RGB")
+                thumbnail.thumbnail(
+                    (IMPORT_PREVIEW_THUMBNAIL_MAX_SIDE, IMPORT_PREVIEW_THUMBNAIL_MAX_SIDE),
+                    Image.Resampling.LANCZOS,
+                )
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        UnidentifiedImageError,
+        OSError,
+        SyntaxError,
+        ValueError,
+    ):
+        return None
+    output = io.BytesIO()
+    thumbnail.save(output, format="PNG", optimize=False, compress_level=9)
+    normalized = output.getvalue()
+    if not normalized or len(normalized) > IMPORT_PREVIEW_IMAGE_MAX_BYTES:
+        return None
+    return normalized, ".png", "image/png"
+
+
+def _store_import_preview(job: dict, manifest: dict, image_map: dict[int, tuple[bytes, str]]) -> tuple[str, dict[int, str]]:
+    prefix = f"users/{job['usuario_id']}/jobs/{job['id']}/preview/{manifest['source_hash'][:16]}"
+    manifest_path = f"{prefix}/manifest.json"
+    image_paths: dict[int, str] = {}
+    uploaded_paths: list[str] = []
+    try:
+        for row, (content, image_type) in image_map.items():
+            normalized = _normalize_import_preview_image(content, image_type)
+            if normalized is not None:
+                preview_bytes, suffix, content_type = normalized
+                image_path = f"{prefix}/row-{row}{suffix}"
+                _storage_upload_bytes(image_path, preview_bytes, content_type)
+                uploaded_paths.append(image_path)
+                image_paths[row] = image_path
+        stored_manifest = {
+            **manifest,
+            "preview_image_paths": {str(row): path for row, path in image_paths.items()},
+        }
+        _storage_upload_bytes(
+            manifest_path,
+            json.dumps(stored_manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+            "application/json",
+        )
+        uploaded_paths.append(manifest_path)
+    except Exception:
+        if uploaded_paths:
+            try:
+                _delete_storage_paths(uploaded_paths)
+            except Exception:
+                pass
+        raise
+    return manifest_path, image_paths
+
+
+def _preview_response(manifest: dict, image_paths: dict[int, str]) -> dict:
+    items = []
+    for item in manifest["items"]:
+        image_path = image_paths.get(item["source_row"])
+        items.append({**item, "image_url": _create_signed_download(image_path) if image_path else ""})
+    return {**manifest, "items": items}
+
+
+@app.post("/cotizaciones/{job_id}/import-preview")
+def quotation_import_preview(job_id: str, current_user: dict = Depends(get_current_user)):
+    try:
+        _require_active_subscription(current_user["id"])
+        job = _quote_job_for_user(job_id, current_user["id"])
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Servicio de cotizaciones no disponible") from None
+
+    input_path = str(job.get("input_path") or "").strip().lstrip("/")
+    metadata = _quote_job_metadata(job)
+    filename = metadata.get("original_filename")
+    if not input_path or not isinstance(filename, str) or not filename.strip():
+        raise HTTPException(status_code=400, detail="La quotation no tiene archivo de entrada")
+    if job.get("status") != "draft" or Path(input_path).suffix.lower() != ".xlsx":
+        raise HTTPException(status_code=409, detail="La quotation no esta disponible para importar")
+
+    try:
+        source_bytes = _storage_download_bytes(input_path)
+        manifest, image_map = build_import_manifest(source_bytes, job_id, filename)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="La quotation no se pudo importar") from None
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="No se pudo leer la quotation") from None
+
+    old_preview_paths = {
+        str(metadata.get("import_manifest_path") or "").strip().lstrip("/"),
+        *(
+            str(path or "").strip().lstrip("/")
+            for path in (metadata.get("import_preview_paths") or {}).values()
+        ),
+    }
+    old_preview_paths.discard("")
+    try:
+        manifest_path, image_paths = _store_import_preview(job, manifest, image_map)
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="No se pudo guardar la previsualizacion") from None
+    new_preview_paths = {manifest_path, *image_paths.values()}
+    try:
+        updated = db_update_quote_job(
+            job_id,
+            {
+                "metadata": {
+                    **metadata,
+                    "import_manifest_path": manifest_path,
+                    "import_preview_paths": {str(row): path for row, path in image_paths.items()},
+                    "import_source_hash": manifest["source_hash"],
+                    "import_item_count": len(manifest["items"]),
+                }
+            },
+            expected_status="draft",
+        )
+    except RuntimeError:
+        try:
+            _delete_storage_paths(sorted(new_preview_paths - old_preview_paths))
+        except RuntimeError:
+            pass
+        raise HTTPException(status_code=503, detail="No se pudo guardar la previsualizacion") from None
+    if not updated:
+        try:
+            _delete_storage_paths(sorted(new_preview_paths - old_preview_paths))
+        except RuntimeError:
+            pass
+        raise HTTPException(status_code=409, detail="La quotation ya no esta disponible para importar")
+    stale_preview_paths = old_preview_paths - new_preview_paths
+    if stale_preview_paths:
+        try:
+            _delete_storage_paths(sorted(stale_preview_paths))
+        except RuntimeError:
+            print(json.dumps({"event": "import_preview_cleanup_pending", "job_id": job_id}, separators=(",", ":")))
+
+    try:
+        return _preview_response(manifest, image_paths)
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="No se pudo preparar la previsualizacion") from None
+
+
 @app.post("/cotizaciones/init-upload")
 def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_current_user)):
     try:
@@ -5346,6 +6046,8 @@ async def cotizaciones_dev_upload(job_id: str, file: UploadFile = File(...), cur
 def _require_retryable_failed_quote(job: dict) -> None:
     if job.get("status") != "failed":
         return
+    if _quote_job_metadata(job).get("import_consumed_by_job_id") is not None:
+        raise HTTPException(status_code=409, detail="La fuente importada es administrada por su cotizacion final")
     if not job.get("input_path"):
         raise HTTPException(status_code=400, detail="La cotizacion no tiene archivo de entrada")
     if str(job.get("error_message") or "").strip().startswith("cleanup_pending:"):
@@ -5440,6 +6142,11 @@ def cotizaciones_list(current_user: dict = Depends(get_current_user)):
     try:
         jobs = db_list_quote_jobs(current_user["id"])
         jobs = _enforce_quote_history_limit(current_user["id"], jobs)
+        jobs = [
+            job for job in jobs
+            if _quote_job_metadata(job).get("import_consumed_by_job_id") is None
+            and not _quote_job_metadata(job).get("import_source_archived")
+        ]
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error de conexion a base de datos: {e}")
     return {"cotizaciones": jobs}
@@ -5455,6 +6162,7 @@ def cotizaciones_get(job_id: str, current_user: dict = Depends(get_current_user)
 def cotizaciones_delete(job_id: str, current_user: dict = Depends(get_current_user)):
     job = _quote_job_for_user(job_id, current_user["id"])
     try:
+        job = _prepare_import_consumer_delete(job)
         _release_quote_reservations(job)
         db_delete_quote_job(job_id)
         _delete_quote_storage(job)
@@ -5527,6 +6235,26 @@ def dev_storage_download(encoded_path: str):
         source,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=source.name,
+    )
+
+
+@app.get("/dev/catalog-assets/{object_name}")
+def dev_catalog_asset_download(object_name: str):
+    if not DEV_MODE or not CATALOG_ASSET_NAME_RE.fullmatch(str(object_name or "")):
+        raise HTTPException(status_code=404, detail="No disponible")
+    source = DEV_STORE_DIR / CATALOG_ASSET_BUCKET / object_name
+    if not source.is_file():
+        raise HTTPException(status_code=404, detail="Imagen no encontrada")
+    media_type = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(source.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        source,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
 
 

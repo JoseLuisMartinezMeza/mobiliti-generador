@@ -48,13 +48,14 @@ $processes = @()
 $processes += Start-HiddenProcess `
   -Name "api" `
   -FilePath "python" `
-  -Arguments "-m uvicorn index:app --app-dir vercel_deploy\api --host 127.0.0.1 --port $ApiPort" `
+  -Arguments "-m uvicorn index:app --app-dir vercel_deploy\api --host 127.0.0.1 --port $ApiPort --reload --reload-dir vercel_deploy\api --reload-dir mobiliti_saas\quote_engine" `
   -WorkingDirectory $root `
   -EnvVars @{
     MOBILITI_DEV_MODE = "1"
     JWT_SECRET_KEY = "dev-secret-change-me-32-chars"
     CORS_ORIGINS = "http://127.0.0.1:$WebPort"
     MOBILITI_DEV_PUBLIC_BASE_URL = "http://127.0.0.1:$ApiPort"
+    CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro"
   }
 
 $processes += Start-HiddenProcess `
@@ -66,6 +67,7 @@ $processes += Start-HiddenProcess `
     MOBILITI_DEV_MODE = "1"
     QUOTE_ENGINE = "python"
     WORKER_STALE_MINUTES = "30"
+    CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro"
   }
 
 $processes += Start-HiddenProcess `

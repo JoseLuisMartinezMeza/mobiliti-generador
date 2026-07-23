@@ -95,6 +95,12 @@ from .sunon_image_provider import (
 )
 
 
+_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_OFFICE_REL_NS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+)
+
 MONEY_FORMAT = '$#,##0.00;[Red]-$#,##0.00;"-"'
 MIXED_MONEY_FORMATS = {
     "MXN": '"MXN" $#,##0.00;[Red]-"MXN" $#,##0.00;"-"',
@@ -142,16 +148,16 @@ MIXED_MOBILITI_MONEY_COLS = (
 )
 PERCENT_FORMAT = "0%"
 MOBILITI_SECTION_COUNT = 32
-BASE_PROD_PER_SECTION = 32
+BASE_PROD_PER_SECTION = 33
 MAX_PROD_PER_SECTION = 64
 MOBILITI_FIRST_SECTION_ROW = 13
-MOBILITI_SECTION_BLOCK_HEIGHT = BASE_PROD_PER_SECTION + 3
+MOBILITI_SECTION_BLOCK_HEIGHT = BASE_PROD_PER_SECTION + 2
 SECTION_CATS = [
     MOBILITI_FIRST_SECTION_ROW + index * MOBILITI_SECTION_BLOCK_HEIGHT
     for index in range(MOBILITI_SECTION_COUNT)
 ]
 SECTION_PROD_STARTS = [row + 1 for row in SECTION_CATS]
-SECTION_SUBTOTAL_ROWS = [row + BASE_PROD_PER_SECTION + 2 for row in SECTION_CATS]
+SECTION_SUBTOTAL_ROWS = [row + BASE_PROD_PER_SECTION + 1 for row in SECTION_CATS]
 MOBILITI_TOTAL_ROW = SECTION_SUBTOTAL_ROWS[-1] + 1
 DEFAULT_EXCHANGE_RATE = 20.0
 DEFAULT_DELIVERY_PLACE = "Guadalajara"
@@ -204,7 +210,13 @@ LUMBRO_PRICE_ROWS = {
     "CAJA-FUS": 406,
 }
 LUMBRO_CATEGORY = "Multicontactos"
-LUMBRO_PROVIDER = "Lumbro"
+LUMBRO_PROVIDER = "Lumbro CH"
+LUMBRO_LEGACY_PROVIDER = "Lumbro"
+LUMBRO_PROVIDER_CODE = "P00720"
+LUMBRO_PROVIDER_MARGIN = 0.85
+LUMBRO_PROVIDER_EXTRA_MARGIN = 0
+LUMBRO_PROVIDER_CATEGORY = "Importado"
+LUMBRO_PROVIDER_MAX_DISCOUNT = 0.5
 LUMBRO_ACCESSORY_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_multicontacto_blanco.png"
 LUMBRO_WORKSTATION_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_workstation_multiusuario.png"
 OFFICIAL_TEMPLATE_PATH = (
@@ -245,6 +257,7 @@ class _OfficialPresentationLine:
     name: str
     description: str
     dimensions: str
+    m3: Decimal
     quantity: Decimal
     category: str
     provider: str
@@ -453,39 +466,129 @@ def _find_provider_discount_start(ws) -> int | None:
     return None
 
 
-def _ensure_mobiliti_formula_layout(ws) -> None:
-    if str(ws.cell(12, MOBILITI_MIN_UNIT_PRICE_COL).value or "").strip() != "Precio Unitario de Lista (Car\u00e1tula)":
-        source_letter = get_column_letter(MOBILITI_UNIT_PRICE_COL)
-        target_letter = get_column_letter(MOBILITI_MIN_UNIT_PRICE_COL)
-        source_width = ws.column_dimensions[source_letter].width
-        ws.insert_cols(MOBILITI_MIN_UNIT_PRICE_COL)
-        if source_width is not None:
-            ws.column_dimensions[target_letter].width = source_width
-        for row in range(1, ws.max_row + 1):
-            _copy_cell_style(
-                ws.cell(row, MOBILITI_UNIT_PRICE_COL),
-                ws.cell(row, MOBILITI_MIN_UNIT_PRICE_COL),
+def _official_mobiliti_provider(value: Any) -> str:
+    provider = str(value or "").strip()
+    if " ".join(provider.casefold().split()) in {
+        LUMBRO_LEGACY_PROVIDER.casefold(),
+        LUMBRO_PROVIDER.casefold(),
+    }:
+        return LUMBRO_PROVIDER
+    return provider
+
+
+def _set_defined_name_range(wb: Workbook, name: str, attr_text: str) -> None:
+    if name in wb.defined_names:
+        del wb.defined_names[name]
+    wb.defined_names.add(DefinedName(name, attr_text=attr_text))
+
+
+def _ensure_lumbro_ch_provider_contract(ws) -> None:
+    wb = ws.parent
+    if "Proveedores" not in wb.sheetnames:
+        return
+
+    provider_ws = wb["Proveedores"]
+    provider_rows = [
+        row
+        for row in range(2, provider_ws.max_row + 1)
+        if str(provider_ws.cell(row, 1).value or "").strip()
+        and str(provider_ws.cell(row, 5).value or "").strip().casefold()
+        in {"importado", "nacional"}
+    ]
+    if not provider_rows:
+        return
+
+    target_row = next(
+        (
+            row
+            for row in provider_rows
+            if _official_mobiliti_provider(provider_ws.cell(row, 1).value)
+            == LUMBRO_PROVIDER
+            and str(provider_ws.cell(row, 1).value or "").strip().casefold()
+            == LUMBRO_PROVIDER.casefold()
+        ),
+        provider_rows[-1] + 1,
+    )
+    if target_row not in provider_rows:
+        style_row = next(
+            (
+                row
+                for row in provider_rows
+                if str(provider_ws.cell(row, 5).value or "").strip().casefold()
+                == LUMBRO_PROVIDER_CATEGORY.casefold()
+            ),
+            provider_rows[0],
+        )
+        provider_ws.row_dimensions[target_row].height = provider_ws.row_dimensions[style_row].height
+        for col in range(1, 6):
+            _copy_external_cell_style(
+                provider_ws.cell(style_row, col),
+                provider_ws.cell(target_row, col),
             )
 
-    headers = {
-        MOBILITI_UNIT_PRICE_COL: "Precio Unitario Base (Aux)",
-        MOBILITI_MIN_UNIT_PRICE_COL: "Precio Unitario de Lista (Car\u00e1tula)",
-        MOBILITI_LIST_TOTAL_COL: "Precio Lista",
-        MOBILITI_MAX_DISCOUNT_COL: "Descuento M\u00e1ximo",
-        MOBILITI_COVER_DISCOUNT_COL: "Descuento Car\u00e1tula",
-        MOBILITI_DISCOUNT_AMOUNT_COL: "Precio Descontado",
-        MOBILITI_FINAL_PRICE_COL: "Precio Final c/ Descuento ",
-        MOBILITI_COMMERCIAL_TOTAL_COL: "Precio Total Comercial",
-        MOBILITI_CLIENT_DISCOUNT_COL: "Descuento Car\u00e1tula Cliente Final",
-        MOBILITI_CLIENT_PRICE_COL: "Precio Cliente con Ajuste",
-        MOBILITI_PROJECT_TOTAL_COL: "Precio Total Proyecto",
-        MOBILITI_GP_COL: "GP COMERCIAL",
-    }
-    for col, value in headers.items():
-        cell = ws.cell(12, col)
-        if not isinstance(cell, MergedCell):
-            cell.value = value
-    ws.column_dimensions[get_column_letter(MOBILITI_UNIT_PRICE_COL)].hidden = True
+    values = (
+        LUMBRO_PROVIDER,
+        LUMBRO_PROVIDER_CODE,
+        LUMBRO_PROVIDER_MARGIN,
+        LUMBRO_PROVIDER_EXTRA_MARGIN,
+        LUMBRO_PROVIDER_CATEGORY,
+    )
+    for col, value in enumerate(values, start=1):
+        provider_ws.cell(target_row, col).value = value
+
+    last_provider_row = max([*provider_rows, target_row])
+    _set_defined_name_range(wb, "Proveedores", f"Proveedores!$A$2:$D${last_provider_row}")
+    _set_defined_name_range(wb, "ProveedoreS_TC", f"Proveedores!$A$2:$E${last_provider_row}")
+    _set_defined_name_range(
+        wb,
+        "Tabla_Proveedores_1",
+        f"Proveedores!$A$2:$B${last_provider_row}",
+    )
+
+
+def _ensure_lumbro_ch_discount_contract(ws) -> None:
+    discount_start = _find_provider_discount_start(ws)
+    if discount_start is None:
+        return
+
+    name_col = 36 if str(ws.cell(discount_start, 36).value or "").strip() else 35
+    value_col = name_col + 1
+    discount_end = discount_start
+    while (
+        discount_end + 1 <= ws.max_row
+        and str(ws.cell(discount_end + 1, name_col).value or "").strip()
+    ):
+        discount_end += 1
+
+    existing_row = next(
+        (
+            row
+            for row in range(discount_start, discount_end + 1)
+            if str(ws.cell(row, name_col).value or "").strip().casefold()
+            == LUMBRO_PROVIDER.casefold()
+        ),
+        None,
+    )
+    if existing_row is not None:
+        ws.cell(existing_row, value_col).value = LUMBRO_PROVIDER_MAX_DISCOUNT
+        return
+
+    target_row = next(
+        (
+            row
+            for row in range(discount_start, discount_end + 1)
+            if str(ws.cell(row, name_col).value or "").strip() == "Tarkett MX"
+        ),
+        discount_end + 1,
+    )
+    for row in range(discount_end, target_row - 1, -1):
+        for col in (name_col, value_col):
+            source = ws.cell(row, col)
+            target = ws.cell(row + 1, col)
+            target.value = source.value
+            _copy_external_cell_style(source, target)
+    ws.cell(target_row, name_col).value = LUMBRO_PROVIDER
+    ws.cell(target_row, value_col).value = LUMBRO_PROVIDER_MAX_DISCOUNT
 
 
 def _snapshot_mobiliti_value(value: Any) -> Any:
@@ -653,6 +756,7 @@ def _mobiliti_landed_cost_formula(row: int, total_row: int, discount_start: int 
         "Armstrong Pisos USA",
         "Tarkett USA",
         "Tarkett Brasil",
+        LUMBRO_PROVIDER,
     ]
     provider_checks = ",".join(f'F{row}<>"{provider}"' for provider in excluded)
     return (
@@ -667,7 +771,7 @@ def _mobiliti_landed_cost_formula(row: int, total_row: int, discount_start: int 
 def _mobiliti_provider_discount_formula(row: int, discount_start: int | None) -> str:
     if not discount_start:
         return "=0.5"
-    discount_end = discount_start + 30
+    discount_end = discount_start + 31
     return f'=IFERROR(VLOOKUP(F{row},$AJ${discount_start}:$AK${discount_end},2,FALSE),0.5)'
 
 
@@ -677,66 +781,6 @@ def _mobiliti_blank_product_guard(row: int) -> str:
 
 def _blank_safe_mobiliti_formula(row: int, formula: str) -> str:
     return f'=IF({_mobiliti_blank_product_guard(row)},"",{formula[1:]})'
-
-
-def _write_mobiliti_row_formulas(
-    ws,
-    row: int,
-    total_row: int,
-    discount_start: int | None,
-    *,
-    line_discount_literal: str | None = None,
-    blank_safe: bool = False,
-) -> None:
-    product_end = max(14, total_row - 3)
-    formulas = {
-        7: f'=IFERROR(VLOOKUP(F{row},Tabla_Proveedores_1,2,0)," ")',
-        9: f'=IFERROR(VLOOKUP(G{row},Proveedores!B:C,2,0)," ")',
-        12: f"=K{row}*H{row}",
-        13: _mobiliti_landed_cost_formula(row, total_row, discount_start),
-        14: f"=M{row}*H{row}",
-        15: f'=IFERROR(VLOOKUP(G{row},Proveedores!B:D,3,0)," ")',
-        17: f"=IFERROR(IF(H{row}=0,0,VLOOKUP(E{row},Tabla_Fletes,3,FALSE)/H{row}),0)",
-        18: (
-            f'=IF(P{row}="Centro",Q{row},IF(P{row}="Norte",Q{row}*1.6,'
-            f'IF(P{row}="Occidente",Q{row}*1.2,IF(P{row}="Sur",Q{row}*2))))'
-        ),
-        19: f"=IFERROR(IF(H{row}=0,0,VLOOKUP(E{row},Tabla_Instalacion,2,FALSE)/H{row}),0)",
-        20: (
-            f'=IF(P{row}="Centro",S{row},IF(P{row}="Norte",S{row}*1.1,'
-            f'IF(P{row}="Occidente",S{row}*1.1,IF(P{row}="Sur",S{row}*1.1))))'
-        ),
-        21: f'=IF(F{row}="Offiho",0,R{row}+T{row})',
-        22: (
-            f"=IFERROR(IF(OR(K{row}=0,L{row}=0),U{row}/$H${total_row},"
-            f"U{row}*(K{row}/L{row}))*H{row},0)"
-        ),
-        MOBILITI_UNIT_PRICE_COL: (
-            f'=IF(F{row}="Offiho",J{row},'
-            f'IF(_xlfn.XLOOKUP(F{row},Proveedores!A$2:A$50,Proveedores!E$2:E$50,"")="Nacional",'
-            f'(J{row}/0.5)+IF(H{row}<=30,U{row},0),'
-            f'((J{row}/0.3/0.5)*IF(H{row}<=25,1+O{row},1))+IF(H{row}<=25,U{row},0)))'
-        ),
-        MOBILITI_MIN_UNIT_PRICE_COL: f"=_xlfn.MINIFS($W$14:$W${product_end},$D$14:$D${product_end},D{row})",
-        MOBILITI_LIST_TOTAL_COL: f"=X{row}*H{row}",
-        MOBILITI_MAX_DISCOUNT_COL: _mobiliti_provider_discount_formula(row, discount_start),
-        MOBILITI_DISCOUNT_AMOUNT_COL: f"=X{row}*AA{row}",
-        MOBILITI_FINAL_PRICE_COL: f'=IF(AA{row}>Z{row},"ERROR",(X{row}-AB{row}))',
-        MOBILITI_COMMERCIAL_TOTAL_COL: f"=AC{row}*H{row}",
-        MOBILITI_CLIENT_DISCOUNT_COL: f'=IF(A{row + 1}=TRUE,MAX(0,1-(AF{row}/X{row})),"NA")',
-        MOBILITI_CLIENT_PRICE_COL: f'=IF(A{row - 1}=FALSE,"NO APLICA",AC{row}*1.2)',
-        MOBILITI_PROJECT_TOTAL_COL: f"=AF{row}*H{row}",
-        MOBILITI_GP_COL: f"=(AD{row}-N{row})/AD{row}",
-        MOBILITI_STATUS_COL: f'=IF(AH{row}<30%,"ERROR","OK")',
-    }
-    if line_discount_literal is not None:
-        formulas[MOBILITI_COVER_DISCOUNT_COL] = f"=MIN({line_discount_literal},Z{row})"
-    for col, formula in formulas.items():
-        cell = ws.cell(row, col)
-        if not isinstance(cell, MergedCell):
-            cell.value = _blank_safe_mobiliti_formula(row, formula) if blank_safe else formula
-    for col in (MOBILITI_MAX_DISCOUNT_COL, MOBILITI_COVER_DISCOUNT_COL):
-        ws.cell(row, col).number_format = PERCENT_FORMAT
 
 
 def _set_mobiliti_row_fill(
@@ -852,50 +896,6 @@ def _exclude_mobiliti_separator_rows_from_conditional_formatting(
 
     cf_rules.clear()
     cf_rules.update(updated_rules)
-
-
-def _normalize_mobiliti_row_formulas(ws, row: int, total_row: int, discount_start: int | None) -> None:
-    provider_cell = ws.cell(row, MOBILITI_PROVIDER_COL)
-    if not isinstance(provider_cell, MergedCell):
-        product_cell = ws.cell(row, MOBILITI_PRODUCT_CATEGORY_COL)
-        provider_cell.fill = copy(product_cell.fill)
-        provider_cell.border = copy(product_cell.border)
-
-    for col in range(1, min(ws.max_column, 49) + 1):
-        cell = ws.cell(row, col)
-        value = cell.value
-        if not isinstance(value, str) or not value.startswith("="):
-            continue
-        value = value.replace("$H$573", f"$H${total_row}")
-        value = re.sub(
-            r"K\d+(?=\s*(?:<=|>=|<|>)\s*\$(?:AO|AN)\$)",
-            f"K{total_row}",
-            value,
-        )
-        if discount_start:
-            offset = discount_start - 577
-            value = value.replace("$AO$578", f"$AO${578 + offset}")
-            value = value.replace("$AN$579", f"$AN${579 + offset}")
-            value = value.replace("$AN$580", f"$AN${580 + offset}")
-        cell.value = value
-
-    _write_mobiliti_row_formulas(ws, row, total_row, discount_start)
-
-
-def _set_mobiliti_subtotal_formulas(
-    ws,
-    row: int,
-    section_number: int,
-    product_start: int,
-    capacity: int = BASE_PROD_PER_SECTION,
-) -> None:
-    product_end = product_start + capacity - 1
-    ws.cell(row, 1).value = f"Subtotales Sección {section_number}"
-    for col in (8, 12, 14, MOBILITI_LIST_TOTAL_COL, MOBILITI_COMMERCIAL_TOTAL_COL, MOBILITI_PROJECT_TOTAL_COL):
-        letter = get_column_letter(col)
-        ws.cell(row, col).value = f"=SUM({letter}{product_start}:{letter}{product_end})"
-    ws.cell(row, MOBILITI_CLIENT_DISCOUNT_COL).value = f"=IFERROR(AVERAGE(AE{product_start}:AE{product_end}),0)"
-    ws.cell(row, MOBILITI_GP_COL).value = f"=IFERROR(1-(N{row}/AD{row}),0)"
 
 
 def _set_mobiliti_total_formulas(
@@ -1046,229 +1046,6 @@ def _write_mobiliti_section_title(
     ws.cell(layout.section_row, anchor_col).value = f"Secci\u00f3n {section_number} - {title}"
 
 
-def _ensure_mobiliti_capacity_legacy(ws) -> None:
-    _ensure_mobiliti_formula_layout(ws)
-    if ws.max_row >= MOBILITI_TOTAL_ROW and str(ws.cell(MOBILITI_TOTAL_ROW, 6).value or "") == "TOTAL PIEZAS":
-        return
-
-    max_col = max(ws.max_column, 49)
-    original_total_row = _find_mobiliti_total_row(ws)
-    if not original_total_row:
-        return
-
-    auxiliary_snapshot = _snapshot_mobiliti_auxiliary_area(ws)
-    first_section = _snapshot_mobiliti_row(ws, 13, max_col)
-    section = _snapshot_mobiliti_row(ws, 48, max_col)
-    product = _snapshot_mobiliti_row(ws, 14, max_col)
-    blank = _snapshot_mobiliti_row(ws, 46, max_col)
-    subtotal = _snapshot_mobiliti_row(ws, 47, max_col)
-
-    rows_to_insert = MOBILITI_TOTAL_ROW - original_total_row
-    if rows_to_insert > 0:
-        ws.insert_rows(original_total_row, rows_to_insert)
-
-    discount_start = _find_provider_discount_start(ws)
-
-    for index, section_row in enumerate(SECTION_CATS, start=1):
-        section_snapshot = first_section if index == 1 else section
-        section_source_row = 13 if index == 1 else 48
-        _copy_mobiliti_row_from_snapshot(
-            ws,
-            section_snapshot,
-            section_row,
-            source_row=section_source_row,
-            max_col=max_col,
-            translate_formulas=False,
-        )
-        ws.cell(section_row, _merged_anchor_column(ws, section_row, 4)).value = f"Sección {index} - NOMBRE"
-        _apply_mobiliti_section_row_visual_style(ws, section_row)
-
-        product_start = section_row + 1
-        for row in range(product_start, product_start + MAX_PROD_PER_SECTION):
-            _copy_mobiliti_row_from_snapshot(
-                ws,
-                product,
-                row,
-                source_row=14,
-                max_col=max_col,
-            )
-            _normalize_mobiliti_row_formulas(ws, row, MOBILITI_TOTAL_ROW, discount_start)
-
-        blank_row = product_start + MAX_PROD_PER_SECTION
-        _copy_mobiliti_row_from_snapshot(
-            ws,
-            blank,
-            blank_row,
-            source_row=46,
-            max_col=max_col,
-        )
-
-        subtotal_row = SECTION_SUBTOTAL_ROWS[index - 1]
-        _copy_mobiliti_row_from_snapshot(
-            ws,
-            subtotal,
-            subtotal_row,
-            source_row=47,
-            max_col=max_col,
-        )
-        _set_mobiliti_subtotal_formulas(ws, subtotal_row, index, product_start)
-        _apply_mobiliti_subtotal_row_visual_style(ws, subtotal_row)
-
-    _set_mobiliti_total_formulas(ws, MOBILITI_TOTAL_ROW)
-    _restore_mobiliti_auxiliary_area(ws, auxiliary_snapshot, MOBILITI_TOTAL_ROW)
-    _set_mobiliti_auxiliary_total_references(ws, MOBILITI_TOTAL_ROW)
-    ws["E4"] = f"=AD{MOBILITI_TOTAL_ROW}"
-    ws["E6"] = f"=E4*E5"
-    ws["E8"] = f"=(AD{MOBILITI_TOTAL_ROW}-M{MOBILITI_TOTAL_ROW})/AD{MOBILITI_TOTAL_ROW}"
-
-
-def _ensure_mobiliti_capacity(ws, capacities: list[int]) -> list[MobilitiSectionLayout]:
-    _ensure_mobiliti_formula_layout(ws)
-    capacities = _normalize_mobiliti_section_capacities(capacities)
-    max_col = max(ws.max_column, 49)
-    original_total_row = _find_mobiliti_total_row(ws)
-    if not original_total_row:
-        layouts = [
-            MobilitiSectionLayout(row, row + 1, capacity, row + capacity + 2)
-            for row, capacity in zip(SECTION_CATS, capacities, strict=False)
-        ]
-        ws._mobiliti_product_ranges = [(layout.product_start, layout.capacity) for layout in layouts]
-        return layouts
-
-    auxiliary_snapshot = _snapshot_mobiliti_auxiliary_area(ws)
-    first_section = _snapshot_mobiliti_row(ws, 13, max_col)
-    first_product = _snapshot_mobiliti_row(ws, 14, max_col)
-    first_blank = _snapshot_mobiliti_row(ws, 46, max_col)
-    first_subtotal = _snapshot_mobiliti_row(ws, 47, max_col)
-    section = _snapshot_mobiliti_row(ws, 48, max_col)
-    section_product = _snapshot_mobiliti_row(ws, 49, max_col)
-    section_blank = _snapshot_mobiliti_row(ws, 81, max_col)
-    section_subtotal = _snapshot_mobiliti_row(ws, 82, max_col)
-
-    rows_to_insert = MOBILITI_TOTAL_ROW - original_total_row
-    if rows_to_insert > 0:
-        ws.insert_rows(original_total_row, rows_to_insert)
-
-    for index in range(16, MOBILITI_SECTION_COUNT):
-        section_row = SECTION_CATS[index]
-        _copy_mobiliti_row_from_snapshot(
-            ws,
-            section,
-            section_row,
-            source_row=48,
-            max_col=max_col,
-            translate_formulas=False,
-        )
-        ws.cell(section_row, _merged_anchor_column(ws, section_row, 4)).value = f"Secci\u00f3n {index + 1} - NOMBRE"
-
-        product_start = section_row + 1
-        for row in range(product_start, product_start + BASE_PROD_PER_SECTION):
-            _copy_mobiliti_row_from_snapshot(
-                ws,
-                section_product,
-                row,
-                source_row=49,
-                max_col=max_col,
-            )
-
-        blank_row = product_start + BASE_PROD_PER_SECTION
-        _copy_mobiliti_row_from_snapshot(ws, section_blank, blank_row, source_row=81, max_col=max_col)
-
-        subtotal_row = blank_row + 1
-        _copy_mobiliti_row_from_snapshot(ws, section_subtotal, subtotal_row, source_row=82, max_col=max_col)
-
-    layouts: list[MobilitiSectionLayout] = []
-    inserted_rows = 0
-    for index, capacity in enumerate(capacities):
-        section_row = SECTION_CATS[index] + inserted_rows
-        product_start = section_row + 1
-        extra_rows = capacity - BASE_PROD_PER_SECTION
-        if extra_rows > 0:
-            insert_at = product_start + BASE_PROD_PER_SECTION
-            ws.insert_rows(insert_at, extra_rows)
-            product_snapshot = first_product if index == 0 else section_product
-            product_source_row = 14 if index == 0 else 49
-            for row in range(insert_at, insert_at + extra_rows):
-                _copy_mobiliti_row_from_snapshot(
-                    ws,
-                    product_snapshot,
-                    row,
-                    source_row=product_source_row,
-                    max_col=max_col,
-                )
-            inserted_rows += extra_rows
-
-        subtotal_row = product_start + capacity + 1
-        layouts.append(MobilitiSectionLayout(section_row, product_start, capacity, subtotal_row))
-
-    total_row = MOBILITI_TOTAL_ROW + inserted_rows
-    discount_start = _find_provider_discount_start(ws)
-    subtotal_rows = [layout.subtotal_row for layout in layouts]
-
-    for index, layout in enumerate(layouts, start=1):
-        section_snapshot = first_section if index == 1 else section
-        section_source_row = 13 if index == 1 else 48
-        _copy_mobiliti_row_from_snapshot(
-            ws,
-            section_snapshot,
-            layout.section_row,
-            source_row=section_source_row,
-            max_col=max_col,
-            translate_formulas=False,
-        )
-        _write_mobiliti_section_title(ws, layout, index, "NOMBRE")
-        _apply_mobiliti_section_row_visual_style(ws, layout.section_row)
-        product_snapshot = first_product if index == 1 else section_product
-        product_source_row = 14 if index == 1 else 49
-        for row in range(layout.product_start, layout.product_start + layout.capacity):
-            _copy_mobiliti_row_from_snapshot(
-                ws,
-                product_snapshot,
-                row,
-                source_row=product_source_row,
-                max_col=max_col,
-            )
-            _normalize_mobiliti_row_formulas(ws, row, total_row, discount_start)
-        blank_snapshot = first_blank if index == 1 else section_blank
-        blank_source_row = 46 if index == 1 else 81
-        _copy_mobiliti_row_from_snapshot(
-            ws,
-            blank_snapshot,
-            layout.subtotal_row - 1,
-            source_row=blank_source_row,
-            max_col=max_col,
-        )
-        _clear_mobiliti_row_values(ws, layout.subtotal_row - 1)
-        subtotal_snapshot = first_subtotal if index == 1 else section_subtotal
-        subtotal_source_row = 47 if index == 1 else 82
-        _copy_mobiliti_row_from_snapshot(
-            ws,
-            subtotal_snapshot,
-            layout.subtotal_row,
-            source_row=subtotal_source_row,
-            max_col=max_col,
-        )
-        _set_mobiliti_subtotal_formulas(
-            ws,
-            layout.subtotal_row,
-            index,
-            layout.product_start,
-            layout.capacity,
-        )
-        _apply_mobiliti_subtotal_row_visual_style(ws, layout.subtotal_row)
-
-    _set_mobiliti_total_formulas(ws, total_row, subtotal_rows)
-    _restore_mobiliti_auxiliary_area(ws, auxiliary_snapshot, total_row)
-    _set_mobiliti_auxiliary_total_references(ws, total_row)
-    ws["E4"] = f"=AD{total_row}"
-    ws["E6"] = f"=E4*E5"
-    ws["E8"] = f"=(AD{total_row}-M{total_row})/AD{total_row}"
-    ws._mobiliti_product_ranges = [(layout.product_start, layout.capacity) for layout in layouts]
-    _apply_mobiliti_status_conditional_formatting(ws)
-    _exclude_mobiliti_separator_rows_from_conditional_formatting(ws, layouts)
-    return layouts
-
-
 def _unmerge_row(ws, row: int) -> None:
     for merged in list(ws.merged_cells.ranges):
         if merged.min_row <= row <= merged.max_row:
@@ -1369,40 +1146,10 @@ def _restore_rows(ws, start_row: int, snapshot: dict[str, Any]) -> int:
     return row - 1
 
 
-def _default_template() -> Workbook:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Cotizacion"
-    wb.create_sheet("Mobiliti")
-    widths = [78, 156, 42, 22, 12, 14, 12, 14, 14, 16]
-    for index, width in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(index)].width = width
-    ws.merge_cells("A1:J1")
-    ws["A1"] = "MOBILITI - COTIZACION"
-    ws["A1"].fill = PatternFill("solid", fgColor="12332F")
-    ws["A1"].font = Font(color="FFFFFF", bold=True, size=16)
-    ws["A1"].alignment = Alignment(horizontal="center")
-    for row in [16, 18, 21, 22, 23, 24, 25]:
-        for col in range(1, 11):
-            ws.cell(row, col).alignment = Alignment(vertical="top", wrap_text=True)
-    return wb
-
-
 def _set_cotizacion_image_column_px(
     ws: Worksheet, pixel_width: float = 1100, column: str = "B"
 ) -> None:
     ws.column_dimensions[column].width = max(1.0, (float(pixel_width) - 5) / 7)
-
-
-def _load_template(template_path: str | Path | None) -> Workbook:
-    if template_path:
-        path = Path(template_path)
-        if not path.exists():
-            raise FileNotFoundError(f"Plantilla no encontrada: {path}")
-        wb = load_workbook(path, keep_links=False)
-        _sanitize_template_workbook(wb)
-        return wb
-    return _default_template()
 
 
 def _load_lumbro_prices(template_path: str | Path | None) -> dict[str, LumbroPriceRef]:
@@ -1423,337 +1170,6 @@ def _load_lumbro_prices(template_path: str | Path | None) -> dict[str, LumbroPri
         return prices
     finally:
         wb.close()
-
-
-def _sanitize_template_workbook(wb: Workbook) -> None:
-    for name in list(wb.defined_names.keys()):
-        defined_name = wb.defined_names[name]
-        text = str(getattr(defined_name, "attr_text", "") or "")
-        if "#REF!" in text or "[" in text or name.startswith("LOCAL_") or name == "Hon":
-            del wb.defined_names[name]
-
-    for ws in wb.worksheets:
-        if not (ws.title.startswith("SPEC") or ws.title.startswith("Spec")):
-            continue
-        for row in ws.iter_rows():
-            for cell in row:
-                if isinstance(cell.value, str) and cell.value.startswith("="):
-                    cell.value = None
-
-
-def _quotation_image_sort_key(img: XlsxImage) -> tuple[int, int]:
-    marker = getattr(getattr(img, "anchor", None), "_from", None)
-    return (
-        int(getattr(marker, "row", 0) or 0),
-        int(getattr(marker, "col", 0) or 0),
-    )
-
-
-def _quotation_used_bounds(ws: Any) -> tuple[int, int]:
-    max_row = 1
-    max_col = 1
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.value not in (None, ""):
-                max_row = max(max_row, cell.row)
-                max_col = max(max_col, cell.column)
-    for merged in ws.merged_cells.ranges:
-        max_row = max(max_row, merged.max_row)
-        max_col = max(max_col, merged.max_col)
-    for img in getattr(ws, "_images", []):
-        row, col = _quotation_image_sort_key(img)
-        max_row = max(max_row, row + 1)
-        max_col = max(max_col, col + 1)
-    return max_row, max(max_col, min(ws.max_column, 32))
-
-
-def _apply_quotation_borders(ws: Any, max_row: int, max_col: int) -> None:
-    side = Side(style="thin", color="000000")
-    border = Border(left=side, right=side, top=side, bottom=side)
-    for row in ws.iter_rows(min_row=1, max_row=max_row, min_col=1, max_col=max_col):
-        for cell in row:
-            cell.border = border
-
-
-def _apply_quotation_item_name_font(ws: Any, max_row: int) -> None:
-    for row in range(1, max_row + 1):
-        for column in (2, 4):
-            cell = ws.cell(row, column)
-            font = copy(cell.font)
-            font.color = "000000"
-            cell.font = font
-
-
-_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-_SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-_OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-
-
-def _zip_resolve_part(base_part: str, target: str) -> str:
-    if target.startswith("/"):
-        return target.lstrip("/")
-    return posixpath.normpath(posixpath.join(posixpath.dirname(base_part), target))
-
-
-def _zip_rel_target(from_part: str, to_part: str) -> str:
-    return posixpath.relpath(to_part, posixpath.dirname(from_part))
-
-
-def _worksheet_part_for_name(zf: zipfile.ZipFile, sheet_name: str) -> str:
-    workbook = ET.fromstring(zf.read("xl/workbook.xml"))
-    rel_id = None
-    for sheet in workbook.find(f"{{{_SHEET_NS}}}sheets"):
-        if sheet.attrib.get("name") == sheet_name:
-            rel_id = sheet.attrib[f"{{{_OFFICE_REL_NS}}}id"]
-            break
-    if rel_id is None:
-        raise ValueError(f"No se encontro la hoja {sheet_name!r}")
-
-    rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
-    for rel in rels:
-        if rel.attrib.get("Id") == rel_id:
-            return _zip_resolve_part("xl/workbook.xml", rel.attrib["Target"])
-    raise ValueError(f"No se encontro la relacion de la hoja {sheet_name!r}")
-
-
-def _drawing_part_for_sheet(zf: zipfile.ZipFile, sheet_part: str) -> tuple[str, str]:
-    sheet = ET.fromstring(zf.read(sheet_part))
-    drawing = sheet.find(f"{{{_SHEET_NS}}}drawing")
-    if drawing is None:
-        raise ValueError("La hoja Quotation no tiene drawing de imagenes")
-    rel_id = drawing.attrib[f"{{{_OFFICE_REL_NS}}}id"]
-    sheet_rels_path = posixpath.join(
-        posixpath.dirname(sheet_part),
-        "_rels",
-        f"{posixpath.basename(sheet_part)}.rels",
-    )
-    sheet_rels = ET.fromstring(zf.read(sheet_rels_path))
-    for rel in sheet_rels:
-        if rel.attrib.get("Id") == rel_id:
-            return _zip_resolve_part(sheet_part, rel.attrib["Target"]), sheet_rels_path
-    raise ValueError("No se encontro la relacion del drawing de Quotation")
-
-
-def _image_parts_from_rels(zf: zipfile.ZipFile, drawing_part: str, rels_path: str) -> set[str]:
-    image_parts: set[str] = set()
-    rels = ET.fromstring(zf.read(rels_path))
-    for rel in rels:
-        if str(rel.attrib.get("Type", "")).endswith("/image"):
-            image_parts.add(_zip_resolve_part(drawing_part, rel.attrib["Target"]))
-    return image_parts
-
-
-def _other_drawing_image_parts(zf: zipfile.ZipFile, excluded_rels_path: str) -> set[str]:
-    image_parts: set[str] = set()
-    for name in zf.namelist():
-        if not (name.startswith("xl/drawings/_rels/") and name.endswith(".rels")):
-            continue
-        if name == excluded_rels_path:
-            continue
-        drawing_part = posixpath.join(
-            "xl/drawings",
-            posixpath.basename(name).removesuffix(".rels"),
-        )
-        if drawing_part in zf.namelist():
-            image_parts.update(_image_parts_from_rels(zf, drawing_part, name))
-    return image_parts
-
-
-def _drawing_embed_rel_ids(drawing_xml: bytes) -> set[str]:
-    drawing = ET.fromstring(drawing_xml)
-    ids: set[str] = set()
-    for element in drawing.iter():
-        rel_id = element.attrib.get(f"{{{_OFFICE_REL_NS}}}embed")
-        if rel_id:
-            ids.add(rel_id)
-    return ids
-
-
-def _patch_quotation_drawing_from_source(source_path: str | Path, output_path: str | Path) -> None:
-    ET.register_namespace("", _PKG_REL_NS)
-    source_path = Path(source_path)
-    output_path = Path(output_path)
-    tmp_path = output_path.with_name(f"{output_path.stem}.quotation_media_tmp{output_path.suffix}")
-
-    with zipfile.ZipFile(source_path) as src_zip, zipfile.ZipFile(output_path) as out_zip:
-        src_sheet_part = _worksheet_part_for_name(src_zip, "Quotation")
-        try:
-            src_drawing_part, _ = _drawing_part_for_sheet(src_zip, src_sheet_part)
-        except ValueError as exc:
-            if "no tiene drawing" in str(exc):
-                return
-            raise
-        src_drawing_rels_path = posixpath.join(
-            posixpath.dirname(src_drawing_part),
-            "_rels",
-            f"{posixpath.basename(src_drawing_part)}.rels",
-        )
-
-        out_sheet_part = _worksheet_part_for_name(out_zip, "Quotation")
-        out_drawing_part, _ = _drawing_part_for_sheet(out_zip, out_sheet_part)
-        out_drawing_rels_path = posixpath.join(
-            posixpath.dirname(out_drawing_part),
-            "_rels",
-            f"{posixpath.basename(out_drawing_part)}.rels",
-        )
-
-        old_quotation_media = _image_parts_from_rels(out_zip, out_drawing_part, out_drawing_rels_path)
-        media_used_elsewhere = _other_drawing_image_parts(out_zip, out_drawing_rels_path)
-        old_media_to_skip = old_quotation_media - media_used_elsewhere
-
-        src_drawing_xml = src_zip.read(src_drawing_part)
-        used_rel_ids = _drawing_embed_rel_ids(src_drawing_xml)
-        src_rels = ET.fromstring(src_zip.read(src_drawing_rels_path))
-        copied_media: dict[str, bytes] = {}
-        for index, rel in enumerate(list(src_rels), start=1):
-            if rel.attrib.get("Id") not in used_rel_ids:
-                src_rels.remove(rel)
-                continue
-            if not str(rel.attrib.get("Type", "")).endswith("/image"):
-                continue
-            if rel.attrib.get("TargetMode") == "External":
-                continue
-            src_media_part = _zip_resolve_part(src_drawing_part, rel.attrib["Target"])
-            if src_media_part not in src_zip.namelist():
-                continue
-            data = src_zip.read(src_media_part)
-            suffix = Path(src_media_part).suffix or ".png"
-            media_part = f"xl/media/quotation_original_{index:03d}{suffix}"
-            copied_media[media_part] = data
-            rel.attrib["Target"] = _zip_rel_target(out_drawing_part, media_part)
-
-        patched_rels_xml = ET.tostring(src_rels, encoding="utf-8", xml_declaration=True)
-
-        with zipfile.ZipFile(
-            tmp_path,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-            compresslevel=6,
-        ) as patched_zip:
-            for info in out_zip.infolist():
-                if info.filename in old_media_to_skip:
-                    continue
-                data = out_zip.read(info.filename)
-                if info.filename == out_drawing_part:
-                    data = src_drawing_xml
-                elif info.filename == out_drawing_rels_path:
-                    data = patched_rels_xml
-                patched_zip.writestr(info, data)
-            for media_part, data in copied_media.items():
-                patched_zip.writestr(media_part, data)
-
-    tmp_path.replace(output_path)
-
-
-def _strip_empty_color_changes(xml_bytes: bytes) -> bytes:
-    text = xml_bytes.decode("utf-8", errors="replace")
-    text = re.sub(r"<clrChange>\s*<clrFrom/>\s*<clrTo/>\s*</clrChange>", "", text)
-    text = re.sub(
-        r"<a:clrChange[^>]*>\s*<a:clrFrom/>\s*<a:clrTo/>\s*</a:clrChange>",
-        "",
-        text,
-    )
-    return text.encode("utf-8")
-
-
-def _normalize_quotation_sheet_view(xml_bytes: bytes) -> bytes:
-    text = xml_bytes.decode("utf-8", errors="replace")
-    safe_view = (
-        '<sheetViews><sheetView showGridLines="0" zoomScale="110" '
-        'zoomScaleNormal="110" workbookViewId="0"><selection activeCell="A1" '
-        'sqref="A1"/></sheetView></sheetViews>'
-    )
-    text = re.sub(r"<sheetViews>.*?</sheetViews>", safe_view, text, count=1, flags=re.S)
-    return text.encode("utf-8")
-
-
-def _sanitize_output_xlsx_for_excel(output_path: str | Path) -> None:
-    output_path = Path(output_path)
-    tmp_path = output_path.with_name(f"{output_path.stem}.excel_sanitize_tmp{output_path.suffix}")
-
-    with zipfile.ZipFile(output_path, "r") as src_zip:
-        try:
-            quotation_sheet_part = _worksheet_part_for_name(src_zip, "Quotation")
-        except ValueError:
-            quotation_sheet_part = ""
-
-        with zipfile.ZipFile(
-            tmp_path,
-            "w",
-            compression=zipfile.ZIP_DEFLATED,
-            compresslevel=6,
-        ) as patched_zip:
-            for info in src_zip.infolist():
-                data = src_zip.read(info.filename)
-                if info.filename.startswith("xl/drawings/drawing") and info.filename.endswith(".xml"):
-                    data = _strip_empty_color_changes(data)
-                elif info.filename == quotation_sheet_part:
-                    data = _normalize_quotation_sheet_view(data)
-                patched_zip.writestr(info, data)
-
-    tmp_path.replace(output_path)
-
-
-def _copy_source_sheet(source_path: str | Path, wb_out: Workbook) -> None:
-    src = load_workbook(source_path, data_only=False)
-    if "Quotation" not in src.sheetnames:
-        src.close()
-        return
-    if "Quotation" in wb_out.sheetnames:
-        del wb_out["Quotation"]
-    src_ws = src["Quotation"]
-    out_ws = wb_out.create_sheet("Quotation")
-    for row in src_ws.iter_rows():
-        for cell in row:
-            dst = out_ws.cell(cell.row, cell.column, cell.value)
-            _copy_external_cell_style(cell, dst)
-    for key, dim in src_ws.column_dimensions.items():
-        out_ws.column_dimensions[key].width = dim.width
-        out_ws.column_dimensions[key].hidden = dim.hidden
-        out_ws.column_dimensions[key].outlineLevel = dim.outlineLevel
-    for row, dim in src_ws.row_dimensions.items():
-        out_ws.row_dimensions[row].height = dim.height
-        out_ws.row_dimensions[row].hidden = dim.hidden
-        out_ws.row_dimensions[row].outlineLevel = dim.outlineLevel
-    for merged in src_ws.merged_cells.ranges:
-        out_ws.merge_cells(str(merged))
-
-    max_row, max_col = _quotation_used_bounds(src_ws)
-    _apply_quotation_borders(out_ws, max_row, max_col)
-    _apply_quotation_item_name_font(out_ws, max_row)
-
-    for src_img in sorted(src_ws._images, key=_quotation_image_sort_key):
-        stream = BytesIO(src_img._data())
-        img = XlsxImage(stream)
-        img.width = src_img.width
-        img.height = src_img.height
-        img.anchor = deepcopy(src_img.anchor)
-        img._mobiliti_stream = stream
-        out_ws.add_image(img)
-
-    out_ws.sheet_properties = deepcopy(src_ws.sheet_properties)
-    out_ws.sheet_format = copy(src_ws.sheet_format)
-    out_ws.page_setup = copy(src_ws.page_setup)
-    out_ws.page_margins = copy(src_ws.page_margins)
-    out_ws.print_options = copy(src_ws.print_options)
-    out_ws.sheet_view.showGridLines = src_ws.sheet_view.showGridLines
-    out_ws.sheet_view.zoomScale = src_ws.sheet_view.zoomScale
-    out_ws.sheet_view.zoomScaleNormal = src_ws.sheet_view.zoomScaleNormal
-    out_ws.sheet_view.view = src_ws.sheet_view.view
-    out_ws.sheet_view.topLeftCell = src_ws.sheet_view.topLeftCell
-    out_ws.sheet_view.selection = deepcopy(src_ws.sheet_view.selection)
-    out_ws.sheet_state = src_ws.sheet_state
-    out_ws.protection = copy(src_ws.protection)
-    out_ws.auto_filter.ref = src_ws.auto_filter.ref
-    out_ws.data_validations = deepcopy(src_ws.data_validations)
-    out_ws.conditional_formatting = deepcopy(src_ws.conditional_formatting)
-    out_ws.row_breaks = deepcopy(src_ws.row_breaks)
-    out_ws.col_breaks = deepcopy(src_ws.col_breaks)
-    out_ws.freeze_panes = None
-    out_ws.print_area = src_ws.print_area
-    out_ws.print_title_rows = src_ws.print_title_rows
-    out_ws.print_title_cols = src_ws.print_title_cols
-    src.close()
 
 
 def _first_product_row(items: list[QuoteItem]) -> int:
@@ -1793,7 +1209,7 @@ def _mixed_decimal(value: Any, message: str, *, positive: bool = False) -> Decim
 def _mixed_item_discount_fraction(item: QuoteItem) -> Decimal:
     mode = str(item.modo_precio or "").strip().lower()
     provider = str(item.proveedor or "").strip()
-    if mode not in {"list", "net"}:
+    if mode not in {"list", "net", "imported"}:
         raise ValueError("Modo de precio mixto invalido")
     value = _mixed_decimal(item.descuento, "Descuento mixto por linea invalido")
     if value > Decimal("100") or max(-value.as_tuple().exponent, 0) > 6:
@@ -1805,6 +1221,17 @@ def _mixed_item_discount_fraction(item: QuoteItem) -> Decimal:
     return value / Decimal("100")
 
 
+def _mixed_metadata_discount_fraction(metadata: dict[str, Any]) -> Decimal:
+    raw = metadata.get(
+        "descuento",
+        metadata.get("discount_percent", DEFAULT_DISCOUNT_PERCENT),
+    )
+    value = _mixed_decimal(raw, "Descuento mixto general invalido")
+    if value > Decimal("100"):
+        raise ValueError("Descuento mixto general invalido")
+    return value if value <= Decimal("1") else value / Decimal("100")
+
+
 def _mixed_decimal_literal(value: Decimal) -> str:
     text = format(value, "f").rstrip("0").rstrip(".")
     return text or "0"
@@ -1812,7 +1239,7 @@ def _mixed_decimal_literal(value: Decimal) -> str:
 
 def _item_discount_literal(item: QuoteItem, metadata: dict[str, Any]) -> str:
     if _uses_mixed_catalog_prices(metadata):
-        return _mixed_decimal_literal(_mixed_item_discount_fraction(item))
+        return _mixed_decimal_literal(_mixed_metadata_discount_fraction(metadata))
     return _excel_decimal(_discount_rate(metadata))
 
 
@@ -1857,7 +1284,7 @@ def _mixed_rate_summary(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     if quote_currency not in MIXED_MONEY_FORMATS:
         raise ValueError("Moneda mixta incompleta")
     raw_summary = metadata.get("rate_summary")
-    if not isinstance(raw_summary, list) or not raw_summary:
+    if not isinstance(raw_summary, list):
         raise ValueError("Resumen de tasas mixtas invalido")
     summary: list[dict[str, Any]] = []
     seen: list[str] = []
@@ -1914,23 +1341,27 @@ def _mixed_rate_summary(metadata: dict[str, Any]) -> list[dict[str, Any]]:
 def _validate_mixed_catalog_metadata(items: list[QuoteItem], metadata: dict[str, Any]) -> None:
     if not _uses_mixed_catalog_prices(metadata):
         return
+    product_items = [item for item in items if item.tipo == "producto"]
+    if not product_items:
+        raise ValueError("Carrito mixto sin productos")
     summary = _mixed_rate_summary(metadata)
     summaries_by_provider = {
         MIXED_CATALOG_LABELS[entry["catalog"]]: entry for entry in summary
     }
     auto_items: list[QuoteItem] = []
     seen_providers: set[str] = set()
-    for item in items:
-        if item.tipo != "producto":
-            continue
+    for item in product_items:
         _item_discount_rate(item, metadata)
         if _item_auto_electrification(item, metadata):
             auto_items.append(item)
+        mode = str(item.modo_precio or "").strip().lower()
         provider = str(item.proveedor or "").strip()
-        seen_providers.add(provider)
-        snapshot = summaries_by_provider.get(provider)
-        if snapshot is None:
-            raise ValueError("Proveedor mixto sin tasa congelada")
+        snapshot = None
+        if mode != "imported":
+            seen_providers.add(provider)
+            snapshot = summaries_by_provider.get(provider)
+            if snapshot is None:
+                raise ValueError("Proveedor mixto sin tasa congelada")
         original_currency = str(item.moneda_original or "").strip().upper()
         frozen_rate = _mixed_decimal(
             item.tipo_cambio_congelado,
@@ -1953,8 +1384,14 @@ def _validate_mixed_catalog_metadata(items: list[QuoteItem], metadata: dict[str,
         except InvalidOperation as exc:
             raise ValueError("Auditoria de precio mixto invalida") from exc
         if (
-            original_currency != snapshot["base_currency"]
-            or frozen_rate != Decimal(snapshot["exchange_rate"])
+            (
+                snapshot is not None
+                and (
+                    original_currency != snapshot["base_currency"]
+                    or frozen_rate != Decimal(snapshot["exchange_rate"])
+                )
+            )
+            or (mode == "imported" and original_currency not in {"MXN", "USD", "EUR"})
             or not str(item.referencia_fuente or "").strip()
         ):
             raise ValueError("Auditoria de precio mixto invalida")
@@ -2033,192 +1470,6 @@ def _write_header(ws, metadata: dict[str, Any]) -> None:
     ws["B10"] = text(metadata.get("telefono", ""))
     ws["B11"] = text(metadata.get("direccion", ""))
     ws["B12"] = text(metadata.get("razon_social", ""))
-
-
-def _write_mobiliti(
-    ws,
-    items: list[QuoteItem],
-    column_map: dict[str, str],
-    lumbro_prices: dict[str, LumbroPriceRef] | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> tuple[dict[int, int], dict[int, list[int]]]:
-    q_sheet = "Quotation"
-    row_map: dict[int, int] = {}
-    lumbro_row_map: dict[int, list[int]] = {}
-    lumbro_prices = lumbro_prices or {}
-    metadata = metadata or {}
-    converted_catalog_prices = _uses_converted_catalog_prices(metadata)
-    provider_label = str(metadata.get("catalog_supplier_label") or "Sunon Inc").strip() or "Sunon Inc"
-    written_rows: set[int] = set()
-    auto_items = [
-        item
-        for item in items
-        if item.tipo == "producto" and _item_auto_electrification(item, metadata)
-    ]
-    mixed_auto_rate = None
-    if _uses_mixed_catalog_prices(metadata) and auto_items:
-        mixed_auto_rate = _mixed_auto_electrification_rate(metadata)
-    elif _uses_mixed_catalog_prices(metadata) and metadata.get("auto_electrification_rate") is not None:
-        raise ValueError("Tasa de electrificacion mixta inesperada")
-    category_dictionary = load_category_dictionary(
-        [str(item.nombre or "") for item in items if item.tipo == "producto"]
-    )
-    section_layouts = _ensure_mobiliti_capacity(
-        ws,
-        _mobiliti_section_capacities(items, category_dictionary, metadata),
-    )
-    m3_col = column_map.get("m3", column_map.get("dimension", "E"))
-    qty_col = column_map.get("cantidad", "G")
-    price_col = column_map.get("unit_price", column_map.get("list_price", "J"))
-    first_row = _first_product_row(items)
-    ws["K14"] = _formula(q_sheet, f"{m3_col}{first_row}")
-
-    section_idx = 0
-    prod_in_section = 0
-    active_section_name = "NOMBRE"
-
-    def next_product_row() -> int | None:
-        nonlocal section_idx, prod_in_section
-        if prod_in_section >= section_layouts[section_idx].capacity:
-            section_idx += 1
-            prod_in_section = 0
-            if section_idx < len(section_layouts):
-                _write_mobiliti_section_title(
-                    ws,
-                    section_layouts[section_idx],
-                    section_idx + 1,
-                    active_section_name,
-                )
-        if section_idx >= len(section_layouts):
-            return None
-        row_number = section_layouts[section_idx].product_start + prod_in_section
-        prod_in_section += 1
-        return row_number
-
-    def mark_written_row(
-        row_number: int,
-        line_discount_literal: str,
-        region: str = DEFAULT_MOBILITI_REGION,
-    ) -> None:
-        ws.cell(row_number, MOBILITI_REGION_COL).value = region
-        ws.cell(row_number, MOBILITI_COVER_DISCOUNT_COL).value = (
-            f"=MIN({line_discount_literal},"
-            f"{get_column_letter(MOBILITI_MAX_DISCOUNT_COL)}{row_number})"
-        )
-        ws.cell(row_number, MOBILITI_DISCOUNT_AMOUNT_COL).value = f"=X{row_number}*AA{row_number}"
-        ws.cell(row_number, MOBILITI_FINAL_PRICE_COL).value = f'=IF(AA{row_number}>Z{row_number},"ERROR",(X{row_number}-AB{row_number}))'
-        ws.cell(row_number, MOBILITI_COMMERCIAL_TOTAL_COL).value = f"=AC{row_number}*H{row_number}"
-        if converted_catalog_prices:
-            ws.cell(row_number, MOBILITI_UNIT_PRICE_COL).value = f"=ROUND(J{row_number},2)"
-            ws.cell(row_number, MOBILITI_MIN_UNIT_PRICE_COL).value = f"=ROUND(J{row_number},2)"
-        written_rows.add(row_number)
-
-    def write_lumbro_row(
-        row_number: int,
-        code: str,
-        quantity: int,
-        line_discount_literal: str,
-        region: str = DEFAULT_MOBILITI_REGION,
-    ) -> None:
-        price_ref = lumbro_prices.get(code)
-        ws.cell(row_number, 4).value = code
-        ws.cell(row_number, 5).value = LUMBRO_CATEGORY
-        ws.cell(row_number, 6).value = LUMBRO_PROVIDER
-        ws.cell(row_number, 8).value = quantity
-        if price_ref and mixed_auto_rate is not None:
-            ws.cell(row_number, 10).value = (
-                f"=ROUND('SPEC-GUIDE-LUMBRO'!E{price_ref.row}*"
-                f"{_excel_decimal(mixed_auto_rate)},2)"
-            )
-        elif price_ref:
-            ws.cell(row_number, 10).value = f"='SPEC-GUIDE-LUMBRO'!E{price_ref.row}/$K$6"
-        else:
-            ws.cell(row_number, 10).value = "=0" if mixed_auto_rate is not None else "=0/$K$6"
-        ws.cell(row_number, 11).value = 0
-        mark_written_row(row_number, line_discount_literal, region)
-
-    for item in items:
-        if item.tipo == "categoria":
-            active_section_name = str(item.nombre or "NOMBRE")
-            if prod_in_section > 0:
-                section_idx += 1
-                prod_in_section = 0
-            if section_idx >= len(section_layouts):
-                break
-            section_row = section_layouts[section_idx].section_row
-            anchor_col = _merged_anchor_column(ws, section_row, 4)
-            ws.cell(section_row, anchor_col).value = f"Sección {section_idx + 1} - {item.nombre}"
-            continue
-
-        row = next_product_row()
-        if row is None:
-            break
-
-        ws.cell(row, 4).value = _formula(q_sheet, f"B{item.row}")
-        category = classify_product_name(str(item.nombre or ""), category_dictionary)
-        ws.cell(row, 5).value = category
-        ws.cell(row, 6).value = (
-            safe_excel_text(item.proveedor)
-            if _uses_mixed_catalog_prices(metadata)
-            else provider_label
-        )
-        ws.cell(row, 8).value = _formula(q_sheet, f"{qty_col}{item.row}")
-        ws.cell(row, 10).value = _formula(q_sheet, f"{price_col}{item.row}")
-        ws.cell(row, 11).value = _formula(q_sheet, f"{m3_col}{item.row}")
-        line_discount_literal = _item_discount_literal(item, metadata)
-        mark_written_row(row, line_discount_literal)
-        row_map[item.row] = row
-
-        lumbro_rows: list[int] = []
-        accessories = (
-            _lumbro_accessories_for_item(item, category)
-            if _item_auto_electrification(item, metadata)
-            else []
-        )
-        for code, quantity in accessories:
-            accessory_row = next_product_row()
-            if accessory_row is None:
-                break
-            write_lumbro_row(accessory_row, code, quantity, line_discount_literal)
-            lumbro_rows.append(accessory_row)
-        if lumbro_rows:
-            lumbro_row_map[item.row] = lumbro_rows
-    _prepare_unused_mobiliti_product_rows(ws, written_rows, metadata)
-    if _uses_mixed_catalog_prices(metadata):
-        money_format = _money_format(metadata)
-        format_rows = written_rows | {layout.subtotal_row for layout in section_layouts}
-        total_row = _find_mobiliti_total_row(ws)
-        if total_row is not None:
-            format_rows.add(total_row)
-        for row in format_rows:
-            for column in MIXED_MOBILITI_MONEY_COLS:
-                ws.cell(row, column).number_format = money_format
-    return row_map, lumbro_row_map
-
-
-def _prepare_unused_mobiliti_product_rows(
-    ws,
-    written_rows: set[int],
-    metadata: dict[str, Any],
-) -> None:
-    total_row = _find_mobiliti_total_row(ws)
-    if total_row is None:
-        return
-    discount_start = _find_provider_discount_start(ws)
-    line_discount_literal = _excel_decimal(_discount_rate(metadata))
-    for start_row, capacity in _mobiliti_product_ranges(ws):
-        for row in range(start_row, start_row + capacity):
-            if row in written_rows:
-                continue
-            _clear_mobiliti_row_values(ws, row)
-            _write_mobiliti_row_formulas(
-                ws,
-                row,
-                total_row,
-                discount_start,
-                line_discount_literal=line_discount_literal,
-                blank_safe=True,
-            )
 
 
 def _apply_mobiliti_provider_validation(ws) -> None:
@@ -2552,12 +1803,9 @@ def _write_cotizacion(
                 if converted_catalog_prices
                 else item.precio
             )
-        if mixed_catalog_prices:
-            ws.cell(current_row, 7).value = _item_discount_rate(item, metadata)
-        else:
-            ws.cell(current_row, 7).value = (
-                discount_rate if current_row == first_product else f"=G${first_product}"
-            )
+        ws.cell(current_row, 7).value = (
+            discount_rate if current_row == first_product else f"=G${first_product}"
+        )
         if converted_catalog_prices:
             ws.cell(current_row, 8).value = f"=ROUND(F{current_row}*G{current_row},2)"
             ws.cell(current_row, 9).value = f"=ROUND(F{current_row}-H{current_row},2)"
@@ -2925,6 +2173,16 @@ def _official_decimal(value: Any, field_name: str, *, positive: bool = False) ->
     return number
 
 
+def _official_volume(value: Any) -> Decimal:
+    """Devuelve siempre un M3 numérico; una medida descriptiva no es volumen."""
+    if value is None or str(value).strip() == "":
+        return Decimal("0")
+    try:
+        return _official_decimal(value, "M3")
+    except ValueError:
+        return Decimal("0")
+
+
 def _official_quote_currency(metadata: dict[str, Any]) -> str:
     currency = str(metadata.get("quote_currency") or "MXN").strip().upper()
     if currency not in {"MXN", "USD", "EUR"}:
@@ -3037,13 +2295,19 @@ def _source_product_image_payloads(
     except (KeyError, ET.ParseError) as error:
         raise ValueError("Relaciones del drawing Quotation inválidas") from error
 
+    embedded_ids = {
+        blip.attrib.get(f"{{{_OFFICE_REL_NS}}}embed", "")
+        for blip in drawing.iter(f"{{{_DRAWING_NS}}}blip")
+    }
     media_by_id: dict[str, str] = {}
     for relationship in relationships.findall(f"{{{_PKG_REL_NS}}}Relationship"):
         if relationship.attrib.get("Type") not in relationship_type_uris("image"):
             continue
+        relationship_id = relationship.attrib.get("Id", "")
+        if relationship_id not in embedded_ids:
+            continue
         if relationship.attrib.get("TargetMode", "").casefold() == "external":
             raise ValueError("TargetMode externo no permitido para image")
-        relationship_id = relationship.attrib.get("Id", "")
         if not relationship_id or relationship_id in media_by_id:
             raise ValueError("Relación de imagen Quotation ambigua")
         media_by_id[relationship_id] = resolve_internal_target(
@@ -3138,6 +2402,7 @@ def _official_presentation_lines(
                 name=safe_excel_text(item.nombre or f"Producto {item.row}"),
                 description=safe_excel_text(item.descripcion or ""),
                 dimensions=safe_excel_text(item.dimension or ""),
+                m3=_official_volume(item.m3),
                 quantity=_official_decimal(
                     item.cantidad or 1,
                     "Cantidad",
@@ -3191,6 +2456,7 @@ def _official_presentation_lines(
                         name=code,
                         description="Accesorio de electrificacion Lumbro",
                         dimensions="",
+                        m3=Decimal("0"),
                         quantity=Decimal(quantity),
                         category=LUMBRO_CATEGORY,
                         provider=LUMBRO_PROVIDER,
@@ -3324,18 +2590,9 @@ def _bind_authoritative_canonical_rows(
                 raise ValueError("Identidad técnica ausente: upstream_row_hash")
             origin_matches = canonical.origin == expected_origin
         else:
-            source_reference = str(
-                item.referencia_fuente
-            ).strip()
-            referenced_origin = (
-                source_reference.partition(":")[0].strip().lower()
-                if ":" in source_reference
-                else ""
-            )
-            origin_matches = (
-                canonical.origin == referenced_origin
-                if referenced_origin
-                else canonical.origin != "imported"
+            key_origin, separator, _identity = item.canonical_key.partition(":")
+            origin_matches = bool(separator and key_origin) and (
+                canonical.origin == key_origin.strip().lower()
             )
         comparisons = {
             "item_key": canonical.item_key == item.canonical_key,
@@ -3496,7 +2753,7 @@ def _build_official_mobiliti(
                 MobilitiCellWrite(f"E{target_row}", "text", line.category),
                 MobilitiCellWrite(f"F{target_row}", "text", line.provider),
                 MobilitiCellWrite(f"H{target_row}", "number", line.quantity),
-                _official_dimension_write(f"K{target_row}", line.dimensions),
+                MobilitiCellWrite(f"K{target_row}", "number", line.m3),
                 MobilitiCellWrite(f"P{target_row}", "text", line.region),
             )
         )

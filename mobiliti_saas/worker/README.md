@@ -22,7 +22,7 @@ $env:QUOTE_STORAGE_PROVIDER="supabase"
 $env:QUOTE_STORAGE_BUCKET="quote-files"
 $env:QUOTE_ENGINE="python"
 $env:MAX_QUOTE_OUTPUT_MB="100"
-$env:TEMPLATE_PATH="C:\ruta\Formato Cotizacion 2026 GDL (1).xlsx"
+$env:TEMPLATE_PATH="C:\ruta\Formato Cotizacion 2026 Oficial.xlsx"
 $env:WORKER_POLL_SECONDS="10"
 $env:WORKER_STALE_MINUTES="30"
 ```
@@ -160,3 +160,38 @@ aislada, fija el resultado completo y repite `pip check`, importaciones,
 Docker Scout y el smoke de generacion. La imagen corre como UID/GID `10001` y
 debe desplegarse con filesystem raiz de solo lectura, `cap-drop=ALL` y
 `no-new-privileges`; `/tmp` es el unico espacio temporal requerido.
+
+## Contrato de plantilla oficial y capacidad dinámica
+
+El worker falla cerrado si la plantilla promovida no tiene SHA-256
+`e8bd97286aaa8af5dcf6d08b715231b9edcbe28b84da3db2523dfbb43f2c3989`.
+La promoción local, siempre hacia un destino nuevo, se ejecuta así:
+
+```powershell
+python scripts\promote_official_quote_template.py `
+  --source "C:\ruta\plantilla-auditada.xlsx" `
+  --destination "mobiliti_saas\worker\templates\Formato Cotizacion 2026 Oficial.xlsx" `
+  --contract "mobiliti_saas\worker\templates\formato-cotizacion-2026-oficial.contract.json"
+```
+
+El compositor parte de esos bytes y sólo puede cambiar las partes declaradas
+por el contrato: `Mobiliti`, `Cotizacion`, `Fletes`, `Estrategia Comercial `,
+`workbook.xml`, relaciones/contenidos del workbook, `calcChain.xml`, el dibujo
+de productos y las partes nuevas de `Quotation`/`Quotation_Data`. Todo lo demás
+se audita byte a byte. `Quotation` conserva exclusivamente la fuente importada;
+el orden combinado vive en `Quotation_Data`, que queda `veryHidden`.
+
+`Mobiliti!J` recibe cada costo convertido una sola vez como número congelado.
+Las fórmulas oficiales desde `W`, incluido `K6`, calculan desde ese valor y no
+vuelven a convertirlo. No hay topes comerciales de 33/500 líneas ni 16/32
+secciones: se valida la capacidad física de 1,048,576 filas XLSX menos las
+filas reservadas y un request máximo de 25 MiB; nunca se truncan productos.
+
+Gate local de estrés:
+
+```powershell
+python -m pytest tests\test_official_quote_stress.py -v
+```
+
+Este handoff es sólo local. No promueve artefactos, no escribe en SharePoint,
+Supabase o Storage y no despliega Vercel/worker sin autorización nueva.

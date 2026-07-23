@@ -298,6 +298,36 @@ versiones historial/
 - **Worker Docker** usa `QUOTE_ENGINE=python`; no necesita Windows ni Microsoft Excel.
 - **Legacy desktop/xlwings** esta archivado en `versiones historial` y no es parte de produccion.
 
+### Plantilla oficial, preservación y límites técnicos
+
+- La plantilla promovida se acepta sólo con SHA-256
+  `e8bd97286aaa8af5dcf6d08b715231b9edcbe28b84da3db2523dfbb43f2c3989`.
+- Se promueve con `scripts/promote_official_quote_template.py` hacia
+  `mobiliti_saas/worker/templates/Formato Cotizacion 2026 Oficial.xlsx`, usando
+  el manifiesto `formato-cotizacion-2026-oficial.contract.json` y un destino
+  nuevo.
+- La allowlist mutable comprende las hojas `Mobiliti`, `Cotizacion`, `Fletes`
+  y `Estrategia Comercial `, sus referencias estructurales de workbook,
+  `calcChain.xml`, el dibujo de productos y las partes agregadas para
+  `Quotation`/`Quotation_Data`. Las demás partes quedan byte-idénticas.
+- `Quotation` preserva la fuente importada; los renglones combinados aparecen
+  una sola vez y en orden en `Quotation_Data`, siempre `veryHidden`.
+- `Mobiliti!J` contiene costo convertido numérico y congelado. `K6`, `W`, `X`
+  y las fórmulas oficiales posteriores no repiten la conversión.
+- La capacidad se limita por las 1,048,576 filas físicas de XLSX menos filas
+  reservadas y por 25 MiB de request, no por antiguos topes de líneas o
+  secciones. Un exceso falla explícitamente; no hay truncamiento silencioso.
+
+Aceptación local reproducible:
+
+```powershell
+python -m pytest tests\test_official_quote_stress.py -v
+npm --prefix mobiliti_saas/web run build
+```
+
+Estado del handoff: validación local únicamente. No se ejecutó despliegue ni
+se escribió en SharePoint, Supabase, Storage remoto o producción.
+
 ---
 
 ## 8. Troubleshooting

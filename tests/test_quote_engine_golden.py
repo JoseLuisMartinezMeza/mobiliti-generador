@@ -1,8 +1,9 @@
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-import os
 import sys
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine import generate_quote  # noqa: E402
-from mobiliti_saas.quote_engine.engine import SECTION_PROD_STARTS, _copy_source_sheet, _write_estrategia_comercial  # noqa: E402
+from mobiliti_saas.quote_engine.engine import SECTION_PROD_STARTS, _write_estrategia_comercial  # noqa: E402
 from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
     build_mixed_catalog_cart_payload,
     create_mixed_catalog_quotation_workbook,
@@ -539,13 +540,15 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
             "Imagen de referencia",
         ):
             assert expected in description
-        # El contrato Task 7 reemplaza W/X legacy por fórmula oficial y deja J
-        # como valor numérico congelado, incluso para un renglón importado.
+        # La GDL oficial conserva W como precio unitario y X como precio lista
+        # total; J queda como valor numérico congelado incluso al importar.
         assert mobiliti.cell(mobiliti_row, 10).value == pytest.approx(
             float(quotation.cell(alma_source_row, 10).value)
         )
         assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
-        assert str(mobiliti.cell(mobiliti_row, 24).value).startswith("=_xlfn.MINIFS(")
+        assert mobiliti.cell(mobiliti_row, 24).value == (
+            f"=(W{mobiliti_row}*H{mobiliti_row})"
+        )
         assert cot.cell(cot_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
         assert wb["Quotation_Data"].sheet_state == "veryHidden"
     finally:
@@ -586,7 +589,7 @@ def test_standard_workbook_keeps_official_provider_header_and_formulas(tmp_path)
         for column in (4, 5, 6, 8, 10, 11, 16)
     )
     assert str(mobiliti.cell(unused_row, 23).value).startswith("=IF(")
-    assert str(mobiliti.cell(unused_row, 24).value).startswith("=_xlfn.MINIFS(")
+    assert mobiliti.cell(unused_row, 24).value == f"=(W{unused_row}*H{unused_row})"
     assert mobiliti["K4"].value is False
     assert getattr(mobiliti["K6"].value, "text", None) == '=_FV(J6,"High")'
     assert wb["Quotation_Data"].sheet_state == "veryHidden"
@@ -615,24 +618,6 @@ def test_python_engine_generates_golden_structure(source, tmp_path):
     assert wb["Cotizacion"].print_area
     assert len(wb["Cotizacion"]._images) > 0
     wb.close()
-
-
-def test_copy_source_sheet_handles_leac_external_styles(tmp_path):
-    if os.environ.get("RUN_SLOW_QUOTE_TESTS") != "1":
-        pytest.skip("LEAC copy is a slow local regression test")
-    if not LEAC_QUOTATION.exists():
-        pytest.skip("LEAC quotation fixture not available on this machine")
-
-    workbook = Workbook()
-    _copy_source_sheet(LEAC_QUOTATION, workbook)
-    output = tmp_path / "leac-copy.xlsx"
-    workbook.save(output)
-    workbook.close()
-
-    copied = load_workbook(output)
-    assert "Quotation" in copied.sheetnames
-    assert len(copied["Quotation"].merged_cells.ranges) > 0
-    copied.close()
 
 
 def test_visual_golden_references_are_intact():
@@ -874,27 +859,34 @@ def test_mobiliti_product_starts_are_not_merged_rows():
         wb.close()
 
 
-def test_python_engine_rejects_cummins_external_image_relationships_fail_closed(tmp_path):
+def test_python_engine_sanitizes_cummins_linked_images_with_embedded_fallback(tmp_path):
     source = DOWNLOADS / "CUMMINS-Quotation Sheet - V1.xlsx"
     template = WORKER_TEMPLATE
     if not source.exists() or not template.exists():
         pytest.skip("CUMMINS input/template not available on this machine")
 
     output = tmp_path / "cummins_python.xlsx"
-    # El quotation real contiene una relación de imagen externa. Task 6 exige
-    # rechazarla: no se degrada silenciosamente ni se produce un XLSX parcial.
-    with pytest.raises(ValueError, match="TargetMode externo no permitido para image"):
-        generate_quote(
-            source,
-            output,
-            {
-                "cotizacion": "CUMMINS-TEST",
-                "proyecto": "Cummins",
-                "cliente": "Cummins",
-                "image_provider": "pillow",
-                "tipo_cambio": 20,
-            },
-            template,
-        )
+    generate_quote(
+        source,
+        output,
+        {
+            "cotizacion": "CUMMINS-TEST",
+            "proyecto": "Cummins",
+            "cliente": "Cummins",
+            "image_provider": "pillow",
+            "tipo_cambio": 20,
+        },
+        template,
+    )
 
-    assert not output.exists()
+    assert output.exists()
+    with ZipFile(output) as archive:
+        external_images = [
+            (name, relationship.attrib.get("Id"))
+            for name in archive.namelist()
+            if name.endswith(".rels")
+            for relationship in ET.fromstring(archive.read(name))
+            if relationship.attrib.get("Type", "").endswith("/image")
+            and relationship.attrib.get("TargetMode", "").casefold() == "external"
+        ]
+    assert external_images == []

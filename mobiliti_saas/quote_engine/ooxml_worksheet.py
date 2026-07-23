@@ -1392,10 +1392,14 @@ def build_mobiliti_sheet(
     for index, section in enumerate(row_map.sections):
         first = index == 0
         header = canonical.first_section_header if first else canonical.section_header
-        product = canonical.first_product_row if first else canonical.product_row
+        # La fila 49 del archivo oficial no contiene la superficie completa de
+        # formulas (L/N estan vacias), aunque secciones oficiales posteriores
+        # si las contienen y calcChain las declara. La fila 14 es la plantilla
+        # oficial completa y el traductor estructural la adapta a cada bloque.
+        product = canonical.first_product_row
         subtotal = canonical.first_subtotal_row if first else canonical.subtotal_row
         header_source_row = 13 if first else 48
-        product_source_row = 14 if first else 49
+        product_source_row = 14
         subtotal_source_row = 47 if first else 82
         clone_section_header(
             editor,

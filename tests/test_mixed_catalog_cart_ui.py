@@ -14,8 +14,20 @@ from mobiliti_saas.quote_engine.mixed_catalog import (
 MODULE_PATH = Path("mobiliti_saas/web/src/mixedCart.js")
 EXPORTS = (
     "MIXED_CATALOGS",
+    "MAX_MIXED_CART_SECTIONS",
     "mixedCartKey",
     "createMixedCartLine",
+    "createInitialMixedCartSections",
+    "mixedCartSectionLabel",
+    "closeMixedCartSection",
+    "renameMixedCartSection",
+    "mergeMixedCartSection",
+    "moveMixedCartLine",
+    "moveMixedCartLineToSection",
+    "compactMixedCartSections",
+    "groupMixedCartLines",
+    "toMixedQuoteSections",
+    "createMixedQuoteRequestSnapshot",
     "validateLineQuantity",
     "lineNeedsAvailabilityConfirmation",
     "lineNeedsPriceConfirmation",
@@ -23,6 +35,9 @@ EXPORTS = (
     "updateMixedCartQuantity",
     "removeMixedCartLine",
     "toMixedQuoteItem",
+    "createImportedCartBundle",
+    "replaceImportedCartBundle",
+    "updateImportedCartLine",
 )
 
 
@@ -104,6 +119,204 @@ def supplier_line_source(
     )
 
 
+def test_manual_sections_label_reorder_move_merge_and_serialize():
+    result = run_mixed_cart_js(
+        r"""
+      const makeLine = (internalId, sectionId) => createMixedCartLine({
+        catalog: "alma",
+        identity: {internal_id: internalId, base_option_id: "", add_on_option_ids: []},
+        quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+        snapshot: {name: internalId, code: internalId, image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+        sectionId,
+      });
+
+      let sections = createInitialMixedCartSections();
+      let lines = [makeLine("alma:a", sections[0].id), makeLine("alma:b", sections[0].id)];
+      sections = closeMixedCartSection(sections, lines);
+      sections = renameMixedCartSection(sections, sections[1].id, "Privados");
+      lines = [...lines, makeLine("alma:c", sections[1].id)];
+      lines = moveMixedCartLine(lines, lines[1].key, "up");
+      const firstSectionMovedKey = lines[1].key;
+      lines = moveMixedCartLineToSection(lines, sections, firstSectionMovedKey, sections[1].id);
+      const serialized = toMixedQuoteSections(sections, lines);
+      const labels = sections.map(mixedCartSectionLabel);
+
+      const merged = mergeMixedCartSection(sections, lines, sections[1].id);
+      const withEmptyTail = closeMixedCartSection(merged.sections, merged.lines);
+      const compacted = compactMixedCartSections(withEmptyTail, merged.lines);
+      const serializedWithoutEmptyTail = toMixedQuoteSections(compacted.sections, compacted.lines);
+
+      let emptyCloseError = "";
+      try {
+        closeMixedCartSection(createInitialMixedCartSections(), []);
+      } catch (error) {
+        emptyCloseError = error.message;
+      }
+
+      console.log(JSON.stringify({
+        labels,
+        serialized,
+        mergedSectionCount: merged.sections.length,
+        mergedOrder: merged.lines.map((line) => line.snapshot.name),
+        compactedSectionCount: compacted.sections.length,
+        serializedWithoutEmptyTail,
+        emptyCloseError,
+        maxSections: MAX_MIXED_CART_SECTIONS,
+      }));
+        """
+    )
+
+    assert result["labels"] == ["1-Recepción", "2-Privados"]
+    assert [section["title"] for section in result["serialized"]] == [
+        "Recepción",
+        "Privados",
+    ]
+    assert [len(section["item_keys"]) for section in result["serialized"]] == [1, 2]
+    assert result["mergedSectionCount"] == 1
+    assert result["mergedOrder"] == ["alma:b", "alma:c", "alma:a"]
+    assert result["compactedSectionCount"] == 2
+    assert len(result["serializedWithoutEmptyTail"]) == 1
+    assert "producto" in result["emptyCloseError"].lower()
+    assert result["maxSections"] == 32
+
+
+def test_group_mixed_cart_lines_preserves_order_and_rejects_unknown_sections():
+    result = run_mixed_cart_js(
+        r"""
+      const sections = Array.from({length: 20}, (_, index) => ({
+        id: `section-${index + 1}`,
+        concept: `Espacio ${index + 1}`,
+      }));
+      const lines = Array.from({length: 700}, (_, index) => ({
+        key: `line-${index}`,
+        sectionId: sections[index % sections.length].id,
+      }));
+      const grouped = groupMixedCartLines(sections, lines);
+      let unknownError = "";
+      try {
+        groupMixedCartLines(sections, [...lines, {key: "unknown", sectionId: "section-999"}]);
+      } catch (error) {
+        unknownError = error.message;
+      }
+      console.log(JSON.stringify({
+        counts: sections.map((section) => grouped.get(section.id).length),
+        firstKeys: sections.slice(0, 3).map((section) => grouped.get(section.id)[0].key),
+        unknownError,
+      }));
+        """
+    )
+
+    assert result["counts"] == [35] * 20
+    assert result["firstKeys"] == ["line-0", "line-1", "line-2"]
+    assert result["unknownError"] == "Seccion de producto invalida"
+
+
+def test_mixed_request_snapshot_is_compact_and_deeply_frozen():
+    result = run_mixed_cart_js(
+        r"""
+      const sections = [{id: "section-1", concept: "Recepcion"}];
+      const line = createMixedCartLine({
+        catalog: "tarkett",
+        identity: {code: "T-1"},
+        quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "100"},
+        snapshot: {name: "Tarkett", code: "T-1", image_url: "", unit: "M2",
+          availability: "", configuration: "", warnings: []},
+        sectionId: "section-1",
+      });
+      const form = {proyecto: "Original"};
+      const snapshot = createMixedQuoteRequestSnapshot(form, sections, [line]);
+      form.proyecto = "Mutado";
+      sections[0].concept = "Mutada";
+      line.quantity = "2";
+      console.log(JSON.stringify({
+        snapshot,
+        frozen: Object.isFrozen(snapshot)
+          && Object.isFrozen(snapshot.items)
+          && Object.isFrozen(snapshot.items[0])
+          && Object.isFrozen(snapshot.sections)
+          && Object.isFrozen(snapshot.sections[0])
+          && Object.isFrozen(snapshot.sections[0].item_keys),
+      }));
+        """
+    )
+
+    assert result["frozen"] is True
+    assert result["snapshot"]["proyecto"] == "Original"
+    assert result["snapshot"]["items"] == [
+        {"catalog": "tarkett", "code": "T-1", "quantity": "1"}
+    ]
+    assert result["snapshot"]["sections"] == [
+        {"id": "section-1", "title": "Recepcion", "item_keys": ["tarkett:T-1"]}
+    ]
+
+
+def test_controller_sends_manual_sections_and_resets_them_after_success():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("createMixedQuoteController",),
+        r"""
+      const makeLine = (internalId) => createMixedCartLine({
+        catalog: "alma",
+        identity: {internal_id: internalId, base_option_id: "", add_on_option_ids: []},
+        quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+        snapshot: {name: internalId, code: internalId, image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+      });
+      const state = {cart: [], sections: createInitialMixedCartSections(), jobs: []};
+      const cartRef = {current: []};
+      const sectionsRef = {current: state.sections};
+      const bodies = [];
+      const controller = createMixedQuoteController({
+        cartRef,
+        sectionsRef,
+        submittingRef: {current: false},
+        sessionEpochRef: {current: 0},
+        emptyForm: {},
+        replaceCart(next) { state.cart = next; cartRef.current = next; },
+        replaceSections(next) { state.sections = next; sectionsRef.current = next; },
+        setOpen() {}, setForm() {}, getForm() { return {proyecto: "Proyecto"}; },
+        setBusy() {}, setError() {}, setNotice() {},
+        setJobs(value) { state.jobs = typeof value === "function" ? value(state.jobs) : value; },
+        async request(path, options = {}) {
+          if (path === "/catalogs/mixed-quote") {
+            bodies.push(JSON.parse(options.body));
+            return {job: {id: "job-1"}};
+          }
+          return {cotizaciones: []};
+        },
+        confirmQuote() { return true; },
+        async waitForJobResult(job) { return {...job, status: "completed"}; },
+      });
+
+      controller.add(makeLine("alma:a"));
+      controller.closeSection();
+      controller.renameSection(state.sections[1].id, "Privados");
+      controller.add(makeLine("alma:b"));
+      await controller.submit({preventDefault() {}});
+
+      console.log(JSON.stringify({
+        sections: bodies[0].sections,
+        itemCount: bodies[0].items.length,
+        cartCount: state.cart.length,
+        resetLabels: state.sections.map(mixedCartSectionLabel),
+      }));
+        """,
+    )
+
+    assert [section["title"] for section in result["sections"]] == [
+        "Recepción",
+        "Privados",
+    ]
+    assert [len(section["item_keys"]) for section in result["sections"]] == [1, 1]
+    assert result["itemCount"] == 2
+    assert result["cartCount"] == 0
+    assert result["resetLabels"] == ["1-Recepción"]
+
+
 def test_app_owns_one_mixed_cart_and_one_submit_endpoint():
     main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
     supplier = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
@@ -142,6 +355,84 @@ def test_mixed_drawer_is_accessible_presentational_and_commits_callbacks():
     assert "fetch(" not in source
 
 
+def test_mixed_drawer_explains_currency_conversion_and_general_discount():
+    source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+    assert "Todos los precios se convierten una sola vez a la moneda seleccionada." in source
+    assert "Descuento general (%)" in source
+    assert "El primer producto controla el descuento de todos los productos en Excel." in source
+    assert "Descuento Tarkett y Offiho (%)" not in source
+    assert "conservan precio neto sin descuento adicional" not in source
+
+
+def test_mixed_drawer_exposes_editable_accessible_section_controls():
+    source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+    for marker in (
+        "mixed-cart-section",
+        "Concepto de la sección",
+        "Cerrar sección y abrir otra",
+        "Unir con la anterior",
+        "Subir",
+        "Bajar",
+        "Mover",
+        'aria-live="polite"',
+        "onRenameSection",
+        "onCloseSection",
+        "onMergeSection",
+        "onMoveLine",
+        "onMoveLineToSection",
+    ):
+        assert marker in source
+    assert "request(" not in source
+    assert "fetch(" not in source
+
+
+def test_drawer_groups_lines_once_and_supports_collapsed_sections():
+    source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+
+    for marker in (
+        "groupMixedCartLines",
+        "useMemo",
+        "collapsedSectionIds",
+        "isMixedCartSectionCollapsed",
+        "aria-expanded",
+        "aria-controls",
+        "sectionContentId",
+        "sectionLines.length > 50",
+    ):
+        assert marker in source
+    assert "lines.filter((line) => line.sectionId === section.id)" not in source
+
+
+def test_collapsed_hidden_quantity_draft_is_still_validated_before_submit():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/MixedCartDrawer.jsx",
+        ("importedEditorKey", "isMixedCartSectionCollapsed", "submitMixedDrawerDrafts"),
+        r"""
+      const line = createMixedCartLine({
+        catalog: "tarkett", identity: {code: "T-1"}, quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "10"},
+        snapshot: {name: "Tarkett", code: "T-1", image_url: "", unit: "M2",
+          availability: "", configuration: "", warnings: []},
+        sectionId: "section-1",
+      });
+      let errors = {}; let posts = 0;
+      const collapsedByDefault = isMixedCartSectionCollapsed({}, "section-1", 51);
+      const manuallyExpanded = isMixedCartSectionCollapsed({"section-1": false}, "section-1", 51);
+      const accepted = submitMixedDrawerDrafts({
+        event: {preventDefault() {}}, lines: [line], quantityDrafts: {[line.key]: ""},
+        setErrors(value) { errors = value; }, focusFirst() {}, onSubmit() { posts += 1; },
+      });
+      console.log(JSON.stringify({collapsedByDefault, manuallyExpanded, accepted, errors, posts}));
+        """,
+    )
+
+    assert result["collapsedByDefault"] is True
+    assert result["manuallyExpanded"] is False
+    assert result["accepted"] is False
+    assert result["posts"] == 0
+    assert list(result["errors"].values()) == ["Cantidad invalida"]
+
+
 def test_app_is_the_only_mixed_quote_request_owner():
     main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
     drawer = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
@@ -157,11 +448,26 @@ def test_mixed_cart_session_and_submission_guards_are_explicit():
     assert "if (mixedQuoteSubmittingRef.current)" in main
     assert "mixedQuoteSubmittingRef.current = true" in main
     assert "submissionEpoch !== mixedQuoteSessionEpochRef.current" in main
-    assert "items: committedLines.map(toMixedQuoteItem)" in main
+    assert "createMixedQuoteRequestSnapshot" in main
+    assert "body: JSON.stringify(mixedRequest)" in main
+    assert "const mixedRequest = useMemo(" in main
     assert "Respuesta de trabajo mixto invalida" in main
     assert "replaceCart([])" in main
     assert "localStorage.setItem(\"mixed" not in main
     assert "sessionStorage.setItem(\"mixed" not in main
+
+
+def test_memoized_compact_request_does_not_rebuild_for_customer_form_edits():
+    main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"const mixedRequest = useMemo\(\s*"
+        r"\(\) => createMixedQuoteRequestSnapshot\(\{\}, mixedCartSections, mixedCart\),\s*"
+        r"\[mixedCart, mixedCartSections\]",
+        main,
+    )
+    assert "[mixedCart, mixedCartSections, mixedQuote]" not in main
+    assert "Object.freeze({ ...mixedQuote, ...mixedRequest })" in main
 
 
 def test_drawer_focus_trap_does_not_restart_when_parent_callbacks_change():
@@ -296,7 +602,7 @@ def test_controller_locks_mutations_deduplicates_submit_and_keeps_malformed_resp
         "removeError": "Cotizacion en curso",
     }
     assert result["finished"]["cart"] == []
-    assert "Cotizacion mixta en cola" in result["finished"]["notice"]
+    assert "Cotizacion mixta lista" in result["finished"]["notice"]
     assert result["rejected"] == {
         "accepted": False,
         "open": True,
@@ -350,7 +656,7 @@ def test_controller_session_reset_ignores_late_logout_and_auth_expiry_responses(
 def test_drawer_invalid_transient_draft_focuses_error_and_never_submits():
     result = run_ui_helper_js(
         "mobiliti_saas/web/src/MixedCartDrawer.jsx",
-        ("submitMixedDrawerDrafts",),
+        ("importedEditorKey", "submitMixedDrawerDrafts"),
         r"""
       const line = createMixedCartLine({catalog: "tarkett", identity: {code: "T-1"}, quantity: "1",
         quantityRules: {min: "0.000001", step: "0.000001", maxDecimals: 6, max: "10"},
@@ -549,7 +855,15 @@ def test_line_shape_is_exact_and_defensively_copies_visual_and_identity_data():
     """
     )
     assert result == {
-        "lineKeys": ["catalog", "identity", "key", "quantity", "quantityRules", "snapshot"],
+        "lineKeys": [
+            "catalog",
+            "identity",
+            "key",
+            "quantity",
+            "quantityRules",
+            "sectionId",
+            "snapshot",
+        ],
         "identity": {
             "internal_id": "alma:desk",
             "base_option_id": "base-a",
@@ -1072,3 +1386,348 @@ def test_javascript_identity_validation_matches_actual_python_backend():
     assert python_results[5] == {"accepted": False}  # FEFF is Cf, not Python strip
     assert python_results[6]["accepted"] is True  # 500 astral base-option code points
     assert python_results[7] == {"accepted": False}
+
+
+def test_imported_preview_replaces_only_imported_lines_without_intermediate_cart_state():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("createMixedQuoteController",),
+        r"""
+      const preview = (importId, name) => ({
+        import_id: importId, original_filename: "Proveedor.xlsx", provider: "Proveedor detectado", source_currency: null,
+        currency_status: "required",
+        sections: [{id: "source-section", title: "Sala", item_keys: [`import:${importId}:9`]}],
+        items: [{key: `import:${importId}:9`, source_row: 9, name, description: "", dimension: "", quantity: "1", unit_price: "10", image_url: ""}],
+      });
+      const catalogLine = createMixedCartLine({
+        catalog: "alma", identity: {internal_id: "alma:desk", base_option_id: "", add_on_option_ids: []}, quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+        snapshot: {name: "Catalogo", code: "AL-1", image_url: "", unit: "PZA", availability: "", configuration: "", warnings: []},
+      });
+      const state = {cart: [catalogLine], sections: createInitialMixedCartSections(), confirmations: 0};
+      const cartRef = {current: state.cart};
+      const sectionsRef = {current: state.sections};
+      const controller = createMixedQuoteController({
+        cartRef, sectionsRef, submittingRef: {current: false}, sessionEpochRef: {current: 0}, emptyForm: {},
+        replaceCart(next) { state.cart = next; cartRef.current = next; },
+        replaceSections(next) { state.sections = next; sectionsRef.current = next; },
+        setOpen() {}, setForm() {}, getForm() { return {}; }, setBusy() {}, setError() {}, setNotice() {}, setJobs() {},
+        async request() { return {cotizaciones: []}; }, confirmQuote() { return true; },
+        confirmImport() { state.confirmations += 1; return true; },
+      });
+      const first = controller.importPreview(preview("11111111-1111-4111-8111-111111111111", "Primero"), {sourceCurrency: "USD", provider: "Proveedor"});
+      const second = controller.importPreview(preview("22222222-2222-4222-8222-222222222222", "Segundo"), {sourceCurrency: "EUR", provider: "Proveedor"});
+      console.log(JSON.stringify({first, second, confirmations: state.confirmations, lines: state.cart, sections: state.sections}));
+        """,
+    )
+
+    assert result["first"] is True
+    assert result["second"] is True
+    assert result["confirmations"] == 1
+    assert [line["snapshot"]["name"] for line in result["lines"]] == ["Catalogo", "Segundo"]
+    assert result["lines"][1]["sourceCurrency"] == "EUR"
+    assert {line["sectionId"] for line in result["lines"]} <= {section["id"] for section in result["sections"]}
+
+
+def test_reimporting_same_preview_changes_editor_revision_and_resets_canonical_model():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("createMixedQuoteController",),
+        r"""
+      const importId = "11111111-1111-4111-8111-111111111111";
+      const preview = name => ({
+        import_id: importId, original_filename: "Proveedor.xlsx", provider: "Proveedor", source_currency: "USD",
+        currency_status: "detected",
+        sections: [{id: "source-section", title: "Sala", item_keys: [`import:${importId}:9`]}],
+        items: [{key: `import:${importId}:9`, source_row: 9, name, description: "", dimension: "", quantity: "1", unit_price: "10", source_currency: "USD", image_url: ""}],
+      });
+      const state = {cart: [], sections: createInitialMixedCartSections()};
+      const cartRef = {current: state.cart}; const sectionsRef = {current: state.sections};
+      const controller = createMixedQuoteController({
+        cartRef, sectionsRef, submittingRef: {current: false}, sessionEpochRef: {current: 0}, emptyForm: {},
+        replaceCart(next) { state.cart = next; cartRef.current = next; },
+        replaceSections(next) { state.sections = next; sectionsRef.current = next; },
+        setOpen() {}, setForm() {}, getForm() { return {}; }, setBusy() {}, setError() {}, setNotice() {}, setJobs() {},
+        async request() { return {cotizaciones: []}; }, confirmQuote() { return true; }, confirmImport() { return true; },
+      });
+      controller.importPreview(preview("Original"), {sourceCurrency: null, provider: "Proveedor"});
+      const first = state.cart[0];
+      controller.updateImported(first.key, {name: "Edicion local"});
+      controller.importPreview(preview("Reimportado"), {sourceCurrency: null, provider: "Proveedor"});
+      const second = state.cart[0];
+      console.log(JSON.stringify({
+        sameCanonicalKey: first.key === second.key,
+        revisions: [first.editorRevision, second.editorRevision],
+        name: second.edits.name,
+      }));
+        """,
+    )
+
+    assert result["sameCanonicalKey"] is True
+    assert result["revisions"] == [1, 2]
+    assert result["name"] == "Reimportado"
+
+
+def test_reimporting_same_line_drops_old_invalid_editor_state():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/MixedCartDrawer.jsx",
+        ("importedEditorKey", "retainActiveImportedDraftValidity"),
+        r"""
+      const line = {kind: "imported", key: "import:source:9", editorRevision: 2};
+      const activeKey = importedEditorKey(line);
+      const oldKey = importedEditorKey({...line, editorRevision: 1});
+      console.log(JSON.stringify({
+        oldKey, activeKey,
+        afterReplacement: retainActiveImportedDraftValidity({[oldKey]: true}, [line]),
+        currentInvalid: retainActiveImportedDraftValidity({[activeKey]: true}, [line]),
+        currentValid: retainActiveImportedDraftValidity({[activeKey]: false}, [line]),
+      }));
+        """,
+    )
+    assert result["oldKey"] != result["activeKey"]
+    assert result["afterReplacement"] == {}
+    assert result["currentInvalid"] == {result["activeKey"]: True}
+    assert result["currentValid"] == {result["activeKey"]: False}
+
+
+def test_reimporting_same_line_replaces_stale_invalid_quantity_draft_and_submits_new_quantity():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/MixedCartDrawer.jsx",
+        ("importedEditorKey", "reconcileQuantityDraftState", "submitMixedDrawerDrafts"),
+        r"""
+      const oldLine = {
+        kind: "imported", key: "import:source:9", editorRevision: 1, quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "100", integer: true},
+      };
+      const newLine = {...oldLine, editorRevision: 2, quantity: "2"};
+      const oldKey = importedEditorKey(oldLine);
+      const newKey = importedEditorKey(newLine);
+      const reconciled = reconcileQuantityDraftState(
+        {[oldKey]: "0"},
+        {[oldKey]: "1"},
+        {[oldKey]: "Cantidad invalida"},
+        [newLine],
+      );
+      let submitErrors = null; let submitted = null;
+      const accepted = submitMixedDrawerDrafts({
+        event: {preventDefault() {}}, lines: [newLine], quantityDrafts: reconciled.drafts,
+        setErrors(value) { submitErrors = value; }, focusFirst() {},
+        onSubmit(_event, lines) { submitted = lines; },
+      });
+      console.log(JSON.stringify({oldKey, newKey, reconciled, accepted, submitErrors, submitted}));
+        """,
+    )
+
+    assert result["oldKey"] != result["newKey"]
+    assert result["reconciled"] == {
+        "drafts": {result["newKey"]: "2"},
+        "errors": {},
+        "committed": {result["newKey"]: "2"},
+    }
+    assert result["accepted"] is True
+    assert result["submitErrors"] == {}
+    assert result["submitted"][0]["quantity"] == "2"
+
+
+def test_mixed_explicit_row_currencies_do_not_require_global_selector():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("previewNeedsSourceCurrency",),
+        r"""
+      console.log(JSON.stringify({
+        mixed: previewNeedsSourceCurrency({currency_status: "detected", source_currency: null}),
+        missing: previewNeedsSourceCurrency({currency_status: "required", source_currency: null}),
+        uniform: previewNeedsSourceCurrency({currency_status: "detected", source_currency: "USD"}),
+      }));
+        """,
+    )
+    assert result == {"mixed": False, "missing": True, "uniform": False}
+
+    bundle = run_mixed_cart_js(r"""
+      const importId = "11111111-1111-4111-8111-111111111111";
+      const preview = {
+        import_id: importId, original_filename: "Mixto.xlsx", provider: "Proveedor", source_currency: null,
+        currency_status: "detected",
+        sections: [{id: "source", title: "Sala", item_keys: [`import:${importId}:9`, `import:${importId}:10`]}],
+        items: [
+          {key: `import:${importId}:9`, source_row: 9, name: "USD", description: "", dimension: "", quantity: "1", unit_price: "10", source_currency: "USD", image_url: ""},
+          {key: `import:${importId}:10`, source_row: 10, name: "EUR", description: "", dimension: "", quantity: "1", unit_price: "9", source_currency: "EUR", image_url: ""},
+        ],
+      };
+      const bundle = createImportedCartBundle(preview, null, "Proveedor", createInitialMixedCartSections());
+      console.log(JSON.stringify(bundle.lines.map(line => line.sourceCurrency)));
+    """)
+    assert bundle == ["USD", "EUR"]
+
+
+def test_mixed_submit_clears_only_after_completed_and_preserves_failed_snapshot():
+    result = run_ui_helper_js(
+        "mobiliti_saas/web/src/main.jsx",
+        ("createMixedQuoteController",),
+        r"""
+      const line = createMixedCartLine({catalog: "tarkett", identity: {code: "T-1"}, quantity: "1",
+        quantityRules: {min: "0.000001", step: "0.000001", maxDecimals: 6, max: "10"},
+        snapshot: {name: "Tarkett", code: "T-1", image_url: "", unit: "M2", availability: "10", configuration: "", warnings: []}});
+      const run = async status => {
+        const state = {cart: [line], sections: createInitialMixedCartSections(), open: true, error: "", notice: "", jobs: []};
+        const cartRef = {current: state.cart}; const sectionsRef = {current: state.sections};
+        const controller = createMixedQuoteController({cartRef, sectionsRef, submittingRef: {current: false}, sessionEpochRef: {current: 0}, emptyForm: {},
+          replaceCart(next) { state.cart = next; cartRef.current = next; }, replaceSections(next) { state.sections = next; sectionsRef.current = next; },
+          setOpen(value) { state.open = value; }, setForm() {}, getForm() { return {proyecto: "P"}; }, setBusy() {},
+          setError(value) { state.error = value; }, setNotice(value) { state.notice = value; },
+          setJobs(value) { state.jobs = typeof value === "function" ? value(state.jobs) : value; },
+          async request() { return {job: {id: `job-${status}`, status: "queued"}}; }, confirmQuote() { return true; },
+          async waitForJobResult(job) { return {...job, status, error_message: status === "failed" ? "worker failed" : null}; },
+        });
+        await controller.submit({preventDefault() {}});
+        return {cartCount: state.cart.length, open: state.open, error: state.error, notice: state.notice};
+      };
+      console.log(JSON.stringify({completed: await run("completed"), failed: await run("failed")}));
+        """,
+    )
+    assert result["completed"]["cartCount"] == 0
+    assert result["completed"]["open"] is False
+    assert result["failed"]["cartCount"] == 1
+    assert result["failed"]["open"] is True
+    assert "worker failed" in result["failed"]["error"]
+
+
+def test_imported_cart_editor_exposes_only_approved_fields():
+    source = Path("mobiliti_saas/web/src/ImportedCartLineFields.jsx").read_text(encoding="utf-8")
+
+    for field in ("name", "description", "dimension", "unitPrice", "provider"):
+        assert f'name="{field}"' in source
+    assert 'name="image"' not in source
+    assert 'line.kind !== "imported"' in source
+
+
+def test_imported_unit_price_draft_survives_clear_shows_blur_error_and_commits_replacement():
+    module_url = (Path("mobiliti_saas/web/src/importedCartLineDraft.js").resolve().as_uri())
+    script = f'''import {{
+  changeImportedLineDraft,
+  commitImportedLineDraft,
+  createImportedLineDraft,
+}} from {json.dumps(module_url)};
+const initial = createImportedLineDraft({{
+  name: "Silla", description: "", dimension: "", unitPrice: "80.50", provider: "Proveedor",
+}});
+const cleared = changeImportedLineDraft(initial, "unitPrice", "");
+const failedBlur = commitImportedLineDraft(cleared, "unitPrice", () => {{ throw new Error("No debe confirmar"); }});
+const replacement = changeImportedLineDraft(failedBlur, "unitPrice", "82.00");
+const commits = [];
+const confirmed = commitImportedLineDraft(replacement, "unitPrice", (edits) => commits.push(edits));
+console.log(JSON.stringify({{cleared, failedBlur, replacement, confirmed, commits}}));
+'''
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=script,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+
+    assert result["cleared"]["values"]["unitPrice"] == ""
+    assert result["cleared"]["errors"] == {}
+    assert result["cleared"]["invalidFields"]["unitPrice"] == "Precio importado invalido"
+    assert result["failedBlur"]["values"]["unitPrice"] == ""
+    assert result["failedBlur"]["errors"]["unitPrice"] == "Precio importado invalido"
+    assert result["replacement"]["values"]["unitPrice"] == "82.00"
+    assert result["replacement"]["errors"] == {}
+    assert result["confirmed"]["invalidFields"] == {}
+    assert result["commits"] == [{"unitPrice": "82.00"}]
+
+
+def test_imported_draft_editor_marks_blur_errors_accessibly_and_meets_touch_target():
+    component = Path("mobiliti_saas/web/src/ImportedCartLineFields.jsx").read_text(encoding="utf-8")
+    drawer = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+
+    for marker in (
+        "draft,",
+        "onDraftChange",
+        "onBlur",
+        "aria-invalid",
+        'role="alert"',
+        "onValidityChange",
+        "DescripciÃ³n",
+    ):
+        assert marker.encode("latin-1").decode("utf-8") in component
+    assert "key={editorKey}" in drawer
+    assert "editorRevision" in drawer
+    assert "handleImportedDraftValidity" in drawer
+    assert "hasInvalidImportedDrafts" in drawer
+    assert "const [importedDrafts, setImportedDrafts] = useState({})" in drawer
+    assert "reconcileImportedDraftState" in drawer
+    assert "draft={importedDrafts[editorKey]" in drawer
+    assert "useState(" not in component
+    assert "useRef(" not in component
+    assert "min-height: 44px" in styles
+    assert "Â¿Continuar?" not in main
+    assert "¿Continuar?" in main
+
+
+def test_imported_line_error_ids_are_unique_and_valid_for_two_failing_lines():
+    component_url = Path("mobiliti_saas/web/src/ImportedCartLineFields.jsx").resolve().as_uri()
+    vite_url = Path("mobiliti_saas/web/node_modules/vite/dist/node/index.js").resolve().as_uri()
+    script = f'''import {{ createServer }} from {json.dumps(vite_url)};
+const server = await createServer({{root: "mobiliti_saas/web", server: {{middlewareMode: true}}, appType: "custom"}});
+const module = await server.ssrLoadModule({json.dumps(component_url)});
+const keys = ["import:proveedor/a:9", "import:proveedor?a:9"];
+const ids = typeof module.importedLineErrorId === "function"
+  ? keys.map((key) => module.importedLineErrorId(key, "unitPrice"))
+  : [];
+await server.close();
+console.log(JSON.stringify({{hasFactory: typeof module.importedLineErrorId === "function", ids, describedBy: ids}}));
+'''
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=script,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    component = Path("mobiliti_saas/web/src/ImportedCartLineFields.jsx").read_text(encoding="utf-8")
+
+    assert result["hasFactory"] is True
+    assert len(result["ids"]) == 2
+    assert len(set(result["ids"])) == 2
+    assert all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", error_id) for error_id in result["ids"])
+    assert result["describedBy"] == result["ids"]
+    assert 'const errorId = (field) => importedLineErrorId(editorKey || line.key, field);' in component
+    assert 'aria-describedby={draft.errors.unitPrice ? errorId("unitPrice") : undefined}' in component
+    assert '<small id={errorId("unitPrice")} role="alert">' in component
+
+
+def test_imported_editor_touch_targets_use_their_exact_selectors():
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+
+    assert 'className="quotation-import-preview"' in main
+    for selector in (
+        ".quotation-import-preview input",
+        ".quotation-import-preview select",
+        ".imported-line-editor input",
+        ".imported-line-editor textarea",
+    ):
+        matching_rules = [
+            declarations
+            for selectors, declarations in re.findall(r"([^{}]+)\{([^{}]*)\}", styles)
+            if selector in {candidate.strip() for candidate in selectors.split(",")}
+        ]
+        assert matching_rules, f"Falta la regla para {selector}"
+        assert any(re.search(r"min-height:\s*(?:4[4-9]|[5-9]\d|[1-9]\d{2,})px", rule) for rule in matching_rules)
+
+
+def test_quote_form_offers_preview_import_without_removing_direct_generation():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+
+    assert "Previsualizar e importar al carrito" in source
+    assert "Generar cotizacion" in source
+    assert "/import-preview" in source

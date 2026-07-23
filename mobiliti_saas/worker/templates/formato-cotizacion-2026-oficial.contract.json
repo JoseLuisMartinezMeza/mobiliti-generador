@@ -1,10 +1,11 @@
 {
-  "sha256": "e8bd97286aaa8af5dcf6d08b715231b9edcbe28b84da3db2523dfbb43f2c3989",
-  "defined_name_count": 29,
+  "sha256": "fc87b105b2809fbb892986e084bf1aaeffc77ff7d2b7e4b5da7ef6d8c4d028f5",
+  "defined_name_count": 31,
   "external_link_parts": 12,
   "spec_formula_count": 1314,
   "sheet_states": {
     "Cotizacion": "visible",
+    "sheep": "visible",
     "Mobiliti": "visible",
     "Estrategia Comercial ": "visible",
     "Fletes": "hidden",
@@ -20,7 +21,7 @@
   "mutable_cells": {
     "Mobiliti": ["K4", "K8"],
     "Fletes": ["D19"],
-    "Estrategia Comercial ": ["B7:C38", "D59", "B63:B64", "B68"]
+    "Estrategia Comercial ": ["B7:C37", "D59"]
   },
   "mutable_drawing_regions": {
     "Cotizacion": ["product-area"]

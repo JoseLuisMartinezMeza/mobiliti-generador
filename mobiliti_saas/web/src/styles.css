@@ -614,7 +614,7 @@ textarea:focus {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -1315,7 +1315,7 @@ textarea:focus {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  min-height: 40px;
+  min-height: 44px;
   margin-top: 4px;
   color: var(--muted);
   font-size: 13px;
@@ -2311,8 +2311,8 @@ textarea:focus {
 
 .mixed-cart-title > button,
 .mixed-cart-remove {
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   border: 1px solid var(--line);
@@ -2335,14 +2335,93 @@ textarea:focus {
   margin: 14px 0 20px;
 }
 
+.mixed-cart-section {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #c7dbd7;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.mixed-cart-section-header {
+  display: grid;
+  grid-template-columns: auto minmax(9rem, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  background: #edf7f5;
+  border-bottom: 1px solid #c7dbd7;
+}
+
+.mixed-cart-section-number {
+  color: var(--teal-dark);
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.mixed-cart-section-concept input {
+  width: 100%;
+  min-height: 44px;
+  border-color: #9ecbc4;
+  background: #fff;
+  font-weight: 850;
+}
+
+.mixed-cart-section-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mixed-cart-section-toggle {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #78b8ae;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--teal-dark);
+  font-weight: 850;
+}
+
+.mixed-cart-section-toggle[aria-expanded="false"] {
+  background: #dff2ee;
+}
+
+.mixed-cart-merge-section {
+  grid-column: 2 / -1;
+  min-height: 44px;
+  justify-self: end;
+  padding: 0 12px;
+  border: 1px solid #9ecbc4;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--teal-dark);
+  font-weight: 800;
+}
+
+.mixed-cart-section-lines {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.mixed-cart-section-lines[hidden] {
+  display: none;
+}
+
 .mixed-cart-line {
   min-width: 0;
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 104px auto;
+  grid-template-columns: 64px minmax(0, 1fr) 104px 150px;
   gap: 10px;
   align-items: end;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.mixed-cart-line:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .mixed-cart-line-image {
@@ -2389,6 +2468,71 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.imported-line-badge {
+  color: var(--teal-dark) !important;
+  font-weight: 800;
+}
+
+.imported-line-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid #cfe4df;
+  border-radius: 6px;
+  background: #fbfdfd;
+}
+
+.imported-line-editor summary {
+  cursor: pointer;
+  color: var(--teal-dark);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.imported-line-editor label,
+.quotation-import-preview label {
+  display: grid;
+  gap: 4px;
+  color: #526177;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.imported-line-editor input,
+.imported-line-editor textarea,
+.quotation-import-preview input,
+.quotation-import-preview select {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #cfdbe7;
+  border-radius: 6px;
+}
+
+.imported-line-editor textarea {
+  min-height: 68px;
+  resize: vertical;
+}
+
+.quotation-import-preview {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #9ecbc4;
+  border-radius: 8px;
+  background: #f4fbfa;
+}
+
+.quotation-import-preview h3,
+.quotation-import-preview p {
+  margin: 0;
+}
+
+.quotation-import-preview small {
+  color: var(--muted);
+}
+
 .mixed-cart-quantity {
   min-width: 0;
 }
@@ -2396,6 +2540,86 @@ textarea:focus {
 .mixed-cart-quantity small {
   color: var(--danger);
   overflow-wrap: anywhere;
+}
+
+.mixed-cart-line-actions {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.mixed-cart-line-actions .mixed-cart-remove {
+  grid-area: auto;
+}
+
+.mixed-cart-order-controls {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mixed-cart-order-controls button,
+.mixed-cart-section-actions button {
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid #9ecbc4;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--teal-dark);
+  font-weight: 800;
+}
+
+.mixed-cart-order-controls button:disabled {
+  border-color: var(--line);
+  color: #8b96a8;
+  background: #f4f6f8;
+}
+
+.mixed-cart-move-section {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.mixed-cart-move-section > span {
+  color: #526177;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mixed-cart-move-section select {
+  width: 100%;
+  min-height: 44px;
+  padding-inline: 8px;
+}
+
+.mixed-cart-section-actions {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid #d9e7e4;
+  background: #fbfdfd;
+}
+
+.mixed-cart-section-actions button {
+  width: 100%;
+  border-color: var(--teal);
+  background: #f4fbfa;
+}
+
+.mixed-cart-section-actions small {
+  color: var(--muted);
+  text-align: center;
+}
+
+.mixed-cart-section button:focus-visible,
+.mixed-cart-section input:focus-visible,
+.mixed-cart-section select:focus-visible {
+  outline: 3px solid rgb(15 145 132 / 28%);
+  outline-offset: 2px;
 }
 
 .mixed-quote-form {
@@ -2449,7 +2673,26 @@ textarea:focus {
     grid-template-areas:
       "image remove"
       "copy copy"
-      "quantity quantity";
+      "quantity quantity"
+      "actions actions";
+  }
+
+  .mixed-cart-section-header {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .mixed-cart-section-count {
+    grid-column: 1 / -1;
+  }
+
+  .mixed-cart-section-toggle {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .mixed-cart-merge-section {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .mixed-cart-line-image {
@@ -2466,6 +2709,11 @@ textarea:focus {
 
   .mixed-cart-remove {
     grid-area: remove;
+  }
+
+  .mixed-cart-line-actions {
+    grid-area: actions;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
 

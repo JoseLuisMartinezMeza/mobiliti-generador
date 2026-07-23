@@ -62,22 +62,6 @@ SOURCE_HASHES = {
     for catalog in CATALOGS
 }
 
-LEGACY_MOBILITI_WRITERS = (
-    "_ensure_mobiliti_formula_layout",
-    "_write_mobiliti_row_formulas",
-    "_normalize_mobiliti_row_formulas",
-    "_set_mobiliti_subtotal_formulas",
-)
-
-
-def _forbid_legacy_mobiliti_writers(monkeypatch) -> None:
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("el flujo oficial no debe alcanzar writers Mobiliti legacy")
-
-    for name in LEGACY_MOBILITI_WRITERS:
-        monkeypatch.setattr(quote_engine, name, forbidden)
-
-
 @pytest.fixture
 def isolated_quote_runtime(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "http://localhost:54321")
@@ -711,7 +695,6 @@ def test_authoritative_base_mismatch_fails_before_output(
     monkeypatch,
     tmp_path,
 ):
-    _forbid_legacy_mobiliti_writers(monkeypatch)
     rows = [
         {
             "catalog": "offiho",
@@ -765,6 +748,52 @@ def test_authoritative_base_mismatch_fails_before_output(
     assert not output.exists()
 
 
+def test_authoritative_catalog_origin_uses_canonical_key_not_source_reference(
+    monkeypatch,
+    tmp_path,
+):
+    catalogs = authoritative_catalogs()
+    catalogs["cr-global"]["items"][0]["source_reference"] = (
+        '[{"cell_or_bbox":"B565","sheet_or_page":"COSTO CR GLOBAL"}]'
+    )
+    row = {"catalog": "cr-global", "internal_id": "cr:e2e", "quantity": "1"}
+    payload = build_mixed_catalog_cart_payload(
+        [row],
+        catalogs=catalogs,
+        rate_rows=rate_rows(),
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": "section-1",
+            "title": "Validacion",
+            "item_keys": [mixed_cart_key(row)],
+        }],
+        today=date.today(),
+    )
+    monkeypatch.setattr(
+        catalog_cart,
+        "_download_catalog_image",
+        lambda *_args, **_kwargs: None,
+    )
+    parser_source = create_mixed_catalog_quotation_workbook(
+        payload,
+        tmp_path / "json-source-reference.xlsx",
+        image_dir=tmp_path / "json-source-reference-images",
+    )
+    output = tmp_path / "json-source-reference-output.xlsx"
+
+    generate_quote(
+        parser_source,
+        output,
+        _mixed_import_metadata(payload, "MXN"),
+        WORKER_TEMPLATE,
+        original_quotation_path=None,
+        quotation_data_rows=quotation_data_rows(payload),
+    )
+
+    assert output.is_file()
+
+
 def _identical_offiho_payload_with_lumbro_parents() -> dict:
     catalogs = authoritative_catalogs()
     identical_items = [
@@ -815,7 +844,6 @@ def test_authoritative_identity_rejects_inverted_identical_lines_and_keeps_lumbr
     monkeypatch,
     tmp_path,
 ):
-    _forbid_legacy_mobiliti_writers(monkeypatch)
     payload = _identical_offiho_payload_with_lumbro_parents()
     monkeypatch.setattr(
         catalog_cart,
@@ -904,7 +932,6 @@ def test_authoritative_handoff_rejects_missing_or_mismatched_parser_identity_bef
     monkeypatch,
     tmp_path,
 ):
-    _forbid_legacy_mobiliti_writers(monkeypatch)
     payload = _identical_offiho_payload_with_lumbro_parents()
     monkeypatch.setattr(
         catalog_cart,
@@ -957,7 +984,6 @@ def test_authoritative_imported_identity_mismatch_fails_before_output(
     monkeypatch,
     tmp_path,
 ):
-    _forbid_legacy_mobiliti_writers(monkeypatch)
     imported_source = write_import_fixture(tmp_path / "identity-import-source.xlsx")
     manifest, _images = build_import_manifest(
         imported_source.read_bytes(),
@@ -1034,7 +1060,6 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
     tmp_path,
 ):
     assert WORKER_TEMPLATE.is_file()
-    _forbid_legacy_mobiliti_writers(monkeypatch)
     imported_source = write_import_fixture(tmp_path / "imported-only-source.xlsx")
     source_hash_before = hashlib.sha256(imported_source.read_bytes()).hexdigest()
     manifest, imported_images = build_import_manifest(
@@ -1148,7 +1173,6 @@ def test_explicit_original_does_not_cross_wire_same_row_parser_image(
     monkeypatch,
     tmp_path,
 ):
-    _forbid_legacy_mobiliti_writers(monkeypatch)
     imported_source = write_import_fixture(tmp_path / "visible-original.xlsx")
     _manifest, imported_images = build_import_manifest(
         imported_source.read_bytes(),
@@ -1241,7 +1265,6 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
     tmp_path,
 ):
     assert WORKER_TEMPLATE.is_file()
-    _forbid_legacy_mobiliti_writers(monkeypatch)
     imported_source = write_import_fixture(tmp_path / "imported-source.xlsx")
     source_hash_before = hashlib.sha256(imported_source.read_bytes()).hexdigest()
     manifest, imported_images = build_import_manifest(
@@ -1422,8 +1445,8 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
             )
             assert mobiliti.cell(mobiliti_row, 16).value == canonical.region
             assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
-            assert str(mobiliti.cell(mobiliti_row, 24).value).startswith(
-                "=_xlfn.MINIFS("
+            assert mobiliti.cell(mobiliti_row, 24).value == (
+                f"=(W{mobiliti_row}*H{mobiliti_row})"
             )
             assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
             assert cotizacion.cell(cotizacion_row, 8).value == (
@@ -1496,7 +1519,6 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
     tmp_path,
 ):
     assert WORKER_TEMPLATE.is_file()
-    _forbid_legacy_mobiliti_writers(monkeypatch)
     api_index, quote_worker = isolated_quote_runtime
     api_state = install_api_boundary(monkeypatch, api_index, authoritative_catalogs())
 
@@ -1820,8 +1842,8 @@ def _assert_task9_final_workbook(
         )
         assert mobiliti.cell(mobiliti_row, 16).value == record["region"]
         assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
-        assert str(mobiliti.cell(mobiliti_row, 24).value).startswith(
-            "=_xlfn.MINIFS("
+        assert mobiliti.cell(mobiliti_row, 24).value == (
+            f"=(W{mobiliti_row}*H{mobiliti_row})"
         )
         assert cotizacion.cell(cotizacion_row, 6).value == (
             f"=Mobiliti!X{mobiliti_row}"
