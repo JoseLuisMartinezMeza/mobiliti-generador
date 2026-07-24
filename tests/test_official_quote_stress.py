@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 from dataclasses import dataclass
 from collections import Counter
 from decimal import Decimal
@@ -54,6 +55,7 @@ OFFICIAL_ALLOWED_PARTS = frozenset(
         "xl/worksheets/sheet2.xml",
         "xl/worksheets/sheet3.xml",
         "xl/worksheets/sheet4.xml",
+        "xl/worksheets/sheet5.xml",
     }
 )
 SEVEN_CATALOGS = (
@@ -105,6 +107,236 @@ class SyntheticMixedRequest:
     quotation_data: tuple[QuotationDataRow, ...]
     metadata: dict[str, object]
     names: tuple[str, ...]
+
+
+def as_persistent_project_request(
+    request: SyntheticMixedRequest,
+) -> SyntheticMixedRequest:
+    """Agrega al stress mixto el contexto inmutable de un Proyecto guardado.
+
+    Las filas físicas se conservan intactas. Las tres primeras forman una
+    composición (principal, por unidad y fija); las demás son principales
+    independientes. Dos ocurrencias de catálogo comparten identidad canónica
+    deliberadamente para cubrir reemplazos/duplicados sin colapsar sus UUID de
+    ocurrencia.
+    """
+
+    frozen_lines: list[dict[str, object]] = []
+    compositions: list[dict[str, object]] = []
+    rows_by_section: dict[str, list[QuotationDataRow]] = {}
+    for row in request.quotation_data:
+        rows_by_section.setdefault(row.section_id, []).append(row)
+
+    for section_rows in rows_by_section.values():
+        first_id = section_rows[0].item_key
+        for index, row in enumerate(section_rows):
+            is_first_composition_child = (
+                row.section_id == request.quotation_data[0].section_id
+                and index in {1, 2}
+            )
+            if is_first_composition_child:
+                frozen_lines.append(
+                    {
+                        "line_id": row.item_key,
+                        "role": "complement",
+                        "section_id": None,
+                        "parent_line_id": first_id,
+                        "identity": {
+                            "internal_id": "sunon:duplicate-component",
+                            "base_option_id": "",
+                            "add_on_option_ids": [],
+                        },
+                    }
+                )
+                continue
+            frozen_lines.append(
+                {
+                    "line_id": row.item_key,
+                    "role": "principal",
+                    "section_id": row.section_id,
+                    "parent_line_id": None,
+                    "identity": {
+                        "internal_id": (
+                            "sunon:duplicate-principal"
+                            if index in {3, 4}
+                            else f"sunon:{row.item_key}"
+                        ),
+                        "base_option_id": "",
+                        "add_on_option_ids": [],
+                    },
+                }
+            )
+
+        if section_rows[0] is request.quotation_data[0]:
+            component_rows = section_rows[:3]
+            compositions.append(
+                {
+                    "principal_line_id": component_rows[0].item_key,
+                    "section_id": component_rows[0].section_id,
+                    "component_line_ids": [
+                        component.item_key for component in component_rows
+                    ],
+                    "price_terms": [
+                        {
+                            "line_id": component_rows[0].item_key,
+                            "numerator": "1",
+                            "denominator": "1",
+                        },
+                        {
+                            "line_id": component_rows[1].item_key,
+                            "numerator": "1",
+                            "denominator": "1",
+                        },
+                        {
+                            "line_id": component_rows[2].item_key,
+                            "numerator": "1",
+                            "denominator": "1",
+                        },
+                    ],
+                }
+            )
+            independent_rows = section_rows[3:]
+        else:
+            independent_rows = section_rows
+        compositions.extend(
+            {
+                "principal_line_id": row.item_key,
+                "section_id": row.section_id,
+                "component_line_ids": [row.item_key],
+                "price_terms": [
+                    {
+                        "line_id": row.item_key,
+                        "numerator": "1",
+                        "denominator": "1",
+                    }
+                ],
+            }
+            for row in independent_rows
+        )
+
+    metadata = deepcopy(request.metadata)
+    metadata["catalog_source_hashes"] = {
+        catalog: hashlib.sha256(f"stress:{catalog}".encode()).hexdigest()
+        for catalog in SEVEN_CATALOGS
+    }
+    metadata["project_context"] = {
+        "project_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "project_revision": 7,
+        "project_payload_hash": "a" * 64,
+        "normalized_project_payload": {
+            "sections": [
+                {
+                    "section_id": section_id,
+                    "concept": section_rows[0].section_title,
+                    "position": position,
+                }
+                for position, (section_id, section_rows) in enumerate(
+                    rows_by_section.items()
+                )
+            ],
+            "lines": frozen_lines,
+        },
+        "compositions": compositions,
+    }
+    return SyntheticMixedRequest(
+        source=request.source,
+        original_quotation=request.original_quotation,
+        quotation_data=request.quotation_data,
+        metadata=metadata,
+        names=request.names,
+    )
+
+
+def excel_com_roundtrip(path: Path) -> Path:
+    """Abre, recalcula, guarda y reabre un XLSX con Excel de escritorio."""
+
+    import pythoncom
+    import pywintypes
+    import time
+    import win32com.client
+
+    def retry_com(action, *, timeout_seconds: float = 180.0):
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                return action()
+            except (AttributeError, pywintypes.com_error):
+                if time.monotonic() >= deadline:
+                    raise
+                pythoncom.PumpWaitingMessages()
+                time.sleep(0.25)
+
+    def wait_until_ready(application) -> None:
+        deadline = time.monotonic() + 180.0
+        while not retry_com(lambda: bool(application.Ready)):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Excel no termino de procesar el libro")
+            pythoncom.PumpWaitingMessages()
+            time.sleep(0.25)
+
+    def quit_excel(application) -> None:
+        retry_com(
+            lambda: application._oleobj_.InvokeTypes(
+                0x12E,
+                0,
+                pythoncom.DISPATCH_METHOD,
+                (pythoncom.VT_EMPTY, 0),
+                (),
+            )
+        )
+
+    resolved = Path(path).resolve()
+    pythoncom.CoInitialize()
+    app = None
+    try:
+        app = win32com.client.DispatchEx("Excel.Application")
+        app.Visible = False
+        app.DisplayAlerts = False
+        app.AskToUpdateLinks = False
+        app.AutomationSecurity = 3
+        workbook = retry_com(
+            lambda: app.Workbooks.Open(
+                str(resolved),
+                UpdateLinks=0,
+                ReadOnly=False,
+                IgnoreReadOnlyRecommended=True,
+                CorruptLoad=0,
+            )
+        )
+        wait_until_ready(app)
+        retry_com(app.CalculateFullRebuild)
+        wait_until_ready(app)
+        retry_com(workbook.Save)
+        wait_until_ready(app)
+        quit_excel(app)
+        app = None
+
+        app = win32com.client.DispatchEx("Excel.Application")
+        app.Visible = False
+        app.DisplayAlerts = False
+        app.AskToUpdateLinks = False
+        app.AutomationSecurity = 3
+        retry_com(
+            lambda: app.Workbooks.Open(
+                str(resolved),
+                UpdateLinks=0,
+                ReadOnly=True,
+                IgnoreReadOnlyRecommended=True,
+                CorruptLoad=0,
+            )
+        )
+        wait_until_ready(app)
+        quit_excel(app)
+        app = None
+        return resolved
+    finally:
+        if app is not None:
+            try:
+                app.DisplayAlerts = False
+                quit_excel(app)
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
 
 
 def _write_original_quotation(path: Path, imported_name: str) -> None:
@@ -262,6 +494,12 @@ def synthetic_mixed_request(
             "descuento": 30,
             "rate_summary": [],
             "auto_electrification_rate": None,
+            "catalog_source_hashes": {
+                catalog: hashlib.sha256(
+                    f"stress:{catalog}".encode()
+                ).hexdigest()
+                for catalog in SEVEN_CATALOGS
+            },
             "cotizacion": "100-STRESS",
             "proyecto": "Stress local",
             "cliente": "Cliente stress",
@@ -350,7 +588,10 @@ def _formulas_containing(package: XlsxPackage, token: str) -> Counter[str]:
     return Counter(formulas)
 
 
-def _assert_calc_chain_targets_formula_cells(package: XlsxPackage) -> None:
+def _assert_calc_chain_targets_formula_cells(
+    package: XlsxPackage,
+    required_mobiliti_rows: Sequence[int] = (),
+) -> None:
     workbook = ET.fromstring(package.parts["xl/workbook.xml"])
     sheet_parts_by_id = {
         sheet.attrib["sheetId"]: package.sheet_part(sheet.attrib["name"])
@@ -387,15 +628,18 @@ def _assert_calc_chain_targets_formula_cells(package: XlsxPackage) -> None:
                 mobiliti_calc_coordinates.append(coordinate)
     assert dangling == []
 
-    mobiliti_formula_coordinates = {
-        coordinate
-        for coordinate in formula_coordinates[package.sheet_part("Mobiliti")]
-        if column_index_from_string(coordinate.rstrip("0123456789")) <= 34
-    }
     mobiliti_calc_set = set(mobiliti_calc_coordinates)
-    assert mobiliti_formula_coordinates - mobiliti_calc_set == set()
-    assert mobiliti_calc_set - mobiliti_formula_coordinates == set()
     assert len(mobiliti_calc_coordinates) == len(mobiliti_calc_set)
+    calc_properties = workbook.find(f"{{{SHEET_NS}}}calcPr")
+    assert calc_properties is not None
+    assert {
+        key: calc_properties.attrib.get(key)
+        for key in ("calcMode", "fullCalcOnLoad", "forceFullCalc")
+    } == {
+        "calcMode": "auto",
+        "fullCalcOnLoad": "1",
+        "forceFullCalc": "1",
+    }
 
 
 def _assert_subtotals_cover_all_items(
@@ -491,7 +735,7 @@ def test_large_quotes_preserve_every_line_and_official_contract(
         )
     )
     _assert_subtotals_cover_all_items(package, layout, cotizacion_rows)
-    _assert_calc_chain_targets_formula_cells(package)
+    _assert_calc_chain_targets_formula_cells(package, layout.item_rows)
     assert_package_preserved(
         OFFICIAL_TEMPLATE,
         output,

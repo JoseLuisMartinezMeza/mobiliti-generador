@@ -29,6 +29,12 @@ OFFICIAL_SHA256 = "fc87b105b2809fbb892986e084bf1aaeffc77ff7d2b7e4b5da7ef6d8c4d02
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
+def assert_official_template_contract():
+    """Audita hash, hojas, relaciones externas y fórmulas de la plantilla."""
+
+    return verify_official_template(TEMPLATE, load_template_contract(CONTRACT))
+
+
 def _formula(root: ET.Element, coordinate: str) -> str:
     cell = root.find(f".//{{{MAIN}}}c[@r='{coordinate}']")
     assert cell is not None
@@ -38,9 +44,7 @@ def _formula(root: ET.Element, coordinate: str) -> str:
 
 
 def test_promoted_template_matches_official_contract():
-    contract = load_template_contract(CONTRACT)
-
-    result = verify_official_template(TEMPLATE, contract)
+    result = assert_official_template_contract()
 
     assert result.sha256 == OFFICIAL_SHA256
     assert result.sheet_states == {

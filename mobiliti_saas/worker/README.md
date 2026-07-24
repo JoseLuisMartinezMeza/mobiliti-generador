@@ -186,7 +186,7 @@ debe desplegarse con filesystem raiz de solo lectura, `cap-drop=ALL` y
 ## Contrato de plantilla oficial y capacidad dinámica
 
 El worker falla cerrado si la plantilla promovida no tiene SHA-256
-`e8bd97286aaa8af5dcf6d08b715231b9edcbe28b84da3db2523dfbb43f2c3989`.
+`fc87b105b2809fbb892986e084bf1aaeffc77ff7d2b7e4b5da7ef6d8c4d028f5`.
 La promoción local, siempre hacia un destino nuevo, se ejecuta así:
 
 ```powershell
@@ -212,8 +212,15 @@ filas reservadas y un request máximo de 25 MiB; nunca se truncan productos.
 Gate local de estrés:
 
 ```powershell
-python -m pytest tests\test_official_quote_stress.py -v
+powershell -ExecutionPolicy Bypass -File scripts\dev-start.ps1
+python -m pytest tests\test_project_quote_acceptance.py tests\test_official_quote_stress.py tests\test_official_template_contract.py tests\test_quotation_sheet_transplant.py -q
 ```
+
+En la interfaz local, valida un Proyecto con código repetido, una Quotation
+importada, reemplazo individual y masivo, y complementos `per_parent_unit` y
+`fixed_project`. Recarga antes de cotizar para comprobar el autoguardado. El
+XLSX final debe agrupar descripción, imagen y precio en `Cotizacion`, pero
+mantener principal y complementos en filas separadas de `Mobiliti`.
 
 Este handoff es sólo local. No promueve artefactos, no escribe en SharePoint,
 Supabase o Storage y no despliega Vercel/worker sin autorización nueva.

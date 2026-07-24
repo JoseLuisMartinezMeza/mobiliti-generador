@@ -341,7 +341,7 @@ versiones historial/
 ### Plantilla oficial, preservación y límites técnicos
 
 - La plantilla promovida se acepta sólo con SHA-256
-  `e8bd97286aaa8af5dcf6d08b715231b9edcbe28b84da3db2523dfbb43f2c3989`.
+  `fc87b105b2809fbb892986e084bf1aaeffc77ff7d2b7e4b5da7ef6d8c4d028f5`.
 - Se promueve con `scripts/promote_official_quote_template.py` hacia
   `mobiliti_saas/worker/templates/Formato Cotizacion 2026 Oficial.xlsx`, usando
   el manifiesto `formato-cotizacion-2026-oficial.contract.json` y un destino
@@ -361,9 +361,23 @@ versiones historial/
 Aceptación local reproducible:
 
 ```powershell
-python -m pytest tests\test_official_quote_stress.py -v
+powershell -ExecutionPolicy Bypass -File scripts\dev-start.ps1
+python -m pytest tests\test_project_quote_acceptance.py tests\test_official_quote_stress.py tests\test_official_template_contract.py tests\test_quotation_sheet_transplant.py -q
 npm --prefix mobiliti_saas/web run build
 ```
+
+Validación manual del Proyecto en `http://127.0.0.1:5173/`:
+
+1. Crea un Proyecto y agrega dos veces el mismo código.
+2. Importa una Quotation al Proyecto.
+3. Reemplaza una sola ocurrencia.
+4. Reemplaza todas las ocurrencias coincidentes, incluidas las importadas.
+5. Agrega un complemento por unidad y otro fijo al mismo principal.
+6. Recarga la página y confirma que el autoguardado conserva orden, secciones
+   y composiciones.
+7. Genera el XLSX en MXN y USD.
+8. Comprueba que `Cotizacion` muestra una línea compuesta y que `Mobiliti`
+   conserva cada componente como fila física independiente.
 
 Estado del handoff: validación local únicamente. No se ejecutó despliegue ni
 se escribió en SharePoint, Supabase, Storage remoto o producción.

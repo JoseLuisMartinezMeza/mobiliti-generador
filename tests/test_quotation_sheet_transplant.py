@@ -47,6 +47,12 @@ X14AC = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
 XR = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
 
 
+def quotation_semantic_signature(path: Path) -> tuple:
+    """Firma pública de la hoja Quotation y todo su cierre OOXML."""
+
+    return _quotation_signature(path)
+
+
 def test_transplanted_quotation_preserves_semantic_signature_and_official_parts(tmp_path):
     source = build_rich_quotation_fixture(
         tmp_path / "source.xlsx",
@@ -66,7 +72,7 @@ def test_transplanted_quotation_preserves_semantic_signature_and_official_parts(
     output = _compose_additions(OFFICIAL_TEMPLATE, tmp_path / "output.xlsx", (addition,))
 
     XlsxPackage.read(output)
-    assert _quotation_signature(output) == _quotation_signature(source)
+    assert quotation_semantic_signature(output) == quotation_semantic_signature(source)
     assert _part_bytes(output, _sheet_part(output, "Fletes")) == _part_bytes(
         OFFICIAL_TEMPLATE, _sheet_part(OFFICIAL_TEMPLATE, "Fletes")
     )
@@ -685,7 +691,7 @@ def test_table_identity_collisions_remap_id_name_and_all_structured_references(t
         display_name="Table1",
         formula="SUM(Table1[Columna 1])",
     )
-    destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    destination = _destination_with_table_registry((1, "Table1"))
 
     first = transplant_quotation(source, destination)
     second = transplant_quotation(source, destination)
@@ -722,7 +728,10 @@ def test_table_formula_tokenizer_rewrites_bare_range_operands_but_never_text(tmp
         filename="bare-table-reference.xlsx",
     )
 
-    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    addition = transplant_quotation(
+        source,
+        _destination_with_table_registry((1, "Table1")),
+    )
     assert addition is not None
     table_part = next(name for name in addition.parts if name.startswith("xl/tables/"))
     table = ET.fromstring(addition.parts[table_part])
@@ -752,7 +761,10 @@ def test_table_formula_tokenizer_rewrites_all_compound_range_identifiers(tmp_pat
         filename="compound-table-ranges.xlsx",
     )
 
-    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    addition = transplant_quotation(
+        source,
+        _destination_with_table_registry((1, "Table1"), (2, "Table2")),
+    )
     assert addition is not None
     table = next(
         ET.fromstring(content)
@@ -792,7 +804,10 @@ def test_table_formula_tokenizer_fails_closed_on_unbalanced_mapped_range(tmp_pat
     )
 
     with pytest.raises(ValueError, match="(?i)tabla|referencia|ambigua"):
-        transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+        transplant_quotation(
+            source,
+            _destination_with_table_registry((1, "Table1")),
+        )
 
 
 def test_table_formula_tokenizer_protects_complete_sheet_and_external_qualifiers(
@@ -809,7 +824,10 @@ def test_table_formula_tokenizer_protects_complete_sheet_and_external_qualifiers
         filename="qualified-table-ranges.xlsx",
     )
 
-    addition = transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+    addition = transplant_quotation(
+        source,
+        _destination_with_table_registry((1, "Table1"), (2, "Table2")),
+    )
     assert addition is not None
     table = next(
         ET.fromstring(content)
@@ -845,11 +863,14 @@ def test_table_formula_tokenizer_fails_closed_on_multiple_unquoted_qualifiers(
     )
 
     with pytest.raises(ValueError, match="(?i)tabla|referencia|ambigua|calificador"):
-        transplant_quotation(source, XlsxPackage.read(OFFICIAL_TEMPLATE))
+        transplant_quotation(
+            source,
+            _destination_with_table_registry((1, "Table1"), (2, "Table2")),
+        )
 
 
 def test_table_identity_preflight_rejects_ambiguous_names_duplicate_destination_and_literal_refs(tmp_path):
-    destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    destination = _destination_with_table_registry((1, "Table1"), (2, "Table2"))
     ambiguous = _source_with_table_identity(
         tmp_path,
         table_id=1,
@@ -2697,6 +2718,64 @@ def _destination_table_registry(package: XlsxPackage) -> tuple[set[int], set[str
             }
         )
     return identifiers, names
+
+
+def _destination_with_table_registry(
+    *identities: tuple[int, str],
+) -> XlsxPackage:
+    """Crea colisiones de tabla explícitas sin depender de la plantilla oficial."""
+
+    destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    parts = dict(destination.parts)
+    content_types = ET.fromstring(parts["[Content_Types].xml"])
+    for offset, (table_id, table_name) in enumerate(identities, start=1):
+        part_name = f"xl/tables/destination-table-{offset}.xml"
+        table = ET.Element(
+            f"{{{MAIN}}}table",
+            {
+                "id": str(table_id),
+                "name": table_name,
+                "displayName": table_name,
+                "ref": "A1:A2",
+                "totalsRowShown": "0",
+            },
+        )
+        ET.SubElement(table, f"{{{MAIN}}}autoFilter", {"ref": "A1:A2"})
+        columns = ET.SubElement(
+            table,
+            f"{{{MAIN}}}tableColumns",
+            {"count": "1"},
+        )
+        ET.SubElement(
+            columns,
+            f"{{{MAIN}}}tableColumn",
+            {"id": "1", "name": "Column1"},
+        )
+        ET.SubElement(
+            table,
+            f"{{{MAIN}}}tableStyleInfo",
+            {
+                "name": "TableStyleMedium2",
+                "showFirstColumn": "0",
+                "showLastColumn": "0",
+                "showRowStripes": "1",
+                "showColumnStripes": "0",
+            },
+        )
+        parts[part_name] = _xml_bytes(table)
+        ET.SubElement(
+            content_types,
+            f"{{{CONTENT_TYPES}}}Override",
+            {
+                "PartName": "/" + part_name,
+                "ContentType": (
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.table+xml"
+                ),
+            },
+        )
+    parts["[Content_Types].xml"] = _xml_bytes(content_types)
+    return replace(destination, parts=parts)
 
 
 def _append_relationship(content: bytes, relationship: tuple[str, str, str, str | None]) -> bytes:
