@@ -10,10 +10,11 @@ from pathlib import Path
 import sys
 from typing import Sequence
 from xml.etree import ElementTree as ET
+from zipfile import ZipFile
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
-from openpyxl.utils.cell import column_index_from_string
+from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
 import pytest
 
 from mobiliti_saas.quote_engine.mobiliti_layout import SectionNeed, plan_mobiliti_layout
@@ -247,11 +248,49 @@ def as_persistent_project_request(
     )
 
 
-def excel_com_roundtrip(path: Path) -> Path:
-    """Abre, recalcula, guarda y reabre un XLSX con Excel de escritorio."""
+def excel_desktop_unavailable_reason() -> str | None:
+    """Devuelve una razón de skip únicamente cuando Excel COM no está disponible."""
+
+    if sys.platform != "win32":
+        return "Excel de escritorio COM solo está disponible en Windows"
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError as exc:
+        return f"pywin32 no está disponible: {exc}"
+
+    pythoncom.CoInitialize()
+    application = None
+    try:
+        application = win32com.client.DispatchEx("Excel.Application")
+        application.Visible = False
+        application.DisplayAlerts = False
+        application.Quit()
+        application = None
+    except Exception as exc:
+        return f"Excel de escritorio no está disponible: {exc}"
+    finally:
+        if application is not None:
+            try:
+                application.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+    return None
+
+
+def excel_com_roundtrip(
+    source: Path,
+    destination: Path,
+    *,
+    formula_expectations: dict[tuple[str, str], str],
+    inspected_cells: Sequence[tuple[str, str]],
+) -> Path:
+    """Valida, recalcula y reabre una copia sin modificar el XLSX del worker."""
 
     import pythoncom
     import pywintypes
+    import tempfile
     import time
     import win32com.client
 
@@ -260,7 +299,7 @@ def excel_com_roundtrip(path: Path) -> Path:
         while True:
             try:
                 return action()
-            except (AttributeError, pywintypes.com_error):
+            except (AttributeError, TypeError, pywintypes.com_error):
                 if time.monotonic() >= deadline:
                     raise
                 pythoncom.PumpWaitingMessages()
@@ -270,7 +309,7 @@ def excel_com_roundtrip(path: Path) -> Path:
         deadline = time.monotonic() + 180.0
         while not retry_com(lambda: bool(application.Ready)):
             if time.monotonic() >= deadline:
-                raise TimeoutError("Excel no termino de procesar el libro")
+                raise TimeoutError("Excel no terminó de procesar el libro")
             pythoncom.PumpWaitingMessages()
             time.sleep(0.25)
 
@@ -285,58 +324,160 @@ def excel_com_roundtrip(path: Path) -> Path:
             )
         )
 
-    resolved = Path(path).resolve()
-    pythoncom.CoInitialize()
-    app = None
-    try:
-        app = win32com.client.DispatchEx("Excel.Application")
-        app.Visible = False
-        app.DisplayAlerts = False
-        app.AskToUpdateLinks = False
-        app.AutomationSecurity = 3
-        workbook = retry_com(
-            lambda: app.Workbooks.Open(
-                str(resolved),
-                UpdateLinks=0,
-                ReadOnly=False,
-                IgnoreReadOnlyRecommended=True,
-                CorruptLoad=0,
-            )
-        )
-        wait_until_ready(app)
-        retry_com(app.CalculateFullRebuild)
-        wait_until_ready(app)
-        retry_com(workbook.Save)
-        wait_until_ready(app)
-        quit_excel(app)
-        app = None
+    def close_workbook(workbook, *, save: bool = False) -> None:
+        retry_com(lambda: workbook.Close(SaveChanges=save))
 
-        app = win32com.client.DispatchEx("Excel.Application")
-        app.Visible = False
-        app.DisplayAlerts = False
-        app.AskToUpdateLinks = False
-        app.AutomationSecurity = 3
-        retry_com(
-            lambda: app.Workbooks.Open(
-                str(resolved),
+    def configure(application) -> None:
+        application.Visible = False
+        application.DisplayAlerts = False
+        application.AskToUpdateLinks = False
+        application.AutomationSecurity = 3
+
+    def repair_log_snapshot() -> dict[str, tuple[int, int]]:
+        temp_dir = Path(tempfile.gettempdir())
+        candidates = {
+            *temp_dir.glob("error*.xml"),
+            *temp_dir.glob("recover*.xml"),
+            *temp_dir.glob("*repair*.xml"),
+        }
+        return {
+            str(path.resolve()): (path.stat().st_mtime_ns, path.stat().st_size)
+            for path in candidates
+            if path.is_file()
+        }
+
+    def open_workbook(application, path: Path, *, read_only: bool):
+        return retry_com(
+            lambda: application.Workbooks.Open(
+                str(path),
                 UpdateLinks=0,
-                ReadOnly=True,
+                ReadOnly=read_only,
                 IgnoreReadOnlyRecommended=True,
                 CorruptLoad=0,
             )
         )
-        wait_until_ready(app)
-        quit_excel(app)
-        app = None
-        return resolved
+
+    def assert_no_repair_log(before: dict[str, tuple[int, int]]) -> None:
+        after = repair_log_snapshot()
+        changed = {
+            path
+            for path, signature in after.items()
+            if before.get(path) != signature
+        }
+        assert changed == set(), (
+            "Excel produjo un registro de recuperación/reparación: "
+            f"{sorted(changed)}"
+        )
+
+    def cell_text(cell) -> str:
+        return str(retry_com(lambda: cell.Text) or "")
+
+    def workbook_cell(workbook, sheet_name: str, coordinate: str):
+        column_name, row = coordinate_from_string(coordinate)
+        column = column_index_from_string(column_name)
+        return retry_com(
+            lambda: workbook.Worksheets.Item(sheet_name).Cells.Item(row, column)
+        )
+
+    def assert_dynamic_surface(workbook) -> None:
+        for (sheet_name, coordinate), expected in formula_expectations.items():
+            cell = workbook_cell(workbook, sheet_name, coordinate)
+            actual = str(retry_com(lambda: cell.Formula) or "")
+            canonical_actual = actual.replace("_xlfn.", "")
+            canonical_expected = expected.replace("_xlfn.", "")
+            assert canonical_actual == canonical_expected, (
+                f"Fórmula alterada en {sheet_name}!{coordinate}: "
+                f"{actual!r} != {expected!r}"
+            )
+            assert "[" not in actual, (
+                f"Vínculo externo en fórmula dinámica {sheet_name}!{coordinate}"
+            )
+            rendered = cell_text(cell).upper()
+            assert "#REF!" not in rendered
+            assert "#VALUE!" not in rendered
+        for sheet_name, coordinate in inspected_cells:
+            cell = workbook_cell(workbook, sheet_name, coordinate)
+            rendered = cell_text(cell).upper()
+            assert "#REF!" not in rendered
+            assert "#VALUE!" not in rendered
+
+    source_path = Path(source).resolve()
+    destination_path = Path(destination).resolve()
+    assert source_path != destination_path, "El roundtrip debe usar una copia distinta"
+    assert not destination_path.exists(), (
+        f"El destino de validación ya existe: {destination_path}"
+    )
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+    pythoncom.CoInitialize()
+    application = None
+    workbook = None
+    try:
+        # La primera apertura detecta reparación antes de crear o guardar la copia.
+        application = win32com.client.DispatchEx("Excel.Application")
+        configure(application)
+        repair_logs_before_open = repair_log_snapshot()
+        workbook = open_workbook(application, source_path, read_only=True)
+        wait_until_ready(application)
+        assert_no_repair_log(repair_logs_before_open)
+        assert_dynamic_surface(workbook)
+        close_workbook(workbook)
+        workbook = None
+        quit_excel(application)
+        application = None
+
+        destination_path.write_bytes(source_path.read_bytes())
+        application = win32com.client.DispatchEx("Excel.Application")
+        configure(application)
+        repair_logs_before_open = repair_log_snapshot()
+        workbook = open_workbook(application, destination_path, read_only=False)
+        wait_until_ready(application)
+        assert_no_repair_log(repair_logs_before_open)
+        assert_dynamic_surface(workbook)
+        retry_com(application.CalculateFullRebuild)
+        wait_until_ready(application)
+        assert_dynamic_surface(workbook)
+        retry_com(workbook.Save)
+        wait_until_ready(application)
+        close_workbook(workbook)
+        workbook = None
+        quit_excel(application)
+        application = None
+
+        application = win32com.client.DispatchEx("Excel.Application")
+        configure(application)
+        repair_logs_before_open = repair_log_snapshot()
+        workbook = open_workbook(application, destination_path, read_only=True)
+        wait_until_ready(application)
+        assert_no_repair_log(repair_logs_before_open)
+        assert_dynamic_surface(workbook)
+        close_workbook(workbook)
+        workbook = None
+        quit_excel(application)
+        application = None
     finally:
-        if app is not None:
+        if workbook is not None:
             try:
-                app.DisplayAlerts = False
-                quit_excel(app)
+                close_workbook(workbook)
+            except Exception:
+                pass
+        if application is not None:
+            try:
+                quit_excel(application)
             except Exception:
                 pass
         pythoncom.CoUninitialize()
+
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == source_hash
+    assert ZipFile(destination_path).testzip() is None
+    package = XlsxPackage.read(destination_path)
+    suspicious_parts = {
+        name
+        for name in package.parts
+        if "recover" in name.lower() or "repair" in name.lower()
+    }
+    assert suspicious_parts == set()
+    return destination_path
 
 
 def _write_original_quotation(path: Path, imported_name: str) -> None:

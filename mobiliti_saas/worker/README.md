@@ -216,6 +216,19 @@ powershell -ExecutionPolicy Bypass -File scripts\dev-start.ps1
 python -m pytest tests\test_project_quote_acceptance.py tests\test_official_quote_stress.py tests\test_official_template_contract.py tests\test_quotation_sheet_transplant.py -q
 ```
 
+El gate anterior atraviesa persistencia de Proyecto, storage de entrada
+inmutable, claim del worker y descarga del XLSX. Para comprobar con Microsoft
+Excel los cuatro artefactos generados sin sobrescribirlos:
+
+```powershell
+python -m pytest tests\test_project_quote_acceptance.py::test_project_quote_excel_desktop_acceptance_for_four_persisted_cases -q -rs
+```
+
+La prueba falla ante recovery logs, fórmulas dinámicas alteradas, `#REF!`,
+`#VALUE!` o vínculos externos en esas fórmulas; después recalcula, guarda una
+copia y la reabre. Sólo hace `skip` con la razón registrada si Excel COM no
+está disponible.
+
 En la interfaz local, valida un Proyecto con código repetido, una Quotation
 importada, reemplazo individual y masivo, y complementos `per_parent_unit` y
 `fixed_project`. Recarga antes de cotizar para comprobar el autoguardado. El

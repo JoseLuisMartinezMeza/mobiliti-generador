@@ -2049,7 +2049,14 @@ def _relationship_graph_signature(
             if attrs.get("TargetMode") == "External":
                 rows.append((attrs["Id"], attrs["Type"], "External", attrs["Target"]))
                 continue
-            target = posixpath.normpath(posixpath.join(posixpath.dirname(owner), attrs["Target"]))
+            raw_target = attrs["Target"]
+            target = (
+                posixpath.normpath(raw_target.lstrip("/"))
+                if raw_target.startswith("/")
+                else posixpath.normpath(
+                    posixpath.join(posixpath.dirname(owner), raw_target)
+                )
+            )
             payload = parts[target]
             content_type = content_type_map.get(target)
             relationship_type = attrs["Type"]
@@ -2456,6 +2463,8 @@ def _sheet_part_from_parts(parts: dict[str, bytes], name: str) -> str:
     matches = [item for item in workbook.findall("m:sheets/m:sheet", NS) if item.attrib["name"] == name]
     assert len(matches) == 1
     target = relationships[matches[0].attrib[f"{{{OFFICE_REL}}}id"]]
+    if target.startswith("/"):
+        return posixpath.normpath(target.lstrip("/"))
     return posixpath.normpath(posixpath.join("xl", target))
 
 

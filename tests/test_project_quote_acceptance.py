@@ -1,44 +1,45 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, timedelta
 from decimal import Decimal
 import hashlib
-import inspect
+import json
 from pathlib import Path
+import uuid
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 import pytest
+from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
-from mobiliti_saas.quote_engine import engine, generate_quote
-from mobiliti_saas.quote_engine.mixed_catalog import (
-    build_mixed_catalog_cart_payload,
-    create_mixed_catalog_quotation_workbook,
+from mobiliti_saas.quote_engine import engine
+from mobiliti_saas.quote_engine.mobiliti_layout import (
+    SectionNeed,
+    plan_mobiliti_layout,
 )
+from mobiliti_saas.quote_engine.ooxml_formula import translate_formula
 from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage
 from mobiliti_saas.quote_engine.ooxml_package import assert_package_preserved
-from mobiliti_saas.quote_engine.project_quote import project_context
 from mobiliti_saas.quote_engine.quotation_import import (
+    MAX_QUOTE_REQUEST_BYTES,
     MOBILITI_RESERVED_ROWS_AFTER_TOTAL,
     XLSX_MAX_ROWS,
+    build_import_manifest,
     required_mobiliti_rows,
-    validate_quote_size,
 )
-from mobiliti_saas.quote_engine.quotation_sheets import quotation_data_rows
 from mobiliti_saas.web.api import index as web_api
-from quotation_import_fixtures import build_rich_quotation_fixture
+from quotation_import_fixtures import write_import_fixture
 from test_official_quote_stress import (
     OFFICIAL_ALLOWED_PARTS,
-    SEVEN_CATALOGS,
-    QuoteShape,
     _cell_map,
     _cell_text,
     _formula,
-    as_persistent_project_request,
-    run_local_worker_job,
-    synthetic_mixed_request,
+    excel_com_roundtrip,
+    excel_desktop_unavailable_reason,
+    quote_worker,
 )
 from test_official_template_contract import assert_official_template_contract
 from test_project_quote_engine import (
@@ -68,13 +69,17 @@ def _formula_semantic_xml(content: bytes) -> tuple:
     return _canonical(root)
 
 
-def _project_quote_input(
-    tmp_path: Path,
-    quote_currency: str,
-) -> tuple[Path, dict, dict]:
-    catalog = {
+def _auth_headers() -> dict[str, str]:
+    token = web_api.create_access_token(
+        {"sub": "1", "email": web_api.DEV_USER_EMAIL}
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _catalog_snapshot() -> dict:
+    return {
         "supplier": "sunon",
-        "source_hash": "c" * 64,
+        "source_hash": hashlib.sha256(b"task-8-persisted-sunon").hexdigest(),
         "generated_at": "2026-07-23T00:00:00+00:00",
         "items": [
             _supplier_item("sunon:main-1", "MAIN-1", "Principal"),
@@ -82,103 +87,420 @@ def _project_quote_input(
             _supplier_item("sunon:fixed-1", "FIXED-1", "Complemento fijo"),
         ],
     }
-    project = _project_payload()
-    project["quote_fields"]["quote_currency"] = quote_currency
-    context = project_context(
-        project,
-        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        3,
+
+
+@dataclass(frozen=True)
+class PersistedQuoteResult:
+    output: Path
+    frozen_payload: dict
+    project: dict
+    job: dict
+    layout: object
+    original_quotation: Path | None
+    claim_events: tuple[str, ...]
+
+
+def _configure_persisted_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    store_dir: Path,
+) -> None:
+    monkeypatch.setattr(web_api, "JWT_SECRET_KEY", "task-8-persisted-secret")
+    monkeypatch.setattr(web_api, "DEV_MODE", True)
+    monkeypatch.setattr(web_api, "DEV_STORE_DIR", store_dir)
+    monkeypatch.setattr(quote_worker, "DEV_MODE", True)
+    monkeypatch.setattr(quote_worker, "DEV_STORE_DIR", store_dir)
+    monkeypatch.setattr(quote_worker, "QUOTE_ENGINE", "python")
+    monkeypatch.setattr(
+        web_api,
+        "db_get_usuario_by_id",
+        lambda user_id: {
+            "id": int(user_id),
+            "email": web_api.DEV_USER_EMAIL,
+            "activo": True,
+            "es_admin": True,
+        },
     )
-    payload = build_mixed_catalog_cart_payload(
-        [
-            {
-                "line_id": PRINCIPAL_ID,
-                "catalog": "sunon",
-                "internal_id": "sunon:main-1",
-                "quantity": "10",
-            },
-            {
-                "line_id": PER_UNIT_ID,
-                "catalog": "sunon",
-                "internal_id": "sunon:per-1",
-                "quantity": "20",
-            },
-            {
-                "line_id": FIXED_ID,
-                "catalog": "sunon",
-                "internal_id": "sunon:fixed-1",
-                "quantity": "3",
-            },
-        ],
-        catalogs={"sunon": catalog},
-        rate_rows=[
+    monkeypatch.setattr(web_api, "_require_active_subscription", lambda _user_id: None)
+    monkeypatch.setattr(web_api, "_require_enabled_catalog_supplier", lambda value: value)
+    monkeypatch.setattr(
+        web_api,
+        "_load_supplier_catalog_cached",
+        lambda supplier: (
+            _catalog_snapshot()
+            if supplier == "sunon"
+            else (_ for _ in ()).throw(
+                AssertionError(f"Catalogo inesperado: {supplier}")
+            )
+        ),
+    )
+    effective = (date.today() - timedelta(days=1)).isoformat()
+    monkeypatch.setattr(
+        web_api,
+        "db_list_exchange_rates",
+        lambda: [
             {
                 "currency": "USD",
-                "effective_date": "2026-07-23",
+                "effective_date": effective,
                 "mxn_per_unit": "18.500000",
-                "retrieved_at": "2026-07-23T00:00:00+00:00",
+                "retrieved_at": f"{effective}T20:00:00Z",
             }
         ],
-        quote_currency=quote_currency,
-        commercial_discount_percent="40",
-        presentation_sections=[
-            {
-                "id": "section-1",
-                "title": "Recepción",
-                "line_ids": [PRINCIPAL_ID, PER_UNIT_ID, FIXED_ID],
-            }
-        ],
-        project_context=context,
-        today=date(2026, 7, 23),
     )
-    source = create_mixed_catalog_quotation_workbook(
-        payload,
-        tmp_path / f"project-{quote_currency}.xlsx",
-        image_dir=tmp_path / "images",
+    monkeypatch.setattr(web_api, "_next_quote_number_for_user", lambda _user: None)
+    monkeypatch.setattr(
+        web_api, "_enforce_active_quote_limit", lambda *_args, **_kwargs: None
     )
-    metadata = {
-        **project["quote_fields"],
-        "cotizacion": f"PROJECT-{quote_currency}",
-        "catalog_price_mode": "mixed_catalog_converted",
-        "base_currency": quote_currency,
-        "quote_currency": quote_currency,
-        "exchange_rate": "1.000000",
-        "rate_summary": deepcopy(payload["rate_summary"]),
-        "auto_electrification_rate": None,
-        "catalog_source_hashes": {"sunon": "c" * 64},
-        "project_context": deepcopy(payload["project_context"]),
+    monkeypatch.setattr(web_api, "_wake_worker", lambda: None)
+    # Los artefactos de aceptación son evidencia; no se eliminan al completar.
+    monkeypatch.setattr(quote_worker, "_delete_job_input", lambda *_args: None)
+    monkeypatch.setattr(
+        quote_worker, "_cleanup_completed_import_source", lambda *_args: True
+    )
+
+
+def _seed_import_job(source: Path) -> tuple[str, dict]:
+    import_id = str(uuid.uuid4())
+    source_bytes = source.read_bytes()
+    manifest, images = build_import_manifest(source_bytes, import_id, source.name)
+    # El source de esta aceptación no aporta una imagen nueva a Cotizacion;
+    # así el conjunto de adiciones OOXML queda cerrado exactamente por las dos
+    # hojas canónicas que este contrato pretende auditar.
+    preview_rows = [row for row in sorted(images) if row != 11]
+    prefix = f"users/1/jobs/{import_id}/"
+    preview_prefix = f"{prefix}preview/{manifest['source_hash'][:16]}"
+    preview_paths = {
+        str(row): f"{preview_prefix}/row-{row}.png"
+        for row in preview_rows
     }
-    return source, payload, metadata
-
-
-def _generate_project_quote(
-    tmp_path: Path,
-    quote_currency: str,
-    *,
-    original_quotation_path: Path | None = None,
-) -> tuple[Path, dict]:
-    source, payload, metadata = _project_quote_input(tmp_path, quote_currency)
-    output = tmp_path / f"project-output-{quote_currency}.xlsx"
-    generate_quote(
-        source,
-        output,
+    input_path = f"{prefix}input.xlsx"
+    manifest_path = f"{preview_prefix}/manifest.json"
+    metadata = {
+        "original_filename": source.name,
+        "import_manifest_path": manifest_path,
+        "import_preview_paths": preview_paths,
+        "import_source_hash": manifest["source_hash"],
+        "import_item_count": len(manifest["items"]),
+    }
+    web_api.db_create_quote_job(
+        1,
+        "import-preview",
         metadata,
-        OFFICIAL_TEMPLATE,
-        original_quotation_path=original_quotation_path,
-        quotation_data_rows=quotation_data_rows(payload),
+        input_path,
+        job_id=import_id,
     )
-    assert output.is_file()
-    assert ZipFile(output).testzip() is None
-    XlsxPackage.read(output)
-    return output, payload
+    web_api._storage_upload_bytes(
+        input_path,
+        source_bytes,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    for row in preview_rows:
+        content, _image_type = images[row]
+        web_api._storage_upload_bytes(preview_paths[str(row)], content, "image/png")
+    web_api._storage_upload_bytes(
+        manifest_path,
+        json.dumps(
+            {**manifest, "preview_image_paths": preview_paths},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        "application/json",
+    )
+    return import_id, manifest
+
+
+def _imported_line(
+    *,
+    line_id: str,
+    section_id: str,
+    position: int,
+    manifest: dict,
+    promotion: dict,
+) -> dict:
+    item = next(row for row in manifest["items"] if row["source_row"] == 11)
+    return {
+        "line_id": line_id,
+        "role": "principal",
+        "section_id": section_id,
+        "parent_line_id": None,
+        "position": position,
+        "quantity": "1",
+        "source": "imported",
+        "import_id": manifest["import_id"],
+        "source_row": item["source_row"],
+        "source_currency": "USD",
+        "official_code": item.get("official_code") or "",
+        "provider": manifest["provider"],
+        "name": item["name"],
+        "description": item["description"],
+        "dimension": item["dimension"],
+        "unit_price": item["unit_price"],
+        "image_asset_key": promotion["image_asset_keys"].get(
+            str(item["source_row"]), ""
+        ),
+        "source_asset_key": promotion["source_asset_key"],
+        "display_cache": {
+            "name": item["name"],
+            "code": item.get("official_code") or "",
+            "image_url": "",
+        },
+    }
+
+
+def _stress_project_payload() -> dict:
+    payload = _project_payload()
+    payload["quote_fields"]["proyecto"] = "Proyecto stress persistido"
+    payload["sections"] = [
+        {
+            "section_id": f"section-{section}",
+            "concept": f"Stress Section {section}",
+            "position": section - 1,
+        }
+        for section in range(1, 21)
+    ]
+    lines: list[dict] = []
+    principal_counter = 0
+    for section in range(1, 21):
+        section_id = f"section-{section}"
+        for offset in range(35):
+            line_id = str(uuid.uuid4())
+            if section == 1 and offset == 0:
+                lines.append(
+                    {
+                        "line_id": line_id,
+                        "role": "import-placeholder",
+                        "section_id": section_id,
+                        "parent_line_id": None,
+                        "position": 0,
+                    }
+                )
+                parent_id = line_id
+                continue
+            if section == 1 and offset in {1, 2}:
+                lines.append(
+                    {
+                        "line_id": line_id,
+                        "role": "complement",
+                        "section_id": None,
+                        "parent_line_id": parent_id,
+                        "position": offset - 1,
+                        "quantity": "1",
+                        "quantity_mode": (
+                            "per_parent_unit"
+                            if offset == 1
+                            else "fixed_project"
+                        ),
+                        "source": "catalog",
+                        "catalog": "sunon",
+                        "official_code": "PER-1" if offset == 1 else "FIXED-1",
+                        "identity": {
+                            "internal_id": (
+                                "sunon:per-1"
+                                if offset == 1
+                                else "sunon:fixed-1"
+                            ),
+                            "base_option_id": "",
+                            "add_on_option_ids": [],
+                        },
+                        "display_cache": {
+                            "name": "Complemento",
+                            "code": "PER-1" if offset == 1 else "FIXED-1",
+                            "image_url": "",
+                        },
+                    }
+                )
+                continue
+            principal_counter += 1
+            lines.append(
+                {
+                    "line_id": line_id,
+                    "role": "principal",
+                    "section_id": section_id,
+                    "parent_line_id": None,
+                    "position": offset - 2 if section == 1 else offset,
+                    "quantity": "1",
+                    "source": "catalog",
+                    "catalog": "sunon",
+                    "official_code": "MAIN-1",
+                    "identity": {
+                        "internal_id": "sunon:main-1",
+                        "base_option_id": "",
+                        "add_on_option_ids": [],
+                    },
+                    "display_cache": {
+                        "name": f"Principal {principal_counter}",
+                        "code": "MAIN-1",
+                        "image_url": "",
+                    },
+                }
+            )
+    payload["lines"] = lines
+    return payload
+
+
+def _run_persisted_project_case(
+    case_dir: Path,
+    payload: dict,
+    *,
+    imported_source: Path | None = None,
+) -> PersistedQuoteResult:
+    monkeypatch = pytest.MonkeyPatch()
+    _configure_persisted_runtime(monkeypatch, case_dir / "dev-store")
+    client = TestClient(web_api.app)
+    claim_events: list[str] = []
+    try:
+        initial_payload = (
+            _project_payload() if imported_source is not None else deepcopy(payload)
+        )
+        initial_payload["quote_fields"]["quote_currency"] = payload["quote_fields"][
+            "quote_currency"
+        ]
+        created = client.post(
+            "/projects",
+            headers=_auth_headers(),
+            json={"name": case_dir.name, "payload": initial_payload},
+        )
+        assert created.status_code == 201, created.json()
+        project = created.json()["project"]
+
+        if imported_source is not None:
+            import_id, manifest = _seed_import_job(imported_source)
+            promoted = client.post(
+                f"/projects/{project['id']}/imports/{import_id}",
+                headers=_auth_headers(),
+            )
+            assert promoted.status_code == 200, promoted.json()
+            final_payload = deepcopy(payload)
+            placeholder = next(
+                line
+                for line in final_payload["lines"]
+                if line["role"] == "import-placeholder"
+            )
+            final_payload["lines"][
+                final_payload["lines"].index(placeholder)
+            ] = _imported_line(
+                line_id=placeholder["line_id"],
+                section_id=placeholder["section_id"],
+                position=placeholder["position"],
+                manifest=manifest,
+                promotion=promoted.json(),
+            )
+            patched = client.patch(
+                f"/projects/{project['id']}",
+                headers=_auth_headers(),
+                json={
+                    "name": project["name"],
+                    "payload": final_payload,
+                    "expected_revision": project["revision"],
+                    "operation_id": str(uuid.uuid4()),
+                },
+            )
+            assert patched.status_code == 200, patched.json()
+            project = patched.json()["project"]
+
+        with TestClient(web_api.app) as reloaded_client:
+            reloaded = reloaded_client.get(
+                f"/projects/{project['id']}", headers=_auth_headers()
+            )
+        assert reloaded.status_code == 200, reloaded.json()
+        assert reloaded.json()["project"]["payload"] == project["payload"]
+
+        quoted = client.post(
+            f"/projects/{project['id']}/quote",
+            headers=_auth_headers(),
+            json={"expected_revision": project["revision"]},
+        )
+        assert quoted.status_code == 202, quoted.json()
+        queued_job = quoted.json()["job"]
+        frozen_payload = json.loads(
+            web_api._storage_download_bytes(queued_job["input_path"])
+        )
+        assert frozen_payload["project_context"]["project_id"] == project["id"]
+        assert frozen_payload["project_context"]["project_revision"] == project[
+            "revision"
+        ]
+
+        original_claim = quote_worker.claim_job
+
+        def tracked_claim(worker_client, job):
+            claim_events.append(str(job["id"]))
+            return original_claim(worker_client, job)
+
+        monkeypatch.setattr(quote_worker, "claim_job", tracked_claim)
+        assert quote_worker.run_once() is True
+        completed = web_api.db_get_quote_job(queued_job["id"])
+        assert completed["status"] == "completed", completed
+        assert claim_events == [queued_job["id"]]
+        output_bytes = web_api._storage_download_bytes(completed["output_path"])
+        output = case_dir / "worker-output.xlsx"
+        output.write_bytes(output_bytes)
+        assert ZipFile(output).testzip() is None
+        XlsxPackage.read(output)
+        layout = plan_mobiliti_layout(
+            [
+                SectionNeed(
+                    section["id"],
+                    section["title"],
+                    len(section["line_ids"]),
+                )
+                for section in frozen_payload["sections"]
+            ]
+        )
+        return PersistedQuoteResult(
+            output=output,
+            frozen_payload=frozen_payload,
+            project=project,
+            job=completed,
+            layout=layout,
+            original_quotation=imported_source,
+            claim_events=tuple(claim_events),
+        )
+    finally:
+        client.close()
+        monkeypatch.undo()
+
+
+@pytest.fixture(scope="module")
+def persisted_project_outputs(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, PersistedQuoteResult]:
+    root = tmp_path_factory.mktemp("task8-persisted-project")
+    source = write_import_fixture(root / "original-quotation.xlsx", currency="USD")
+    source_workbook = load_workbook(source)
+    source_workbook["Quotation"]._images = []
+    source_workbook.save(source)
+    source_workbook.close()
+    mxn_payload = _project_payload()
+    mxn_payload["quote_fields"]["quote_currency"] = "MXN"
+    usd_payload = _project_payload()
+    usd_payload["quote_fields"]["quote_currency"] = "USD"
+    imported_payload = _stress_project_payload()
+    imported_payload["sections"] = imported_payload["sections"][:1]
+    imported_payload["lines"] = imported_payload["lines"][:8]
+    stress_payload = _stress_project_payload()
+    return {
+        "MXN": _run_persisted_project_case(root / "mxn", mxn_payload),
+        "USD": _run_persisted_project_case(root / "usd", usd_payload),
+        "imported": _run_persisted_project_case(
+            root / "imported",
+            imported_payload,
+            imported_source=source,
+        ),
+        "stress": _run_persisted_project_case(
+            root / "stress",
+            stress_payload,
+            imported_source=source,
+        ),
+    }
 
 
 @pytest.mark.parametrize("quote_currency", ("MXN", "USD"))
 def test_project_quote_opens_without_repair_and_totals_equal_components(
-    tmp_path: Path,
+    persisted_project_outputs: dict[str, PersistedQuoteResult],
     quote_currency: str,
 ) -> None:
-    output, payload = _generate_project_quote(tmp_path, quote_currency)
+    result = persisted_project_outputs[quote_currency]
+    output = result.output
+    payload = result.frozen_payload
     expected_unit_cost = Decimal("1850") if quote_currency == "MXN" else Decimal("100")
     physical_quantities = (Decimal("10"), Decimal("20"), Decimal("3"))
     component_totals = tuple(
@@ -196,6 +518,8 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
         expected_unit_cost,
         expected_unit_cost,
     ]
+    assert result.claim_events == (result.job["id"],)
+    assert result.job["metadata"]["project_id"] == result.project["id"]
 
     workbook = load_workbook(output, data_only=False, read_only=False)
     try:
@@ -218,26 +542,37 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
         workbook.close()
 
 
+def _exact_generated_additions(
+    template_package: XlsxPackage,
+    output_package: XlsxPackage,
+) -> frozenset[str]:
+    template_parts = set(template_package.parts)
+    actual = set(output_package.parts) - template_parts
+    expected = (
+        set(
+            output_package.relationship_closure(
+                output_package.sheet_part("Quotation")
+            )
+        )
+        | set(
+            output_package.relationship_closure(
+                output_package.sheet_part("Quotation_Data")
+            )
+        )
+    ) - template_parts
+    assert actual == expected
+    return frozenset(expected)
+
+
 def test_project_quote_preserves_original_quotation_and_template_contract(
-    tmp_path: Path,
+    persisted_project_outputs: dict[str, PersistedQuoteResult],
 ) -> None:
-    imported_source = build_rich_quotation_fixture(
-        tmp_path / "checked-import-fixture.xlsx",
-        formulas={"N9": "=G9*J9"},
-        merges=["A1:N1", "B9:C9"],
-        image_anchor="B9",
-        print_area="A1:N40",
-        hidden_rows=[12],
-        state="hidden",
-    )
+    result = persisted_project_outputs["imported"]
+    output = result.output
+    imported_source = result.original_quotation
+    assert imported_source is not None
     source_sha = hashlib.sha256(imported_source.read_bytes()).hexdigest()
     template_sha = hashlib.sha256(OFFICIAL_TEMPLATE.read_bytes()).hexdigest()
-
-    output, _payload = _generate_project_quote(
-        tmp_path,
-        "MXN",
-        original_quotation_path=imported_source,
-    )
 
     assert quotation_semantic_signature(output) == quotation_semantic_signature(
         imported_source
@@ -245,10 +580,9 @@ def test_project_quote_preserves_original_quotation_and_template_contract(
     assert hashlib.sha256(imported_source.read_bytes()).hexdigest() == source_sha
     assert hashlib.sha256(OFFICIAL_TEMPLATE.read_bytes()).hexdigest() == template_sha
     assert_official_template_contract()
-    template_parts = set(XlsxPackage.read(OFFICIAL_TEMPLATE).parts)
     output_package = XlsxPackage.read(output)
-    output_parts = set(output_package.parts)
     template_package = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    exact_additions = _exact_generated_additions(template_package, output_package)
     fletes_part = template_package.sheet_part("Fletes")
     assert _formula_semantic_xml(
         output_package.parts[fletes_part]
@@ -258,7 +592,7 @@ def test_project_quote_preserves_original_quotation_and_template_contract(
         output,
         allowed_parts=(
             set(OFFICIAL_ALLOWED_PARTS)
-            | (output_parts - template_parts)
+            | set(exact_additions)
             | {fletes_part}
         ),
     )
@@ -267,32 +601,23 @@ def test_project_quote_preserves_original_quotation_and_template_contract(
 
 
 def test_project_quote_expands_past_16_sections_and_33_components(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    persisted_project_outputs: dict[str, PersistedQuoteResult],
 ) -> None:
-    shape = QuoteShape([35] * 20)
-    base = synthetic_mixed_request(
-        tmp_path,
-        shape,
-        include_imported=True,
-        catalogs=SEVEN_CATALOGS,
-    )
-    request = as_persistent_project_request(base)
-    output = run_local_worker_job(tmp_path, request, monkeypatch)
+    result = persisted_project_outputs["stress"]
+    output = result.output
+    request = result.frozen_payload
     package = XlsxPackage.read(output)
 
     assert ZipFile(output).testzip() is None
-    assert len(request.quotation_data) == 700
-    assert len({row.section_id for row in request.quotation_data}) == 20
-    assert request.quotation_data[0].origin == "imported"
+    assert request["item_count"] == 700
+    assert len(request["sections"]) == 20
+    assert request["imported_source"]["items"][0]["source_row"] == 11
     identities = [
         line["identity"]["internal_id"]
-        for line in request.metadata["project_context"][
-            "normalized_project_payload"
-        ]["lines"]
+        for line in request["project_context"]["normalized_project_payload"]["lines"]
         if "identity" in line
     ]
-    assert identities.count("sunon:duplicate-principal") >= 2
+    assert identities.count("sunon:main-1") >= 2
 
     quotation_data = _cell_map(package, "Quotation_Data")
     assert sum(
@@ -303,23 +628,220 @@ def test_project_quote_expands_past_16_sections_and_33_components(
         and _cell_text(cell)
     ) == 700
     cotizacion = _cell_map(package, "Cotizacion")
-    visible_names = [
-        _cell_text(cell)
-        for coordinate, cell in cotizacion.items()
-        if coordinate.startswith("A") and _cell_text(cell) in set(request.names)
-    ]
-    assert len(visible_names) == 698
-    first_visible_row = next(
+    visible_formula_rows = sorted(
         int(coordinate[1:])
         for coordinate, cell in cotizacion.items()
-        if coordinate.startswith("A") and _cell_text(cell) == request.names[0]
+        if coordinate.startswith("F") and "Mobiliti!X" in _formula(cell)
     )
+    assert len(visible_formula_rows) == 698
+    first_visible_row = visible_formula_rows[0]
     assert _formula(cotizacion[f"F{first_visible_row}"]) == (
         "Mobiliti!X14+Mobiliti!X15+Mobiliti!X16"
     )
 
 
-def test_project_quote_rejects_only_after_physical_xlsx_limit() -> None:
+def _excel_acceptance_surface(
+    result: PersistedQuoteResult,
+) -> tuple[dict[tuple[str, str], str], tuple[tuple[str, str], ...]]:
+    package = XlsxPackage.read(result.output)
+    official = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    mobiliti = _cell_map(package, "Mobiliti")
+    official_mobiliti = _cell_map(official, "Mobiliti")
+    selected_rows: set[int] = set()
+    for section in result.layout.sections:
+        if section.item_count:
+            selected_rows.add(section.product_start)
+            selected_rows.add(section.product_start + section.item_count - 1)
+        if section.item_count < section.capacity:
+            selected_rows.add(section.product_start + section.item_count)
+
+    expectations: dict[tuple[str, str], str] = {}
+    inspected: set[tuple[str, str]] = set()
+    for row in sorted(selected_rows):
+        for column in ("W", "X"):
+            coordinate = f"{column}{row}"
+            expected = translate_formula(
+                f"={_formula(official_mobiliti[f'{column}14'])}",
+                origin=f"{column}14",
+                target=coordinate,
+                sheet="Mobiliti",
+            )
+            actual = f"={_formula(mobiliti[coordinate])}"
+            assert actual == expected
+            expectations[("Mobiliti", coordinate)] = actual
+        y_coordinate = f"Y{row}"
+        y_formula = _formula(mobiliti[y_coordinate])
+        assert y_formula
+        expectations[("Mobiliti", y_coordinate)] = f"={y_formula}"
+
+    cotizacion = _cell_map(package, "Cotizacion")
+    cotizacion_formula_coordinates = sorted(
+        (
+            coordinate
+            for coordinate, cell in cotizacion.items()
+            if coordinate.startswith(("F", "J")) and _formula(cell)
+        ),
+        key=lambda coordinate: (coordinate[0], int(coordinate[1:])),
+    )
+    for coordinate in (
+        cotizacion_formula_coordinates[0],
+        cotizacion_formula_coordinates[len(cotizacion_formula_coordinates) // 2],
+        cotizacion_formula_coordinates[-1],
+    ):
+        expectations[("Cotizacion", coordinate)] = (
+            f"={_formula(cotizacion[coordinate])}"
+        )
+    return expectations, tuple(sorted(inspected))
+
+
+def test_project_quote_excel_desktop_acceptance_for_four_persisted_cases(
+    persisted_project_outputs: dict[str, PersistedQuoteResult],
+    tmp_path: Path,
+) -> None:
+    unavailable = excel_desktop_unavailable_reason()
+    if unavailable is not None:
+        pytest.skip(unavailable)
+
+    for case_name in ("MXN", "USD", "imported", "stress"):
+        result = persisted_project_outputs[case_name]
+        source_hash = hashlib.sha256(result.output.read_bytes()).hexdigest()
+        expectations, inspected_cells = _excel_acceptance_surface(result)
+        validated = excel_com_roundtrip(
+            result.output,
+            tmp_path / f"{case_name}-excel-roundtrip.xlsx",
+            formula_expectations=expectations,
+            inspected_cells=inspected_cells,
+        )
+        assert hashlib.sha256(result.output.read_bytes()).hexdigest() == source_hash
+        assert validated != result.output
+        assert ZipFile(validated).testzip() is None
+        XlsxPackage.read(validated)
+
+
+class _ProjectedLineIds(list):
+    def __init__(self, reported_count: int):
+        super().__init__()
+        self.reported_count = reported_count
+
+    def __len__(self) -> int:
+        return self.reported_count
+
+
+def _capacity_projection(component_count: int, *, padding: str = "") -> dict:
+    project = _project_payload()
+    return {
+        "source_type": "mixed_catalog_cart",
+        "quote_currency": "MXN",
+        "created_at": "2026-07-23T00:00:00+00:00",
+        "groups": [],
+        "imported_source": None,
+        "sections": [
+            {
+                "id": "section-1",
+                "title": "Boundary",
+                "line_ids": _ProjectedLineIds(component_count),
+            }
+        ],
+        "item_count": component_count,
+        "auto_electrification_rate": None,
+        "rate_summary": [],
+        "project_context": {
+            "project_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "project_revision": 3,
+            "project_payload_hash": "a" * 64,
+            "normalized_project_payload": project,
+            "compositions": [],
+        },
+        **({"padding": padding} if padding else {}),
+    }
+
+
+def _capacity_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    projection: dict,
+) -> tuple[TestClient, list[str]]:
+    project = {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "usuario_id": 1,
+        "name": "Boundary",
+        "status": "active",
+        "revision": 3,
+        "schema_version": 1,
+        "payload": _project_payload(),
+    }
+    events: list[str] = []
+    monkeypatch.setattr(web_api, "JWT_SECRET_KEY", "task-8-capacity-secret")
+    monkeypatch.setattr(
+        web_api,
+        "db_get_usuario_by_id",
+        lambda user_id: {"id": int(user_id), "activo": True, "es_admin": False},
+    )
+    monkeypatch.setattr(web_api, "_require_active_subscription", lambda _user_id: None)
+    monkeypatch.setattr(web_api, "db_get_project", lambda *_args: deepcopy(project))
+    monkeypatch.setattr(
+        web_api,
+        "_build_saved_project_quote_payload",
+        lambda *_args: (projection, None, None),
+    )
+    monkeypatch.setattr(web_api, "_next_quote_number_for_user", lambda _user: None)
+    monkeypatch.setattr(
+        web_api, "_enforce_active_quote_limit", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(web_api, "_wake_worker", lambda: events.append("wake"))
+    monkeypatch.setattr(
+        web_api,
+        "db_create_quote_job",
+        lambda *_args, **_kwargs: events.append("create"),
+    )
+    monkeypatch.setattr(
+        web_api,
+        "db_reserve_mixed_cart",
+        lambda *_args, **_kwargs: events.append("reserve") or [],
+    )
+    monkeypatch.setattr(
+        web_api,
+        "_storage_upload_bytes",
+        lambda *_args, **_kwargs: events.append("upload"),
+    )
+    monkeypatch.setattr(
+        web_api,
+        "db_queue_mixed_quote_job",
+        lambda job_id, metadata: (
+            events.append("queue")
+            or {
+                "id": job_id,
+                "usuario_id": 1,
+                "status": "queued",
+                "metadata": metadata,
+            }
+        ),
+    )
+
+    def enqueue(**kwargs):
+        events.append("enqueue")
+        job_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        web_api.db_create_quote_job(
+            1,
+            kwargs["template"],
+            kwargs["metadata"],
+            "users/1/jobs/boundary/input.json",
+            job_id=job_id,
+        )
+        web_api.db_reserve_mixed_cart(1, job_id, [])
+        web_api._storage_upload_bytes(
+            "users/1/jobs/boundary/input.json",
+            b"{}",
+            "application/json",
+        )
+        return web_api.db_queue_mixed_quote_job(job_id, kwargs["metadata"])
+
+    monkeypatch.setattr(web_api, "_enqueue_mixed_payload", enqueue)
+    return TestClient(web_api.app), events
+
+
+def test_project_quote_rejects_only_after_physical_xlsx_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fixed_rows = required_mobiliti_rows([34]) - 34
     maximum_components = (
         XLSX_MAX_ROWS
@@ -330,17 +852,45 @@ def test_project_quote_rejects_only_after_physical_xlsx_limit() -> None:
         MOBILITI_RESERVED_ROWS_AFTER_TOTAL
     ) == XLSX_MAX_ROWS
 
-    validate_quote_size(
-        section_counts=[maximum_components],
-        encoded_bytes=0,
+    projection = _capacity_projection(maximum_components)
+    client, events = _capacity_endpoint(monkeypatch, projection)
+    accepted = client.post(
+        "/projects/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/quote",
+        headers=_auth_headers(),
+        json={"expected_revision": 3},
     )
-    with pytest.raises(ValueError, match="XLSX permite hasta"):
-        validate_quote_size(
-            section_counts=[maximum_components + 1],
-            encoded_bytes=0,
-        )
+    assert accepted.status_code == 202, accepted.json()
+    assert events == ["enqueue", "create", "reserve", "upload", "queue", "wake"]
 
-    source = inspect.getsource(web_api.projects_quote)
-    assert source.index("validate_quote_size(") < source.index(
-        "_enqueue_mixed_payload("
+    events.clear()
+    projection["sections"][0]["line_ids"] = _ProjectedLineIds(
+        maximum_components + 1
     )
+    rejected = client.post(
+        "/projects/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/quote",
+        headers=_auth_headers(),
+        json={"expected_revision": 3},
+    )
+    assert rejected.status_code == 400
+    assert "XLSX permite hasta" in rejected.json()["detail"]
+    assert events == []
+    client.close()
+
+
+def test_project_quote_rejects_byte_limit_before_enqueue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projection = _capacity_projection(
+        1,
+        padding="x" * (MAX_QUOTE_REQUEST_BYTES + 1),
+    )
+    client, events = _capacity_endpoint(monkeypatch, projection)
+    rejected = client.post(
+        "/projects/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/quote",
+        headers=_auth_headers(),
+        json={"expected_revision": 3},
+    )
+    assert rejected.status_code == 400
+    assert "bytes" in rejected.json()["detail"]
+    assert events == []
+    client.close()

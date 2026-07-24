@@ -252,6 +252,21 @@ python -m pytest tests/test_mixed_catalog_browser_e2e.py tests/test_project_ui.p
 npm --prefix mobiliti_saas/web run build
 ```
 
+La aceptación de `test_project_quote_acceptance.py` crea y recarga el Proyecto,
+cotiza por `POST /projects/{id}/quote`, consume el payload inmutable guardado y
+ejecuta el claim real del worker. En Windows con Excel instalado también puede
+ejecutarse aisladamente el gate de escritorio:
+
+```powershell
+python -m pytest tests\test_project_quote_acceptance.py::test_project_quote_excel_desktop_acceptance_for_four_persisted_cases -q -rs
+```
+
+Ese gate abre los cuatro resultados (MXN, USD, importado y stress), detecta
+registros de reparación antes de guardar, recalcula, valida fórmulas y errores,
+guarda sólo una copia temporal y vuelve a abrirla. El XLSX producido por el
+worker no se sobrescribe. El test sólo se omite con una razón explícita cuando
+Windows, `pywin32` o Excel de escritorio no están disponibles.
+
 ### Crear usuario cliente
 
 ```bash
