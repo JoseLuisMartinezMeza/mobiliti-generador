@@ -949,9 +949,10 @@ def test_jobs_rls_is_guarded_idempotent_and_non_destructive():
     assert "ENABLE ROW LEVEL SECURITY" in sql
     assert "REVOKE ALL ON TABLE public.jobs FROM anon, authenticated" in sql
     assert "REVOKE ALL ON TABLE public.saas_quote_jobs FROM anon, authenticated" in sql
+    assert "GRANT SELECT, UPDATE ON TABLE public.saas_quote_jobs TO anon" in sql
     assert "GRANT ALL ON TABLE public.jobs TO service_role" in sql
     assert "GRANT ALL ON TABLE public.saas_quote_jobs TO service_role" in sql
-    for destructive in ("DROP ", "TRUNCATE", "DELETE FROM", "UPDATE "):
+    for destructive in ("DROP ", "TRUNCATE", "DELETE FROM", "\nUPDATE "):
         assert destructive not in upper_sql
 
 
