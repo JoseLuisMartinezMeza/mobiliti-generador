@@ -33,6 +33,16 @@ from .lumbro import (
     build_lumbro_snapshot_with_assets,
     parse_lumbro_pdf_prices,
 )
+from .jome import (
+    build_jome_snapshot,
+    build_jome_snapshot_with_assets,
+    import_jome_catalog,
+)
+from .lauco import (
+    build_lauco_snapshot,
+    build_lauco_snapshot_with_assets,
+    import_lauco_catalog,
+)
 
 __all__ = (
     "CellRef",
@@ -64,4 +74,10 @@ __all__ = (
     "build_sunon_snapshot",
     "build_sunon_snapshot_with_assets",
     "parse_lumbro_pdf_prices",
+    "build_jome_snapshot",
+    "build_jome_snapshot_with_assets",
+    "import_jome_catalog",
+    "build_lauco_snapshot",
+    "build_lauco_snapshot_with_assets",
+    "import_lauco_catalog",
 )

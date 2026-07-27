@@ -35,6 +35,7 @@ _PROJECT_HOST = re.compile(r"[a-z]{20}\.supabase\.co")
 _CONTENT_RANGE = re.compile(r"(\d+)-(\d+)/(\d+)")
 _MIME_BY_EXTENSION = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xlsb": "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
     "pdf": "application/pdf",
 }
 _SOURCE_FIELDS = (
@@ -50,7 +51,15 @@ _FILE_FIELDS = (
     "private_object_path,validation_status,validation_summary,last_sync_run_id,"
     "is_deleted,deleted_at,deleted_sync_run_id,discovered_at,validated_at"
 )
-_SYNC_SUPPLIERS = {"cr-global", "sonara", "sunon", "alma", "lumbro"}
+_SYNC_SUPPLIERS = {
+    "cr-global",
+    "sonara",
+    "sunon",
+    "alma",
+    "lumbro",
+    "jome",
+    "lauco",
+}
 
 
 class CatalogRepositoryError(ValueError):
@@ -287,7 +296,16 @@ class SourceFileRecord:
         if deleted != (deleted_at is not None and deleted_run is not None):
             _fail()
         object_path = _string(row["private_object_path"], maximum=96)
-        extension = "xlsx" if mime == _MIME_BY_EXTENSION["xlsx"] else "pdf"
+        extension = next(
+            (
+                candidate
+                for candidate, candidate_mime in _MIME_BY_EXTENSION.items()
+                if candidate_mime == mime
+            ),
+            None,
+        )
+        if extension is None:
+            _fail()
         if object_path != f"catalog-sources/{digest}.{extension}":
             _fail()
         return cls(
@@ -646,7 +664,7 @@ class CatalogRepository:
     def store_raw_if_absent(self, local_path, sha256, extension, mime_type):
         if not isinstance(sha256, str) or _SHA256.fullmatch(sha256) is None:
             raise CatalogRepositoryError("Invalid catalog raw hash")
-        if not isinstance(extension, str) or extension not in {"xlsx", ".xlsx", "pdf", ".pdf"}:
+        if not isinstance(extension, str):
             raise CatalogRepositoryError("Invalid catalog raw type")
         extension = extension.removeprefix(".")
         if extension not in _MIME_BY_EXTENSION or _MIME_BY_EXTENSION[extension] != mime_type:

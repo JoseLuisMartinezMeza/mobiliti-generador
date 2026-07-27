@@ -89,6 +89,15 @@ Solo cambia `QUOTE_STORAGE_PROVIDER=r2` cuando `s3_ready=true`,
 mobiliti-worker-deploy
 ```
 
+Cada despliegue crea un worktree inmutable en
+`/opt/mobiliti-worker/releases/<commit>` y conserva las liberaciones anteriores.
+El commit activo queda registrado en `/opt/mobiliti-worker/releases/CURRENT`.
+El proceso no ejecuta `git reset --hard` ni reemplaza el checkout base.
+
+Para volver a una liberación ya construida, ejecuta su `docker-compose.yml`
+con `WORKER_IMAGE_TAG=<commit-anterior>` y valida nuevamente el health local
+antes de continuar.
+
 The health endpoint is bound to localhost only:
 
 ```bash

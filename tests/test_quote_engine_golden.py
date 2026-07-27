@@ -385,6 +385,7 @@ def test_supplier_final_workbook_uses_official_template_and_frozen_price_contrac
     wb = load_workbook(output, data_only=False)
     cot = wb["Cotizacion"]
     mobiliti = wb["Mobiliti"]
+    quotation = wb["Quotation"]
     # El paquete oficial, no el writer legacy, gobierna B4, K4/K6 y las
     # fórmulas visibles; J contiene el único costo congelado por producto.
     assert cot["B4"].value is None
@@ -396,13 +397,17 @@ def test_supplier_final_workbook_uses_official_template_and_frozen_price_contrac
     product_row = next(
         row
         for row in range(1, cot.max_row + 1)
-        if cot.cell(row, 1).value == "Producto de prueba"
+        if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
     )
     assert mobiliti.cell(mobiliti_row, 6).value == "ALMA"
-    assert mobiliti.cell(mobiliti_row, 10).value == pytest.approx(123.46)
+    assert mobiliti.cell(mobiliti_row, 10).value == "=Quotation!K9"
+    assert quotation["K9"].value == pytest.approx(123.46)
     assert mobiliti["K4"].value is False
     assert getattr(mobiliti["K6"].value, "text", None) == '=_FV(J6,"High")'
     assert cot.cell(product_row, 7).value == 0.4
+    assert cot.cell(product_row, 3).value == "=Quotation!D9"
+    assert cot.cell(product_row, 4).value == "=Quotation!F9"
+    assert cot.cell(product_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
     assert cot.cell(product_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
     assert cot.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
     assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
@@ -446,26 +451,28 @@ def test_mixed_final_workbook_uses_official_formulas_and_one_frozen_cost_per_ite
         product_row_map = []
         for source_row in (9, 10):
             product_name = wb["Quotation"].cell(source_row, 2).value
-            cot_row = next(
-                row for row in range(1, cot.max_row + 1)
-                if cot.cell(row, 1).value == product_name
-            )
             mobiliti_row = next(
                 row for row in range(1, mobiliti.max_row + 1)
                 if mobiliti.cell(row, 4).value == product_name
             )
-            product_row_map.append((cot_row, mobiliti_row))
+            cot_row = next(
+                row for row in range(1, cot.max_row + 1)
+                if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
+            )
+            product_row_map.append((source_row, cot_row, mobiliti_row))
 
-        first_product = product_row_map[0][0]
-        for cot_row, mobiliti_row in product_row_map:
+        first_product = product_row_map[0][1]
+        for source_row, cot_row, mobiliti_row in product_row_map:
+            assert cot.cell(cot_row, 3).value == f"=Quotation!D{source_row}"
+            assert cot.cell(cot_row, 4).value == f"=Quotation!F{source_row}"
+            assert cot.cell(cot_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
             assert cot.cell(cot_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
             assert cot.cell(cot_row, 8).value == f"=F{cot_row}*G{cot_row}"
             assert cot.cell(cot_row, 9).value == f"=F{cot_row}-H{cot_row}"
             assert cot.cell(cot_row, 10).value == f"=E{cot_row}*I{cot_row}"
+            assert mobiliti.cell(mobiliti_row, 10).value == f"=Quotation!K{source_row}"
         assert cot.cell(first_product, 7).value == 0.4
-        assert cot.cell(product_row_map[1][0], 7).value == f"=$G${first_product}"
-        assert mobiliti.cell(product_row_map[0][1], 10).value == pytest.approx(123.46)
-        assert mobiliti.cell(product_row_map[1][1], 10).value == pytest.approx(200.13)
+        assert cot.cell(product_row_map[1][1], 7).value == f"=$G${first_product}"
         assert wb["Quotation_Data"].sheet_state == "veryHidden"
         assert reference_totals(
             [
@@ -518,20 +525,23 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
         alma_source_row = next(
             row
             for row in range(8, quotation.max_row + 1)
-            if quotation.cell(row, 12).value == "ALMA"
+            if quotation.cell(row, 2).value == "Silla KUN configurable"
         )
         alma_name = quotation.cell(alma_source_row, 2).value
-        cot_row = next(
-            row
-            for row in range(1, cot.max_row + 1)
-            if cot.cell(row, 1).value == alma_name
-        )
         mobiliti_row = next(
             row
             for row in range(1, mobiliti.max_row + 1)
             if mobiliti.cell(row, 4).value == alma_name
         )
-        description = str(cot.cell(cot_row, 3).value)
+        cot_row = next(
+            row
+            for row in range(1, cot.max_row + 1)
+            if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
+        )
+        assert cot.cell(cot_row, 3).value == f"=Quotation!D{alma_source_row}"
+        assert cot.cell(cot_row, 4).value == f"=Quotation!F{alma_source_row}"
+        assert cot.cell(cot_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
+        description = str(quotation.cell(alma_source_row, 4).value)
         for expected in (
             "Silla ejecutiva configurable",
             "Powder coated aluminium",
@@ -540,11 +550,11 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
             "Imagen de referencia",
         ):
             assert expected in description
-        # La GDL oficial conserva W como precio unitario y X como precio lista
-        # total; J queda como valor numérico congelado incluso al importar.
-        assert mobiliti.cell(mobiliti_row, 10).value == pytest.approx(
-            float(quotation.cell(alma_source_row, 10).value)
+        # Mobiliti J enlaza el costo físico K de la Quotation ampliada.
+        assert mobiliti.cell(mobiliti_row, 10).value == (
+            f"=Quotation!K{alma_source_row}"
         )
+        assert quotation.cell(alma_source_row, 11).value == pytest.approx(5274.35)
         assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
         assert mobiliti.cell(mobiliti_row, 24).value == (
             f"=(W{mobiliti_row}*H{mobiliti_row})"
@@ -573,12 +583,15 @@ def test_standard_workbook_keeps_official_provider_header_and_formulas(tmp_path)
     product_row = next(
         row
         for row in range(1, cot.max_row + 1)
-        if cot.cell(row, 1).value == "Producto de prueba"
+        if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
     )
     # Las filas vacías conservan las fórmulas nativas del template oficial; no
     # se reinstalan los guards sintéticos producidos por el writer anterior.
     assert cot["B4"].value is None
     assert mobiliti.cell(mobiliti_row, 6).value == "Sunon Inc"
+    assert cot.cell(product_row, 3).value == "=Quotation!D9"
+    assert cot.cell(product_row, 4).value == "=Quotation!F9"
+    assert cot.cell(product_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
     assert cot.cell(product_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
     assert cot.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
     assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
@@ -613,7 +626,7 @@ def test_python_engine_generates_golden_structure(source, tmp_path):
     assert "Cotizacion" in wb.sheetnames
     assert "Mobiliti" in wb.sheetnames
     assert "Quotation" in wb.sheetnames
-    assert wb["Cotizacion"]["D17"].value == "=Quotation!E9"
+    assert wb["Cotizacion"]["D17"].value == "=Quotation!F9"
     assert str(wb["Mobiliti"]["K14"].value).startswith("=Quotation!")
     assert wb["Cotizacion"].print_area
     assert len(wb["Cotizacion"]._images) > 0
@@ -713,7 +726,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     assert len(cot.merged_cells.ranges) >= 50
     assert cot["B4"].value is None
     assert cot["A16"].value == "=Quotation!A8"
-    assert cot["D17"].value == "=Quotation!E9"
+    assert cot["D17"].value == "=Quotation!F9"
     assert str(cot["F17"].value).startswith(("=Mobiliti!X", "=IFERROR((Mobiliti!X"))
     assert (cot.row_dimensions[19].height or 0) >= 300
     merged_ranges = {str(rng) for rng in cot.merged_cells.ranges}
@@ -740,7 +753,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     product_rows = [
         row
         for row in range(1, cot.max_row + 1)
-        if str(cot.cell(row, 4).value or "").startswith("=Quotation!E")
+        if str(cot.cell(row, 4).value or "").startswith("=Quotation!F")
     ]
     assert product_rows
     first_product_row = product_rows[0]

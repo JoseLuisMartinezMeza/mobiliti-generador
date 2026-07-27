@@ -33,6 +33,13 @@ TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 GDL.xlsx"
 )
+OFFICIAL_TEMPLATE = (
+    ROOT
+    / "mobiliti_saas"
+    / "worker"
+    / "templates"
+    / "Formato Cotizacion 2026 Oficial.xlsx"
+)
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -273,6 +280,32 @@ def test_more_than_sixteen_sections_clone_official_blocks(tmp_path, section_coun
         ) == _expected_total_subtotal_rows(row_map)
     finally:
         workbook.close()
+
+
+def test_seventeenth_section_extends_official_x_global_product_ranges():
+    needs = [
+        SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
+        for index in range(17)
+    ]
+    part = _official_part(OFFICIAL_TEMPLATE, "Mobiliti")
+    mutation = build_mobiliti_sheet(
+        _part_bytes(OFFICIAL_TEMPLATE, part),
+        needs,
+        [],
+    )
+    root = ET.fromstring(mutation.xml)
+    last_row = mutation.row_map.sections[-1].product_start
+    formula = root.find(f".//{{{MAIN}}}c[@r='X{last_row}']/{{{MAIN}}}f")
+
+    assert formula is not None and formula.text
+    assert (
+        f"$W$14:$W${mutation.row_map.last_product_row}"
+        in formula.text
+    )
+    assert (
+        f"$D$14:$D${mutation.row_map.last_product_row}"
+        in formula.text
+    )
 
 
 def test_validations_and_conditional_formatting_reach_twentieth_section(tmp_path):
@@ -1138,6 +1171,43 @@ def test_empty_section_subtotal_is_official_but_has_no_phantom_product_operand()
     )
 
 
+def test_all_product_rows_keep_the_official_currency_reference():
+    mutation = build_mobiliti_sheet(
+        ET.tostring(_official_root(), encoding="utf-8", xml_declaration=True),
+        [SectionNeed("first", "FIRST", 1), SectionNeed("second", "SECOND", 1)],
+        [],
+    )
+    output = ET.fromstring(mutation.xml)
+    product_rows = [
+        row
+        for section in mutation.row_map.sections
+        for row in range(section.product_start, section.subtotal_row)
+    ]
+
+    assert output.find(f".//{{{MAIN}}}c[@r='C{product_rows[0]}']/{{{MAIN}}}f").text == "C13"
+    assert {
+        output.find(f".//{{{MAIN}}}c[@r='C{row}']/{{{MAIN}}}f").text
+        for row in product_rows[1:]
+    } == {"$C$13"}
+
+
+def test_provider_cells_keep_the_yellow_product_row_style_in_every_section():
+    mutation = build_mobiliti_sheet(
+        ET.tostring(_official_root(), encoding="utf-8", xml_declaration=True),
+        [SectionNeed("first", "FIRST", 1), SectionNeed("second", "SECOND", 1)],
+        [],
+    )
+    output = ET.fromstring(mutation.xml)
+
+    for section in mutation.row_map.sections:
+        for row in range(section.product_start, section.subtotal_row):
+            provider = output.find(f".//{{{MAIN}}}c[@r='F{row}']")
+            yellow_reference = output.find(f".//{{{MAIN}}}c[@r='H{row}']")
+            assert provider is not None
+            assert yellow_reference is not None
+            assert provider.attrib.get("s") == yellow_reference.attrib.get("s")
+
+
 def test_all_product_rows_keep_styles_and_used_unused_rows_match_official_formulas():
     root = _official_root()
     mutation = build_mobiliti_sheet(
@@ -1187,11 +1257,13 @@ def test_all_product_rows_keep_styles_and_used_unused_rows_match_official_formul
                     "".join(filter(str.isalpha, cell.attrib["r"]))
                 ) <= 34
             }
-            assert {
-                column: cell.attrib.get("s") for column, cell in target_cells.items()
-            } == {
+            expected_styles = {
                 column: cell.attrib.get("s") for column, cell in source_cells.items()
             }
+            expected_styles[6] = source_cells[8].attrib.get("s")
+            assert {
+                column: cell.attrib.get("s") for column, cell in target_cells.items()
+            } == expected_styles
             assert all(
                 target_cells[column].find(f"{{{MAIN}}}f") is not None
                 for column in formula_columns

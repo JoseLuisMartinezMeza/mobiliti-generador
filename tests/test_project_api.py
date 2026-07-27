@@ -81,6 +81,37 @@ def test_project_survives_new_client_session_and_preserves_ownership(persistent_
     ).status_code == 404
 
 
+def test_project_get_resolves_durable_import_image_without_persisting_signed_url(monkeypatch):
+    client = _project_client(monkeypatch)
+    payload = valid_project_payload()
+    imported = payload["lines"][1]
+    imported["official_code"] = ""
+    imported["display_cache"]["code"] = ""
+    imported["image_asset_key"] = (
+        "projects/7/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/images/row-14.png"
+    )
+    monkeypatch.setattr(
+        index,
+        "_create_signed_download",
+        lambda path, filename=None: f"https://storage.example/{path}?signed=1",
+    )
+    created_response = client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Con imagen durable", "payload": payload},
+    )
+    assert created_response.status_code == 201, created_response.json()
+    created = created_response.json()["project"]
+
+    reopened = client.get(f"/projects/{created['id']}", headers=_auth_headers(7))
+
+    assert reopened.status_code == 200, reopened.json()
+    visible_line = reopened.json()["project"]["payload"]["lines"][1]
+    assert visible_line["display_cache"]["image_url"].endswith("?signed=1")
+    stored_line = index.db_get_project(created["id"], 7)["payload"]["lines"][1]
+    assert stored_line["display_cache"]["image_url"] == ""
+
+
 def test_catalog_search_requires_authentication_subscription_and_valid_query(monkeypatch):
     client = _project_client(monkeypatch)
     calls = []
@@ -139,7 +170,7 @@ def test_catalog_search_requires_authentication_subscription_and_valid_query(mon
     assert client.get("/catalogs/search?q=olive", headers=_auth_headers(7)).status_code == 503
 
 
-def test_project_routes_are_user_scoped_and_archive_without_delete(monkeypatch):
+def test_project_routes_are_user_scoped_and_archive_restore_duplicate(monkeypatch):
     client, project = _created_project(monkeypatch)
 
     listed = client.get("/projects", headers=_auth_headers(7))
@@ -180,7 +211,92 @@ def test_project_routes_are_user_scoped_and_archive_without_delete(monkeypatch):
     assert copied["status"] == "active"
     assert copied["revision"] == 0
     assert copied["payload"] == project["payload"]
-    assert all("DELETE" not in route.methods for route in index.app.routes if route.path.startswith("/projects"))
+
+
+def test_archived_project_can_be_deleted_definitively_with_exact_name(monkeypatch):
+    client, project = _created_project(monkeypatch)
+    archived_response = client.post(
+        f"/projects/{project['id']}/archive",
+        headers=_auth_headers(7),
+        json={
+            "expected_revision": project["revision"],
+            "operation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+    )
+    archived = archived_response.json()["project"]
+
+    deleted = client.request(
+        "DELETE",
+        f"/projects/{project['id']}",
+        headers=_auth_headers(7),
+        json={
+            "expected_revision": archived["revision"],
+            "confirm_name": "Oficinas",
+        },
+    )
+
+    assert deleted.status_code == 200, deleted.json()
+    assert deleted.json() == {"deleted": True, "project_id": project["id"]}
+    assert client.get(
+        f"/projects/{project['id']}", headers=_auth_headers(7)
+    ).status_code == 404
+    assert client.get(
+        "/projects?status=archived", headers=_auth_headers(7)
+    ).json()["projects"] == []
+
+
+def test_project_delete_requires_archived_exact_name_current_revision_and_owner(monkeypatch):
+    client, project = _created_project(monkeypatch)
+    endpoint = f"/projects/{project['id']}"
+    active = client.request(
+        "DELETE",
+        endpoint,
+        headers=_auth_headers(7),
+        json={"expected_revision": 0, "confirm_name": "Oficinas"},
+    )
+    assert active.status_code == 409
+    assert active.json()["detail"] == "Archiva el Proyecto antes de eliminarlo"
+
+    archived = client.post(
+        f"{endpoint}/archive",
+        headers=_auth_headers(7),
+        json={
+            "expected_revision": 0,
+            "operation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+    ).json()["project"]
+    wrong_name = client.request(
+        "DELETE",
+        endpoint,
+        headers=_auth_headers(7),
+        json={
+            "expected_revision": archived["revision"],
+            "confirm_name": "oficinas",
+        },
+    )
+    assert wrong_name.status_code == 400
+    assert wrong_name.json()["detail"] == "Escribe el nombre exacto del Proyecto"
+
+    stale = client.request(
+        "DELETE",
+        endpoint,
+        headers=_auth_headers(7),
+        json={"expected_revision": 0, "confirm_name": "Oficinas"},
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "project_revision_conflict"
+
+    foreign = client.request(
+        "DELETE",
+        endpoint,
+        headers=_auth_headers(8),
+        json={
+            "expected_revision": archived["revision"],
+            "confirm_name": "Oficinas",
+        },
+    )
+    assert foreign.status_code == 404
+    assert client.get(endpoint, headers=_auth_headers(7)).status_code == 200
 
 
 def test_project_patch_returns_current_revision_on_conflict_and_rejects_invalid_contract(monkeypatch):

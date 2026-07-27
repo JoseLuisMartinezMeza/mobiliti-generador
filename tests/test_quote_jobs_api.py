@@ -7,7 +7,7 @@ import threading
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -2775,6 +2775,89 @@ def _supplier_rate_rows():
             "retrieved_at": f"{effective_date}T20:05:00Z",
         },
     ]
+
+
+def test_dev_exchange_rates_replace_stale_usd_with_latest_market_reference(
+    monkeypatch,
+):
+    latest = {
+        "currency": "USD",
+        "effective_date": date.today().isoformat(),
+        "mxn_per_unit": "17.480400",
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(
+        index,
+        "_dev_load",
+        lambda: {
+            "exchange_rates": [
+                {
+                    "currency": "USD",
+                    "effective_date": "2026-07-20",
+                    "mxn_per_unit": "18.500000",
+                    "retrieved_at": "2026-07-20T15:54:36+00:00",
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        index,
+        "_fetch_latest_usd_mxn_row",
+        lambda: latest,
+        raising=False,
+    )
+
+    rows = index.db_list_exchange_rates()
+
+    assert rows[0] == latest
+    assert not any(
+        row["currency"] == "USD" and row["mxn_per_unit"] == "18.500000"
+        for row in rows
+    )
+
+
+def test_dev_exchange_rates_keep_stored_usd_when_market_date_is_future_locally(
+    monkeypatch,
+):
+    from mobiliti_saas.quote_engine import engine
+
+    stored = {
+        "currency": "USD",
+        "effective_date": (date.today() - timedelta(days=4)).isoformat(),
+        "mxn_per_unit": "18.500000",
+        "retrieved_at": (
+            datetime.now(timezone.utc) - timedelta(days=4)
+        ).isoformat(),
+    }
+    future_payload = json.dumps({
+        "date": (date.today() + timedelta(days=1)).isoformat(),
+        "base": "USD",
+        "quote": "MXN",
+        "rate": 17.4782,
+    }).encode("utf-8")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return future_payload
+
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(
+        index,
+        "_dev_load",
+        lambda: {"exchange_rates": [stored]},
+    )
+    monkeypatch.setattr(engine, "urlopen", lambda *_args, **_kwargs: Response())
+
+    rows = index.db_list_exchange_rates()
+
+    assert rows == [stored]
 
 
 def _valid_supplier_line():

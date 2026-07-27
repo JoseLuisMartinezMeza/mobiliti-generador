@@ -3,9 +3,11 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 
 import pytest
 from openpyxl import load_workbook
+from PIL import Image, ImageDraw
 
 from mobiliti_saas.quote_engine import engine, generate_quote
 from mobiliti_saas.quote_engine.mixed_catalog import (
@@ -41,6 +43,7 @@ def _line(
     parent_item_key: str | None = None,
     origin: str = "sunon",
     image_content: bytes | None = None,
+    image_content_type: str | None = None,
 ) -> engine._OfficialPresentationLine:
     return engine._OfficialPresentationLine(
         item_key=line_id,
@@ -68,7 +71,12 @@ def _line(
         upstream_row_hash="",
         parent_item_key=parent_item_key,
         image_content=image_content,
-        image_content_type="image/png" if image_content is not None else None,
+        image_content_type=(
+            image_content_type
+            if image_content is not None
+            else None
+        )
+        or ("image/png" if image_content is not None else None),
     )
 
 
@@ -77,6 +85,13 @@ def _mobiliti(lines):
         (SectionNeed("section-1", "Recepción", len(lines)),)
     )
     return MobilitiSheetMutation(b"<worksheet/>", row_map)
+
+
+def _quotation_data_row_map(lines):
+    return {
+        line.item_key: position + 2
+        for position, line in enumerate(lines)
+    }
 
 
 def _context():
@@ -372,6 +387,12 @@ def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):
             "FIXED-1",
         ]
         assert [mobiliti.cell(row, 8).value for row in (14, 15, 16)] == [
+            "=Quotation!H9",
+            "=Quotation!H10",
+            "=Quotation!H11",
+        ]
+        quotation = workbook["Quotation"]
+        assert [quotation.cell(row, 8).value for row in (9, 10, 11)] == [
             10,
             20,
             3,
@@ -380,19 +401,26 @@ def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):
         product_rows = [
             row
             for row in range(1, cotizacion.max_row + 1)
-            if cotizacion.cell(row, 1).value == "MAIN-1"
+            if cotizacion.cell(row, 1).value == "=Mobiliti!D14"
         ]
         assert product_rows == [17]
         assert all(
-            cotizacion.cell(row, 1).value not in {"PER-1", "FIXED-1"}
+            cotizacion.cell(row, 1).value not in {
+                "=Mobiliti!D15",
+                "=Mobiliti!D16",
+            }
             for row in range(1, cotizacion.max_row + 1)
         )
         assert cotizacion["F17"].value == (
             "=Mobiliti!X14+Mobiliti!X15*2+Mobiliti!X16*3/10"
         )
-        assert cotizacion["E17"].value == 10
-        assert "\n+ " in cotizacion["C17"].value
-        assert cotizacion["C17"].value.count("\n+ ") == 2
+        assert cotizacion["A17"].value == "=Mobiliti!D14"
+        assert cotizacion["C17"].value == "=Quotation!D9"
+        assert cotizacion["D17"].value == "=Quotation!F9"
+        assert cotizacion["E17"].value == "=Mobiliti!H14"
+        processed_description = quotation["D9"].value
+        assert "\n+ " in processed_description
+        assert processed_description.count("\n+ ") == 2
     finally:
         workbook.close()
 
@@ -404,6 +432,7 @@ def test_project_projection_keeps_physical_mobiliti_rows_and_groups_cotizacion()
         lines,
         _mobiliti(lines),
         {"project_context": _context(), "descuento": "40"},
+        _quotation_data_row_map(lines),
     )
 
     assert len(sections) == 1
@@ -427,7 +456,7 @@ def test_project_projection_keeps_physical_mobiliti_rows_and_groups_cotizacion()
     ]
 
 
-def test_project_projection_builds_ordered_montage(monkeypatch):
+def test_project_projection_keeps_ordered_images_separate():
     lines = (
         _line(
             PRINCIPAL_ID,
@@ -448,27 +477,106 @@ def test_project_projection_builds_ordered_montage(monkeypatch):
             image_content=b"fixed",
         ),
     )
-    seen = {}
-
-    def fake_montage(principal, complements):
-        seen["principal"] = principal
-        seen["complements"] = complements
-        return b"montage"
-
-    monkeypatch.setattr(engine, "compose_product_montage", fake_montage)
-
     product = engine._project_cotizacion_sections(
         lines,
         _mobiliti(lines),
         {"project_context": _context()},
+        _quotation_data_row_map(lines),
     )[0].products[0]
 
-    assert seen == {
-        "principal": b"principal",
-        "complements": [b"per-unit", b"fixed"],
-    }
-    assert product.image_content == b"montage"
+    assert product.image_content == b"principal"
     assert product.image_content_type == "image/png"
+    assert [
+        (image.content, image.content_type)
+        for image in product.complement_images
+    ] == [
+        (b"per-unit", "image/png"),
+        (b"fixed", "image/png"),
+    ]
+
+
+def test_official_image_improvement_changes_only_cotizacion_projection():
+    source = BytesIO()
+    source_image = Image.new("RGB", (80, 60), (232, 232, 232))
+    ImageDraw.Draw(source_image).rectangle(
+        (24, 12, 56, 52),
+        fill=(35, 35, 35),
+    )
+    source_image.save(source, format="JPEG")
+    line = _line(
+        PRINCIPAL_ID,
+        description="Principal",
+        quantity="1",
+        image_content=source.getvalue(),
+        image_content_type="image/jpeg",
+    )
+
+    improved = engine._improve_official_cotizacion_images(
+        (line,),
+        {
+            "image_provider": "pillow",
+            "image_background": "white",
+            "image_cleanup_strength": "balanced",
+        },
+    )
+
+    assert line.image_content == source.getvalue()
+    assert line.image_content_type == "image/jpeg"
+    assert improved[0].image_content_type == "image/png"
+    assert improved[0].image_content.startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(BytesIO(improved[0].image_content)) as result:
+        assert result.format == "PNG"
+        assert result.mode == "RGB"
+        assert result.getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_official_image_improvement_removes_shadow_only_for_imported_lines(monkeypatch):
+    calls = []
+
+    def fake_improve(content, content_type, **options):
+        calls.append((content, content_type, options["remove_shadow"]))
+        return content, content_type
+
+    monkeypatch.setattr(engine, "improve_product_image_bytes", fake_improve)
+    imported = _line(
+        PRINCIPAL_ID,
+        description="Importado",
+        quantity="1",
+        origin="imported",
+        image_content=b"imported",
+    )
+    catalog = _line(
+        PER_UNIT_ID,
+        description="Catálogo",
+        quantity="1",
+        origin="sunon",
+        image_content=b"catalog",
+    )
+
+    engine._improve_official_cotizacion_images(
+        (imported, catalog),
+        {"image_provider": "pillow", "image_background": "white"},
+    )
+
+    assert calls == [
+        (b"imported", "image/png", True),
+        (b"catalog", "image/png", False),
+    ]
+
+
+def test_official_image_improvement_falls_back_to_original_invalid_bytes():
+    line = _line(
+        PRINCIPAL_ID,
+        description="Principal",
+        quantity="1",
+        image_content=b"invalid",
+        image_content_type="image/png",
+    )
+
+    assert engine._improve_official_cotizacion_images(
+        (line,),
+        {"image_provider": "pillow", "image_background": "white"},
+    ) == (line,)
 
 
 def test_project_projection_keeps_generated_lumbro_as_independent_line():
@@ -486,6 +594,7 @@ def test_project_projection_keeps_generated_lumbro_as_independent_line():
         lines,
         _mobiliti(lines),
         {"project_context": _context()},
+        _quotation_data_row_map(lines),
     )[0].products
 
     assert [product.item_key for product in products] == [
@@ -523,6 +632,7 @@ def test_project_projection_distinguishes_catalog_lumbro_from_auto_accessory():
         lines,
         _mobiliti(lines),
         {"project_context": _context()},
+        _quotation_data_row_map(lines),
     )[0].products
 
     assert [product.item_key for product in products] == [
@@ -626,6 +736,7 @@ def test_project_projection_rejects_invalid_component_consumption(mutation, mess
             _project_lines(),
             _mobiliti(_project_lines()),
             {"project_context": context},
+            _quotation_data_row_map(_project_lines()),
         )
 
 
@@ -634,6 +745,17 @@ def test_project_projection_without_context_is_identical_to_legacy():
     mobiliti = _mobiliti(lines)
     metadata = {"descuento": "40"}
 
-    assert engine._project_cotizacion_sections(lines, mobiliti, metadata) == (
-        engine._legacy_cotizacion_sections(lines, mobiliti, metadata)
+    quotation_rows = _quotation_data_row_map(lines)
+    assert engine._project_cotizacion_sections(
+        lines,
+        mobiliti,
+        metadata,
+        quotation_rows,
+    ) == (
+        engine._legacy_cotizacion_sections(
+            lines,
+            mobiliti,
+            metadata,
+            quotation_rows,
+        )
     )

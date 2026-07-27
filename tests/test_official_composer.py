@@ -5,6 +5,7 @@ from decimal import Decimal
 from io import BytesIO
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -48,6 +49,7 @@ from mobiliti_saas.quote_engine.mobiliti_pricing import (  # noqa: E402
 )
 from mobiliti_saas.quote_engine.official_composer import (  # noqa: E402
     ComposeRequest,
+    CotizacionImageSource,
     CotizacionMetadata,
     CotizacionPriceTerm,
     CotizacionProduct,
@@ -240,6 +242,21 @@ def _cell(root: ET.Element, coordinate: str) -> ET.Element:
     return result
 
 
+def _cell_scalar(root: ET.Element, coordinate: str) -> str | None:
+    cell = _cell(root, coordinate)
+    if cell.attrib.get("t") == "inlineStr":
+        return "".join(
+            node.text or ""
+            for node in cell.findall(f".//{{{MAIN}}}t")
+        )
+    return cell.findtext(f"{{{MAIN}}}v")
+
+
+def _cell_formula_in_root(root: ET.Element, coordinate: str) -> str | None:
+    formula = _cell(root, coordinate).find(f"{{{MAIN}}}f")
+    return None if formula is None else f"={formula.text or ''}"
+
+
 def _terms_signature(root: ET.Element, *, start: int, end: int) -> tuple:
     signature = []
     for row_number in range(start, end + 1):
@@ -270,8 +287,11 @@ def _terms_signature(root: ET.Element, *, start: int, end: int) -> tuple:
     return tuple(signature)
 
 
-def _cotizacion_drawing_parts(package: XlsxPackage) -> tuple[str, str]:
-    sheet_part = package.sheet_part("Cotizacion")
+def _sheet_drawing_parts(
+    package: XlsxPackage,
+    sheet_name: str,
+) -> tuple[str, str]:
+    sheet_part = package.sheet_part(sheet_name)
     sheet = ET.fromstring(package.parts[sheet_part])
     drawing = sheet.find(f"{{{MAIN}}}drawing")
     assert drawing is not None
@@ -286,6 +306,10 @@ def _cotizacion_drawing_parts(package: XlsxPackage) -> tuple[str, str]:
     )
     drawing_part = resolve_internal_target(sheet_part, relationship.attrib["Target"])
     return drawing_part, relationship_part_name(drawing_part)
+
+
+def _cotizacion_drawing_parts(package: XlsxPackage) -> tuple[str, str]:
+    return _sheet_drawing_parts(package, "Cotizacion")
 
 
 def _calc_chain_coordinates_for_sheet(
@@ -475,7 +499,7 @@ def test_calc_chain_prunes_mutated_sheets_and_forces_full_recalculation(
         mutation.replacements[cotizacion_part]
     )
     assert len(formula_coordinates) == len(set(formula_coordinates))
-    assert {"P19", "L122"}.issubset(formula_coordinates)
+    assert {"P21", "L121"}.issubset(formula_coordinates)
     assert _calc_chain_coordinates_for_sheet(
         mutation.replacements[calc_part],
         cotizacion_sheet_id,
@@ -535,9 +559,10 @@ def test_composer_preserves_protected_official_package_and_updates_dependents(
 
     assert audit.unexpected_changed_parts == frozenset()
     result = XlsxPackage.read(output)
-    assert result.sheet_state("Fletes") == "hidden"
+    assert result.sheet_state("Fletes") == "visible"
     assert result.sheet_state("Quotation_Data") == "veryHidden"
-    assert result.sheet_state("sheep") == "visible"
+    with pytest.raises(KeyError):
+        result.sheet_state("sheep")
     assert sum(name.startswith("xl/externalLinks/") for name in result.parts) == 12
     assert sum(
         len(
@@ -549,7 +574,7 @@ def test_composer_preserves_protected_official_package_and_updates_dependents(
     workbook = ET.fromstring(result.parts["xl/workbook.xml"])
     assert len(
         workbook.findall(f"{{{MAIN}}}definedNames/{{{MAIN}}}definedName")
-    ) == 31
+    ) == 29
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     for prefix in request.contract.protected_prefixes:
         for name, payload in base.parts.items():
@@ -561,6 +586,56 @@ def test_composer_preserves_protected_official_package_and_updates_dependents(
     assert _cell_formula(result, "Estrategia Comercial ", "D59") == (
         f"=Cotizacion!H{request.cotizacion.total_row}"
     )
+
+
+def test_composer_restores_flete_routes_from_flete_routes(
+    tmp_path: Path,
+) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _minimal_request(tmp_path / "flete-routes.xlsx")
+
+    mutation = build_allowlisted_mutation(base, request)
+
+    fletes = ET.fromstring(
+        mutation.replacements[base.sheet_part("Fletes")]
+    )
+    for row, (origin, destination) in engine_module.FLETE_ROUTES.items():
+        assert _cell_scalar(fletes, f"A{row}") == origin
+        assert _cell_scalar(fletes, f"C{row}") == destination
+
+
+def test_composer_populates_missing_flete_and_installation_categories(
+    tmp_path: Path,
+) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _minimal_request(tmp_path / "flete-categories.xlsx")
+
+    mutation = build_allowlisted_mutation(base, request)
+
+    fletes = ET.fromstring(
+        mutation.replacements[base.sheet_part("Fletes")]
+    )
+    assert _cell_scalar(fletes, "I8") == "Escritorios-WorkStation"
+    assert _cell_scalar(fletes, "M8") == "Escritorios-WorkStation"
+    expected = {
+        16: ("Bancos", Decimal("0.2"), Decimal("56")),
+        17: ("Cocineta", Decimal("0.2"), Decimal("1790")),
+        18: ("Pizarrones", Decimal("0.2"), Decimal("210")),
+    }
+    for row, (category, factor, installation) in expected.items():
+        assert _cell_scalar(fletes, f"I{row}") == category
+        assert Decimal(_cell_scalar(fletes, f"J{row}")) == factor
+        assert _cell_formula_in_root(fletes, f"K{row}") == (
+            f"=IF(Mobiliti!$K$4=TRUE,"
+            f"((J{row}/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
+            f"(J{row}/$J$21)*Mobiliti!$P$9)"
+        )
+        assert _cell_scalar(fletes, f"M{row}") == category
+        assert _cell_formula_in_root(fletes, f"N{row}") == (
+            f"=IF(Mobiliti!$K$4=TRUE,"
+            f"({format(installation, 'f')}/Mobiliti!$K$6),"
+            f"{format(installation, 'f')})"
+        )
 
 
 def test_cotizacion_clears_contamination_uses_master_discount_and_keeps_terms(
@@ -618,6 +693,45 @@ def test_composer_handles_twenty_sections_and_one_hundred_product_section(
     assert _cell_formula(package, "Estrategia Comercial ", "D59") == (
         f"=Cotizacion!H{request.cotizacion.total_row}"
     )
+
+
+def test_composer_moves_only_mobiliti_auxiliary_shapes_after_section_sixteen(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "seventeen-sections-drawing.xlsx"
+    request = _request_for_sections(output, tuple(1 for _ in range(17)))
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    base_drawing_part, _base_relationships = _sheet_drawing_parts(base, "Mobiliti")
+    base_drawing = ET.fromstring(base.parts[base_drawing_part])
+
+    compose_official_quote(request)
+
+    result = XlsxPackage.read(output)
+    result_drawing_part, _result_relationships = _sheet_drawing_parts(
+        result,
+        "Mobiliti",
+    )
+    result_drawing = ET.fromstring(result.parts[result_drawing_part])
+    delta = request.mobiliti.row_map.total_row - 573
+
+    def anchors_by_name(root: ET.Element) -> dict[str, tuple[int, int]]:
+        rows: dict[str, tuple[int, int]] = {}
+        for anchor in root:
+            properties = anchor.find(f".//{{{XDR}}}cNvPr")
+            if properties is None:
+                continue
+            start = anchor.findtext(f"{{{XDR}}}from/{{{XDR}}}row")
+            end = anchor.findtext(f"{{{XDR}}}to/{{{XDR}}}row")
+            if start is not None and end is not None:
+                rows[properties.attrib["name"]] = (int(start), int(end))
+        return rows
+
+    before = anchors_by_name(base_drawing)
+    after = anchors_by_name(result_drawing)
+    for name in ("Straight Arrow Connector 1", "Straight Arrow Connector 7"):
+        assert after[name] == tuple(value + delta for value in before[name])
+    for name in ("Straight Arrow Connector 9", "Imagen 2"):
+        assert after[name] == before[name]
 
 
 def test_composer_preserves_static_drawing_and_adds_safe_product_png(
@@ -899,6 +1013,42 @@ def test_cotizacion_product_requires_nonempty_identity_fields() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "formula",
+    (
+        "=Quotation!$D$9",
+        "=Quotation!E9",
+        "=Quotation!D1048577",
+        "=[externo.xlsx]Quotation!D9",
+        '=HYPERLINK("https://invalid.example","abrir")',
+    ),
+)
+def test_cotizacion_product_rejects_description_formulas_outside_quotation(
+    formula: str,
+) -> None:
+    with pytest.raises(ValueError, match="fuera de contrato"):
+        CotizacionProduct(
+            item_key="item-1",
+            name="Silla",
+            description="Descripción procesada",
+            dimensions="600 x 600 mm",
+            quantity=Decimal("1"),
+            mobiliti_row=14,
+            description_formula=formula,
+        )
+
+    valid = CotizacionProduct(
+        item_key="item-1",
+        name="Silla",
+        description="Descripción procesada",
+        dimensions="600 x 600 mm",
+        quantity=Decimal("1"),
+        mobiliti_row=14,
+        description_formula="=Quotation!D9",
+    )
+    assert valid.description_formula == "=Quotation!D9"
+
+
 def test_active_engine_routes_through_official_composer_without_legacy_writers(
     tmp_path: Path,
 ) -> None:
@@ -939,40 +1089,137 @@ def test_active_engine_routes_through_official_composer_without_legacy_writers(
     assert package.sheet_part("Quotation")
 
 
-def test_active_engine_writes_numeric_m3_without_overwriting_visible_dimensions(
+def test_active_engine_rejects_delivery_place_missing_from_flete_routes(
     tmp_path: Path,
 ) -> None:
-    source = tmp_path / "m3-source.xlsx"
+    source = tmp_path / "unsupported-delivery.xlsx"
     _write_engine_source(
         source,
         (
             {
-                "name": "Mesa con volumen",
-                "dimension": "240 x 120 cm",
-                "m3": 0.42,
+                "name": "Silla de prueba",
+                "description": "Silla operativa",
                 "quantity": 1,
-                "price": 1000,
-            },
-            {
-                "name": "Silla sin volumen",
-                "dimension": "60 x 60 x 90 cm",
-                "quantity": 1,
-                "price": 250,
+                "price": 125.50,
             },
         ),
     )
+    output = tmp_path / "unsupported-delivery-output.xlsx"
+
+    with pytest.raises(ValueError, match="Lugar de entrega no soportado"):
+        generate_quote(
+            source,
+            output,
+            {
+                "cotizacion": "100-DESTINO",
+                "lugar_entrega": "Destino inexistente",
+            },
+            OFFICIAL_TEMPLATE,
+        )
+
+    assert not output.exists()
+
+
+def test_active_engine_references_visible_quotation_and_mobiliti_fields(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "m3-source.xlsx"
+    original_description = (
+        "Mesa operativa original del proveedor | Fuente: celda D9 "
+        "| Hash fuente: abc123 | URL: https://example.com/producto"
+    )
+    source_workbook = Workbook()
+    source_quotation = source_workbook.active
+    source_quotation.title = "Quotation"
+    headers = (
+        "No.",
+        "Item Name",
+        "Photo",
+        "Description",
+        "Dimension",
+        "Color",
+        "Q'ty",
+        "Vol.",
+        "Tot.Vol.",
+        "Unit Price",
+        " Tot.Price",
+        "Remark",
+    )
+    for column, header in enumerate(headers, start=1):
+        source_quotation.cell(7, column).value = header
+    source_quotation["A8"] = "- Sillas"
+    source_quotation["A9"] = 1
+    source_quotation["B9"] = "Mesa con volumen"
+    source_quotation["D9"] = original_description
+    source_quotation["E9"] = "240 x 120 cm"
+    source_quotation["F9"] = "Nogal"
+    source_quotation["G9"] = 3
+    source_quotation["H9"] = 0.42
+    source_quotation["I9"] = "=G9*H9"
+    source_quotation["J9"] = 1000
+    source_quotation["K9"] = "=G9*J9"
+    source_quotation["L9"] = "Entrega 8 semanas"
+    source_quotation["A10"] = 2
+    source_quotation["B10"] = "Silla sin volumen"
+    source_quotation["D10"] = "Silla operativa original"
+    source_quotation["E10"] = "60 x 60 x 90 cm"
+    source_quotation["G10"] = 1
+    source_quotation["H10"] = 0
+    source_quotation["I10"] = "=G10*H10"
+    source_quotation["J10"] = 250
+    source_quotation["K10"] = "=G10*J10"
+    source_workbook.save(source)
+    source_workbook.close()
     output = tmp_path / "m3-official.xlsx"
 
     generate_quote(source, output, {"cotizacion": "M3-E2E"}, OFFICIAL_TEMPLATE)
 
     workbook = load_workbook(output, data_only=False, keep_links=False)
     try:
+        quotation = workbook["Quotation"]
         mobiliti = workbook["Mobiliti"]
         cotizacion = workbook["Cotizacion"]
-        assert mobiliti["K14"].value == pytest.approx(0.42)
-        assert mobiliti["K15"].value == 0
-        assert cotizacion["D17"].value == "240 x 120 cm"
-        assert cotizacion["D18"].value == "60 x 60 x 90 cm"
+        quotation_data = workbook["Quotation_Data"]
+        assert tuple(
+            quotation.cell(7, column).value for column in range(4, 14)
+        ) == (
+            "Trasformacion",
+            "Description",
+            "Dimension",
+            "Color",
+            "Q'ty",
+            "Vol.",
+            "Tot.Vol.",
+            "Unit Price",
+            " Tot.Price",
+            "Remark",
+        )
+        assert "Mesa operativa original del proveedor" in quotation["D9"].value
+        assert "Fuente:" not in quotation["D9"].value
+        assert "Hash fuente:" not in quotation["D9"].value
+        assert "https://" not in quotation["D9"].value
+        assert quotation["E9"].value == original_description
+        assert quotation["F9"].value == "240 x 120 cm"
+        assert quotation["H9"].value == 3
+        assert quotation["I9"].value == pytest.approx(0.42)
+        assert quotation["J9"].value == "=H9*I9"
+        assert quotation["K9"].value == 1000
+        assert quotation["L9"].value == "=H9*K9"
+        assert quotation_data.max_column == 16
+        assert mobiliti["H14"].value == "=Quotation!H9"
+        assert mobiliti["J14"].value == "=Quotation!K9"
+        assert mobiliti["K14"].value == "=Quotation!I9"
+        assert mobiliti["H15"].value == "=Quotation!H10"
+        assert mobiliti["J15"].value == "=Quotation!K10"
+        assert mobiliti["K15"].value == "=Quotation!I10"
+        assert cotizacion["A17"].value == "=Mobiliti!D14"
+        assert cotizacion["A18"].value == "=Mobiliti!D15"
+        assert cotizacion["C17"].value == "=Quotation!D9"
+        assert cotizacion["C18"].value == "=Quotation!D10"
+        assert cotizacion["D17"].value == "=Quotation!F9"
+        assert cotizacion["D18"].value == "=Quotation!F10"
+        assert cotizacion["E17"].value == "=Mobiliti!H14"
+        assert cotizacion["E18"].value == "=Mobiliti!H15"
     finally:
         workbook.close()
 
@@ -1007,14 +1254,18 @@ def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
             "JUMP-1.5M",
             "CAJA-FUS",
         )
-        rows_by_name = {
-            name: [
-                row
-                for row in range(16, cotizacion.max_row + 1)
-                if cotizacion.cell(row, 1).value == name
-            ]
-            for name in expected_names
-        }
+        rows_by_name = {name: [] for name in expected_names}
+        for row in range(16, cotizacion.max_row + 1):
+            product_formula = cotizacion.cell(row, 1).value
+            if (
+                not isinstance(product_formula, str)
+                or re.fullmatch(r"=Mobiliti!D[1-9][0-9]*", product_formula) is None
+            ):
+                continue
+            mobiliti_row = int(product_formula.removeprefix("=Mobiliti!D"))
+            product_name = workbook["Mobiliti"].cell(mobiliti_row, 4).value
+            if product_name in rows_by_name:
+                rows_by_name[product_name].append(row)
         assert all(len(rows) == 1 for rows in rows_by_name.values())
 
         visible_rows = tuple(rows_by_name[name][0] for name in expected_names)
@@ -1053,9 +1304,14 @@ def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
             assert parent_key in str(row[0])
             assert code in str(row[0])
             assert row[1] == canonical[0][1]
-            assert workbook["Mobiliti"].cell(mobiliti_row, 10).value == pytest.approx(
-                float(row[9])
-            )
+            cost_formula = workbook["Mobiliti"].cell(mobiliti_row, 10).value
+            assert isinstance(cost_formula, str)
+            assert re.fullmatch(r"=Quotation!K[1-9][0-9]*", cost_formula)
+            quotation_row = int(cost_formula.removeprefix("=Quotation!K"))
+            assert workbook["Quotation"].cell(
+                quotation_row,
+                11,
+            ).value == pytest.approx(float(row[9]))
     finally:
         workbook.close()
 
@@ -1095,7 +1351,7 @@ def test_active_engine_uses_authoritative_catalog_canonical_identity(
         frozen_rate="1",
         converted_cost="125.50",
         quantity="2",
-        provider="Tarkett",
+        provider="Tarkett MX",
         region="tarkett",
     )
     output = tmp_path / "catalog-official.xlsx"
@@ -1146,7 +1402,7 @@ def test_active_engine_uses_authoritative_imported_canonical_identity(
                 "dimension": "pieza",
                 "quantity": 3,
                 "price": 200.25,
-                "provider": "Proveedor externo",
+                "provider": "Proveedor Externo",
                 "discount": 0,
                 "currency": "MXN",
                 "original_price": 200.25,
@@ -1168,7 +1424,7 @@ def test_active_engine_uses_authoritative_imported_canonical_identity(
         frozen_rate="1",
         converted_cost="200.25",
         quantity="3",
-        provider="Proveedor externo",
+        provider="Proveedor Externo",
         region="imported",
     )
     output = tmp_path / "imported-official.xlsx"
@@ -1199,6 +1455,16 @@ def test_active_engine_uses_authoritative_imported_canonical_identity(
             canonical.source_row,
             canonical.row_hash,
         )
+        assert workbook["Quotation"]["E9"].value == "Línea importada"
+        assert "Producto importado" in workbook["Quotation"]["D9"].value
+        assert "Línea importada" in workbook["Quotation"]["D9"].value
+        cotizacion = workbook["Cotizacion"]
+        product_row = next(
+            row
+            for row in range(16, cotizacion.max_row + 1)
+            if cotizacion.cell(row, 1).value == "=Mobiliti!D14"
+        )
+        assert cotizacion.cell(product_row, 3).value == "=Quotation!D9"
     finally:
         workbook.close()
 
@@ -1323,6 +1589,12 @@ def test_active_engine_explicit_original_transplants_that_workbook(
         ({"name": "Producto original visible", "quantity": 7, "price": 999},),
         category="Original cliente",
     )
+    original_workbook = load_workbook(original)
+    try:
+        original_workbook["Quotation"]["A1"] = "Encabezado exclusivo del cliente"
+        original_workbook.save(original)
+    finally:
+        original_workbook.close()
     output = tmp_path / "explicit-original-output.xlsx"
 
     generate_quote(
@@ -1335,11 +1607,23 @@ def test_active_engine_explicit_original_transplants_that_workbook(
 
     workbook = load_workbook(output, data_only=False, keep_links=False)
     try:
-        assert workbook["Quotation"]["B9"].value == "Producto original visible"
-        assert any(
-            workbook["Cotizacion"].cell(row, 1).value == "Producto generado"
-            for row in range(16, workbook["Cotizacion"].max_row + 1)
+        assert (
+            workbook["Quotation"]["A1"].value
+            == "Encabezado exclusivo del cliente"
         )
+        assert workbook["Quotation"]["B9"].value == "Producto generado"
+        cotizacion_formula = next(
+            workbook["Cotizacion"].cell(row, 1).value
+            for row in range(16, workbook["Cotizacion"].max_row + 1)
+            if isinstance(workbook["Cotizacion"].cell(row, 1).value, str)
+            and re.fullmatch(
+                r"=Mobiliti!D[1-9][0-9]*",
+                workbook["Cotizacion"].cell(row, 1).value,
+            )
+            is not None
+        )
+        mobiliti_row = int(cotizacion_formula.removeprefix("=Mobiliti!D"))
+        assert workbook["Mobiliti"].cell(mobiliti_row, 4).value == "Producto generado"
     finally:
         workbook.close()
 
@@ -1375,16 +1659,27 @@ def test_active_engine_embedded_source_image_reaches_cotizacion_anchor(
 
     package = XlsxPackage.read(output)
     cotizacion = ET.fromstring(package.parts[package.sheet_part("Cotizacion")])
-    product_row = next(
-        int(row.attrib["r"])
-        for row in cotizacion.findall(f"{{{MAIN}}}sheetData/{{{MAIN}}}row")
-        if (
-            (cell := row.find(f"{{{MAIN}}}c[@r='A{row.attrib['r']}']"))
-            is not None
-            and cell.findtext(f"{{{MAIN}}}is/{{{MAIN}}}t")
-            == "Silla con imagen"
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        product_row = next(
+            row
+            for row in range(16, workbook["Cotizacion"].max_row + 1)
+            if (
+                isinstance(
+                    product_formula := workbook["Cotizacion"].cell(row, 1).value,
+                    str,
+                )
+                and re.fullmatch(r"=Mobiliti!D[1-9][0-9]*", product_formula)
+                is not None
+                and workbook["Mobiliti"].cell(
+                    int(product_formula.removeprefix("=Mobiliti!D")),
+                    4,
+                ).value
+                == "Silla con imagen"
+            )
         )
-    )
+    finally:
+        workbook.close()
     drawing_part, _drawing_rels_part = _cotizacion_drawing_parts(package)
     drawing = ET.fromstring(package.parts[drawing_part])
     product_anchors = [
@@ -1457,13 +1752,21 @@ def test_active_engine_uses_one_audited_source_snapshot_after_preflight(
     workbook = load_workbook(output, data_only=False, keep_links=False)
     try:
         assert workbook["Quotation"]["B9"].value == "Producto snapshot original"
+        mobiliti_rows = [
+            row
+            for row in range(1, workbook["Mobiliti"].max_row + 1)
+            if workbook["Mobiliti"].cell(row, 4).value
+            == "Producto snapshot original"
+        ]
+        assert len(mobiliti_rows) == 1
         assert any(
-            workbook["Cotizacion"].cell(row, 1).value == "Producto snapshot original"
+            workbook["Cotizacion"].cell(row, 1).value
+            == f"=Mobiliti!D{mobiliti_rows[0]}"
             for row in range(16, workbook["Cotizacion"].max_row + 1)
         )
         assert all(
-            workbook["Cotizacion"].cell(row, 1).value != "Producto carrera hostil"
-            for row in range(16, workbook["Cotizacion"].max_row + 1)
+            workbook["Mobiliti"].cell(row, 4).value != "Producto carrera hostil"
+            for row in range(1, workbook["Mobiliti"].max_row + 1)
         )
     finally:
         workbook.close()
@@ -1533,24 +1836,195 @@ def test_composer_rejects_any_change_outside_the_exact_sheet_allowlist(
     assert not output.exists()
 
 
-@pytest.mark.parametrize("targets", ((999,), (17, 17)))
-def test_composer_rejects_product_images_outside_unique_product_rows(
+def test_composer_rejects_product_images_outside_product_rows(
     tmp_path: Path,
-    targets: tuple[int, ...],
 ) -> None:
     image = tmp_path / "safe.png"
     Image.new("RGB", (16, 16), (10, 20, 30)).save(image)
-    output = tmp_path / f"bad-image-{'-'.join(map(str, targets))}.xlsx"
+    output = tmp_path / "bad-image-row.xlsx"
     request = _minimal_request(output)
     cotizacion = replace(
         request.cotizacion,
-        images=tuple(CotizacionProductImage(image.resolve(), row) for row in targets),
+        images=(CotizacionProductImage(image.resolve(), 999),),
     )
 
     with pytest.raises(ValueError, match="filas de producto"):
         compose_official_quote(replace(request, cotizacion=cotizacion))
 
     assert not output.exists()
+
+
+def test_composer_rejects_duplicate_image_positions_in_one_product_row(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "safe.png"
+    Image.new("RGB", (16, 16), (10, 20, 30)).save(image)
+    output = tmp_path / "duplicate-image-position.xlsx"
+    request = _minimal_request(output)
+    product_row = request.cotizacion.product_rows[0]
+    cotizacion = replace(
+        request.cotizacion,
+        images=(
+            CotizacionProductImage(image.resolve(), product_row, position=0),
+            CotizacionProductImage(image.resolve(), product_row, position=0),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="posiciones"):
+        compose_official_quote(replace(request, cotizacion=cotizacion))
+
+    assert not output.exists()
+
+
+def test_cotizacion_places_principal_and_complements_as_separate_images(
+    tmp_path: Path,
+) -> None:
+    def png_payload(color: tuple[int, int, int]) -> bytes:
+        stream = BytesIO()
+        Image.new("RGB", (120, 90), color).save(stream, format="PNG")
+        return stream.getvalue()
+
+    output = tmp_path / "separate-complement-images.xlsx"
+    request = _request_for_sections(output, (1,))
+    product_row = request.cotizacion.product_rows[0]
+    payloads = (
+        png_payload((20, 80, 180)),
+        png_payload((20, 170, 90)),
+        png_payload((190, 90, 30)),
+    )
+    cotizacion = replace(
+        request.cotizacion,
+        images=tuple(
+            CotizacionProductImage(
+                None,
+                product_row,
+                content=payload,
+                content_type="image/png",
+                position=position,
+            )
+            for position, payload in enumerate(payloads)
+        ),
+    )
+
+    compose_official_quote(replace(request, cotizacion=cotizacion))
+
+    package = XlsxPackage.read(output)
+    drawing_part, drawing_rels_part = _cotizacion_drawing_parts(package)
+    drawing = ET.fromstring(package.parts[drawing_part])
+    relationships = {
+        node.attrib["Id"]: node.attrib
+        for node in ET.fromstring(package.parts[drawing_rels_part]).findall(
+            f"{{{PACKAGE_REL}}}Relationship"
+        )
+    }
+    anchors = [
+        anchor
+        for anchor in drawing.findall(f"{{{XDR}}}oneCellAnchor")
+        if anchor.findtext(f"{{{XDR}}}from/{{{XDR}}}row")
+        == str(product_row - 1)
+        and (
+            (name := anchor.find(f".//{{{XDR}}}cNvPr")) is not None
+            and name.attrib["name"].startswith(("Imagen principal", "Imagen complemento"))
+        )
+    ]
+    assert [
+        anchor.find(f".//{{{XDR}}}cNvPr").attrib["name"]
+        for anchor in anchors
+    ] == [
+        "Imagen principal 0001",
+        "Imagen complemento 0001-01",
+        "Imagen complemento 0001-02",
+    ]
+    extents = [
+        (
+            int(anchor.find(f"{{{XDR}}}ext").attrib["cx"]),
+            int(anchor.find(f"{{{XDR}}}ext").attrib["cy"]),
+        )
+        for anchor in anchors
+    ]
+    assert extents[0][0] * extents[0][1] > extents[1][0] * extents[1][1]
+    assert extents[1] == extents[2]
+    for anchor in anchors:
+        marker = anchor.find(f"{{{XDR}}}from")
+        extent = anchor.find(f"{{{XDR}}}ext")
+        assert marker is not None
+        assert extent is not None
+        assert int(marker.findtext(f"{{{XDR}}}colOff")) >= 0
+        assert int(marker.findtext(f"{{{XDR}}}rowOff")) >= 0
+        assert (
+            int(marker.findtext(f"{{{XDR}}}colOff"))
+            + int(extent.attrib["cx"])
+            <= official_composer_module._COTIZACION_IMAGE_CELL_WIDTH_EMU
+        )
+        assert (
+            int(marker.findtext(f"{{{XDR}}}rowOff"))
+            + int(extent.attrib["cy"])
+            <= official_composer_module._COTIZACION_IMAGE_CELL_HEIGHT_EMU
+        )
+    media_payloads = []
+    for anchor in anchors:
+        relationship_id = anchor.find(
+            ".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
+        ).attrib[f"{{{OFFICE_REL}}}embed"]
+        media_part = resolve_internal_target(
+            drawing_part,
+            relationships[relationship_id]["Target"],
+        )
+        media_payloads.append(package.parts[media_part])
+    assert media_payloads == list(payloads)
+
+
+def test_cotizacion_sheet_editor_expands_complement_sources_in_order() -> None:
+    def png_payload(color: tuple[int, int, int]) -> bytes:
+        stream = BytesIO()
+        Image.new("RGB", (40, 30), color).save(stream, format="PNG")
+        return stream.getvalue()
+
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    principal = png_payload((20, 80, 180))
+    first = png_payload((20, 170, 90))
+    second = png_payload((190, 90, 30))
+    mutation = CotizacionSheetEditor.from_xml(
+        base.parts[base.sheet_part("Cotizacion")]
+    ).compose(
+        metadata=CotizacionMetadata(),
+        sections=(
+            CotizacionSection(
+                "Recepción",
+                (
+                    CotizacionProduct(
+                        item_key="principal",
+                        name="Producto principal",
+                        description="Principal + complementos",
+                        dimensions="600 x 600 mm",
+                        quantity=Decimal("1"),
+                        mobiliti_row=14,
+                        image_content=principal,
+                        image_content_type="image/png",
+                        complement_images=(
+                            CotizacionImageSource(
+                                content=first,
+                                content_type="image/png",
+                            ),
+                            CotizacionImageSource(
+                                content=second,
+                                content_type="image/png",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    assert [
+        (image.target_row, image.position, image.content)
+        for image in mutation.images
+    ] == [
+        (17, 0, principal),
+        (17, 1, first),
+        (17, 2, second),
+    ]
 
 
 def test_product_picture_ids_are_unique_and_names_are_deterministic(tmp_path: Path) -> None:
@@ -1584,6 +2058,108 @@ def test_product_picture_ids_are_unique_and_names_are_deterministic(tmp_path: Pa
             assert node is not None
             product_names.append(node.attrib["name"])
     assert product_names == ["Imagen de producto 0001", "Imagen de producto 0002"]
+
+
+def test_cotizacion_centers_product_images_and_preserves_original_payloads(
+    tmp_path: Path,
+) -> None:
+    def png_payload(size: tuple[int, int], color: tuple[int, int, int]) -> bytes:
+        stream = BytesIO()
+        Image.new("RGB", size, color).save(stream, format="PNG")
+        return stream.getvalue()
+
+    output = tmp_path / "centered-project-images.xlsx"
+    request = _request_for_sections(output, (2,))
+    panoramic = png_payload((500, 100), (20, 80, 180))
+    portrait = png_payload((100, 500), (20, 170, 90))
+    first_row, second_row = request.cotizacion.product_rows
+    cotizacion = replace(
+        request.cotizacion,
+        images=(
+            CotizacionProductImage(
+                None,
+                first_row,
+                content=panoramic,
+                content_type="image/png",
+            ),
+            CotizacionProductImage(
+                None,
+                second_row,
+                content=portrait,
+                content_type="image/png",
+            ),
+        ),
+    )
+
+    compose_official_quote(replace(request, cotizacion=cotizacion))
+
+    package = XlsxPackage.read(output)
+    drawing_part, drawing_rels_part = _cotizacion_drawing_parts(package)
+    drawing = ET.fromstring(package.parts[drawing_part])
+    relationships = {
+        node.attrib["Id"]: node.attrib
+        for node in ET.fromstring(package.parts[drawing_rels_part]).findall(
+            f"{{{PACKAGE_REL}}}Relationship"
+        )
+    }
+    anchors = {
+        node.find(f".//{{{XDR}}}cNvPr").attrib["name"]: node
+        for node in drawing.findall(f"{{{XDR}}}oneCellAnchor")
+        if node.find(f".//{{{XDR}}}cNvPr") is not None
+        and node.find(f".//{{{XDR}}}cNvPr")
+        .attrib["name"]
+        .startswith("Imagen de producto")
+    }
+    expected = {
+        "Imagen de producto 0001": (
+            first_row,
+            panoramic,
+            3_200_000,
+            640_000,
+            909_837,
+            1_884_085,
+        ),
+        "Imagen de producto 0002": (
+            second_row,
+            portrait,
+            600_000,
+            3_000_000,
+            2_209_837,
+            704_085,
+        ),
+    }
+    assert set(anchors) == set(expected)
+    for name, (
+        target_row,
+        original_payload,
+        width,
+        height,
+        column_offset,
+        row_offset,
+    ) in expected.items():
+        anchor = anchors[name]
+        marker = anchor.find(f"{{{XDR}}}from")
+        extent = anchor.find(f"{{{XDR}}}ext")
+        assert marker is not None
+        assert extent is not None
+        assert marker.findtext(f"{{{XDR}}}col") == "1"
+        assert marker.findtext(f"{{{XDR}}}row") == str(target_row - 1)
+        assert int(marker.findtext(f"{{{XDR}}}colOff")) == column_offset
+        assert int(marker.findtext(f"{{{XDR}}}rowOff")) == row_offset
+        assert extent.attrib == {"cx": str(width), "cy": str(height)}
+        shape_extent = anchor.find(
+            ".//{http://schemas.openxmlformats.org/drawingml/2006/main}ext"
+        )
+        assert shape_extent is not None
+        assert shape_extent.attrib == {"cx": str(width), "cy": str(height)}
+        relationship_id = anchor.find(
+            ".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip"
+        ).attrib[f"{{{OFFICE_REL}}}embed"]
+        media_part = resolve_internal_target(
+            drawing_part,
+            relationships[relationship_id]["Target"],
+        )
+        assert package.parts[media_part] == original_payload
 
 
 def test_composer_rejects_inline_string_value_smuggling(tmp_path: Path) -> None:
@@ -2505,9 +3081,10 @@ def test_output_contract_rejects_unexpected_defined_name(tmp_path: Path) -> None
 def test_cotizacion_declares_audited_formula_contract_for_official_f_i() -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
-    assert _cell(source, "F17").find(f"{{{MAIN}}}f") is None
-    assert _cell(source, "F17").find(f"{{{MAIN}}}v") is None
-    assert _cell(source, "I17").findtext(f"{{{MAIN}}}f") == "F17-H17"
+    assert _cell(source, "F17").findtext(f"{{{MAIN}}}f") == "Mobiliti!X14"
+    assert _cell(source, "F17").findtext(f"{{{MAIN}}}v") == "0"
+    assert _cell(source, "I17").find(f"{{{MAIN}}}f") is None
+    assert _cell(source, "I17").find(f"{{{MAIN}}}v") is None
 
     contract = official_composer_module.CotizacionFormulaContract()
     product = CotizacionProduct(

@@ -965,33 +965,29 @@ def _parse_kun_design_2026(identity_source, identity_sheet, images, formulas, sa
         identity_matches += int(same_identity)
         reconciled_groups += int(not same_cost)
         derived_groups += int(derived)
-        price_matrix = (
-            [[_derived_sale(value) if value is not None else None for value in row] for row in identity_matrix]
-            if derived
-            else sales["matrix"]
-        )
+        price_matrix = identity_matrix if derived else costs["matrix"]
         warnings = []
-        method = "derived_from_identity_cost" if derived else "current_sale"
+        method = "official_cost"
         if derived:
             warnings.append(
-                "Precio de venta derivado del costo oficial de identidad con factores 0.3 y 0.5; revisar conciliación."
+                "Costo oficial vigente conservado pese a diferencia con la conciliación histórica."
             )
         elif not same_cost:
-            warnings.append("Precio vigente conciliado por identidad oficial pese a diferencia de costo.")
+            warnings.append("Costo oficial vigente conciliado por identidad.")
 
         base_options = []
         cushion_prices: dict[int, Decimal] = {}
         cushion_price_refs: dict[int, list[dict]] = {}
         evidence = []
         cost_refs = []
-        for row_index, (identity_row, sale_row, cost_row) in enumerate(
+        for row_index, (identity_row, _sale_row, cost_row) in enumerate(
             zip(identity["rows"], sales["rows"], costs["rows"])
         ):
             for column_index, price in enumerate(price_matrix[row_index]):
                 if price is None:
                     continue
                 identity_column = column_index + 5
-                sale_column = column_index + 4
+                cost_column = column_index + 4
                 label = headers[identity_column] or f"Opción {identity_column}"
                 price_source = (
                     source_ref(
@@ -1001,9 +997,9 @@ def _parse_kun_design_2026(identity_source, identity_sheet, images, formulas, sa
                     )
                     if derived
                     else source_ref(
-                        sales["source"].sha256,
-                        "SPEC Alma",
-                        f"{get_column_letter(sale_column)}{sale_row}",
+                        costs["source"].sha256,
+                        "Costo Alma",
+                        f"{get_column_letter(cost_column)}{cost_row}",
                     )
                 )
                 if identity_column <= 6:
@@ -1030,13 +1026,7 @@ def _parse_kun_design_2026(identity_source, identity_sheet, images, formulas, sa
                         cushion_prices.get(identity_column, Decimal(0)) + price
                     )
                     cushion_price_refs.setdefault(identity_column, []).append(price_source)
-                cost_refs.append(
-                    source_ref(
-                        costs["source"].sha256,
-                        "Costo Alma",
-                        f"{get_column_letter(sale_column)}{cost_row}",
-                    )
-                )
+                cost_refs.append(price_source)
 
         add_ons = []
         for identity_column in range(7, 10):

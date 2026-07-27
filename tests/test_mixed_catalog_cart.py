@@ -748,11 +748,13 @@ def test_mixed_payload_keeps_catalog_groups_and_imported_source_separate(
     }]
 
 
-def test_mixed_cart_groups_seven_catalogs_in_canonical_order(mixed_catalogs, rate_rows):
+def test_mixed_cart_groups_nine_catalogs_in_canonical_order(mixed_catalogs, rate_rows):
     payload = build_mixed_catalog_cart_payload(browser_rows_for_all_catalogs(), catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="MXN", commercial_discount_percent="40", today=date(2026, 7, 19))
     assert payload["source_type"] == "mixed_catalog_cart"
     assert [group["catalog"] for group in payload["groups"]] == list(MIXED_CATALOG_ORDER)
-    assert sum(len(group["items"]) for group in payload["groups"]) == 7
+    assert sum(len(group["items"]) for group in payload["groups"]) == len(
+        MIXED_CATALOG_ORDER
+    )
 
 
 def test_mixed_cart_preserves_manual_sections_independent_from_catalog_groups(
@@ -999,6 +1001,8 @@ def test_mixed_cart_preserves_per_line_discount_audit_by_price_mode(mixed_catalo
         "sunon": "0.000000",
         "alma": "0.000000",
         "lumbro": "0.000000",
+        "jome": "0.000000",
+        "lauco": "0.000000",
     }
 
 
@@ -1041,6 +1045,28 @@ def test_mixed_line_projection_has_exact_contract_for_each_family(frozen_mixed_p
         "alma": {"canonical_key":"alma:[\"alma:desk-1\",\"\",[]]","catalog":"alma","supplier":"ALMA","code":"ALMA:DESK-1","name":"Producto alma","description":"","unit":"pieza","quantity":"1.000000","unit_price":"1850.00","discount_percent":"0.000000","original_currency":"USD","original_unit_price":"100.000000","frozen_exchange_rate":"18.500000","source_reference":"alma:source","price_mode":"net","auto_electrification":False,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"Standard","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"5.000000","stock":"5.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"alma:desk-1","sku":"ALMA:DESK-1","quantity":"1.000000","stock":"5.000000"}},
         "lumbro": {"canonical_key":"lumbro:[\"lumbro:desk-1\",\"\",[]]","catalog":"lumbro","supplier":"Lumbro","code":"LUMBRO:DESK-1","name":"Producto lumbro","description":"","unit":"pieza","quantity":"1.000000","unit_price":"100.00","discount_percent":"0.000000","original_currency":"MXN","original_unit_price":"100.000000","frozen_exchange_rate":"1.000000","source_reference":"lumbro:source","price_mode":"net","auto_electrification":False,"tax_rate":"0.160000","image_url":"","product_url":"","warnings":[],"code_status":"verified","configuration":"Standard","attributes":{},"variant":"","availability_type":"stocked","available_quantity":"5.000000","stock":"5.000000","lead_time":"","price_source":"catalog","stock_status":"available","image_kind":"placeholder","reservation":{"identity":"lumbro:desk-1","sku":"LUMBRO:DESK-1","quantity":"1.000000","stock":"5.000000"}},
     }
+    for additional_catalog, supplier_label in (
+        ("jome", "JOME"),
+        ("lauco", "Lauco"),
+    ):
+        expected = deepcopy(expected_by_catalog["lumbro"])
+        expected.update({
+            "canonical_key": (
+                f'{additional_catalog}:["{additional_catalog}:desk-1","",[]]'
+            ),
+            "catalog": additional_catalog,
+            "supplier": supplier_label,
+            "code": f"{additional_catalog.upper()}:DESK-1",
+            "name": f"Producto {additional_catalog}",
+            "source_reference": f"{additional_catalog}:source",
+            "reservation": {
+                "identity": f"{additional_catalog}:desk-1",
+                "sku": f"{additional_catalog.upper()}:DESK-1",
+                "quantity": "1.000000",
+                "stock": "5.000000",
+            },
+        })
+        expected_by_catalog[additional_catalog] = expected
     line = next(group for group in frozen_mixed_payload["groups"] if group["catalog"] == catalog)["items"][0]
     expected_by_catalog[catalog]["line_id"] = (
         f"legacy-{MIXED_CATALOG_ORDER.index(catalog) + 1}"
@@ -1073,7 +1099,7 @@ def test_mixed_cart_rejects_divergent_eligible_snapshots_during_constructor(monk
         build_mixed_catalog_cart_payload([{"catalog": "tarkett", "code": "25731726", "quantity": "1"}, {"catalog": "offiho", "inventory_key": "offiho:desk-1", "quantity": "1"}], catalogs=mixed_catalogs, rate_rows=rate_rows, quote_currency="USD", commercial_discount_percent="40", today=date(2026, 7, 19))
 
 
-@pytest.mark.parametrize("catalog", ("cr-global", "sonara", "sunon", "alma", "lumbro"))
+@pytest.mark.parametrize("catalog", MIXED_CATALOG_ORDER[2:])
 def test_mixed_constructor_rejects_wrong_base_currency_in_source_fixture(mixed_catalogs, rate_rows, catalog):
     item = mixed_catalogs[catalog]["items"][0]
     item["base_currency"] = "USD" if item["base_currency"] == "MXN" else "MXN"
@@ -1176,13 +1202,21 @@ def test_mixed_payload_rejects_tarkett_insufficient_without_reservation_snapshot
         validate_mixed_catalog_payload(payload)
 
 
-@pytest.mark.parametrize("catalog", ("tarkett", "offiho", "cr-global", "sunon", "alma"))
-def test_mixed_payload_rejects_review_status_outside_sonara_and_lumbro(frozen_mixed_payload, catalog):
+@pytest.mark.parametrize("catalog", ("tarkett", "offiho"))
+def test_mixed_payload_rejects_review_status_for_legacy_catalogs(frozen_mixed_payload, catalog):
     payload = deepcopy(frozen_mixed_payload)
     line = next(group for group in payload["groups"] if group["catalog"] == catalog)["items"][0]
     line.update(code_status="needs_review", warnings=["Codigo por verificar"])
     with pytest.raises(ValueError, match="Grupos mixtos invalidos"):
         validate_mixed_catalog_payload(payload)
+
+
+@pytest.mark.parametrize("catalog", ("cr-global", "sunon", "alma"))
+def test_mixed_payload_accepts_review_status_for_supplier_catalogs(frozen_mixed_payload, catalog):
+    payload = deepcopy(frozen_mixed_payload)
+    line = next(group for group in payload["groups"] if group["catalog"] == catalog)["items"][0]
+    line.update(code_status="needs_review", warnings=["Codigo por verificar"])
+    validate_mixed_catalog_payload(payload)
 
 
 @pytest.mark.parametrize("catalog", ("sonara", "lumbro"))
@@ -1276,6 +1310,37 @@ def test_mixed_cart_preserves_review_missing_price_and_generated_reference_warni
     assert "Codigo por verificar" in lines["sonara"]["warnings"]
     assert "Imagen de referencia" in lines["sonara"]["warnings"]
     assert "Precio por confirmar" in lines["offiho"]["warnings"]
+
+
+def test_mixed_cart_accepts_alma_review_code_with_pending_price(mixed_catalogs, rate_rows):
+    alma = mixed_catalogs["alma"]["items"][0]
+    alma.update(
+        code_status="needs_review",
+        sku="",
+        price_net="0.000000",
+        base_price_options=[],
+        add_on_options=[],
+        warnings=[],
+    )
+
+    payload = build_mixed_catalog_cart_payload(
+        [{"catalog": "alma", "internal_id": "alma:desk-1", "quantity": "1"}],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="USD",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+
+    line = payload["groups"][0]["items"][0]
+    assert line["code_status"] == "needs_review"
+    assert line["code"] == ""
+    assert line["price_source"] == "missing"
+    assert line["original_unit_price"] == "0.000000"
+    assert line["unit_price"] == "0.00"
+    assert "Codigo por verificar" in line["warnings"]
+    assert "Precio por confirmar" in line["warnings"]
+    validate_mixed_catalog_payload(payload)
 
 
 def test_mixed_cart_preserves_supplier_warning_alongside_review_warning(

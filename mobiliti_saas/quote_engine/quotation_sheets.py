@@ -333,6 +333,102 @@ class QuotationDataRow:
 
 
 QUOTATION_DATA_HEADERS = tuple(item.name for item in fields(QuotationDataRow))
+OFFICIAL_MOBILITI_REGIONS = frozenset(("Norte", "Centro", "Occidente", "Sur"))
+OFFICIAL_MOBILITI_PROVIDERS = (
+    "Sunon Inc",
+    "Alma - Exterior",
+    "Yabo - Hotelería",
+    "OSJ - Medical",
+    "Seezo - Home",
+    "A&D - Home",
+    "Encore Alfombras Hoteleria Asia",
+    "Zhong Xian - Leds",
+    "Tarkett Europa",
+    "2tec2",
+    "Balsan Europa",
+    "Armstrong Pisos USA",
+    "Tarkett USA",
+    "Tarkett Brasil",
+    "Tarkett MX",
+    "Jome",
+    "Offiho",
+    "Lumbro",
+    "Sunon Mty",
+    "Conceptos Sofas",
+    "Lauco Sofas",
+    "CR Global - Mesas Ajustables",
+    "Vandesk",
+    "Mamparas Tela",
+    "Mampara Cristales",
+    "Herrajes",
+    "MetalWork",
+    "Requiez",
+    "Labenze",
+    "Infinity",
+    "Proveedor Externo",
+    # Variante operativa aprobada que el motor agrega a la plantilla.
+    "Lumbro CH",
+)
+_OFFICIAL_PROVIDER_ALIASES = {
+    "sunon": "Sunon Inc",
+    "sunon inc": "Sunon Inc",
+    "sunon importado": "Sunon Inc",
+    "sunon technology co ltd": "Sunon Inc",
+    "sunon technology company limited": "Sunon Inc",
+    "alma": "Alma - Exterior",
+    "alma exterior": "Alma - Exterior",
+    "cr global": "CR Global - Mesas Ajustables",
+    "cr global mesas ajustables": "CR Global - Mesas Ajustables",
+    "tarkett": "Tarkett MX",
+    "tarkett mx": "Tarkett MX",
+    "lumbro": "Lumbro CH",
+    "lumbro ch": "Lumbro CH",
+    "offiho": "Offiho",
+    "sonara": "Proveedor Externo",
+    "lauco": "Lauco Sofas",
+    "lauco sofas": "Lauco Sofas",
+}
+
+
+def _normalized_provider_key(value: object) -> str:
+    provider = str(value or "").strip()
+    normalized = unicodedata.normalize("NFKD", provider)
+    normalized = "".join(
+        character
+        for character in normalized
+        if not unicodedata.combining(character)
+    )
+    return " ".join(
+        re.sub(r"[^a-z0-9]+", " ", normalized.casefold()).split()
+    )
+
+
+_OFFICIAL_PROVIDER_BY_KEY = MappingProxyType(
+    {
+        _normalized_provider_key(provider): provider
+        for provider in OFFICIAL_MOBILITI_PROVIDERS
+    }
+)
+
+
+def official_provider_name(value: object) -> str:
+    """Normaliza un proveedor al texto exacto permitido por la plantilla."""
+
+    key = _normalized_provider_key(value)
+    return _OFFICIAL_PROVIDER_ALIASES.get(
+        key,
+        _OFFICIAL_PROVIDER_BY_KEY.get(key, "Proveedor Externo"),
+    )
+
+
+def official_region_name(value: object) -> str:
+    """Devuelve una región oficial; la omisión usa el contrato Centro."""
+
+    region = str(value or "").strip()
+    for candidate in OFFICIAL_MOBILITI_REGIONS:
+        if candidate.casefold() == region.casefold():
+            return candidate
+    return "Centro"
 
 
 def quotation_data_rows(payload: object) -> tuple[QuotationDataRow, ...]:
@@ -364,7 +460,11 @@ def quotation_data_rows(payload: object) -> tuple[QuotationDataRow, ...]:
                 frozen_rate=_decimal(line.get("frozen_exchange_rate"), "frozen_rate"),
                 converted_cost=_decimal(line.get("unit_price"), "converted_cost"),
                 quantity=_decimal(line.get("quantity"), "quantity"),
-                provider=line.get("provider") if origin == "imported" else line.get("supplier"),
+                provider=official_provider_name(
+                    line.get("provider")
+                    if origin == "imported"
+                    else line.get("supplier")
+                ),
                 region=_region(line, origin),
                 source_hash=source_hash,
                 upstream_row_hash=upstream_row_hash,
@@ -378,7 +478,9 @@ def quotation_data_rows(payload: object) -> tuple[QuotationDataRow, ...]:
     return tuple(ordered)
 
 
-def build_quotation_data_sheet(rows: Sequence[QuotationDataRow]) -> SheetAddition:
+def build_quotation_data_sheet(
+    rows: Sequence[QuotationDataRow],
+) -> SheetAddition:
     """Construye una hoja muy oculta con texto inline y números Decimal."""
 
     if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
@@ -2828,10 +2930,10 @@ def _add_item(result: dict, key: object, value: tuple[dict, str, str, int | None
 
 
 def _region(line: dict, origin: str) -> str:
-    value = line.get("catalog") if origin != "imported" else "imported"
-    if not isinstance(value, str):
+    value = line.get("region", "")
+    if value is not None and not isinstance(value, str):
         raise ValueError("Región de Quotation_Data inválida")
-    return value
+    return official_region_name(value)
 
 
 def _with_canonical_hash(row: QuotationDataRow) -> QuotationDataRow:
@@ -2864,7 +2966,10 @@ def _row_hash(row: QuotationDataRow) -> str:
     return digest.hexdigest()
 
 
-def _stream_worksheet_xml(rows: Sequence[QuotationDataRow], row_count: int) -> bytes:
+def _stream_worksheet_xml(
+    rows: Sequence[QuotationDataRow],
+    row_count: int,
+) -> bytes:
     output = BytesIO()
     _write(output, f'<?xml version="1.0" encoding="utf-8"?><worksheet xmlns="{MAIN}"><dimension ref="A1:P{row_count + 1}"/><sheetData>')
     _write_xml_row(output, 1, QUOTATION_DATA_HEADERS)
@@ -2880,7 +2985,11 @@ def _stream_worksheet_xml(rows: Sequence[QuotationDataRow], row_count: int) -> b
         seen_keys.add(row.item_key)
         if row.row_hash != _row_hash(row):
             raise ValueError("row_hash de Quotation_Data inválido")
-        _write_xml_row(output, position + 1, tuple(getattr(row, name) for name in QUOTATION_DATA_HEADERS))
+        _write_xml_row(
+            output,
+            position + 1,
+            tuple(getattr(row, name) for name in QUOTATION_DATA_HEADERS),
+        )
     _write(output, "</sheetData></worksheet>")
     return output.getvalue()
 

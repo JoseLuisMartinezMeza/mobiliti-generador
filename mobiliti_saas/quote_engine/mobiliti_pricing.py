@@ -34,6 +34,8 @@ class PricingRowBinding:
     section_id: str
     position: int
     target_row: int
+    quotation_row: int | None = None
+    quotation_rate: Decimal = Decimal("1")
 
     def __post_init__(self) -> None:
         if not isinstance(self.item_key, str) or not self.item_key:
@@ -44,6 +46,17 @@ class PricingRowBinding:
             raise ValueError("position de binding de precio inválida")
         if type(self.target_row) is not int or self.target_row < 1:
             raise ValueError("target_row de binding de precio inválida")
+        if self.quotation_row is not None and (
+            type(self.quotation_row) is not int or self.quotation_row < 1
+        ):
+            raise ValueError("quotation_row de binding de precio invalida")
+        if (
+            isinstance(self.quotation_rate, bool)
+            or not isinstance(self.quotation_rate, Decimal)
+            or not self.quotation_rate.is_finite()
+            or self.quotation_rate <= 0
+        ):
+            raise ValueError("quotation_rate de binding de precio invalida")
 
 
 def build_mobiliti_pricing_writes(
@@ -130,7 +143,22 @@ def build_mobiliti_pricing_writes(
             raise ValueError("Costo convertido canónico inconsistente")
 
         # No se usa ``expected`` como salida: converted_cost ya está congelado.
-        writes.append(MobilitiCellWrite(f"J{target_row}", "number", converted))
+        if binding.quotation_row is None:
+            writes.append(MobilitiCellWrite(f"J{target_row}", "number", converted))
+        else:
+            formula = f"=Quotation!K{binding.quotation_row}"
+            if binding.quotation_rate != Decimal("1"):
+                formula = (
+                    f"=ROUND(Quotation!K{binding.quotation_row}"
+                    f"*{format(binding.quotation_rate, 'f')},2)"
+                )
+            writes.append(
+                MobilitiCellWrite(
+                    f"J{target_row}",
+                    "formula",
+                    formula,
+                )
+            )
 
     return tuple(writes)
 

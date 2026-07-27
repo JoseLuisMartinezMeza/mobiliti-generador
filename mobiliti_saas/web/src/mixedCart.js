@@ -6,6 +6,8 @@ export const MIXED_CATALOGS = Object.freeze([
   "sunon",
   "alma",
   "lumbro",
+  "jome",
+  "lauco",
 ]);
 
 export const MAX_MIXED_CART_SECTIONS = 32;
@@ -33,6 +35,7 @@ const IMPORTED_CURRENCIES = new Set(["MXN", "USD", "EUR"]);
 const IMPORTED_EDIT_FIELDS = new Set([
   "officialCode", "name", "description", "dimension", "unitPrice", "provider",
 ]);
+const IMPORTED_DESCRIPTION_LIMIT = 2000;
 const IMPORTED_PRICE_PATTERN = /^(?:0|[1-9]\d{0,9})(?:\.\d{1,6})?$/;
 const IMPORTED_MAX_QUANTITY = 1000000n * QUANTITY_SCALE;
 const PROJECT_SCHEMA_VERSION = 1;
@@ -548,7 +551,7 @@ function validatedImportedEdits(edits) {
     name: normalizedImportedText(record.name, "Nombre", { limit: 1000 }),
     description: normalizedImportedText(record.description, "Descripcion", {
       allowEmpty: true,
-      limit: 10000,
+      limit: IMPORTED_DESCRIPTION_LIMIT,
     }),
     dimension: normalizedImportedText(record.dimension, "Dimension", {
       allowEmpty: true,
@@ -579,7 +582,7 @@ function validatedImportedEditUpdates(updates) {
     } else if (field === "description") {
       result.description = normalizedImportedText(value, "Descripcion", {
         allowEmpty: true,
-        limit: 10000,
+        limit: IMPORTED_DESCRIPTION_LIMIT,
       });
     } else if (field === "dimension") {
       result.dimension = normalizedImportedText(value, "Dimension", {
@@ -873,7 +876,10 @@ function validatedPromotionContract(preview, promotion, expected) {
     }
     normalizedImportedText(item.category, "Categoria", {allowEmpty: true});
     normalizedImportedText(item.name, "Nombre");
-    normalizedImportedText(item.description, "Descripcion", {allowEmpty: true});
+    normalizedImportedText(item.description, "Descripcion", {
+      allowEmpty: true,
+      limit: IMPORTED_DESCRIPTION_LIMIT,
+    });
     normalizedImportedText(item.dimension, "Dimension", {allowEmpty: true});
     normalizedImportedText(item.provider, "Proveedor", {allowEmpty: true});
     normalizedImportedText(item.official_code, "Codigo oficial", {allowEmpty: true, limit: 500});
@@ -1438,7 +1444,10 @@ function hydratePersistedImportedLine(line) {
     kind: "imported",
     key: identity.key,
     lineId: normalizedProjectLineId(line.line_id),
-    officialCode: normalizedImportedText(line.official_code, "Codigo oficial", { limit: 500 }),
+    officialCode: normalizedImportedText(line.official_code, "Codigo oficial", {
+      allowEmpty: true,
+      limit: 500,
+    }),
     provider,
     role,
     parentLineId,
@@ -1455,11 +1464,14 @@ function hydratePersistedImportedLine(line) {
     snapshot,
     sectionId: role === "principal" ? line.section_id : null,
     edits: {
-      officialCode: normalizedImportedText(line.official_code, "Codigo oficial", { limit: 500 }),
+      officialCode: normalizedImportedText(line.official_code, "Codigo oficial", {
+        allowEmpty: true,
+        limit: 500,
+      }),
       name: normalizedImportedText(line.name, "Nombre", { limit: 500 }),
       description: normalizedImportedText(line.description, "Descripcion", {
         allowEmpty: true,
-        limit: 2000,
+        limit: IMPORTED_DESCRIPTION_LIMIT,
       }),
       dimension: normalizedImportedText(line.dimension, "Dimension", {
         allowEmpty: true,
@@ -1524,6 +1536,8 @@ function validateProjectLineGraph(lines, sectionIds) {
 
 function serializeProjectLine(line, sectionIds) {
   const relationship = projectLineRelationship(line, sectionIds);
+  const displayCache = projectDisplayCache(line.snapshot);
+  if (line.kind === "imported" && line.imageAssetKey) displayCache.image_url = "";
   const common = {
     line_id: relationship.lineId,
     role: relationship.role,
@@ -1533,7 +1547,7 @@ function serializeProjectLine(line, sectionIds) {
     quantity: validateLineQuantity(line, line.quantity),
     source: line.kind === "imported" ? "imported" : "catalog",
     official_code: normalizedOfficialCode(line.edits?.officialCode || line.officialCode, line.snapshot),
-    display_cache: projectDisplayCache(line.snapshot),
+    display_cache: displayCache,
   };
   if (!common.official_code && common.source !== "imported") {
     throw new Error("Codigo oficial requerido");

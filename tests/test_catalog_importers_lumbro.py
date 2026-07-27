@@ -479,6 +479,64 @@ def test_spec_guide_extracts_identity_dimensions_colors_and_exact_provenance(lum
     assert all(record.net_price is None for record in variants)
 
 
+def test_cost_sheet_column_e_is_authoritative_and_uses_its_image_anchor(tmp_path):
+    path = tmp_path / "Spec guide-Lumbro-2026.xlsx"
+    workbook = Workbook()
+    legacy = workbook.active
+    legacy.title = "SPEC-GUIDE-LUMBRO"
+    for column, value in enumerate(
+        ("Cod.", "Imagen.", "Descripcion.", "Medida/Unidad.", "P. Unitario.", "Moneda"),
+        1,
+    ):
+        legacy.cell(8, column, value)
+    legacy["C9"] = "Barcelona"
+    legacy["A10"] = "BARCELONA"
+    legacy["C10"] = "Multicontacto Barcelona"
+    legacy["D10"] = "245 x 102 x 60 mm"
+    legacy["E10"] = 5648
+    legacy["F10"] = "MXN"
+    legacy["C11"] = "Color: Negro"
+    legacy.add_image(XlsxImage(BytesIO(_png_bytes("#AA0000"))), "B10")
+
+    cost = workbook.create_sheet("COSTO LUMBRO ")
+    for column, value in enumerate(
+        (
+            "Imagen.",
+            "Cod.",
+            "Descripcion.",
+            "Medida/Unidad.",
+            "P. Unitario.",
+            "LAB Cedis",
+            "Moneda",
+            "Precio Venta 50% GP",
+        ),
+        1,
+    ):
+        cost.cell(8, column, value)
+    cost["C9"] = "Barcelona"
+    cost["B10"] = "BARCELONA"
+    cost["C10"] = "Multicontacto Barcelona"
+    cost["D10"] = "245 x 102 x 60 mm"
+    cost["E10"] = 2824
+    cost["F10"] = Decimal("0.5")
+    cost["G10"] = "MXN"
+    cost["H10"] = 5648
+    cost["C11"] = "Color: Negro"
+    cost.add_image(XlsxImage(BytesIO(_png_bytes("#303030"))), "A10")
+    workbook.save(path)
+    workbook.close()
+
+    build = lumbro_importer.parse_lumbro_spec_guide(_spec_file(path))
+    record = build.records[0]
+
+    assert build.price_authoritative is True
+    assert record.net_price == Decimal("2824")
+    assert record.spec_price_evidence == 2824
+    assert record.source.sheet == "COSTO LUMBRO "
+    assert record.provenance["spec_price_evidence"][0]["cell_or_bbox"] == "E10"
+    assert build.bindings[0].source_references[0]["cell_or_bbox"] == "A10"
+
+
 def test_spec_guide_emits_only_explicit_variants_and_safe_family_image_reuse(lumbro_spec):
     variants = {
         (record.model, record.configuration, record.color): record

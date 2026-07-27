@@ -156,6 +156,7 @@ def normalize_imported_items(
     discount_percent: str,
     *,
     allow_duplicate_source_rows: bool = False,
+    today: date | None = None,
 ) -> list[dict]:
     if type(allow_duplicate_source_rows) is not bool:
         raise TypeError("allow_duplicate_source_rows invalido")
@@ -206,7 +207,7 @@ def normalize_imported_items(
             "Precio importado invalido",
             minimum=Decimal(0),
         )
-        rate = _conversion_rate(currency, destination, rate_rows)
+        rate = _conversion_rate(currency, destination, rate_rows, today=today)
         converted = (original_price * rate).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
         normalized.append(
             {
@@ -560,7 +561,13 @@ def _import_overrides(value: object) -> dict[str, str]:
     }
 
 
-def _conversion_rate(base_currency: str, quote_currency: str, rate_rows: object) -> Decimal:
+def _conversion_rate(
+    base_currency: str,
+    quote_currency: str,
+    rate_rows: object,
+    *,
+    today: date | None = None,
+) -> Decimal:
     if not isinstance(rate_rows, list):
         raise ValueError("Filas de tasa invalidas")
     normalized_rows = []
@@ -573,7 +580,12 @@ def _conversion_rate(base_currency: str, quote_currency: str, rate_rows: object)
         row = dict(raw)
         row.setdefault("retrieved_at", f"{row['effective_date']}T00:00:00Z")
         normalized_rows.append(row)
-    return resolve_conversion_rate(base_currency, quote_currency, normalized_rows, date.today()).exchange_rate
+    return resolve_conversion_rate(
+        base_currency,
+        quote_currency,
+        normalized_rows,
+        today or date.today(),
+    ).exchange_rate
 
 
 def _provider_from_workbook_bytes(source_bytes: bytes) -> str:

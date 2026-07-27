@@ -255,7 +255,7 @@ def _spec_records(row, images):
                 description,
             )
             row_metadata = metadata.get(current, {})
-            price_column = columns.get("sale_price") or columns.get("unit_price")
+            price_column = columns.get("unit_price")
             currency_column = columns.get("currency")
             price = None
             price_sheet = sheet.title
@@ -265,23 +265,11 @@ def _spec_records(row, images):
                 except (InvalidOperation, TypeError, ValueError):
                     price = None
             currency = _code(sheet.cell(current, currency_column).value) if currency_column else ""
-            price_input_cells = []
-            if (
-                price is None
-                and "sale_price" in columns
-                and {"unit_price", "pricing_factor"} <= set(columns)
-            ):
-                try:
-                    cost = Decimal(str(sheet.cell(current, columns["unit_price"]).value))
-                    factor = Decimal(str(sheet.cell(current, columns["pricing_factor"]).value))
-                    price = cost / factor if cost > 0 and factor > 0 else None
-                except (InvalidOperation, TypeError, ValueError, ZeroDivisionError):
-                    price = None
-                if price is not None:
-                    price_input_cells = [
-                        f"{sheet.cell(current, columns['unit_price']).column_letter}{current}",
-                        f"{sheet.cell(current, columns['pricing_factor']).column_letter}{current}",
-                    ]
+            price_input_cells = [
+                f"{sheet.cell(current, columns[key]).column_letter}{current}"
+                for key in ("pricing_factor", "sale_price")
+                if key in columns
+            ]
             if price is None and price_companion is not None:
                 companion_sheet, (_, companion_columns) = price_companion
                 price_column = companion_columns["unit_price"]

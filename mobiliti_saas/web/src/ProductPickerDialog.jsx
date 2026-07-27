@@ -4,7 +4,12 @@ import {
   CATALOG_OPTIONS,
   catalogLabel,
   createCanonicalProductSelection,
+  initialAddOnOptionIds,
+  initialBaseOptionId,
   normalizeWarnings,
+  productAddOnFamilies,
+  productAddOnOptions,
+  productBaseOptions,
   shouldShowProductImage,
 } from "./productPicker";
 
@@ -35,6 +40,8 @@ export default function ProductPickerDialog({
   const [supplier, setSupplier] = useState("");
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [selectedBaseOptionId, setSelectedBaseOptionId] = useState("");
+  const [selectedAddOnOptionIds, setSelectedAddOnOptionIds] = useState([]);
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -46,7 +53,13 @@ export default function ProductPickerDialog({
   const previousFocusRef = useRef(null);
 
   const confirmar = () => {
-    if (selected) onConfirm(createCanonicalProductSelection(selected));
+    if (canConfirm) {
+      onConfirm(createCanonicalProductSelection(
+        selected,
+        selectedBaseOptionId,
+        selectedAddOnOptionIds,
+      ));
+    }
   };
 
   const cancelar = () => {
@@ -59,6 +72,8 @@ export default function ProductPickerDialog({
       setSupplier("");
       setResults([]);
       setSelected(null);
+      setSelectedBaseOptionId("");
+      setSelectedAddOnOptionIds([]);
       setOffset(0);
       setTotal(0);
       setError("");
@@ -101,6 +116,8 @@ export default function ProductPickerDialog({
         setResults([]);
         setTotal(0);
         setSelected(null);
+        setSelectedBaseOptionId("");
+        setSelectedAddOnOptionIds([]);
         setError(requestError?.message || "No fue posible cargar el catálogo.");
       } finally {
         if (!controller.signal.aborted && requestVersion === requestVersionRef.current) {
@@ -127,6 +144,11 @@ export default function ProductPickerDialog({
   const warnings = normalizeWarnings(preview.warnings);
   const selectedKey = selected ? `${selected.catalog}:${selected.official_code}` : "";
   const showImage = shouldShowProductImage(preview.image_url, failedImageKey === selectedKey);
+  const baseOptions = productBaseOptions(selected);
+  const selectedBaseOption = baseOptions.find((option) => option.id === selectedBaseOptionId);
+  const addOnOptions = productAddOnOptions(selected, selectedBaseOptionId);
+  const addOnFamilies = productAddOnFamilies(selected, selectedBaseOptionId);
+  const canConfirm = Boolean(selected) && (!baseOptions.length || Boolean(selectedBaseOption));
   const canGoBack = offset > 0;
   const canGoForward = offset + results.length < total;
 
@@ -160,7 +182,7 @@ export default function ProductPickerDialog({
             event.preventDefault();
             cancelar();
           }
-          if (event.key === "Enter" && event.target === dialogRef.current && selected) {
+          if (event.key === "Enter" && event.target === dialogRef.current && canConfirm) {
             event.preventDefault();
             confirmar();
           }
@@ -191,6 +213,8 @@ export default function ProductPickerDialog({
                 setQuery(event.target.value);
                 setOffset(0);
                 setSelected(null);
+                setSelectedBaseOptionId("");
+                setSelectedAddOnOptionIds([]);
               }}
             />
           </label>
@@ -203,6 +227,8 @@ export default function ProductPickerDialog({
                 setSupplier(event.target.value);
                 setOffset(0);
                 setSelected(null);
+                setSelectedBaseOptionId("");
+                setSelectedAddOnOptionIds([]);
               }}
             >
               <option value="">Todos los proveedores</option>
@@ -229,13 +255,24 @@ export default function ProductPickerDialog({
                     aria-pressed={isSelected}
                     key={`${item.catalog}:${item.official_code}`}
                     onClick={() => {
-                      setSelected({...item, snapshot: item.snapshot || {}});
+                      const next = {...item, snapshot: item.snapshot || {}};
+                      const nextBaseId = initialBaseOptionId(next);
+                      setSelected(next);
+                      setSelectedBaseOptionId(nextBaseId);
+                      setSelectedAddOnOptionIds(initialAddOnOptionIds(next, nextBaseId));
                       setFailedImageKey("");
                     }}
                   >
-                    <strong>{itemSnapshot.name || "Producto sin nombre"}</strong>
-                    <span>{catalogLabel(item.catalog)}</span>
-                    <small>{item.official_code} · {item.catalog}</small>
+                    <span className="project-picker-result-image">
+                      {itemSnapshot.image_url
+                        ? <img src={itemSnapshot.image_url} alt={itemSnapshot.name || "Producto"} loading="lazy" />
+                        : <small>Sin imagen</small>}
+                    </span>
+                    <span className="project-picker-result-copy">
+                      <strong>{itemSnapshot.name || "Producto sin nombre"}</strong>
+                      <span>{catalogLabel(item.catalog)}</span>
+                      <small>{item.official_code} · {item.catalog}</small>
+                    </span>
                   </button>
                 );
               })}
@@ -244,11 +281,15 @@ export default function ProductPickerDialog({
               <button type="button" className="ghost-action" disabled={!canGoBack || loading} onClick={() => {
                 setOffset((current) => Math.max(0, current - PAGE_SIZE));
                 setSelected(null);
+                setSelectedBaseOptionId("");
+                setSelectedAddOnOptionIds([]);
               }}>Anterior</button>
               <span aria-live="polite">{rangeLabel}</span>
               <button type="button" className="ghost-action" disabled={!canGoForward || loading} onClick={() => {
                 setOffset((current) => current + PAGE_SIZE);
                 setSelected(null);
+                setSelectedBaseOptionId("");
+                setSelectedAddOnOptionIds([]);
               }}>Siguiente</button>
             </nav>
           </section>
@@ -264,7 +305,63 @@ export default function ProductPickerDialog({
                 <strong>{preview.name}</strong>
                 <span>{previewSupplier || "Proveedor no disponible"}</span>
                 <span>Código: {selected.official_code}</span>
-                <span>Configuración: {preview.configuration || "No especificada"}</span>
+                {baseOptions.length > 1 ? (
+                  <label>
+                    Configuración base
+                    <select
+                      aria-label="Configuración base"
+                      value={selectedBaseOptionId}
+                      onChange={(event) => {
+                        const nextBaseId = event.target.value;
+                        const compatibleIds = new Set(
+                          productAddOnOptions(selected, nextBaseId).map((option) => option.id),
+                        );
+                        setSelectedBaseOptionId(nextBaseId);
+                        setSelectedAddOnOptionIds((current) => (
+                          current.filter((optionId) => compatibleIds.has(optionId))
+                        ));
+                      }}
+                    >
+                      <option value="">Selecciona una configuración</option>
+                      {baseOptions.map((option) => (
+                        <option key={option.id} value={option.id}>{option.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <span>Configuración: {selectedBaseOption?.name || preview.configuration || "No especificada"}</span>
+                )}
+                {baseOptions.length > 1 && !selectedBaseOption ? (
+                  <small>Selecciona una configuración para continuar.</small>
+                ) : null}
+                {addOnFamilies.map((family) => {
+                  const selectedOption = addOnOptions.find((option) => (
+                    option.family === family.family
+                    && selectedAddOnOptionIds.includes(option.id)
+                  ));
+                  return (
+                    <label key={family.family}>
+                      {family.family}
+                      <select
+                        aria-label={`Configuración ${family.family}`}
+                        value={selectedOption?.id || ""}
+                        onChange={(event) => {
+                          const familyIds = new Set(family.options.map((option) => option.id));
+                          const nextId = event.target.value;
+                          setSelectedAddOnOptionIds((current) => [
+                            ...current.filter((optionId) => !familyIds.has(optionId)),
+                            ...(nextId ? [nextId] : []),
+                          ]);
+                        }}
+                      >
+                        <option value="">Sin complemento</option>
+                        {family.options.map((option) => (
+                          <option key={option.id} value={option.id}>{option.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })}
                 <span>Disponibilidad: {preview.availability || "No especificada"}</span>
                 {warnings.length > 0 && (
                   <ul className="project-picker-warnings">
@@ -278,7 +375,7 @@ export default function ProductPickerDialog({
 
         <footer className="project-picker-actions">
           <button type="button" className="ghost-action" onClick={cancelar}>Cancelar</button>
-          <button type="button" className="primary-action" disabled={!selected} onClick={confirmar}>{confirmLabel}</button>
+          <button type="button" className="primary-action" disabled={!canConfirm} onClick={confirmar}>{confirmLabel}</button>
         </footer>
       </section>
     </div>

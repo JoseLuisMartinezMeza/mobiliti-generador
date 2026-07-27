@@ -10,8 +10,10 @@ _ADAPTERS = {
     "sunon": "sunon",
     "alma": "alma",
     "lumbro": "lumbro",
+    "jome": "jome",
+    "lauco": "lauco",
 }
-_EXTENSIONS = {".pdf", ".xlsx"}
+_EXTENSIONS = {".pdf", ".xlsx", ".xlsb"}
 _KINDS = {"catalog", "inventory", "price_list", "spec_guide"}
 _ROOT_PATH = "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES"
 _GRAPH_ITEM_ID_RE = re.compile(r"^[A-Za-z0-9]{34}$")
@@ -118,6 +120,40 @@ _FIRST_WAVE_ALLOWLIST = (
                 "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf",
                 "catalog",
                 drive_item_id="01DHXXN7YFOCIP7S2WR5F3AFZF3Z5ITB3J",
+            ),
+        ),
+    ),
+    SupplierSourceConfig(
+        supplier="jome",
+        label="JOME",
+        adapter="jome",
+        root_path=_ROOT_PATH,
+        files=(
+            SupplierFileConfig(
+                "SPEC GUIDES 2026/JOME/Spec guide-Estructuras Jome-2026.xlsx",
+                "spec_guide",
+                "estructuras",
+                drive_item_id="01DHXXN73FNX632SXL3JBZ5O6FNNULR67U",
+            ),
+            SupplierFileConfig(
+                "SPEC GUIDES 2026/JOME/Spec guide-Laminado-2026.xlsx",
+                "spec_guide",
+                "laminado",
+                drive_item_id="01DHXXN72IXFY22JUPD5GJT5B6PPGWE7ZX",
+            ),
+        ),
+    ),
+    SupplierSourceConfig(
+        supplier="lauco",
+        label="Lauco",
+        adapter="lauco",
+        root_path=_ROOT_PATH,
+        files=(
+            SupplierFileConfig(
+                "SPEC GUIDES 2026/LAUCO/Spec Guide Lauco-2026.xlsb",
+                "spec_guide",
+                "Lauco",
+                drive_item_id="01DHXXN73QZOUEEWNH4BE2NO5YPBUJ5HNK",
             ),
         ),
     ),

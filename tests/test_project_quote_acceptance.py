@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from io import BytesIO
 import hashlib
 import json
 from pathlib import Path
@@ -14,6 +15,7 @@ from zipfile import ZipFile
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
+from openpyxl.utils import column_index_from_string
 
 from mobiliti_saas.quote_engine import engine
 from mobiliti_saas.quote_engine.mobiliti_layout import (
@@ -525,19 +527,32 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
     try:
         mobiliti = workbook["Mobiliti"]
         cotizacion = workbook["Cotizacion"]
-        assert [Decimal(str(mobiliti.cell(row, 10).value)) for row in (14, 15, 16)] == [
-            expected_unit_cost,
-            expected_unit_cost,
-            expected_unit_cost,
+        quotation = workbook["Quotation"]
+        quotation_rows = []
+        for row in (14, 15, 16):
+            formula = str(mobiliti.cell(row, 10).value)
+            assert formula.startswith("=Quotation!K")
+            quotation_rows.append(int(formula.removeprefix("=Quotation!K")))
+        assert [
+            Decimal(str(quotation.cell(row, 11).value))
+            for row in quotation_rows
+        ] == [expected_unit_cost, expected_unit_cost, expected_unit_cost]
+        assert [mobiliti.cell(row, 8).value for row in (14, 15, 16)] == [
+            f"=Quotation!H{quotation_row}"
+            for quotation_row in quotation_rows
         ]
-        assert [Decimal(str(mobiliti.cell(row, 8).value)) for row in (14, 15, 16)] == list(
-            physical_quantities
-        )
+        assert [
+            Decimal(str(quotation.cell(row, 8).value))
+            for row in quotation_rows
+        ] == list(physical_quantities)
         assert cotizacion["F17"].value == (
             "=Mobiliti!X14+Mobiliti!X15*2+Mobiliti!X16*3/10"
         )
-        assert cotizacion["E17"].value == 10
-        assert cotizacion["C17"].value.count("\n+ ") == 2
+        assert cotizacion["A17"].value == "=Mobiliti!D14"
+        assert cotizacion["C17"].value == f"=Quotation!D{quotation_rows[0]}"
+        assert cotizacion["D17"].value == f"=Quotation!F{quotation_rows[0]}"
+        assert cotizacion["E17"].value == "=Mobiliti!H14"
+        assert quotation.cell(quotation_rows[0], 4).value.count("\n+ ") == 2
     finally:
         workbook.close()
 
@@ -574,13 +589,99 @@ def test_project_quote_preserves_original_quotation_and_template_contract(
     source_sha = hashlib.sha256(imported_source.read_bytes()).hexdigest()
     template_sha = hashlib.sha256(OFFICIAL_TEMPLATE.read_bytes()).hexdigest()
 
-    assert quotation_semantic_signature(output) == quotation_semantic_signature(
-        imported_source
+    source_signature = quotation_semantic_signature(imported_source)
+    output_signature = quotation_semantic_signature(output)
+    source_workbook = load_workbook(imported_source, data_only=False)
+    try:
+        source_sheet = source_workbook["Quotation"]
+        source_content_last_row = max(
+            row
+            for row in range(1, source_sheet.max_row + 1)
+            if any(
+                source_sheet.cell(row, column).value is not None
+                for column in range(1, 13)
+            )
+        )
+        source_content_first_row = min(
+            row
+            for row in range(1, source_content_last_row + 1)
+            if (
+                str(source_sheet.cell(row, 1).value or "").startswith("-")
+                or (
+                    isinstance(source_sheet.cell(row, 1).value, (int, float))
+                    and not isinstance(source_sheet.cell(row, 1).value, bool)
+                )
+            )
+        )
+        source_product_rows = [
+            row
+            for row in range(source_content_first_row, source_content_last_row + 1)
+            if (
+                isinstance(source_sheet.cell(row, 1).value, (int, float))
+                and not isinstance(source_sheet.cell(row, 1).value, bool)
+            )
+        ]
+    finally:
+        source_workbook.close()
+    row_keys = {f"source-{row}": row for row in source_product_rows}
+    expected_snapshot = engine._insert_quotation_transformation_column(
+        engine._normalized_quotation_source(imported_source),
+        row_keys,
+        {key: "Descripcion procesada esperada" for key in row_keys},
     )
+    expected_signature = quotation_semantic_signature(BytesIO(expected_snapshot))
+    assert output_signature[0] == expected_signature[0]
+    expected_cells = {
+        coordinate: signature
+        for coordinate, *signature in expected_signature[1]
+        if (
+            int("".join(character for character in coordinate if character.isdigit()))
+            < source_content_first_row
+            or column_index_from_string(
+                "".join(character for character in coordinate if character.isalpha())
+            )
+            > 13
+        )
+    }
+    output_cells = {
+        coordinate: signature
+        for coordinate, *signature in output_signature[1]
+    }
+    assert {
+        coordinate: output_cells[coordinate]
+        for coordinate in expected_cells
+    } == expected_cells
+    assert output_signature[3:5] == expected_signature[3:5]
+    assert output_signature[6] == expected_signature[6]
+    output_workbook = load_workbook(output, data_only=False)
+    try:
+        output_sheet = output_workbook["Quotation"]
+        output_product_count = sum(
+            isinstance(output_sheet.cell(row, 1).value, (int, float))
+            and not isinstance(output_sheet.cell(row, 1).value, bool)
+            for row in range(1, output_sheet.max_row + 1)
+        )
+        assert output_product_count == result.frozen_payload["item_count"]
+    finally:
+        output_workbook.close()
+    source_package = XlsxPackage.from_bytes(
+        engine._normalized_quotation_source(imported_source)
+    )
+    output_package = XlsxPackage.read(output)
+    source_media = {
+        hashlib.sha256(payload).hexdigest()
+        for name, payload in source_package.parts.items()
+        if name.startswith("xl/media/")
+    }
+    output_media = {
+        hashlib.sha256(payload).hexdigest()
+        for name, payload in output_package.parts.items()
+        if name.startswith("xl/media/")
+    }
+    assert source_media.issubset(output_media)
     assert hashlib.sha256(imported_source.read_bytes()).hexdigest() == source_sha
     assert hashlib.sha256(OFFICIAL_TEMPLATE.read_bytes()).hexdigest() == template_sha
     assert_official_template_contract()
-    output_package = XlsxPackage.read(output)
     template_package = XlsxPackage.read(OFFICIAL_TEMPLATE)
     exact_additions = _exact_generated_additions(template_package, output_package)
     fletes_part = template_package.sheet_part("Fletes")

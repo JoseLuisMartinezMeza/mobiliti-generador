@@ -25,7 +25,7 @@ MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 X14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 XM = "http://schemas.microsoft.com/office/excel/2006/main"
 XML = "http://www.w3.org/XML/1998/namespace"
-TABLE_LAST_COLUMN = 34  # AH
+TABLE_LAST_COLUMN = 35  # AI
 CANONICAL_TOTAL_ROW = 573
 CANONICAL_AUXILIARY_START = 574
 CANONICAL_AUXILIARY_END = 610
@@ -58,7 +58,7 @@ for prefix, namespace in (
 @dataclass(frozen=True)
 class MobilitiCellWrite:
     coordinate: str
-    kind: Literal["number", "text", "boolean"]
+    kind: Literal["number", "text", "boolean", "formula"]
     value: Decimal | str | bool
 
 
@@ -507,13 +507,18 @@ def clone_formula_row(
     *,
     source_row: int = 49,
 ) -> None:
-    editor.replace_table_row(
+    clone = editor.replace_table_row(
         target_row,
         canonical_row,
         source_row,
         row_map,
         clear_input_formulas=True,
     )
+    provider = _find_cell(clone, 6)
+    yellow_reference = _find_cell(clone, 8)
+    if provider is None or yellow_reference is None or "s" not in yellow_reference.attrib:
+        raise ValueError(f"La fila Mobiliti {target_row} no contiene estilo de producto")
+    provider.set("s", yellow_reference.attrib["s"])
 
 
 def clone_subtotal_row(
@@ -948,6 +953,25 @@ def _structural_reference(
     if any(item is None for item in parsed):
         return translated
     rows = [int(item.group("row")) for item in parsed if item is not None]
+    if len(parsed) == 2 and rows == [14, 571]:
+        columns = {
+            item.group("column").lstrip("$")
+            for item in parsed
+            if item is not None
+        }
+        if (
+            columns in ({"D"}, {"W"})
+            and all(
+                item is not None
+                and item.group("column").startswith("$")
+                and item.group("row_abs") == "$"
+                for item in parsed
+            )
+        ):
+            return _reference_with_rows(
+                original,
+                (14, row_map.last_product_row),
+            )
     if product_range is not None and (
         rows == [14, 46] or rows == [49, 81]
     ):
@@ -1081,7 +1105,7 @@ def _clear_cell(cell: ET.Element) -> None:
 def _set_cell_value(
     row: ET.Element,
     coordinate: str,
-    kind: Literal["number", "text", "boolean"],
+    kind: Literal["number", "text", "boolean", "formula"],
     value: Decimal | str | bool,
 ) -> None:
     _validate_write_value(kind, value)
@@ -1110,13 +1134,18 @@ def _set_cell_value(
         if isinstance(value, bool) or not isinstance(value, Decimal):
             raise TypeError("Una escritura number requiere Decimal")
         ET.SubElement(cell, f"{{{MAIN}}}v").text = format(value, "f")
+    elif kind == "formula":
+        if not isinstance(value, str):
+            raise TypeError("Una escritura formula requiere str")
+        ET.SubElement(cell, f"{{{MAIN}}}f").text = value[1:]
     else:
         raise ValueError(f"Tipo de escritura Mobiliti inválido: {kind!r}")
     _sort_cells(row)
 
 
 def _validate_write_value(
-    kind: Literal["number", "text", "boolean"], value: Decimal | str | bool
+    kind: Literal["number", "text", "boolean", "formula"],
+    value: Decimal | str | bool,
 ) -> None:
     if kind == "text":
         if not isinstance(value, str):
@@ -1133,6 +1162,21 @@ def _validate_write_value(
             raise TypeError("Una escritura number requiere Decimal")
         if not value.is_finite():
             raise ValueError("Una escritura number requiere un Decimal finito")
+    elif kind == "formula":
+        if not isinstance(value, str):
+            raise TypeError("Una escritura formula requiere str")
+        match = re.fullmatch(
+            r"(?:=Quotation![HIK]([1-9][0-9]*)|"
+            r"=ROUND\(Quotation!K([1-9][0-9]*)"
+            r"\*([0-9]+(?:\.[0-9]+)?),2\))",
+            value,
+        )
+        row_text = next(
+            (group for group in match.groups()[:2] if group is not None),
+            None,
+        ) if match is not None else None
+        if row_text is None or int(row_text) > XLSX_MAX_ROW:
+            raise ValueError("Formula Mobiliti fuera del contrato Quotation")
     else:
         raise ValueError(f"Tipo de escritura Mobiliti inválido: {kind!r}")
 
@@ -1388,6 +1432,16 @@ def build_mobiliti_sheet(
     _preflight_static_special_formulas(editor, row_map)
     _translate_static_structural_formulas(editor, row_map)
     apply_mobiliti_layout(editor, row_map)
+    currency_source = _find_cell(canonical.product_row, 3)
+    currency_formula = (
+        None if currency_source is None else currency_source.find(f"{{{MAIN}}}f")
+    )
+    if currency_source is None or currency_formula is None:
+        raise ValueError("La plantilla oficial no contiene la fórmula de moneda Mobiliti")
+    currency_text = editor.formulas.source_text(
+        currency_formula, currency_source.attrib["r"]
+    )
+    first_product_row = row_map.sections[0].product_start
 
     for index, section in enumerate(row_map.sections):
         first = index == 0
@@ -1417,6 +1471,19 @@ def build_mobiliti_sheet(
                 row_map,
                 source_row=product_source_row,
             )
+            if target_row != first_product_row:
+                target_currency = _find_cell(editor.require_row(target_row), 3)
+                if target_currency is None:
+                    raise ValueError(f"La fila Mobiliti {target_row} no contiene moneda")
+                target_formula = target_currency.find(f"{{{MAIN}}}f")
+                if target_formula is None:
+                    raise ValueError(f"La celda Mobiliti C{target_row} no contiene fórmula")
+                target_formula.text = _translate_official_formula(
+                    "=" + currency_text,
+                    origin=currency_source.attrib["r"],
+                    target=f"C{target_row}",
+                    row_map=row_map,
+                )[1:]
         clone_subtotal_row(
             editor,
             subtotal,

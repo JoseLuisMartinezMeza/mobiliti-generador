@@ -466,7 +466,9 @@ function Sidebar({ view, setView, isAdmin, onLogout }) {
     ["sonara", "Sonara", PackageSearch],
     ["sunon", "Sunon", PackageSearch],
     ["alma", "ALMA", PackageSearch],
-    ["lumbro", "Lumbro", PackageSearch]
+    ["lumbro", "Lumbro", PackageSearch],
+    ["jome", "JOME", PackageSearch],
+    ["lauco", "Lauco", PackageSearch]
   ];
   return (
     <aside className="sidebar">
@@ -2089,7 +2091,7 @@ function createMixedQuoteController({
     event,
     submissionLines = mixedCartRef.current,
     preparedRequest = null,
-    {preserveProject = false, propagateFailure = false} = {},
+    {preserveProject = false, propagateFailure = false, projectQuote = null} = {},
   ) {
     event.preventDefault();
     if (mixedQuoteSubmittingRef.current || !submissionLines.length) return;
@@ -2119,14 +2121,19 @@ function createMixedQuoteController({
     setError("");
     setNotice("");
     try {
-      const mixedRequest = preparedRequest || createMixedQuoteRequestSnapshot(
-        getForm(),
-        mixedSectionsRef.current,
-        committedLines,
-      );
-      const data = await request("/catalogs/mixed-quote", {
+      const quoteRequest = projectQuote
+        ? {expected_revision: projectQuote.revision}
+        : preparedRequest || createMixedQuoteRequestSnapshot(
+          getForm(),
+          mixedSectionsRef.current,
+          committedLines,
+        );
+      const quotePath = projectQuote
+        ? `/projects/${encodeURIComponent(projectQuote.id)}/quote`
+        : "/catalogs/mixed-quote";
+      const data = await request(quotePath, {
         method: "POST",
-        body: JSON.stringify(mixedRequest),
+        body: JSON.stringify(quoteRequest),
       });
       if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
       if (!data?.job?.id) throw new Error("Respuesta de trabajo mixto invalida");
@@ -2652,7 +2659,9 @@ function App() {
     sonara: "Sonara",
     sunon: "Sunon",
     alma: "ALMA",
-    lumbro: "Lumbro"
+    lumbro: "Lumbro",
+    jome: "JOME",
+    lauco: "Lauco"
   };
 
   function blockExternalProjectEntry(pendingDraft = null) {
@@ -2913,22 +2922,44 @@ function App() {
     setProjectChangeVersion((current) => current + 1);
   }
 
+  function handleProjectDeleted(projectId) {
+    if (activeProjectRef.current?.id !== projectId) return;
+    projectLoadEpochRef.current += 1;
+    activeProjectRef.current = null;
+    canMutateActiveProjectRef.current = false;
+    pendingImportAdoptionRef.current = null;
+    const emptySections = createInitialMixedCartSections();
+    mixedCartRef.current = [];
+    mixedCartSectionsRef.current = emptySections;
+    setActiveProjectId("");
+    setActiveProject(null);
+    setMixedCart([]);
+    setMixedCartSections(emptySections);
+    setMixedQuote({...EMPTY_MIXED_QUOTE});
+    setPendingImportDraft(null);
+    setConfirmedImport(null);
+    setProjectChangeVersion(0);
+    setProjectLoadState({status: "idle", message: ""});
+    setView("proyectos");
+  }
+
   async function generateActiveProjectQuote(project) {
     if (!project?.id) throw new Error("Abre un Proyecto persistente antes de cotizar.");
     if (projectAutosave.status !== "saved") {
       throw new Error("Espera a que el Proyecto termine de guardarse.");
     }
-    const quoteLines = projectMixedQuoteLines(project.lines);
-    const preparedRequest = createMixedQuoteRequestSnapshot(
-      project.quoteFields,
-      project.sections,
-      quoteLines,
-    );
     return mixedQuoteController.submit(
       {preventDefault() {}},
       project.lines,
-      preparedRequest,
-      {preserveProject: true, propagateFailure: true},
+      null,
+      {
+        preserveProject: true,
+        propagateFailure: true,
+        projectQuote: {
+          id: project.id,
+          revision: project.revision,
+        },
+      },
     );
   }
 
@@ -2991,6 +3022,7 @@ function App() {
           projectDraft={creationPlan.projectState}
           projectAdoptionDraft={creationPlan.submittedAdoption}
           activeProjectId={activeProjectId}
+          onProjectDeleted={handleProjectDeleted}
         />
       )
       : view === "project-editor"

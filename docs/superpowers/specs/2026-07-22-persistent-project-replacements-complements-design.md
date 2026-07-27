@@ -1,8 +1,8 @@
 # Proyectos persistentes, sustituciones y complementos — diseño aprobado
 
-Fecha: 2026-07-22  
-Proyecto: Mobiliti SaaS Cotizador  
-Estado: aprobado para planificación, no implementado  
+Fecha: 2026-07-22
+Proyecto: Mobiliti SaaS Cotizador
+Estado: aprobado para planificación, no implementado
 Producción y SharePoint: sin cambios
 
 ## 1. Resumen

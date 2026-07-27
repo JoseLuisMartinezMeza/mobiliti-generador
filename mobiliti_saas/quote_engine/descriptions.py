@@ -296,7 +296,19 @@ def _clean_text(value: Any) -> str:
     text = "" if value is None else str(value)
     text = text.replace("\r", " ").replace("\n", " ")
     text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    parts = re.split(r"\s*\|\s*", text)
+    visible_parts = [
+        part.strip()
+        for part in parts
+        if part.strip()
+        and re.match(
+            r"^(?:fuente|hash\s+fuente|hash\s+fila|url|clave)\s*:",
+            part,
+            flags=re.I,
+        )
+        is None
+    ]
+    return " | ".join(visible_parts)
 
 
 def _display_model_name(product_name: str) -> str:

@@ -619,6 +619,8 @@ def test_product_picker_covers_all_contexts_and_previews_images():
     ):
         assert copy in source
     assert 'alt={selected.snapshot.name}' in source
+    assert 'className="project-picker-result-image"' in source
+    assert "src={itemSnapshot.image_url}" in source
     assert "Sin imagen" in source
     assert "buildCatalogSearchPath" in source
     assert "/catalogs/search" in helper
@@ -705,6 +707,129 @@ def test_product_picker_confirmation_is_a_deep_copied_canonical_allowlist():
     assert result["rawWarnings"] == ["Bajo pedido"]
 
 
+def test_product_picker_base_choice_is_automatic_only_when_unambiguous():
+    result = run_picker(r"""
+      const single = {
+        identity: {internal_id: "lauco:single", base_option_id: "", add_on_option_ids: []},
+        base_options: [{id: "grade-1", name: "Tapiz Grado 1"}],
+      };
+      const multiple = {
+        catalog: "lauco",
+        official_code: "A4 1P",
+        identity: {internal_id: "lauco:multiple", base_option_id: "", add_on_option_ids: []},
+        base_options: [
+          {id: "grade-1", name: "Tapiz Grado 1"},
+          {id: "grade-2", name: "Tapiz Grado 2"},
+        ],
+        snapshot: {name: "A4 1P"},
+      };
+      let missingError = "";
+      try {
+        picker.createCanonicalProductSelection(multiple, "");
+      } catch (error) {
+        missingError = error.message;
+      }
+      const selected = picker.createCanonicalProductSelection(multiple, "grade-2");
+      console.log(JSON.stringify({
+        single: picker.initialBaseOptionId(single),
+        multiple: picker.initialBaseOptionId(multiple),
+        missingError,
+        selectedBase: selected.identity.base_option_id,
+        selectedConfiguration: selected.snapshot.configuration,
+      }));
+    """)
+    assert result == {
+        "single": "grade-1",
+        "multiple": "",
+        "missingError": "Selecciona una configuración base",
+        "selectedBase": "grade-2",
+        "selectedConfiguration": "Tapiz Grado 2",
+    }
+
+
+def test_product_picker_keeps_one_compatible_add_on_per_family():
+    result = run_picker(r"""
+      const item = {
+        catalog: "alma",
+        official_code: "ALMA-42",
+        identity: {
+          internal_id: "alma-42",
+          base_option_id: "",
+          add_on_option_ids: ["cojin-a"],
+        },
+        base_options: [
+          {id: "base-aluminio", name: "Aluminio"},
+          {id: "base-madera", name: "Madera"},
+        ],
+        add_on_options: [
+          {
+            id: "cojin-a",
+            name: "Cojín A",
+            family: "cojin",
+            compatible_base_option_ids: ["base-aluminio"],
+          },
+          {
+            id: "cojin-b",
+            name: "Cojín B",
+            family: "cojin",
+            compatible_base_option_ids: [],
+          },
+          {
+            id: "protector",
+            name: "Protector",
+            family: "proteccion",
+            compatible_base_option_ids: [],
+          },
+        ],
+        snapshot: {name: "Silla configurable"},
+      };
+      let duplicateFamilyError = "";
+      try {
+        picker.createCanonicalProductSelection(
+          item,
+          "base-aluminio",
+          ["cojin-a", "cojin-b"],
+        );
+      } catch (error) {
+        duplicateFamilyError = error.message;
+      }
+      let incompatibleError = "";
+      try {
+        picker.createCanonicalProductSelection(item, "base-madera", ["cojin-a"]);
+      } catch (error) {
+        incompatibleError = error.message;
+      }
+      const selected = picker.createCanonicalProductSelection(
+        item,
+        "base-aluminio",
+        ["cojin-a", "protector"],
+      );
+      console.log(JSON.stringify({
+        initial: picker.initialAddOnOptionIds(item, "base-aluminio"),
+        families: picker.productAddOnFamilies(item, "base-aluminio"),
+        duplicateFamilyError,
+        incompatibleError,
+        selectedIds: selected.identity.add_on_option_ids,
+        selectedConfiguration: selected.snapshot.configuration,
+      }));
+    """)
+
+    assert result["initial"] == ["cojin-a"]
+    assert [family["family"] for family in result["families"]] == ["cojin", "proteccion"]
+    assert "familia cojin" in result["duplicateFamilyError"]
+    assert "incompatible" in result["incompatibleError"]
+    assert result["selectedIds"] == ["cojin-a", "protector"]
+    assert result["selectedConfiguration"] == "Aluminio + Cojín A + Protector"
+
+
+def test_product_picker_dialog_requires_ambiguous_base_choice_before_confirmation():
+    source = Path("mobiliti_saas/web/src/ProductPickerDialog.jsx").read_text(encoding="utf-8")
+    assert 'aria-label="Configuración base"' in source
+    assert "initialBaseOptionId" in source
+    assert "disabled={!canConfirm}" in source
+    assert "Selecciona una configuración para continuar." in source
+
+
 def test_product_picker_uses_catalog_contract_for_supplier_choices_and_image_fallback():
     result = run_picker(r"""
       console.log(JSON.stringify({
@@ -715,7 +840,17 @@ def test_product_picker_uses_catalog_contract_for_supplier_choices_and_image_fal
       }));
     """)
     assert result == {
-        "catalogs": ["tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro"],
+        "catalogs": [
+            "tarkett",
+            "offiho",
+            "cr-global",
+            "sonara",
+            "sunon",
+            "alma",
+            "lumbro",
+            "jome",
+            "lauco",
+        ],
         "alma": "ALMA",
         "imageWhenLoaded": True,
         "imageWhenBroken": False,
@@ -737,12 +872,26 @@ def test_product_picker_uses_modal_focus_controls_and_mobile_layout():
     assert "grid-template-columns: 1fr;" in styles
 
 
-def test_projects_view_has_recoverable_lifecycle_and_no_delete_action():
+def test_projects_view_has_rename_and_archived_only_definitive_delete():
     source = PROJECTS_VIEW.read_text(encoding="utf-8")
-    for copy in ("Proyectos activos", "Archivados", "Abrir", "Duplicar", "Archivar", "Restaurar"):
+    for copy in (
+        "Proyectos activos",
+        "Archivados",
+        "Abrir",
+        "Duplicar",
+        "Archivar",
+        "Restaurar",
+        "Renombrar",
+        "Guardar",
+        "Cancelar",
+        "Eliminar definitivamente",
+    ):
         assert copy in source
-    assert "Eliminar" not in source
-    assert 'method: "DELETE"' not in source
+    assert "project.status === \"archived\"" in source
+    assert "Escribe el nombre exacto" in source
+    assert 'method: "DELETE"' in source
+    assert "confirm_name: confirmation" in source
+    assert "onProjectDeleted" in source
 
 
 def test_projects_view_loads_both_lifecycle_lists_and_posts_actions():

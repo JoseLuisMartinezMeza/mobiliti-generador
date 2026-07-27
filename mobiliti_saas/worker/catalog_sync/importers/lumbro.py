@@ -46,6 +46,7 @@ _PDF_MIME = "application/pdf"
 _SPEC_PATH = "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx"
 _SPEC_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _SPEC_SHEET = "SPEC-GUIDE-LUMBRO"
+_COST_SHEET = "COSTO LUMBRO "
 _SPEC_FIRST_ROW = 8
 _SPEC_LAST_ROW = 520
 _INTERCONNECTION_PATH = "LUMBRO/LP/Precios Interconexión Sunón act.xlsx"
@@ -126,6 +127,7 @@ class LumbroSpecBuild:
     records: tuple[LumbroSpecRecord, ...]
     assets_by_sha256: Mapping[str, ImageAsset]
     bindings: tuple[CatalogAssetBinding, ...]
+    price_authoritative: bool = False
 
 
 @dataclass(frozen=True)
@@ -885,8 +887,8 @@ def _colors(value: str) -> tuple[str, ...]:
     return tuple(colors)
 
 
-def _cell_references(file_id: str, coordinates) -> tuple[dict, ...]:
-    return tuple(source_ref(file_id, _SPEC_SHEET, coordinate) for coordinate in coordinates)
+def _cell_references(file_id: str, sheet_name: str, coordinates) -> tuple[dict, ...]:
+    return tuple(source_ref(file_id, sheet_name, coordinate) for coordinate in coordinates)
 
 
 def _internal_id(code: str, model: str, configuration: str, color: str) -> str:
@@ -894,12 +896,16 @@ def _internal_id(code: str, model: str, configuration: str, color: str) -> str:
     return "lumbro:variant:" + hashlib.sha256(material.encode()).hexdigest()[:20]
 
 
-def _image_rows(images) -> dict[int, tuple[object, ImageAsset]]:
+def _image_rows(
+    images, *, sheet_name: str, image_column: str
+) -> dict[int, tuple[object, ImageAsset]]:
     rows = {}
     for reference, asset in images.items():
-        match = re.fullmatch(r"B([0-9]+)", reference.cell, re.IGNORECASE)
+        match = re.fullmatch(
+            rf"{re.escape(image_column)}([0-9]+)", reference.cell, re.IGNORECASE
+        )
         if (
-            reference.sheet == _SPEC_SHEET
+            reference.sheet == sheet_name
             and match is not None
             and _SPEC_FIRST_ROW <= int(match.group(1)) <= _SPEC_LAST_ROW
         ):
@@ -908,28 +914,63 @@ def _image_rows(images) -> dict[int, tuple[object, ImageAsset]]:
 
 
 def _parse_lumbro_spec_workbook(source, workbook) -> LumbroSpecBuild:
-    if workbook.sheetnames.count(_SPEC_SHEET) != 1:
+    if workbook.sheetnames.count(_COST_SHEET) == 1:
+        sheet_name = _COST_SHEET
+        code_column = 2
+        image_column = "A"
+        currency_column = 7
+        expected_headings = (
+            "imagen",
+            "cod",
+            "descripcion",
+            "medida unidad",
+            "p unitario",
+            "lab cedis",
+            "moneda",
+            "precio venta 50 gp",
+        )
+        price_authoritative = True
+    elif workbook.sheetnames.count(_SPEC_SHEET) == 1:
+        sheet_name = _SPEC_SHEET
+        code_column = 1
+        image_column = "B"
+        currency_column = 6
+        expected_headings = (
+            "cod",
+            "imagen",
+            "descripcion",
+            "medida unidad",
+            "p unitario",
+            "moneda",
+        )
+        price_authoritative = False
+    else:
         raise ValueError("LUMBRO_SPEC_SHEET")
-    sheet = workbook[_SPEC_SHEET]
-    headings = tuple(_fold(sheet.cell(_SPEC_FIRST_ROW, column).value).strip(". ") for column in range(1, 7))
-    if headings != ("cod", "imagen", "descripcion", "medida unidad", "p unitario", "moneda"):
+    sheet = workbook[sheet_name]
+    headings = tuple(
+        _fold(sheet.cell(_SPEC_FIRST_ROW, column).value).strip(". ")
+        for column in range(1, len(expected_headings) + 1)
+    )
+    if headings != expected_headings:
         raise ValueError("LUMBRO_SPEC_HEADER")
 
     coded_rows = tuple(
         row
         for row in range(_SPEC_FIRST_ROW + 1, _SPEC_LAST_ROW + 1)
-        if _plain(sheet.cell(row, 1).value)
+        if _plain(sheet.cell(row, code_column).value)
     )
     coded_row_set = set(coded_rows)
     heading_rows = _heading_rows(sheet, coded_rows)
     raw_images = {
         reference: asset
         for reference, asset in extract_xlsx_images(source.local_path).items()
-        if reference.sheet == _SPEC_SHEET
+        if reference.sheet == sheet_name
     }
     exact_images = {
         row: candidate
-        for row, candidate in _image_rows(raw_images).items()
+        for row, candidate in _image_rows(
+            raw_images, sheet_name=sheet_name, image_column=image_column
+        ).items()
         if row in coded_row_set
     }
     assets_by_sha256 = {asset.sha256: asset for _, asset in exact_images.values()}
@@ -938,7 +979,7 @@ def _parse_lumbro_spec_workbook(source, workbook) -> LumbroSpecBuild:
     for index, row in enumerate(coded_rows):
         heading_row = heading_rows[row]
         heading = _plain(sheet.cell(heading_row, 3).value) if heading_row else ""
-        code = _plain(sheet.cell(row, 1).value)
+        code = _plain(sheet.cell(row, code_column).value)
         model, configuration, model_sources, configuration_sources = (
             _designation_from_spec(heading, code)
         )
@@ -974,29 +1015,64 @@ def _parse_lumbro_spec_workbook(source, workbook) -> LumbroSpecBuild:
                 description_coordinates.append(coordinate)
 
         dimensions = _plain(sheet.cell(row, 4).value)
-        currency = _plain(sheet.cell(row, 6).value)
+        currency = _plain(sheet.cell(row, currency_column).value)
         evidence = sheet.cell(row, 5).value
+        price = None
+        price_warnings = ()
+        if price_authoritative:
+            try:
+                price = Decimal(str(evidence))
+            except (InvalidOperation, ValueError):
+                price_warnings = ("missing_price",) if evidence is None else ("malformed_price",)
+            if price is not None and (not price.is_finite() or price <= 0):
+                price = None
+                price_warnings = ("malformed_price",)
+            if _fold(currency) != "mxn":
+                price = None
+                price_warnings = tuple(dict.fromkeys((*price_warnings, "invalid_currency")))
+        code_coordinate = f"{'B' if code_column == 2 else 'A'}{row}"
+        currency_coordinate = f"{'G' if currency_column == 7 else 'F'}{row}"
         identity_coordinates = {
             "heading": f"C{heading_row}" if heading_row else None,
-            "code": f"A{row}",
+            "code": code_coordinate,
         }
         provenance = {
-            "code": _cell_references(source.sha256, (f"A{row}",)),
+            "code": _cell_references(source.sha256, sheet_name, (code_coordinate,)),
             "model": _cell_references(
                 source.sha256,
+                sheet_name,
                 tuple(identity_coordinates[value] for value in model_sources),
             ),
             "configuration": _cell_references(
                 source.sha256,
+                sheet_name,
                 tuple(identity_coordinates[value] for value in configuration_sources),
             ),
-            "description": _cell_references(source.sha256, description_coordinates),
-            "dimensions": _cell_references(source.sha256, (f"D{row}",)) if dimensions else (),
-            "color": _cell_references(source.sha256, color_coordinates),
-            "mounting": _cell_references(source.sha256, mounting_coordinates),
-            "notes": _cell_references(source.sha256, note_coordinates),
-            "spec_price_evidence": _cell_references(source.sha256, (f"E{row}",)) if evidence is not None else (),
-            "currency": _cell_references(source.sha256, (f"F{row}",)) if currency else (),
+            "description": _cell_references(
+                source.sha256, sheet_name, description_coordinates
+            ),
+            "dimensions": (
+                _cell_references(source.sha256, sheet_name, (f"D{row}",))
+                if dimensions
+                else ()
+            ),
+            "color": _cell_references(source.sha256, sheet_name, color_coordinates),
+            "mounting": _cell_references(
+                source.sha256, sheet_name, mounting_coordinates
+            ),
+            "notes": _cell_references(source.sha256, sheet_name, note_coordinates),
+            "spec_price_evidence": (
+                _cell_references(source.sha256, sheet_name, (f"E{row}",))
+                if evidence is not None
+                else ()
+            ),
+            "currency": (
+                _cell_references(
+                    source.sha256, sheet_name, (currency_coordinate,)
+                )
+                if currency
+                else ()
+            ),
         }
         blocks.append(
             {
@@ -1012,6 +1088,8 @@ def _parse_lumbro_spec_workbook(source, workbook) -> LumbroSpecBuild:
                 "notes": tuple(notes),
                 "currency": currency,
                 "evidence": evidence,
+                "price": price,
+                "price_warnings": price_warnings,
                 "provenance": provenance,
             }
         )
@@ -1039,6 +1117,13 @@ def _parse_lumbro_spec_workbook(source, workbook) -> LumbroSpecBuild:
             )
             family_binding = selected is not None and (bool(color) or borrowed)
             warning = "El color puede variar" if family_binding else None
+            record_source = LumbroSpecSource(
+                source.path,
+                source.sha256,
+                sheet_name,
+                block["heading_row"],
+                block["row"],
+            )
             record = LumbroSpecRecord(
                 internal_id=internal_id,
                 identity=_identity(block["model"], " ".join(value for value in (block["configuration"], color) if value)),
@@ -1053,17 +1138,17 @@ def _parse_lumbro_spec_workbook(source, workbook) -> LumbroSpecBuild:
                 notes=block["notes"],
                 currency=block["currency"],
                 spec_price_evidence=block["evidence"],
-                source=LumbroSpecSource(
-                    source.path,
-                    source.sha256,
-                    _SPEC_SHEET,
-                    block["heading_row"],
-                    block["row"],
-                ),
+                source=record_source,
                 provenance=block["provenance"],
                 image_sha256=selected[1].sha256 if selected else None,
                 image_warning=warning,
-                warnings=(warning,) if warning else (),
+                net_price=block["price"],
+                price_source=record_source if price_authoritative else None,
+                warnings=tuple(
+                    dict.fromkeys(
+                        (*block["price_warnings"], *((warning,) if warning else ()))
+                    )
+                ),
             )
             records.append(record)
             if selected is not None:
@@ -1076,15 +1161,17 @@ def _parse_lumbro_spec_workbook(source, workbook) -> LumbroSpecBuild:
                         image_kind="official",
                         match_status="family_xlsx" if family_binding else "exact_xlsx",
                         source_references=(
-                            source_ref(source.sha256, _SPEC_SHEET, reference.cell),
+                            source_ref(source.sha256, sheet_name, reference.cell),
                         ),
                     )
                 )
-    return LumbroSpecBuild(tuple(records), assets_by_sha256, tuple(bindings))
+    return LumbroSpecBuild(
+        tuple(records), assets_by_sha256, tuple(bindings), price_authoritative
+    )
 
 
 def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
-    """Extrae evidencia de identidad del spec guide sin otorgarle autoridad de precio."""
+    """Lee identidad e imágenes; COSTO LUMBRO/E es la autoridad comercial."""
 
     source = _validated_spec_source(source)
     workbook = open_xlsx_data_only(source.local_path)
@@ -1095,7 +1182,7 @@ def parse_lumbro_spec_guide(source) -> LumbroSpecBuild:
 
 
 def reconcile_lumbro_spec_prices(spec_records, price_records) -> tuple[LumbroSpecRecord, ...]:
-    """Añade precios comerciales inequívocos; E permanece como diagnóstico."""
+    """Añade precios legacy sólo cuando la hoja de costos no fijó columna E."""
 
     prices_by_identity = {}
     prices_by_code = {}
@@ -1109,6 +1196,9 @@ def reconcile_lumbro_spec_prices(spec_records, price_records) -> tuple[LumbroSpe
 
     enriched = []
     for record in spec_records:
+        if record.net_price is not None and record.price_source is not None:
+            enriched.append(record)
+            continue
         matches = (
             *prices_by_code.get(record.code, ()),
             *prices_by_identity.get(record.price_identity, ()),
@@ -1352,6 +1442,8 @@ def _price_reference(record) -> dict:
     source = record.source
     if isinstance(source, LumbroInterconnectionSource):
         return source_ref(source.file_id, source.sheet, source.price_cell)
+    if isinstance(source, LumbroSpecSource):
+        return source_ref(source.file_id, source.sheet, f"E{source.row}")
     return source_ref(source.file_id, source.page, (0, 0, 0, 0))
 
 
@@ -1362,6 +1454,12 @@ def _row_audit_reference(record) -> dict:
             "path": source.path,
             "sheet_or_page": source.sheet,
             "cell_or_bbox": source.price_cell,
+        }
+    if isinstance(source, LumbroSpecSource):
+        return {
+            "path": source.path,
+            "sheet_or_page": source.sheet,
+            "cell_or_bbox": f"E{source.row}",
         }
     return {
         "path": source.path,
@@ -1376,6 +1474,13 @@ def _price_source_metadata(record) -> dict:
         return {
             "authority_rank": record.authority_rank,
             "cell": source.price_cell,
+            "path": source.path,
+            "sheet": source.sheet,
+        }
+    if isinstance(source, LumbroSpecSource):
+        return {
+            "authority_rank": 5,
+            "cell": f"E{source.row}",
             "path": source.path,
             "sheet": source.sheet,
         }
@@ -1458,7 +1563,11 @@ def _item(
         "price_source": _price_source_metadata(price_record) if price_record else {},
         "product_url_match": link_metadata,
     }
-    product_key_material = source_code or _identity(model, configuration) or internal_id
+    product_key_material = (
+        " ".join(value for value in (source_code, configuration) if value).strip()
+        or _identity(model, configuration)
+        or internal_id
+    )
     return {
         "internal_id": internal_id,
         "supplier": "lumbro",
@@ -1589,34 +1698,37 @@ def _build_lumbro(files, *, include_assets: bool):
     items = []
     item_by_id = {}
     for record in spec_build.records:
-        resolution_key = (record.code, record.price_identity, _fold(record.color))
-        if resolution_key not in resolution_cache:
-            candidates = [
-                *inter_entries_by_code.get(record.code, ()),
-                *pdf_entries_by_identity.get(record.price_identity, ()),
-            ]
-            candidates = [
-                entry
-                for entry in candidates
-                if _compatible_variant(record, entry["record"])
-            ]
-            selected, _, rejected = _selection(candidates)
-            resolution_cache[resolution_key] = selected
-            if selected is not None and selected["disposition"] is None:
-                selected["disposition"] = ("reconciled", "exact_compatible_identity")
-            for rejected_entry in rejected:
-                if rejected_entry["disposition"] is None:
-                    reason = (
-                        "lower_authority"
-                        if selected is not None
-                        and rejected_entry["record"].authority_rank
-                        < selected["record"].authority_rank
-                        else "redundant_same_authority"
-                    )
-                    rejected_entry["disposition"] = ("excluded", reason)
-        selected = resolution_cache[resolution_key]
-        if selected is not None:
-            selected["final_ids"].append(record.internal_id)
+        if spec_build.price_authoritative:
+            selected = {"record": record}
+        else:
+            resolution_key = (record.code, record.price_identity, _fold(record.color))
+            if resolution_key not in resolution_cache:
+                candidates = [
+                    *inter_entries_by_code.get(record.code, ()),
+                    *pdf_entries_by_identity.get(record.price_identity, ()),
+                ]
+                candidates = [
+                    entry
+                    for entry in candidates
+                    if _compatible_variant(record, entry["record"])
+                ]
+                selected, _, rejected = _selection(candidates)
+                resolution_cache[resolution_key] = selected
+                if selected is not None and selected["disposition"] is None:
+                    selected["disposition"] = ("reconciled", "exact_compatible_identity")
+                for rejected_entry in rejected:
+                    if rejected_entry["disposition"] is None:
+                        reason = (
+                            "lower_authority"
+                            if selected is not None
+                            and rejected_entry["record"].authority_rank
+                            < selected["record"].authority_rank
+                            else "redundant_same_authority"
+                        )
+                        rejected_entry["disposition"] = ("excluded", reason)
+            selected = resolution_cache[resolution_key]
+            if selected is not None:
+                selected["final_ids"].append(record.internal_id)
         technical = technical_by_identity.get(
             _identity(record.model, record.configuration), {}
         )
@@ -1641,6 +1753,11 @@ def _build_lumbro(files, *, include_assets: bool):
         )
         items.append(item)
         item_by_id[item["internal_id"]] = item
+
+    if spec_build.price_authoritative:
+        for entry in commercial:
+            if entry["disposition"] is None:
+                entry["disposition"] = ("excluded", "superseded_by_cost_sheet_column_e")
 
     remaining_groups = defaultdict(list)
     for entry in commercial:
@@ -1844,6 +1961,16 @@ def _build_lumbro(files, *, include_assets: bool):
     )
     items.sort(key=lambda item: item["internal_id"])
     final_bindings.sort(key=lambda binding: binding.internal_id)
+    source_image_groups = defaultdict(set)
+    for binding in spec_build.bindings:
+        item = item_by_id.get(binding.internal_id)
+        if item is not None:
+            source_image_groups[binding.asset_sha256].add(item["product_key"])
+    shared_source_images = sorted(
+        asset_sha256
+        for asset_sha256, product_keys in source_image_groups.items()
+        if len(product_keys) > 1
+    )
     coverage = {
         "parsed_price_rows": len(commercial),
         "imported_rows": counts["imported"],
@@ -1857,6 +1984,14 @@ def _build_lumbro(files, *, include_assets: bool):
         "assets": len(final_assets),
         "bindings": len(final_bindings),
         "catalog_enriched_items": sum(bool(item["collection"]) for item in items),
+        "official_product_rows": len(
+            {record.source.row for record in spec_build.records}
+        ),
+        "product_groups": len({item["product_key"] for item in items}),
+        "price_authority": (
+            f"{_COST_SHEET}!E" if spec_build.price_authoritative else "legacy_reconciliation"
+        ),
+        "shared_source_image_assets": shared_source_images,
     }
     link_index = load_lumbro_link_index()
     snapshot = {

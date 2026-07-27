@@ -1,5 +1,6 @@
 from pathlib import Path
 import inspect
+from io import BytesIO
 import sys
 
 import pytest
@@ -9,7 +10,12 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from mobiliti_saas.quote_engine.image_processing import improve_image_map, improve_product_image  # noqa: E402
+from mobiliti_saas.quote_engine.image_processing import (  # noqa: E402
+    improve_image_map,
+    improve_product_image,
+    improve_product_image_bytes,
+)
+from mobiliti_saas.quote_engine import image_processing  # noqa: E402
 from mobiliti_saas.quote_engine.engine import _generate_missing_dezgo_images  # noqa: E402
 from mobiliti_saas.quote_engine.parser import QuoteItem  # noqa: E402
 
@@ -48,10 +54,213 @@ def test_improve_product_image_can_flatten_to_white_background(tmp_path):
 
     output = improve_product_image(source, tmp_path / "out", background="white", min_size=160)
 
+    assert output.suffix.lower() == ".png"
     with Image.open(output) as result:
         assert result.mode == "RGB"
         assert result.getpixel((0, 0)) == (255, 255, 255)
         assert min(result.size) >= 160
+
+
+def test_improve_product_image_bytes_returns_white_png():
+    stream = BytesIO()
+    image = Image.new("RGB", (80, 60), (232, 232, 232))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((24, 12, 56, 52), fill=(35, 35, 35))
+    image.save(stream, "JPEG")
+
+    payload, content_type = improve_product_image_bytes(
+        stream.getvalue(),
+        "image/jpeg",
+        background="white",
+        min_size=160,
+        cleanup_strength="balanced",
+    )
+
+    assert content_type == "image/png"
+    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(BytesIO(payload)) as result:
+        assert result.format == "PNG"
+        assert result.mode == "RGB"
+        assert min(result.size) >= 160
+        assert result.getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_imported_image_shadow_removal_uses_local_segmentation(monkeypatch):
+    image = Image.new("RGB", (120, 100), "white")
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((10, 70, 110, 96), fill=(105, 105, 105))
+    draw.rounded_rectangle((42, 12, 78, 68), radius=5, fill=(28, 28, 28))
+    draw.line((60, 64, 60, 90), fill=(210, 210, 210), width=2)
+    stream = BytesIO()
+    image.save(stream, "PNG")
+
+    def fake_segment(source):
+        segmented = source.convert("RGBA")
+        alpha = Image.new("L", source.size, 0)
+        mask = ImageDraw.Draw(alpha)
+        mask.rounded_rectangle((42, 12, 78, 68), radius=5, fill=255)
+        mask.line((60, 64, 60, 90), fill=255, width=2)
+        segmented.putalpha(alpha)
+        return segmented
+
+    monkeypatch.setattr(image_processing, "_segment_product_locally", fake_segment)
+
+    payload, _ = improve_product_image_bytes(
+        stream.getvalue(),
+        "image/png",
+        background="transparent",
+        min_size=1,
+        remove_shadow=True,
+    )
+
+    with Image.open(BytesIO(payload)) as result:
+        rgba = result.convert("RGBA")
+        visible = list(rgba.getdata())
+    assert sum(1 for r, g, b, a in visible if a and max(r, g, b) < 70) > 500
+    assert sum(1 for r, g, b, a in visible if a and 90 <= r <= 130 and r == g == b) == 0
+    assert sum(1 for r, g, b, a in visible if a and 190 <= r <= 225 and r == g == b) > 20
+
+
+def test_imported_shadow_cleanup_preserves_light_surface(monkeypatch):
+    image = Image.new("RGB", (100, 80), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((18, 16, 82, 64), radius=5, fill=(232, 229, 222))
+    draw.rectangle((40, 28, 60, 52), fill=(70, 65, 60))
+    stream = BytesIO()
+    image.save(stream, "PNG")
+
+    def fake_segment(source):
+        segmented = source.convert("RGBA")
+        alpha = Image.new("L", source.size, 0)
+        mask = ImageDraw.Draw(alpha)
+        mask.rounded_rectangle((18, 16, 82, 64), radius=5, fill=255)
+        segmented.putalpha(alpha)
+        return segmented
+
+    monkeypatch.setattr(image_processing, "_segment_product_locally", fake_segment)
+
+    payload, _ = improve_product_image_bytes(
+        stream.getvalue(),
+        "image/png",
+        background="white",
+        min_size=1,
+        remove_shadow=True,
+    )
+
+    with Image.open(BytesIO(payload)) as result:
+        rgb = result.convert("RGB")
+        light_surface_pixels = sum(
+            1
+            for r, g, b in rgb.getdata()
+            if 220 <= r <= 240 and 215 <= g <= 238 and 210 <= b <= 235
+        )
+    assert rgb.width >= 60
+    assert light_surface_pixels > 1_500
+
+
+def test_imported_shadow_cleanup_segments_source_alpha(monkeypatch):
+    image = Image.new("RGBA", (80, 60), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((8, 40, 72, 58), fill=(80, 80, 80, 100))
+    draw.rectangle((30, 10, 50, 55), fill=(35, 35, 35, 255))
+    stream = BytesIO()
+    image.save(stream, "PNG")
+    calls = []
+
+    def fake_segment(source):
+        calls.append(source.size)
+        segmented = source.convert("RGBA")
+        alpha = Image.new("L", source.size, 0)
+        ImageDraw.Draw(alpha).rectangle((30, 10, 50, 55), fill=255)
+        segmented.putalpha(alpha)
+        return segmented
+
+    monkeypatch.setattr(image_processing, "_segment_product_locally", fake_segment)
+
+    payload, _ = improve_product_image_bytes(
+        stream.getvalue(),
+        "image/png",
+        background="white",
+        min_size=1,
+        remove_shadow=True,
+    )
+
+    with Image.open(BytesIO(payload)) as result:
+        rgb = result.convert("RGB")
+    assert calls == [(80, 60)]
+    assert all(max(pixel) < 70 or pixel == (255, 255, 255) for pixel in rgb.getdata())
+
+
+def test_imported_shadow_cleanup_rejects_unsafe_soft_mask(monkeypatch):
+    source_color = (20, 100, 180)
+    image = Image.new("RGB", (40, 40), source_color)
+    stream = BytesIO()
+    image.save(stream, "PNG")
+
+    def fake_segment(source):
+        segmented = source.convert("RGBA")
+        alpha = Image.new("L", source.size, 0)
+        mask = ImageDraw.Draw(alpha)
+        for y in range(0, 40, 4):
+            for x in range(0, 40, 4):
+                mask.point((x, y), fill=96)
+        mask.point((39, 39), fill=96)
+        mask.rectangle((14, 14, 25, 25), fill=220)
+        segmented.putalpha(alpha)
+        return segmented
+
+    monkeypatch.setattr(image_processing, "_segment_product_locally", fake_segment)
+
+    payload, _ = improve_product_image_bytes(
+        stream.getvalue(),
+        "image/png",
+        background="white",
+        min_size=1,
+        remove_shadow=True,
+    )
+
+    with Image.open(BytesIO(payload)) as result:
+        rgb = result.convert("RGB")
+    assert rgb.size == (40, 40)
+    assert rgb.getpixel((0, 0)) == source_color
+    assert rgb.getpixel((20, 20)) == source_color
+
+
+def test_shadow_removal_is_opt_in(monkeypatch):
+    image = Image.new("RGB", (40, 40), "white")
+    ImageDraw.Draw(image).rectangle((10, 10, 30, 30), fill="black")
+    stream = BytesIO()
+    image.save(stream, "PNG")
+
+    def unexpected_segment(_source):
+        raise AssertionError("No debe segmentar imágenes que no son importadas")
+
+    monkeypatch.setattr(image_processing, "_segment_product_locally", unexpected_segment)
+
+    payload, content_type = improve_product_image_bytes(
+        stream.getvalue(),
+        "image/png",
+        min_size=1,
+        remove_shadow=False,
+    )
+
+    assert content_type == "image/png"
+    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_thin_structure_rescue_does_not_restore_broad_floor_shadow():
+    source = Image.new("RGBA", (100, 100), "white")
+    draw = ImageDraw.Draw(source)
+    draw.ellipse((8, 72, 92, 97), fill=(125, 125, 125, 255))
+    draw.rectangle((36, 14, 64, 58), fill=(25, 25, 25, 255))
+    draw.line((50, 58, 50, 91), fill=(205, 205, 205, 255), width=2)
+    alpha = Image.new("L", source.size, 0)
+    ImageDraw.Draw(alpha).rectangle((36, 14, 64, 58), fill=255)
+
+    rescued = image_processing._restore_thin_connected_structure(source, alpha)
+
+    assert rescued.getpixel((50, 84)) > 0
+    assert rescued.getpixel((25, 84)) == 0
 
 
 def test_improve_image_map_preserves_rows_and_returns_pngs(tmp_path):

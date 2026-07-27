@@ -28,6 +28,8 @@ from .importers import (
     build_alma_snapshot_with_assets,
     build_cr_global_snapshot_with_assets,
     build_lumbro_snapshot_with_assets,
+    build_jome_snapshot_with_assets,
+    build_lauco_snapshot_with_assets,
     build_sonara_snapshot_with_assets,
     build_sunon_snapshot_with_assets,
 )
@@ -57,13 +59,17 @@ _REPOSITORY_METHODS = (
     "stage_candidate", "finish_no_changes", "finish_failed", "auto_publish_candidate",
 )
 _GRAPH_METHODS = ("iter_delta", "download_content")
-_SUPPLIERS = ("cr-global", "sonara", "sunon", "alma", "lumbro")
+_SUPPLIERS = (
+    "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
+)
 ADAPTERS = {
     "cr_global": build_cr_global_snapshot_with_assets,
     "sonara": build_sonara_snapshot_with_assets,
     "sunon": build_sunon_snapshot_with_assets,
     "alma": build_alma_snapshot_with_assets,
     "lumbro": build_lumbro_snapshot_with_assets,
+    "jome": build_jome_snapshot_with_assets,
+    "lauco": build_lauco_snapshot_with_assets,
 }
 CATALOG_EXIT_WORKED = 0
 CATALOG_EXIT_FAILED = 1

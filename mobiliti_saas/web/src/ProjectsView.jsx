@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Archive, Copy, FolderOpen, Loader2, Plus, RotateCcw } from "lucide-react";
+import {
+  Archive,
+  Check,
+  Copy,
+  FolderOpen,
+  Loader2,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 import {createInitialMixedCartSections, serializeProject} from "./mixedCart.js";
 import { createProjectLoadGuard, createProjectOperationId } from "./projectWorkspace";
 
@@ -55,19 +66,91 @@ function formatDate(value) {
   }).format(date);
 }
 
-function ProjectCard({ project, activeProjectId, busyProjectId, onOpenProject, onDuplicate, onStatusChange }) {
+function ProjectCard({
+  project,
+  activeProjectId,
+  busyProjectId,
+  onOpenProject,
+  onDuplicate,
+  onStatusChange,
+  onRename,
+  onDelete,
+}) {
   const archived = project.status === "archived";
   const summary = project.summary || {};
   const busy = busyProjectId === project.id;
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(project.name);
+
+  useEffect(() => {
+    if (!editingName) setNameDraft(project.name);
+  }, [editingName, project.name]);
+
+  async function saveName() {
+    const name = nameDraft.trim();
+    if (!name || name === project.name) {
+      setNameDraft(project.name);
+      setEditingName(false);
+      return;
+    }
+    const saved = await onRename(project, name);
+    if (saved) setEditingName(false);
+  }
 
   return (
     <article className={`project-card${project.id === activeProjectId ? " selected" : ""}`}>
       <div className="project-card-copy">
-        <strong>{project.name}</strong>
+        {editingName ? (
+          <label className="project-name-editor">
+            <span className="sr-only">Nombre del Proyecto</span>
+            <input
+              type="text"
+              value={nameDraft}
+              maxLength={120}
+              disabled={busy}
+              onChange={(event) => setNameDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") saveName();
+                if (event.key === "Escape") {
+                  setNameDraft(project.name);
+                  setEditingName(false);
+                }
+              }}
+              autoFocus
+            />
+          </label>
+        ) : <strong>{project.name}</strong>}
         <small>Actualizado: {formatDate(project.updated_at)}</small>
         <span>{summary.principals || 0} productos · {summary.complements || 0} complementos</span>
       </div>
       <div className="project-card-actions">
+        {editingName ? (
+          <>
+            <button type="button" className="ghost-action" disabled={busy} onClick={saveName}>
+              <Check size={16} /> Guardar
+            </button>
+            <button
+              type="button"
+              className="ghost-action"
+              disabled={busy}
+              onClick={() => {
+                setNameDraft(project.name);
+                setEditingName(false);
+              }}
+            >
+              <X size={16} /> Cancelar
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="ghost-action"
+            disabled={busy}
+            onClick={() => setEditingName(true)}
+          >
+            <Pencil size={16} /> Renombrar
+          </button>
+        )}
         {!archived ? (
           <button type="button" className="primary-action" onClick={() => onOpenProject(project.id)}>
             <FolderOpen size={16} /> Abrir
@@ -84,6 +167,16 @@ function ProjectCard({ project, activeProjectId, busyProjectId, onOpenProject, o
         >
           {archived ? <RotateCcw size={16} /> : <Archive size={16} />} {archived ? "Restaurar" : "Archivar"}
         </button>
+        {archived ? (
+          <button
+            type="button"
+            className="danger-action"
+            disabled={busy}
+            onClick={() => onDelete(project)}
+          >
+            <Trash2 size={16} /> Eliminar definitivamente
+          </button>
+        ) : null}
       </div>
     </article>
   );
@@ -96,6 +189,7 @@ export default function ProjectsView({
   projectDraft,
   projectAdoptionDraft,
   activeProjectId,
+  onProjectDeleted,
 }) {
   const [activeProjects, setActiveProjects] = useState([]);
   const [archivedProjects, setArchivedProjects] = useState([]);
@@ -182,6 +276,59 @@ export default function ProjectsView({
     }
   }
 
+  async function renameProject(project, name) {
+    if (!canUpdate()) return false;
+    setBusyProjectId(project.id);
+    setError("");
+    try {
+      await request(`/projects/${project.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name,
+          payload: project.payload,
+          expected_revision: project.revision,
+          operation_id: createProjectOperationId(),
+        }),
+      });
+      await loadProjects();
+      return true;
+    } catch (failure) {
+      if (canUpdate()) setError(failure.message || "No se pudo renombrar el Proyecto.");
+      return false;
+    } finally {
+      if (canUpdate()) setBusyProjectId("");
+    }
+  }
+
+  async function deleteProject(project) {
+    if (!canUpdate() || project.status !== "archived") return;
+    const confirmation = window.prompt(
+      `Escribe el nombre exacto "${project.name}" para eliminar definitivamente este Proyecto.`,
+    );
+    if (confirmation === null) return;
+    if (confirmation !== project.name) {
+      setError("Escribe el nombre exacto del Proyecto para eliminarlo.");
+      return;
+    }
+    setBusyProjectId(project.id);
+    setError("");
+    try {
+      await request(`/projects/${project.id}`, {
+        method: "DELETE",
+        body: JSON.stringify({
+          expected_revision: project.revision,
+          confirm_name: confirmation,
+        }),
+      });
+      onProjectDeleted?.(project.id);
+      await loadProjects();
+    } catch (failure) {
+      if (canUpdate()) setError(failure.message || "No se pudo eliminar el Proyecto.");
+    } finally {
+      if (canUpdate()) setBusyProjectId("");
+    }
+  }
+
   async function createProject() {
     if (!canUpdate() || creatingRef.current) return;
     setCreating(true);
@@ -233,6 +380,8 @@ export default function ProjectsView({
             onOpenProject={onOpenProject}
             onDuplicate={duplicate}
             onStatusChange={changeStatus}
+            onRename={renameProject}
+            onDelete={deleteProject}
           />
         ))}
       </section>
@@ -249,6 +398,8 @@ export default function ProjectsView({
             onOpenProject={onOpenProject}
             onDuplicate={duplicate}
             onStatusChange={changeStatus}
+            onRename={renameProject}
+            onDelete={deleteProject}
           />
         ))}
       </section>

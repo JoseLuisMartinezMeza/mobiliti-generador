@@ -110,12 +110,16 @@ def _binding(
     *,
     section_id: str = "section-1",
     position: int = 1,
+    quotation_row: int | None = None,
+    quotation_rate: Decimal = Decimal("1"),
 ) -> PricingRowBinding:
     return PricingRowBinding(
         item_key=key,
         section_id=section_id,
         position=position,
         target_row=target_row,
+        quotation_row=quotation_row,
+        quotation_rate=quotation_rate,
     )
 
 
@@ -163,6 +167,41 @@ def test_frozen_cost_is_written_once_and_official_pricing_formulas_survive(
     assert _cell(output, "J15").find(f"{{{MAIN}}}v") is None
     assert _cell(output, "W15").find(f"{{{MAIN}}}f") is not None
     assert _cell(output, "X15").find(f"{{{MAIN}}}f") is not None
+
+
+def test_project_cost_references_the_final_quotation_row_instead_of_freezing_a_number():
+    row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
+    writes = build_mobiliti_pricing_writes(
+        [_row("item-1")],
+        row_map,
+        bindings=(_binding("item-1", 14, quotation_row=27),),
+    )
+
+    assert writes == (MobilitiCellWrite("J14", "formula", "=Quotation!K27"),)
+
+
+def test_imported_cost_references_quotation_and_converts_exactly_once():
+    row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
+    writes = build_mobiliti_pricing_writes(
+        [_row("item-1")],
+        row_map,
+        bindings=(
+            _binding(
+                "item-1",
+                14,
+                quotation_row=11,
+                quotation_rate=Decimal("18.500000"),
+            ),
+        ),
+    )
+
+    assert writes == (
+        MobilitiCellWrite(
+            "J14",
+            "formula",
+            "=ROUND(Quotation!K11*18.500000,2)",
+        ),
+    )
 
 
 def test_cost_writes_follow_every_item_row_in_exact_order_without_duplicates():

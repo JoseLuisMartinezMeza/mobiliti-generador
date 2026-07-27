@@ -565,29 +565,30 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         quotation = workbook["Quotation"]
         assert quotation["A8"].value == "- Lumbro"
         assert quotation["B9"].value == "'=Multicontacto LIDO para interconectar"
-        assert quotation["D9"].value.startswith("'+Multicontacto especial")
-        assert "SKU: MULT-LIDO-INT" in quotation["D9"].value
-        assert "Unidad: PZA" in quotation["D9"].value
-        assert f"Fuente: {INTERCONNECTION_SOURCE}" in quotation["D9"].value
-        assert "Imagen de referencia" in quotation["D9"].value
-        assert quotation["E9"].value == "420 x 160 mm"
-        assert quotation["G9"].value == 2
-        assert isinstance(quotation["G9"].value, int)
-        assert quotation["J9"].value == 3003
-        assert quotation["K9"].value == "https://www.lumbromx.com/productos-1"
+        assert quotation["D9"].value.startswith(
+            "Multicontacto modelo '=Multicontacto LIDO para interconectar."
+        )
+        assert "'+Multicontacto especial" in quotation["D9"].value
+        assert f"Fuente: {INTERCONNECTION_SOURCE}" in quotation["E9"].value
+        assert "SKU: MULT-LIDO-INT" in quotation["E9"].value
+        assert "Unidad: PZA" in quotation["E9"].value
+        assert "Imagen de referencia" in quotation["E9"].value
+        assert quotation["F9"].value == "420 x 160 mm"
+        assert quotation["H9"].value == 2
+        assert isinstance(quotation["H9"].value, int)
+        assert quotation["K9"].value == 3003
+        assert "URL: https://www.lumbromx.com/productos-1" in quotation["E9"].value
         assert len(quotation._images) == 1
 
         cotizacion = workbook["Cotizacion"]
         product_row = next(
             row
             for row in range(1, cotizacion.max_row + 1)
-            if cotizacion.cell(row, 1).value == "=Quotation!B9"
+            if str(cotizacion.cell(row, 1).value or "").startswith("=Mobiliti!D")
         )
         assert cotizacion["B7"].value == "'=Proyecto Lumbro E2E"
         assert cotizacion.cell(product_row, 7).value == 0
-        assert cotizacion.cell(product_row, 10).value == (
-            f"=ROUND(E{product_row}*I{product_row},2)"
-        )
+        assert cotizacion.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
         iva_rows = [
             row
             for row in range(product_row + 1, cotizacion.max_row + 1)
@@ -595,7 +596,7 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         ]
         assert len(iva_rows) == 1
         iva_row = iva_rows[0]
-        assert cotizacion.cell(iva_row, 8).value == f"=ROUND(H{iva_row - 1}*16%,2)"
+        assert cotizacion.cell(iva_row, 8).value == f"=H{iva_row - 1}*16%"
         total_row = next(
             row
             for row in range(iva_row + 1, cotizacion.max_row + 1)
@@ -603,7 +604,7 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         )
         assert total_row == iva_row + 1
         assert cotizacion.cell(total_row, 8).value == (
-            f"=ROUND(H{iva_row - 1}+H{iva_row},2)"
+            f"=H{iva_row - 1}+H{iva_row}"
         )
         output_product_rows = [
             row

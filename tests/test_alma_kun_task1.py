@@ -374,9 +374,9 @@ def test_corrupt_current_identity_is_never_public_and_inequivalent_price_is_deri
     )
 
     assert item["name"] == "Producto que deriva"
-    assert item["base_price_options"][0]["price_net"] == "1000.000000"
-    assert item["attributes"]["price_reconciliation"]["method"] == "derived_from_identity_cost"
-    assert any("deriv" in warning.casefold() for warning in item["warnings"])
+    assert item["base_price_options"][0]["price_net"] == "150.000000"
+    assert item["attributes"]["price_reconciliation"]["method"] == "official_cost"
+    assert any("costo oficial" in warning.casefold() for warning in item["warnings"])
     assert "BROKEN-0.3" not in str(snapshot)
 
 
@@ -418,6 +418,6 @@ def test_real_2026_cache_has_310_kun_rows_with_ambiguous_addons_fail_closed():
     assert len({item["internal_id"] for item in items}) == len(items)
     assert sum(
         item["attributes"]["price_reconciliation"]["method"]
-        == "derived_from_identity_cost"
+        == "official_cost"
         for item in kun
-    ) == 2
+    ) == 307

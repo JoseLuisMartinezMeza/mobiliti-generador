@@ -244,6 +244,7 @@ KNOWN_API_REQUESTS = frozenset({
     ("POST", "/projects"),
     ("GET", f"/projects/{PROJECT_ID}"),
     ("PATCH", f"/projects/{PROJECT_ID}"),
+    ("POST", f"/projects/{PROJECT_ID}/quote"),
     ("POST", f"/projects/{PROJECT_ID}/imports/{IMPORT_JOB_ID}"),
     ("GET", "/catalogs/search"),
 })
@@ -424,6 +425,46 @@ class ApiStub:
                 },
             }
 
+        def project_quote_snapshot():
+            payload = deepcopy(self.saved_project["payload"])
+            items = []
+            for line in payload["lines"]:
+                if line["source"] == "catalog":
+                    item = {
+                        "catalog": line["catalog"],
+                        "quantity": line["quantity"],
+                        **deepcopy(line["identity"]),
+                    }
+                else:
+                    item = {
+                        "kind": "imported",
+                        "import_id": line["import_id"],
+                        "source_row": line["source_row"],
+                        "source_currency": line["source_currency"],
+                        "quantity": line["quantity"],
+                        "overrides": {
+                            "name": line["name"],
+                            "description": line["description"],
+                            "dimension": line["dimension"],
+                            "unit_price": line["unit_price"],
+                            "provider": line["provider"],
+                        },
+                    }
+                items.append(item)
+            occupied_sections = {
+                line["section_id"] for line in payload["lines"]
+                if line["role"] == "principal"
+            }
+            sections = [
+                section for section in payload["sections"]
+                if section["section_id"] in occupied_sections
+            ]
+            return {
+                **deepcopy(payload["quote_fields"]),
+                "items": items,
+                "sections": sections,
+            }
+
         def dispatch(route):
             request = route.request
             parsed = urlparse(request.url)
@@ -546,6 +587,24 @@ class ApiStub:
                     },
                     "manifest": manifest,
                 })
+                return
+            if (
+                hasattr(self, "project_id")
+                and request.method == "POST"
+                and path == f"/projects/{self.project_id}/quote"
+            ):
+                assert self.saved_project is not None
+                body = deepcopy(request.post_data_json)
+                assert body == {"expected_revision": self.project_revision}
+                self.mixed_post_bodies.append(project_quote_snapshot())
+                if not self.mixed_responses:
+                    self.unexpected_requests.append(
+                        f"POST {path} (respuesta agotada)"
+                    )
+                    fulfill_json(route, {"detail": "stub faltante"}, status=500)
+                    return
+                status, response_body = self.mixed_responses.pop(0)
+                fulfill_json(route, response_body, status=status)
                 return
             if (
                 hasattr(self, "project_id")
@@ -727,7 +786,10 @@ def capture_console_errors(page):
 def is_intentional_mixed_422_console_error(message):
     return (
         "422" in message["text"]
-        and urlparse(message["url"]).path == "/catalogs/mixed-quote"
+        and urlparse(message["url"]).path in {
+            "/catalogs/mixed-quote",
+            f"/projects/{PROJECT_ID}/quote",
+        }
     )
 
 

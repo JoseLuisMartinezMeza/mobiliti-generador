@@ -88,6 +88,7 @@ _DRAWING_MAIN_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
 _RELATIONSHIP_ATTR_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _SUPPORTED_COMPRESSION = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 _SUPPORTED_IMAGE_FORMATS = {"BMP", "GIF", "JPEG", "PNG", "TIFF", "WEBP"}
+_DISCARDED_EMBEDDED_IMAGE_TYPES = {"image/x-emf", "image/vnd.ms-photo"}
 _ALLOWED_CONTENT_TYPES = {
     "application/xml",
     "text/xml",
@@ -183,6 +184,7 @@ _PASSIVE_EXTERNAL_RELATIONSHIP = (
 _NULL_EXTERNAL_IMAGE_RELATIONSHIP = (
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
 )
+_HDPHOTO_RELATIONSHIP = "http://schemas.microsoft.com/office/2007/relationships/hdphoto"
 _PDF_IMAGE_FILTERS = {
     "ASCII85Decode",
     "ASCIIHexDecode",
@@ -496,7 +498,18 @@ def _validate_content_types(parts: dict[str, bytes]) -> dict[str, str]:
             overrides[part.casefold()] = content_type
         else:
             _fail("XLSX_INVALID")
-        if content_type not in _ALLOWED_CONTENT_TYPES:
+        discardable_wdp_default = (
+            entry.tag == f"{{{_CONTENT_TYPE_NS}}}Default"
+            and entry.get("Extension", "").lower() == "wdp"
+            and content_type == "image/vnd.ms-photo"
+        )
+        discardable_wdp_override = (
+            entry.tag == f"{{{_CONTENT_TYPE_NS}}}Override"
+            and _is_discardable_wdp_part(part, content_type)
+        )
+        if content_type not in _ALLOWED_CONTENT_TYPES and not (
+            discardable_wdp_default or discardable_wdp_override
+        ):
             _fail("XLSX_UNSAFE")
 
     content_types = {}
@@ -507,10 +520,33 @@ def _validate_content_types(parts: dict[str, bytes]) -> dict[str, str]:
         if content_type is None:
             extension = part.rsplit(".", 1)[-1].lower() if "." in part else ""
             content_type = defaults.get(extension)
-        if content_type not in _ALLOWED_CONTENT_TYPES:
+        if content_type not in _ALLOWED_CONTENT_TYPES and not _is_discardable_wdp_part(
+            part, content_type
+        ):
             _fail("XLSX_UNSAFE")
         content_types[part.casefold()] = content_type
     return content_types
+
+
+def _is_discardable_wdp_part(part: str | None, content_type: str) -> bool:
+    return bool(
+        isinstance(part, str)
+        and content_type == "image/vnd.ms-photo"
+        and part.casefold().startswith("xl/media/")
+        and part.casefold().endswith(".wdp")
+    )
+
+
+def _is_discardable_wdp_relationship(
+    relationship_type: str, source: str, resolved_target: str | None
+) -> bool:
+    return bool(
+        relationship_type == _HDPHOTO_RELATIONSHIP
+        and source.startswith("xl/drawings/")
+        and isinstance(resolved_target, str)
+        and resolved_target.casefold().startswith("xl/media/")
+        and resolved_target.casefold().endswith(".wdp")
+    )
 
 
 def _relationships(parts: dict[str, bytes], name: str) -> dict[str, tuple[str, str]]:
@@ -563,11 +599,13 @@ def _relationships(parts: dict[str, bytes], name: str) -> dict[str, tuple[str, s
             ):
                 _fail("XLSX_UNSAFE")
             continue
-        if relation_type not in _ALLOWED_RELATIONSHIPS:
-            _fail("XLSX_UNSAFE")
         resolved = _part_target(source, target or "")
         if resolved is None or resolved not in parts:
             _fail("XLSX_INVALID")
+        if relation_type not in _ALLOWED_RELATIONSHIPS and not _is_discardable_wdp_relationship(
+            relation_type, source, resolved
+        ):
+            _fail("XLSX_UNSAFE")
         result[relationship_id] = (relation_type, resolved)
     return result
 
@@ -730,7 +768,8 @@ def _without_unsupported_images(parts: dict[str, bytes], content_types: dict[str
         source = _relationship_source(name)
         unsupported_ids = set()
         for relationship in root:
-            if relationship.get("Type") != _NULL_EXTERNAL_IMAGE_RELATIONSHIP:
+            relationship_type = relationship.get("Type")
+            if relationship_type not in {_NULL_EXTERNAL_IMAGE_RELATIONSHIP, _HDPHOTO_RELATIONSHIP}:
                 continue
             mode = relationship.get("TargetMode", "Internal")
             target = relationship.get("Target", "")
@@ -739,7 +778,10 @@ def _without_unsupported_images(parts: dict[str, bytes], content_types: dict[str
                 resolved = _part_target(source, target)
                 unsupported = (
                     resolved is not None
-                    and content_types.get(resolved.casefold()) == "image/x-emf"
+                    and (
+                        content_types.get(resolved.casefold()) in _DISCARDED_EMBEDDED_IMAGE_TYPES
+                        or _is_discardable_wdp_relationship(relationship_type, source, resolved)
+                    )
                 )
             if unsupported:
                 unsupported_ids.add(relationship.get("Id"))
@@ -1536,7 +1578,7 @@ def _drawing_images(
                 target = relation[1]
                 if target not in parts or not target.lower().startswith("xl/media/"):
                     _fail("IMAGE_UNSAFE")
-                if content_types.get(target.casefold()) == "image/x-emf":
+                if content_types.get(target.casefold()) in _DISCARDED_EMBEDDED_IMAGE_TYPES:
                     continue
                 reference = CellRef(sheet_name, f"{get_column_letter(column)}{row}")
                 anchors_per_cell[reference] += 1

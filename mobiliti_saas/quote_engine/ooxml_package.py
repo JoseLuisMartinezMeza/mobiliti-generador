@@ -100,14 +100,22 @@ class XlsxPackage:
         return package
 
     @classmethod
-    def from_bytes(cls, content: bytes) -> "XlsxPackage":
+    def from_bytes(
+        cls,
+        content: bytes,
+        *,
+        audit: bool = True,
+    ) -> "XlsxPackage":
         """Lee bytes XLSX sin crear ni modificar archivos temporales."""
 
         if not isinstance(content, bytes):
             raise TypeError("El paquete XLSX debe recibirse como bytes")
+        if type(audit) is not bool:
+            raise TypeError("La opcion audit debe ser booleana")
         with zipfile.ZipFile(BytesIO(content), "r") as archive:
             package = cls._from_archive(archive, None)
-        package.audit()
+        if audit:
+            package.audit()
         return package
 
     @classmethod

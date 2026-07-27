@@ -9,11 +9,13 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import uuid
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
+from openpyxl.formula.translate import Translator
 from PIL import Image
 import pytest
 
@@ -1184,15 +1186,25 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
         audit = wb["Quotation_Data"]
         mobiliti = wb["Mobiliti"]
         cotizacion = wb["Cotizacion"]
-        assert quotation["B11"].value == "CAI63SW Alien Task Chair"
-        assert quotation["B11"].value != "Alien Task Chair imported-only"
-        assert {
+        assert not _rows_with_value(
+            quotation,
+            2,
+            "CAI63SW Alien Task Chair",
+        )
+        quotation_hashes = {
             hashlib.sha256(image._data()).hexdigest()
             for image in quotation._images
-        } == {
-            hashlib.sha256(image_bytes).hexdigest()
-            for image_bytes, _extension in imported_images.values()
         }
+        selected_imported_hash = hashlib.sha256(
+            imported_images[11][0]
+        ).hexdigest()
+        unused_imported_hashes = {
+            hashlib.sha256(image_bytes).hexdigest()
+            for source_row, (image_bytes, _extension) in imported_images.items()
+            if source_row != 11
+        }
+        assert selected_imported_hash in quotation_hashes
+        assert quotation_hashes.isdisjoint(unused_imported_hashes)
         _assert_exact_quotation_data(audit, canonical_rows)
         assert audit["A2"].value == payload["imported_source"]["items"][0]["line_id"]
         assert audit["F2"].value == 11
@@ -1202,10 +1214,16 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
             mobiliti, 4, "Alien Task Chair imported-only"
         )[0]
         cotizacion_row = _rows_with_value(
-            cotizacion, 1, "Alien Task Chair imported-only"
+            cotizacion, 1, f"=Mobiliti!D{mobiliti_row}"
         )[0]
-        assert mobiliti.cell(mobiliti_row, 10).value == 82
-        assert mobiliti.cell(mobiliti_row, 16).value == "imported"
+        cost_formula = str(mobiliti.cell(mobiliti_row, 10).value)
+        assert cost_formula.startswith("=Quotation!K")
+        edited_row = int(cost_formula.removeprefix("=Quotation!K"))
+        assert edited_row != 11
+        assert quotation.cell(edited_row, 2).value == "Alien Task Chair imported-only"
+        assert quotation.cell(edited_row, 11).value == 82
+        assert mobiliti.cell(mobiliti_row, 16).value == "Centro"
+        assert mobiliti.cell(mobiliti_row, 6).value == "Sunon Inc"
         assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
         assert cotizacion.cell(cotizacion_row, 7).value == 0.4
         assert cotizacion.cell(cotizacion_row, 8).value == (
@@ -1441,25 +1459,52 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
     )
 
     assert hashlib.sha256(imported_source.read_bytes()).hexdigest() == source_hash_before
+    template_workbook = load_workbook(WORKER_TEMPLATE, data_only=False)
+    try:
+        template_x_formula = template_workbook["Mobiliti"]["X14"].value
+        template_freight_formula = template_workbook["Cotizacion"]["H21"].value
+        template_before_tax_formula = template_workbook["Cotizacion"]["H22"].value
+        template_tax_formula = template_workbook["Cotizacion"]["H23"].value
+        template_total_formula = template_workbook["Cotizacion"]["H24"].value
+    finally:
+        template_workbook.close()
+    assert isinstance(template_x_formula, str) and template_x_formula.startswith("=")
+    assert isinstance(template_freight_formula, str)
+    assert isinstance(template_before_tax_formula, str)
+    assert isinstance(template_tax_formula, str)
+    assert isinstance(template_total_formula, str)
     wb = load_workbook(output, data_only=False)
     try:
         quotation = wb["Quotation"]
         audit = wb["Quotation_Data"]
         mobiliti = wb["Mobiliti"]
         cotizacion = wb["Cotizacion"]
-        assert quotation["B11"].value == "CAI63SW Alien Task Chair"
-        assert quotation["B11"].value != "Alien Task Chair revisada"
+        edited_name_rows = _rows_with_value(
+            quotation,
+            2,
+            "Alien Task Chair revisada",
+        )
+        assert len(edited_name_rows) == 1
+        assert not _rows_with_value(
+            quotation,
+            2,
+            "CAI63SW Alien Task Chair",
+        )
         quotation_hashes = {
             hashlib.sha256(image._data()).hexdigest()
             for image in quotation._images
         }
-        assert quotation_hashes == {
+        selected_imported_hash = hashlib.sha256(
+            imported_images[11][0]
+        ).hexdigest()
+        unused_imported_hashes = {
             hashlib.sha256(image_bytes).hexdigest()
-            for image_bytes, _extension in imported_images.values()
+            for source_row, (image_bytes, _extension) in imported_images.items()
+            if source_row != 11
         }
-        assert hashlib.sha256(catalog_image.read_bytes()).hexdigest() not in (
-            quotation_hashes
-        )
+        assert selected_imported_hash in quotation_hashes
+        assert quotation_hashes.isdisjoint(unused_imported_hashes)
+        assert hashlib.sha256(catalog_image.read_bytes()).hexdigest() in quotation_hashes
 
         _assert_exact_quotation_data(audit, canonical_rows)
         imported_audit_row = canonical_rows.index(
@@ -1487,8 +1532,8 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
             for name in expected_names
         ]
         cotizacion_rows = [
-            _rows_with_value(cotizacion, 1, name)[0]
-            for name in expected_names
+            _rows_with_value(cotizacion, 1, f"=Mobiliti!D{row}")[0]
+            for row in mobiliti_rows
         ]
         assert mobiliti_rows == sorted(mobiliti_rows)
         assert cotizacion_rows == sorted(cotizacion_rows)
@@ -1503,13 +1548,37 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
             cotizacion_rows,
             strict=True,
         ):
-            assert Decimal(str(mobiliti.cell(mobiliti_row, 10).value)) == (
-                canonical.converted_cost
-            )
+            cost_formula = str(mobiliti.cell(mobiliti_row, 10).value)
+            quotation_match = re.search(r"Quotation!K([1-9][0-9]*)", cost_formula)
+            assert quotation_match is not None
+            quotation_row = int(quotation_match.group(1))
+            if canonical.origin == "imported":
+                if cost_formula.startswith("=ROUND("):
+                    assert Decimal(str(quotation.cell(quotation_row, 11).value)) == (
+                        canonical.original_cost
+                    )
+                    expected_formula = (
+                        f"=ROUND(Quotation!K{quotation_row}"
+                        f"*{canonical.frozen_rate:f},2)"
+                    )
+                else:
+                    assert Decimal(str(quotation.cell(quotation_row, 11).value)) == (
+                        canonical.converted_cost
+                    )
+                    expected_formula = f"=Quotation!K{quotation_row}"
+                assert cost_formula == expected_formula
+            else:
+                assert Decimal(str(quotation.cell(quotation_row, 11).value)) == (
+                    canonical.converted_cost
+                )
+                assert cost_formula == f"=Quotation!K{quotation_row}"
             assert mobiliti.cell(mobiliti_row, 16).value == canonical.region
             assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
             assert mobiliti.cell(mobiliti_row, 24).value == (
-                f"=(W{mobiliti_row}*H{mobiliti_row})"
+                Translator(
+                    template_x_formula,
+                    origin="X14",
+                ).translate_formula(f"X{mobiliti_row}")
             )
             assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
             assert cotizacion.cell(cotizacion_row, 8).value == (
@@ -1548,12 +1617,22 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         assert getattr(subtotal_formula, "text", None) == (
             f"=SUM(IFERROR(J{first_product_row}:J{cotizacion_rows[-1]},0))"
         )
-        assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*10%"
-        assert cotizacion.cell(before_tax, 8).value == (
-            f"=H{subtotal}+H{subtotal + 1}"
-        )
-        assert cotizacion.cell(tax, 8).value == f"=H{before_tax}*16%"
-        assert cotizacion.cell(total, 8).value == f"=H{before_tax}+H{tax}"
+        assert cotizacion.cell(subtotal + 1, 8).value == Translator(
+            template_freight_formula,
+            origin="H21",
+        ).translate_formula(f"H{subtotal + 1}")
+        assert cotizacion.cell(before_tax, 8).value == Translator(
+            template_before_tax_formula,
+            origin="H22",
+        ).translate_formula(f"H{before_tax}")
+        assert cotizacion.cell(tax, 8).value == Translator(
+            template_tax_formula,
+            origin="H23",
+        ).translate_formula(f"H{tax}")
+        assert cotizacion.cell(total, 8).value == Translator(
+            template_total_formula,
+            origin="H24",
+        ).translate_formula(f"H{total}")
 
         cotizacion_hashes = {
             hashlib.sha256(image._data()).hexdigest()
@@ -1764,8 +1843,9 @@ def _assert_task9_final_workbook(
 ) -> None:
     assert wb.sheetnames.count("Cotizacion") == 1
     assert wb.sheetnames.count("Mobiliti") == 1
-    assert wb.sheetnames.count("Quotation") == 0
+    assert wb.sheetnames.count("Quotation") == 1
     assert wb.sheetnames.count("Quotation_Data") == 1
+    quotation = wb["Quotation"]
     mobiliti = wb["Mobiliti"]
     cotizacion = wb["Cotizacion"]
     audit = wb["Quotation_Data"]
@@ -1889,24 +1969,61 @@ def _assert_task9_final_workbook(
     derived_names = ["LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"]
     final_names = [base_names[0], *derived_names, *base_names[1:]]
     mobiliti_rows = _ordered_rows_for_values(mobiliti, 4, final_names)
-    cotizacion_rows = _ordered_rows_for_values(cotizacion, 1, final_names)
+    cotizacion_rows = _ordered_rows_for_values(
+        cotizacion,
+        1,
+        [f"=Mobiliti!D{row}" for row in mobiliti_rows],
+    )
     assert mobiliti_rows == list(range(14, 25))
     assert cotizacion_rows == list(range(17, 28))
 
+    processed_by_cotizacion_row = {}
     for record, mobiliti_row, cotizacion_row in zip(
         records,
         mobiliti_rows,
         cotizacion_rows,
         strict=True,
     ):
-        assert Decimal(str(mobiliti.cell(mobiliti_row, 10).value)) == Decimal(
-            str(record["converted_cost"])
+        cost_formula = str(mobiliti.cell(mobiliti_row, 10).value)
+        match = re.fullmatch(r"=Quotation!K([1-9][0-9]*)", cost_formula)
+        assert match is not None
+        assert Decimal(str(quotation.cell(int(match.group(1)), 11).value)) == (
+            Decimal(str(record["converted_cost"]))
         )
         assert mobiliti.cell(mobiliti_row, 16).value == record["region"]
         assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
         assert mobiliti.cell(mobiliti_row, 24).value == (
-            f"=(W{mobiliti_row}*H{mobiliti_row})"
+            f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row})"
         )
+        quantity_match = re.fullmatch(
+            r"=Quotation!H([1-9][0-9]*)",
+            str(mobiliti.cell(mobiliti_row, 8).value),
+        )
+        assert quantity_match is not None
+        quotation_row = int(quantity_match.group(1))
+        assert Decimal(str(quotation.cell(quotation_row, 8).value)) == Decimal(
+            str(record["quantity"])
+        )
+        assert mobiliti.cell(mobiliti_row, 11).value == (
+            f"=Quotation!I{quotation_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 1).value == (
+            f"=Mobiliti!D{mobiliti_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 3).value == (
+            f"=Quotation!D{quotation_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 4).value == (
+            f"=Quotation!F{quotation_row}"
+        )
+        assert cotizacion.cell(cotizacion_row, 5).value == (
+            f"=Mobiliti!H{mobiliti_row}"
+        )
+        processed_by_cotizacion_row[cotizacion_row] = quotation.cell(
+            quotation_row,
+            4,
+        ).value
+        assert processed_by_cotizacion_row[cotizacion_row]
         assert cotizacion.cell(cotizacion_row, 6).value == (
             f"=Mobiliti!X{mobiliti_row}"
         )
@@ -1930,17 +2047,19 @@ def _assert_task9_final_workbook(
     )
 
     sonara_row = cotizacion_rows[final_names.index("Panel Sonara por verificar")]
-    assert "Revision documental local" in str(cotizacion.cell(sonara_row, 3).value)
+    assert "Revision documental local" in str(
+        processed_by_cotizacion_row[sonara_row]
+    )
     alma_rows = [
         cotizacion_rows[index]
         for index, name in enumerate(final_names)
         if name == "Mesa ALMA"
     ]
     assert "electrificacion a" in str(
-        cotizacion.cell(alma_rows[0], 3).value
+        processed_by_cotizacion_row[alma_rows[0]]
     ).casefold()
     assert "pasacables b" in str(
-        cotizacion.cell(alma_rows[1], 3).value
+        processed_by_cotizacion_row[alma_rows[1]]
     ).casefold()
 
     subtotal_rows = _rows_with_value(cotizacion, 4, "SUBTOTAL:")
@@ -1952,7 +2071,7 @@ def _assert_task9_final_workbook(
     assert getattr(subtotal_formula, "text", None) == (
         f"=SUM(IFERROR(J{first_product}:J{cotizacion_rows[-1]},0))"
     )
-    assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*10%"
+    assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*8%"
     assert cotizacion.cell(before_tax, 8).value == (
         f"=H{subtotal}+H{subtotal + 1}"
     )
@@ -1965,6 +2084,11 @@ def _assert_task9_final_workbook(
         for image in cotizacion._images
     }
     assert expected_image_hashes <= cotizacion_hashes
+    quotation_hashes = {
+        hashlib.sha256(image._data()).hexdigest()
+        for image in quotation._images
+    }
+    assert expected_image_hashes <= quotation_hashes
 
 
 def _assert_final_workbook(
@@ -1994,14 +2118,14 @@ def _assert_final_workbook(
         if isinstance(quotation.cell(row, 1).value, (int, float))
     ]
     assert [quotation.cell(row, 1).value for row in source_rows] == list(range(1, 9))
-    assert [quotation.cell(row, 12).value for row in source_rows] == [
+    assert [quotation.cell(row, 13).value for row in source_rows] == [
         "Tarkett", "Offiho", "CR Global", "Sonara", "Sunon", "ALMA",
         "ALMA", "Lumbro",
     ]
-    assert [quotation.cell(row, 13).value for row in source_rows] == [
+    assert [quotation.cell(row, 14).value for row in source_rows] == [
         40, 40, 0, 0, 0, 0, 0, 0,
     ]
-    assert [quotation.cell(row, 19).value for row in source_rows] == [
+    assert [quotation.cell(row, 20).value for row in source_rows] == [
         True, True, False, False, False, False, False, False,
     ]
     sonara_description = str(quotation.cell(source_rows[3], 4).value)
@@ -2019,15 +2143,15 @@ def _assert_final_workbook(
     row_maps = []
     for source_row in source_rows:
         mobiliti_row = _row_for_formula(mobiliti, 4, f"=Quotation!B{source_row}")
-        cot_row = _row_for_formula(cot, 1, f"=Quotation!B{source_row}")
+        cot_row = _row_for_formula(cot, 1, f"=Mobiliti!D{mobiliti_row}")
         row_maps.append((source_row, mobiliti_row, cot_row))
     assert [
         (row, cot.cell(row, 1).value)
         for row in range(1, cot.max_row + 1)
-        if str(cot.cell(row, 1).value or "").startswith("=Quotation!B")
+        if str(cot.cell(row, 1).value or "").startswith("=Mobiliti!D")
     ] == [
-        (cot_row, f"=Quotation!B{source_row}")
-        for source_row, _mobiliti_row, cot_row in row_maps
+        (cot_row, f"=Mobiliti!D{mobiliti_row}")
+        for _source_row, mobiliti_row, cot_row in row_maps
     ]
     assert [mobiliti.cell(row, 6).value for _source, row, _cot in row_maps] == [
         "Tarkett", "Offiho", "CR Global", "Sonara", "Sunon", "ALMA",
@@ -2043,11 +2167,11 @@ def _assert_final_workbook(
     frozen_lines = [
         item for group in payload["groups"] for item in group["items"]
     ]
-    assert [quotation.cell(row, 10).value for row in source_rows] == [
+    assert [quotation.cell(row, 11).value for row in source_rows] == [
         float(Decimal(item["unit_price"])) for item in frozen_lines
     ]
     for index, (_source_row, mobiliti_row, cot_row) in enumerate(row_maps):
-        assert mobiliti.cell(mobiliti_row, 10).value == f"=Quotation!J{_source_row}"
+        assert mobiliti.cell(mobiliti_row, 10).value == f"=Quotation!K{_source_row}"
         assert "$K$6" not in str(mobiliti.cell(mobiliti_row, 10).value)
         assert "$K$6" not in str(cot.cell(cot_row, 6).value)
         if index:

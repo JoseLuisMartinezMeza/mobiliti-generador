@@ -620,6 +620,7 @@ def test_mark_file_deleted_uses_only_atomic_task_2c_rpc():
     "extension,mime_type",
     [
         ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ("xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.12"),
         ("pdf", "application/pdf"),
     ],
 )
@@ -636,6 +637,19 @@ def test_store_raw_is_content_addressed_and_never_upserts(tmp_path, extension, m
     assert parsed.path == f"/storage/v1/object/catalog-sources/{digest}.{extension}"
     assert request.headers["X-upsert"] == "false"
     assert request.data == content
+
+
+def test_source_file_record_accepts_the_validated_lauco_xlsb_object():
+    digest = hashlib.sha256(b"abc").hexdigest()
+    parsed = SourceFileRecord.from_row(
+        file_row(
+            path="SPEC GUIDES 2026/LAUCO/Spec Guide Lauco-2026.xlsb",
+            mime_type="application/vnd.ms-excel.sheet.binary.macroEnabled.12",
+            private_object_path=f"catalog-sources/{digest}.xlsb",
+        )
+    )
+
+    assert parsed.private_object_path == f"catalog-sources/{digest}.xlsb"
 
 
 def test_store_raw_conflict_requires_confirmed_existence(tmp_path):

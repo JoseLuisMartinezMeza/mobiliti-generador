@@ -198,6 +198,40 @@ def test_imported_bundle_copies_row_code_and_provider_and_requires_durable_asset
     }
 
 
+def test_durable_import_accepts_supplier_descriptions_between_1000_and_2000_characters():
+    preview, manifest = promotion_preview()
+    long_description = "Descripcion tecnica " + ("x" * 1_180)
+    preview["items"][0]["description"] = long_description
+    manifest["items"][0]["description"] = long_description
+    promotion = valid_promotion_response()
+    promotion["manifest"] = manifest
+
+    result = run_js(f"""
+      const preview = {json.dumps(preview, ensure_ascii=False)};
+      const durable = model.withDurableImportedAssets(
+        preview,
+        {json.dumps(promotion, ensure_ascii=False)},
+        {{
+          userId: 7,
+          projectId: {json.dumps(PROJECT_ID)},
+          importId: preview.import_id,
+        }},
+      );
+      const bundle = model.createImportedCartBundle(
+        durable, "USD", "Proveedor elegido", [{{id: "section-1", concept: "Recepcion"}}],
+      );
+      console.log(JSON.stringify({{
+        imported: bundle.lines.length,
+        descriptionLength: bundle.lines[0].edits.description.length,
+      }}));
+    """)
+
+    assert result == {
+        "imported": 1,
+        "descriptionLength": len(long_description),
+    }
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -695,6 +729,39 @@ def test_imported_persisted_decimals_match_backend_and_round_trip_unchanged():
         "unitPrice": "0.0000001",
         "savedQuantity": "1.0000001",
         "savedUnitPrice": "0.0000001",
+    }
+
+
+def test_imported_project_without_official_code_reopens_and_round_trips():
+    payload = imported_project_payload()
+    payload["lines"][0]["official_code"] = ""
+    payload["lines"][0]["display_cache"]["code"] = ""
+    payload["lines"][0]["image_asset_key"] = (
+        "projects/7/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/images/row-9.png"
+    )
+    payload["lines"][0]["display_cache"]["image_url"] = (
+        "https://storage.example/row-9.png?signed=1"
+    )
+    payload = normalize_project_payload(payload)
+
+    result = run_js(f"""
+      const reopened = model.hydrateProject({json.dumps(payload)});
+      const saved = model.serializeProject(reopened);
+      console.log(JSON.stringify({{
+        reopenedCode: reopened.lines[0].officialCode,
+        reopenedImage: reopened.lines[0].snapshot.image_url,
+        savedCode: saved.lines[0].official_code,
+        savedImage: saved.lines[0].display_cache.image_url,
+        source: saved.lines[0].source,
+      }}));
+    """)
+
+    assert result == {
+        "reopenedCode": "",
+        "reopenedImage": "https://storage.example/row-9.png?signed=1",
+        "savedCode": "",
+        "savedImage": "",
+        "source": "imported",
     }
 
 

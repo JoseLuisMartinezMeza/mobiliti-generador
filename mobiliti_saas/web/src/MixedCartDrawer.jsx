@@ -17,6 +17,8 @@ const CATALOG_LABELS = Object.freeze({
   sunon: "Sunon",
   alma: "ALMA",
   lumbro: "Lumbro",
+  jome: "JOME",
+  lauco: "Lauco",
 });
 
 const CUSTOMER_FIELDS = Object.freeze([
@@ -354,7 +356,7 @@ function LegacyMixedProjectEditor({
         </div>
 
         {!lines.length ? (
-          <p className="mixed-cart-empty">Selecciona productos de cualquiera de los siete catalogos.</p>
+          <p className="mixed-cart-empty">Selecciona productos de cualquiera de los nueve catalogos.</p>
         ) : null}
         <p className="sr-only" aria-live="polite">
           {visibleSections.length} sección(es) en el proyecto.

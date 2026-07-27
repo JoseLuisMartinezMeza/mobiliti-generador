@@ -340,6 +340,31 @@ def test_spanish_description_translates_board_and_power_terms():
             assert fragment not in text
 
 
+def test_processed_description_removes_only_technical_audit_segments():
+    text = build_product_description(
+        "Mesa ALMA",
+        (
+            "Descripcion Mesa ALMA"
+            " | Fuente: alma:e2e:configurable"
+            " | Hash fuente: " + "a" * 64
+            + " | Clave: ALMA-E2E"
+            " | Base operativa; Electrificacion A"
+            " | Entrega: Entrega inmediata"
+            " | Revision documental local"
+        ),
+        "Mesas de Apoyo",
+        "es",
+    )
+
+    assert "Base operativa" in text
+    assert "Electrificacion A" in text
+    assert "Entrega inmediata" in text
+    assert "Revision documental local" in text
+    assert "Fuente:" not in text
+    assert "Hash fuente:" not in text
+    assert "Clave:" not in text
+
+
 def test_python_engine_writes_spanish_description_in_cotizacion(tmp_path):
     source = DOWNLOADS / "IZA REFORMA-Quotation Sheet - V1.xlsx"
     if not source.exists() or not TEMPLATE.exists():
@@ -360,8 +385,9 @@ def test_python_engine_writes_spanish_description_in_cotizacion(tmp_path):
     )
 
     wb = load_workbook(output, data_only=False)
-    description = wb["Cotizacion"]["C17"].value
+    assert wb["Cotizacion"]["C17"].value == "=Quotation!D9"
+    description = wb["Quotation"]["D9"].value
     assert description.startswith("Silla modelo Locke Task Chair.")
     assert "malla de alta calidad" in description
-    assert description != "=Quotation!D9"
+    assert wb["Quotation"]["E9"].value != description
     wb.close()

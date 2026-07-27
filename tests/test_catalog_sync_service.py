@@ -447,10 +447,20 @@ def test_due_runner_claims_at_most_one_run_and_uses_explicit_registry(monkeypatc
         )[1],
     )
 
-    assert set(ADAPTERS) == {"cr_global", "sonara", "sunon", "alma", "lumbro"}
+    assert set(ADAPTERS) == {
+        "cr_global",
+        "sonara",
+        "sunon",
+        "alma",
+        "lumbro",
+        "jome",
+        "lauco",
+    }
     assert ADAPTERS["cr_global"].__name__ == "build_cr_global_snapshot_with_assets"
     assert ADAPTERS["sonara"].__name__ == "build_sonara_snapshot_with_assets"
     assert ADAPTERS["lumbro"].__name__ == "build_lumbro_snapshot_with_assets"
+    assert ADAPTERS["jome"].__name__ == "build_jome_snapshot_with_assets"
+    assert ADAPTERS["lauco"].__name__ == "build_lauco_snapshot_with_assets"
     assert run_due_once() == "no_changes"
     assert seen[0] == ("recover", ("alma", "sunon"))
     assert seen[1] == ("claim", ("alma", "sunon"))

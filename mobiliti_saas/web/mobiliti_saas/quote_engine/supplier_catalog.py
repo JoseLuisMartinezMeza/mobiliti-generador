@@ -14,19 +14,30 @@ from urllib.parse import urlsplit
 from .catalog_cart import create_catalog_quotation_workbook
 
 
-ALLOWED_SUPPLIERS = {"cr-global", "sonara", "sunon", "alma", "lumbro"}
+ALLOWED_SUPPLIERS = {
+    "cr-global",
+    "sonara",
+    "sunon",
+    "alma",
+    "lumbro",
+    "jome",
+    "lauco",
+}
 SUPPLIER_LABELS = {
     "cr-global": "CR Global",
     "sonara": "Sonara",
     "sunon": "Sunon",
     "alma": "ALMA",
     "lumbro": "Lumbro",
+    "jome": "JOME",
+    "lauco": "Lauco",
 }
 ALLOWED_CURRENCIES = {"USD", "MXN", "EUR"}
 UNKNOWN_BASE_CURRENCY = "XXX"
-REVIEW_QUOTABLE_SUPPLIERS = frozenset({"lumbro", "sonara"})
+REVIEW_QUOTABLE_SUPPLIERS = frozenset(SUPPLIER_LABELS)
 EXPECTED_SUPPLIER_BASE_CURRENCY = {
-    "cr-global": "MXN", "sonara": "MXN", "sunon": "USD", "alma": "USD", "lumbro": "MXN",
+    "cr-global": "MXN", "sonara": "MXN", "sunon": "USD", "alma": "USD",
+    "lumbro": "MXN", "jome": "MXN", "lauco": "MXN",
 }
 PUBLIC_ITEM_FIELDS = (
     "internal_id", "supplier", "product_key", "sku", "code_status",
@@ -200,8 +211,6 @@ def build_supplier_cart_payload(
         if item["code_status"] != "verified":
             if loaded["supplier"] not in REVIEW_QUOTABLE_SUPPLIERS:
                 raise ValueError("codigo por verificar; el producto no se puede cotizar")
-            if item["base_currency"] != "MXN":
-                raise ValueError("moneda base por verificar; el producto no se puede cotizar")
             if Decimal(item["tax_rate"]) != Decimal("0.160000"):
                 raise ValueError("IVA 16% requerido para codigo por verificar")
         quantity = _quantity(
@@ -217,7 +226,7 @@ def build_supplier_cart_payload(
             (Decimal(option["price_net"]) for option in add_ons),
             Decimal(0),
         )
-        if configured_price <= 0:
+        if configured_price <= 0 and item["code_status"] == "verified":
             raise ValueError("precio por confirmar; el producto no se puede cotizar")
         configuration_key = (
             internal_id,
@@ -645,7 +654,7 @@ def _cart_line(
         "image_url": item["image_url"],
         "image_kind": item["image_kind"],
         "product_url": item["product_url"],
-        "warnings": _supplier_line_warnings(item),
+        "warnings": _supplier_line_warnings(item, price_missing=configured <= 0),
         "source_reference": item["source_reference"],
     }
 
@@ -659,10 +668,17 @@ def _normalized_supplier_warning(value: object) -> str:
     return " ".join(without_marks.split())
 
 
-def _supplier_line_warnings(item: dict[str, Any]) -> list[str]:
-    canonical = "Codigo por verificar"
-    canonical_key = _normalized_supplier_warning(canonical)
-    review_line = item["code_status"] == "needs_review"
+def _supplier_line_warnings(
+    item: dict[str, Any],
+    *,
+    price_missing: bool = False,
+) -> list[str]:
+    derived = []
+    if item["code_status"] == "needs_review":
+        derived.append("Codigo por verificar")
+    if price_missing:
+        derived.append("Precio por confirmar")
+    derived_keys = {_normalized_supplier_warning(warning) for warning in derived}
     result: list[str] = []
     seen: set[str] = set()
     for raw_warning in item["warnings"]:
@@ -670,15 +686,19 @@ def _supplier_line_warnings(item: dict[str, Any]) -> list[str]:
         key = _normalized_supplier_warning(warning)
         if not warning or not key:
             continue
-        if review_line and key == canonical_key:
+        if key in derived_keys:
             continue
         if key not in seen:
             seen.add(key)
             result.append(warning)
-    if review_line:
+    for warning in derived:
+        key = _normalized_supplier_warning(warning)
+        if key in seen:
+            continue
         if len(result) >= MAX_WARNINGS_PER_ITEM:
-            raise ValueError("Se excede el limite de warnings al agregar codigo por verificar")
-        result.append(canonical)
+            raise ValueError("Se excede el limite de warnings derivados")
+        seen.add(key)
+        result.append(warning)
     return result
 
 

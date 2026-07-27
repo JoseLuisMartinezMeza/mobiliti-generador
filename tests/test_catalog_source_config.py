@@ -12,15 +12,27 @@ ROOT_PATH = "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES"
 
 def test_first_wave_source_config_is_explicit_and_safe():
     rows = load_source_config(Path("mobiliti_saas/worker/catalog_sync/sources.json"))
-    assert [row.supplier for row in rows] == ["cr-global", "sonara", "sunon", "alma", "lumbro"]
+    assert [row.supplier for row in rows] == [
+        "cr-global",
+        "sonara",
+        "sunon",
+        "alma",
+        "lumbro",
+        "jome",
+        "lauco",
+    ]
     names = {file.name for row in rows for file in row.files}
     assert "FAST INVENTARIO SUNON 2026.cmdrw" not in names
     assert "NEW Order registration template-To Dealers (1).xlsx" not in names
     assert "CRG_LP_General_Dist_2026-04.pdf" in names
     assert "SPEC Guide-Alma-KUN.xlsx" in names
     assert "Spec guide-Alma-KUN Design.xlsx" in names
-    assert sum(len(row.files) for row in rows) == 18
-    assert all(file.extension in {".xlsx", ".pdf"} for row in rows for file in row.files)
+    assert sum(len(row.files) for row in rows) == 21
+    assert all(
+        file.extension in {".xlsx", ".xlsb", ".pdf"}
+        for row in rows
+        for file in row.files
+    )
     assert {row.root_path for row in rows} == {ROOT_PATH}
 
 

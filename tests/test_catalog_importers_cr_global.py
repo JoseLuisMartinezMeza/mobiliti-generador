@@ -265,12 +265,60 @@ def test_cost_sheet_sale_price_corrected_code_and_section_metadata_are_authorita
     by_sku = {item["sku"]: item for item in items}
 
     assert set(by_sku) == {"CR-CORRECTED", "CR-SECOND"}
-    assert by_sku["CR-CORRECTED"]["price_net"] == "1000.000000"
+    assert by_sku["CR-CORRECTED"]["price_net"] == "500.000000"
     assert by_sku["CR-CORRECTED"]["collection"] == "Estructuras"
-    assert by_sku["CR-SECOND"]["price_net"] == "800.000000"
+    assert by_sku["CR-SECOND"]["price_net"] == "400.000000"
     assert by_sku["CR-SECOND"]["collection"] == "Complementos"
     assert by_sku["CR-SECOND"]["attributes"]["system"] == "Accesorios"
     assert "80 cm" in by_sku["CR-SECOND"]["attributes"]["dimensions"]
+
+
+def test_cost_sheet_publishes_unit_cost_instead_of_50_percent_gp_sale_price(
+    source_bundle,
+):
+    workbook_path = source_bundle[0].local_path
+    workbook = load_workbook(workbook_path)
+    sheet = workbook.create_sheet("COSTO CR GLOBAL ")
+    sheet["A6"] = "Linea: CR Global"
+    sheet["C6"] = "Sistema: Sistemas"
+    sheet["A7"] = "Famila: Estructuras"
+    for cell, value in zip(
+        ("A8", "B8", "C8", "D8", "E8", "F8", "G8", "H8"),
+        (
+            "Imagen.",
+            "Cod.",
+            "Descripcion.",
+            "Medida/Unidad.",
+            "P. Unitario.",
+            "LAB Cedis",
+            "Moneda",
+            "Precio Venta 50% GP",
+        ),
+    ):
+        sheet[cell] = value
+    sheet["B10"] = "CR-COST"
+    sheet["C10"] = "Producto con costo y precio de venta"
+    sheet["D10"] = "60 x 70 cm"
+    sheet["E10"] = 258
+    sheet["F10"] = 0.5
+    sheet["G10"] = "MXN"
+    sheet["H10"] = 516
+    workbook.save(workbook_path)
+    workbook.close()
+    files = (
+        AdapterFile(
+            **{**source_bundle[0].__dict__, "sha256": _sha256(workbook_path)}
+        ),
+        *source_bundle[1:],
+    )
+
+    item = build_cr_global_snapshot(files)["items"][0]
+
+    assert item["price_net"] == "258.000000"
+    assert any(
+        reference.get("cell_or_bbox") == "E10"
+        for reference in json.loads(item["source_reference"])
+    )
 
 
 def test_price_list_is_authoritative_and_technical_pdf_only_fills_missing_description(source_bundle):

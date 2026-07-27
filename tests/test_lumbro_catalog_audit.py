@@ -9,7 +9,7 @@ from scripts.audit_lumbro_catalog import EXPECTED_SOURCE_HASHES, audit_lumbro_ca
 
 
 REAL_SOURCE_DIR = Path(
-    ".cache/catalog_sources/lumbro/sharepoint_2026-07-18"
+    ".cache/catalog_sources/lumbro/sharepoint_2026-07-26"
 )
 
 
@@ -44,3 +44,6 @@ def test_real_source_audit_hashes_and_balances_every_commercial_row(tmp_path):
     )
     assert len(coverage["exclusions"]) == coverage["excluded_rows"]
     assert all(row["reason"] for row in coverage["exclusions"])
+    assert coverage["price_authority"] == "COSTO LUMBRO !E"
+    assert coverage["official_product_rows"] == 49
+    assert coverage["product_groups"] == 49

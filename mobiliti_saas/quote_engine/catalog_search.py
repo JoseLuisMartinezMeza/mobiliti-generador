@@ -30,14 +30,66 @@ def _text(value: object) -> str:
     return clean
 
 
-def _catalog_identity(catalog: str, raw: dict) -> dict:
+def _base_choices(raw: dict) -> list[dict]:
+    options = raw.get("base_price_options")
+    if not isinstance(options, list):
+        return []
+    choices = []
+    seen = set()
+    for option in options:
+        if not isinstance(option, dict) or option.get("available") is False:
+            continue
+        option_id = _text(option.get("id"))
+        if not option_id or option_id in seen:
+            continue
+        seen.add(option_id)
+        choices.append({
+            "id": option_id,
+            "name": _text(option.get("name")) or option_id,
+        })
+    return choices
+
+
+def _add_on_choices(raw: dict, base_choices: list[dict]) -> list[dict]:
+    options = raw.get("add_on_options")
+    if not isinstance(options, list):
+        return []
+    base_ids = {choice["id"] for choice in base_choices}
+    choices = []
+    seen = set()
+    for option in options:
+        if not isinstance(option, dict) or option.get("available") is False:
+            continue
+        option_id = _text(option.get("id"))
+        family = _text(option.get("family"))
+        if not option_id or not family or option_id in seen:
+            continue
+        compatible_raw = option.get("compatible_base_option_ids", [])
+        compatible = []
+        if isinstance(compatible_raw, list):
+            compatible = [
+                candidate
+                for candidate in (_text(value) for value in compatible_raw)
+                if candidate and (not base_ids or candidate in base_ids)
+            ]
+        seen.add(option_id)
+        choices.append({
+            "id": option_id,
+            "name": _text(option.get("name")) or option_id,
+            "family": family,
+            "compatible_base_option_ids": compatible,
+        })
+    return choices
+
+
+def _catalog_identity(catalog: str, raw: dict, base_choices: list[dict]) -> dict:
     if catalog == "tarkett":
         return {"code": _text(raw.get("code"))}
     if catalog == "offiho":
         return {"inventory_key": _text(raw.get("inventory_key"))}
     return {
         "internal_id": _text(raw.get("internal_id")),
-        "base_option_id": "",
+        "base_option_id": base_choices[0]["id"] if len(base_choices) == 1 else "",
         "add_on_option_ids": [],
     }
 
@@ -97,7 +149,9 @@ def _supplier(value: object) -> str | None:
 
 
 def _canonical_item(catalog: str, raw: dict) -> dict | None:
-    identity = _catalog_identity(catalog, raw)
+    base_choices = _base_choices(raw)
+    add_on_choices = _add_on_choices(raw, base_choices)
+    identity = _catalog_identity(catalog, raw, base_choices)
     try:
         preflight = preflight_mixed_catalog_items([
             {"catalog": catalog, **identity, "quantity": "1"}
@@ -114,7 +168,7 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
         return None
     name = _text(raw.get("name")) or official_code
     availability = _availability_label(raw)
-    return {
+    result = {
         "catalog": catalog,
         "official_code": official_code,
         "identity": identity,
@@ -123,10 +177,15 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
             "code": official_code,
             "image_url": _text(raw.get("image_url")),
             "availability": availability,
-            "configuration": "",
+            "configuration": base_choices[0]["name"] if len(base_choices) == 1 else "",
             "warnings": _availability_warnings(availability),
         },
     }
+    if base_choices:
+        result["base_options"] = base_choices
+    if add_on_choices:
+        result["add_on_options"] = add_on_choices
+    return result
 
 
 def search_catalog_products(catalogs, *, query, supplier, offset, limit) -> dict:

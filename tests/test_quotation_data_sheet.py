@@ -1,5 +1,6 @@
 from copy import deepcopy
 from collections.abc import Sequence
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 import builtins
 import xml.etree.ElementTree as ET
@@ -39,6 +40,18 @@ def _lines_by_key(payload):
     }
 
 
+def _current_rate_rows():
+    today = date.today().isoformat()
+    return [
+        {
+            **row,
+            "effective_date": today,
+            "retrieved_at": f"{today}T12:00:00+00:00",
+        }
+        for row in rate_rows.__wrapped__()
+    ]
+
+
 def test_quotation_data_contains_all_lines_in_user_order(mixed_payload):
     rows = quotation_data_rows(mixed_payload)
     expected_keys = [
@@ -63,7 +76,7 @@ def test_quotation_data_contains_all_lines_in_user_order(mixed_payload):
 
 def test_quotation_data_keeps_duplicate_canonical_occurrences_as_distinct_rows():
     catalogs = mixed_catalogs.__wrapped__()
-    rates = rate_rows.__wrapped__()
+    rates = _current_rate_rows()
     line_ids = [
         "11111111-1111-4111-8111-111111111111",
         "22222222-2222-4222-8222-222222222222",
@@ -131,7 +144,7 @@ def test_quotation_data_keeps_imported_source_rows_verifiable(tmp_path):
     payload = build_mixed_catalog_cart_payload(
         [],
         catalogs=mixed_catalogs.__wrapped__(),
-        rate_rows=rate_rows.__wrapped__(),
+        rate_rows=_current_rate_rows(),
         quote_currency="MXN",
         commercial_discount_percent="40",
         presentation_sections=[{
@@ -215,7 +228,7 @@ def test_quotation_data_hash_binds_imported_upstream_row_hash(tmp_path):
         }],
     }
     payload = build_mixed_catalog_cart_payload(
-        [], catalogs=mixed_catalogs.__wrapped__(), rate_rows=rate_rows.__wrapped__(),
+        [], catalogs=mixed_catalogs.__wrapped__(), rate_rows=_current_rate_rows(),
         quote_currency="MXN", commercial_discount_percent="40",
         presentation_sections=[{"id": "section-1", "title": "Recepcion", "item_keys": [item_key]}],
         imported_source=source_payload,
@@ -311,7 +324,7 @@ def test_quotation_data_normalizes_negative_zero_and_accepts_source_row_one(tmp_
     manifest, _images = build_import_manifest(source.read_bytes(), IMPORT_ID, source.name)
     item_key = f"import:{IMPORT_ID}:11"
     payload = build_mixed_catalog_cart_payload(
-        [], catalogs=mixed_catalogs.__wrapped__(), rate_rows=rate_rows.__wrapped__(),
+        [], catalogs=mixed_catalogs.__wrapped__(), rate_rows=_current_rate_rows(),
         quote_currency="MXN", commercial_discount_percent="40",
         presentation_sections=[{"id": "section-1", "title": "Recepcion", "item_keys": [item_key]}],
         imported_source={"manifest": manifest, "source_currency": "USD", "items": [{
@@ -349,7 +362,7 @@ def test_quotation_data_rejects_imported_source_hash_and_key_mismatches(tmp_path
     manifest, _images = build_import_manifest(source.read_bytes(), IMPORT_ID, source.name)
     item_key = f"import:{IMPORT_ID}:11"
     payload = build_mixed_catalog_cart_payload(
-        [], catalogs=mixed_catalogs.__wrapped__(), rate_rows=rate_rows.__wrapped__(),
+        [], catalogs=mixed_catalogs.__wrapped__(), rate_rows=_current_rate_rows(),
         quote_currency="MXN", commercial_discount_percent="40",
         presentation_sections=[{"id": "section-1", "title": "Recepcion", "item_keys": [item_key]}],
         imported_source={"manifest": manifest, "source_currency": "USD", "items": [{
@@ -400,6 +413,23 @@ def test_quotation_data_sheet_uses_indexed_sequence_not_its_iterator(mixed_paylo
             raise AssertionError("No debe usar el iterador libre")
 
     assert b'<dimension ref="A1:P2"' in build_quotation_data_sheet(OneRowSequence()).xml
+
+
+def test_quotation_data_has_exact_canonical_columns_without_processed_description(
+    mixed_payload,
+):
+    rows = quotation_data_rows(mixed_payload)
+    addition = build_quotation_data_sheet(rows)
+    root = ET.fromstring(addition.xml)
+    header = root.find("main:sheetData/main:row[@r='1']", NS)
+
+    assert header is not None
+    assert [
+        text.text or ""
+        for text in header.findall("main:c/main:is/main:t", NS)
+    ] == list(QUOTATION_DATA_HEADERS)
+    assert header.find("main:c[@r='P1']", NS) is not None
+    assert header.find("main:c[@r='Q1']", NS) is None
 
 
 def test_quotation_data_preflight_checks_declared_sequences_before_iteration(monkeypatch, mixed_payload):

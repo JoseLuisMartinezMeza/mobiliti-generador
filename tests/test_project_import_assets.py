@@ -115,6 +115,22 @@ def test_import_promotion_copies_source_manifest_and_images_without_consuming_jo
     assert storage[body["source_asset_key"]] == storage[job["input_path"]]
 
 
+def test_dev_storage_serves_project_preview_with_image_content_type(monkeypatch, tmp_path):
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "DEV_STORE_DIR", tmp_path)
+    object_path = "projects/7/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/images/row-14.png"
+    source = index._dev_storage_file(object_path)
+    source.parent.mkdir(parents=True, exist_ok=True)
+    content = _preview_png()
+    source.write_bytes(content)
+
+    response = TestClient(index.app).get(f"/dev/storage/{object_path}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content == content
+
+
 def test_import_promotion_rejects_project_owned_by_another_user(monkeypatch, tmp_path):
     client, _headers, project, job, storage = project_with_import_fixture(monkeypatch, tmp_path)
 

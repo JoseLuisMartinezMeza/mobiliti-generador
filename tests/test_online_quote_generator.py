@@ -95,36 +95,30 @@ def test_generate_online_quote_creates_valid_xlsx(tmp_path):
     assert "Quotation" in wb.sheetnames
     ws = wb["Cotizacion"]
     mob = wb["Mobiliti"]
-    assert ws["A1"].value == "MOBILITI - COTIZACION"
     assert ws["B3"].value == "COT-001"
-    assert ws["A16"].value == "=Quotation!A8"
-    assert ws["A17"].value == "=Quotation!B9"
-    assert ws["D17"].value == "=Quotation!E9"
+    assert ws["A16"].value == "Escritorios"
+    assert ws["A17"].value == "=Mobiliti!D14"
+    assert ws["C17"].value == "=Quotation!D9"
+    assert ws["D17"].value == "=Quotation!F9"
+    assert ws["E17"].value == "=Mobiliti!H14"
     assert ws["G17"].value == 0.3
     assert ws["H17"].value == "=F17*G17"
     assert ws["I17"].value == "=F17-H17"
     assert ws["J17"].value == "=E17*I17"
-    assert mob["K14"].value == "=Quotation!E9"
-    assert mob["D14"].value == "=Quotation!B9"
+    assert mob["D14"].value == "Mesa Uno"
+    assert mob["H14"].value == "=Quotation!H9"
+    assert mob["J14"].value == "=Quotation!K9"
+    assert mob["K14"].value == "=Quotation!I9"
+    assert wb["Quotation_Data"].max_column == 16
     wb.close()
 
 
-def test_generate_online_quote_inserts_dezgo_enhanced_image_not_original(monkeypatch, tmp_path):
+def test_generate_online_quote_preserves_and_places_source_image(tmp_path):
     source = tmp_path / "quotation.xlsx"
     original = tmp_path / "original.png"
     output = tmp_path / "cotizacion.xlsx"
     Image.new("RGB", (80, 60), (20, 20, 20)).save(original)
     _sample_quotation_with_image(source, original)
-    monkeypatch.setenv("DEZGO_API_KEY", "fake-key")
-
-    def fake_enhance_with_dezgo(_source_path, output_path, _config=None):
-        Image.new("RGBA", (90, 90), (255, 0, 0, 255)).save(output_path, "PNG")
-        return Path(output_path)
-
-    monkeypatch.setattr(
-        "mobiliti_saas.quote_engine.image_processing.enhance_with_dezgo",
-        fake_enhance_with_dezgo,
-    )
 
     generate_online_quote(
         source,
@@ -133,7 +127,6 @@ def test_generate_online_quote_inserts_dezgo_enhanced_image_not_original(monkeyp
             "cotizacion": "COT-IA",
             "proyecto": "Demo IA",
             "cliente": "Cliente Test",
-            "image_provider": "dezgo",
             "image_background": "white",
             "image_prompt": "Mejora la calidad de imagen y que este en fondo blanco",
             "tipo_cambio": "20",
@@ -148,9 +141,12 @@ def test_generate_online_quote_inserts_dezgo_enhanced_image_not_original(monkeyp
             if int(getattr(img.anchor, "_from").row) == 16 and int(getattr(img.anchor, "_from").col) == 1
         ]
         assert cotizacion_images
+        anchor = getattr(cotizacion_images[0].anchor, "_from")
+        assert int(anchor.rowOff) > 0
+        assert int(anchor.colOff) > 0
         with Image.open(cotizacion_images[0].ref) as embedded:
             pixel = embedded.convert("RGB").getpixel((embedded.width // 2, embedded.height // 2))
-        assert pixel == (255, 0, 0)
+        assert pixel == (20, 20, 20)
     finally:
         wb.close()
 
@@ -176,6 +172,8 @@ def test_generate_online_quote_uses_vol_for_mobiliti_m3(tmp_path):
     generate_online_quote(source, output, {"tipo_cambio": "20"})
 
     out = load_workbook(output, data_only=False)
-    assert out["Cotizacion"]["D17"].value == "=Quotation!E9"
-    assert out["Mobiliti"]["K14"].value == "=Quotation!H9"
+    assert out["Cotizacion"]["D17"].value == "=Quotation!F9"
+    assert out["Mobiliti"]["H14"].value == "=Quotation!H9"
+    assert out["Mobiliti"]["J14"].value == "=Quotation!K9"
+    assert out["Mobiliti"]["K14"].value == "=Quotation!I9"
     out.close()

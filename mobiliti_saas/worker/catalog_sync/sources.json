@@ -56,5 +56,24 @@
       {"path": "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx", "kind": "spec_guide", "drive_item_id": "01DHXXN726RRTWDBVGDZH3DHSR4XUGGYNG"},
       {"path": "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf", "kind": "catalog", "drive_item_id": "01DHXXN7YFOCIP7S2WR5F3AFZF3Z5ITB3J"}
     ]
+  },
+  {
+    "supplier": "jome",
+    "label": "JOME",
+    "adapter": "jome",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC GUIDES 2026/JOME/Spec guide-Estructuras Jome-2026.xlsx", "kind": "spec_guide", "brand": "estructuras", "drive_item_id": "01DHXXN73FNX632SXL3JBZ5O6FNNULR67U"},
+      {"path": "SPEC GUIDES 2026/JOME/Spec guide-Laminado-2026.xlsx", "kind": "spec_guide", "brand": "laminado", "drive_item_id": "01DHXXN72IXFY22JUPD5GJT5B6PPGWE7ZX"}
+    ]
+  },
+  {
+    "supplier": "lauco",
+    "label": "Lauco",
+    "adapter": "lauco",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC GUIDES 2026/LAUCO/Spec Guide Lauco-2026.xlsb", "kind": "spec_guide", "brand": "Lauco", "drive_item_id": "01DHXXN73QZOUEEWNH4BE2NO5YPBUJ5HNK"}
+    ]
   }
 ]

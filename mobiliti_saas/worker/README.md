@@ -130,7 +130,8 @@ token solo se lee del entorno y nunca se imprime.
 
 La sincronizacion queda desactivada si `CATALOG_SYNC_ENABLED` no esta activo o
 si `CATALOG_ENABLED_SUPPLIERS` esta vacio/invalido. Los identificadores
-permitidos son `cr-global`, `sonara`, `sunon` y `alma`; la base de datos aplica
+permitidos son `cr-global`, `sonara`, `sunon`, `alma`, `lumbro`, `jome` y
+`lauco`; la base de datos aplica
 el intervalo de seis horas y reclama primero los runs manuales. Antes de cada
 claim, un RPC atomico cierra como `failed` los runs `running` de proveedores
 habilitados cuyo lease fijo de 45 minutos vencio.
@@ -158,6 +159,27 @@ defecto, acepta solo valores validos y siempre queda por debajo del lease. El
 hijo usa codigos de salida acotados: `0` trabajo exitoso, `1` fallo, `2` sin
 trabajo y `3` desactivado o mal configurado. Solo `0` limpia un fallo previo y
 actualiza `last_catalog_sync_at`.
+
+### Fuentes JOME y Lauco
+
+El catalogo `jome` se sincroniza desde dos XLSX oficiales: Estructuras y
+Laminado. El importador solo toma el costo proveedor de la columna E y conserva
+la moneda declarada de H en la procedencia; la columna I es precio comercial y
+se ignora. Todos los costos JOME se publican en MXN. Las etiquetas USD de MA02
+y MA03 son errores conocidos de la fuente: se normalizan a MXN sin aplicar tipo
+de cambio y se registra la correccion en la procedencia.
+
+El catalogo `lauco` se sincroniza desde el XLSB oficial con
+`pyxlsb==1.0.10`, leyendo valores cacheados sin ejecutar formulas. Toma el costo
+de F y conserva G como moneda declarada; K es precio comercial y se ignora.
+Todos los costos Lauco se publican en MXN desde origen.
+
+Ambas fuentes se validan antes de abrirse: limites ZIP y de expansion, rutas y
+relaciones OOXML, tipos de archivo, imagenes y vinculos externos. En JOME, las
+imagenes WDP/HD Photo internas no compatibles se descartan de forma acotada;
+las imagenes PNG, JPEG y TIFF validas se conservan. Un libro inseguro, una hoja
+requerida ausente o un costo invalido rechaza la sincronizacion completa, sin
+publicar un snapshot parcial.
 
 Prueba local del motor online sin Supabase:
 

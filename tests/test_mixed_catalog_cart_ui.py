@@ -329,7 +329,8 @@ def test_app_owns_one_mixed_cart_and_one_submit_endpoint():
     drawer = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx")
     assert drawer.is_file()
     assert "const [mixedCart, setMixedCart] = useState([])" in main
-    assert main.count('request("/catalogs/mixed-quote"') == 1
+    assert main.count('"/catalogs/mixed-quote"') == 1
+    assert main.count("`/projects/${encodeURIComponent(projectQuote.id)}/quote`") == 1
     assert 'request("/tarkett/quote"' not in main
     assert 'request("/offiho/quote"' not in main
     assert "/catalogs/${supplier}/quote" not in supplier
@@ -442,7 +443,8 @@ def test_collapsed_hidden_quantity_draft_is_still_validated_before_submit():
 def test_app_is_the_only_mixed_quote_request_owner():
     main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
     drawer = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
-    assert main.count('request("/catalogs/mixed-quote"') == 1
+    assert main.count('"/catalogs/mixed-quote"') == 1
+    assert main.count("`/projects/${encodeURIComponent(projectQuote.id)}/quote`") == 1
     assert "/catalogs/mixed-quote" not in drawer
 
 
@@ -455,7 +457,7 @@ def test_mixed_cart_session_and_submission_guards_are_explicit():
     assert "mixedQuoteSubmittingRef.current = true" in main
     assert "submissionEpoch !== mixedQuoteSessionEpochRef.current" in main
     assert "createMixedQuoteRequestSnapshot" in main
-    assert "body: JSON.stringify(mixedRequest)" in main
+    assert "body: JSON.stringify(quoteRequest)" in main
     assert "const mixedRequest = useMemo(" in main
     assert "Respuesta de trabajo mixto invalida" in main
     assert "replaceCart([])" in main
@@ -468,7 +470,8 @@ def test_memoized_compact_request_does_not_rebuild_for_customer_form_edits():
 
     assert re.search(
         r"const mixedRequest = useMemo\(\s*"
-        r"\(\) => createMixedQuoteRequestSnapshot\(\{\}, mixedCartSections, mixedCart\),\s*"
+        r"\(\) => createMixedQuoteRequestSnapshot\(\s*"
+        r"\{\},\s*mixedCartSections,\s*projectMixedQuoteLines\(mixedCart\),\s*\),\s*"
         r"\[mixedCart, mixedCartSections\]",
         main,
     )
@@ -1240,6 +1243,8 @@ def test_catalog_list_is_frozen_and_complete():
             "sunon",
             "alma",
             "lumbro",
+            "jome",
+            "lauco",
         ],
         "mutation": "TypeError",
     }
@@ -2340,6 +2345,7 @@ def test_project_submit_reuses_controller_without_clearing_persistent_lines():
       const state = {cart: [line], sections: createInitialMixedCartSections(), open: false};
       const cartRef = {current: state.cart};
       const sectionsRef = {current: state.sections};
+      const requests = [];
       const controller = createMixedQuoteController({
         cartRef, sectionsRef, submittingRef: {current: false}, sessionEpochRef: {current: 0},
         emptyForm: {},
@@ -2347,20 +2353,44 @@ def test_project_submit_reuses_controller_without_clearing_persistent_lines():
         replaceSections(next) { state.sections = next; sectionsRef.current = next; },
         setOpen(value) { state.open = value; }, setForm() {}, getForm() { return {proyecto: "P"}; },
         setBusy() {}, setError() {}, setNotice() {}, setJobs() {},
-        async request() { return {job: {id: "job-project"}}; },
+        async request(path, options) {
+          requests.push({path, body: JSON.parse(options.body)});
+          return {job: {id: "job-project"}};
+        },
         confirmQuote() { return true; },
         async waitForJobResult(job) { return {...job, status: "completed"}; },
       });
       await controller.submit(
         {preventDefault() {}},
         state.cart,
-        createMixedQuoteRequestSnapshot({proyecto: "P"}, state.sections, state.cart),
-        {preserveProject: true},
+        null,
+        {
+          preserveProject: true,
+          projectQuote: {
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            revision: 18,
+          },
+        },
       );
-      console.log(JSON.stringify({cartCount: state.cart.length, sectionCount: state.sections.length}));
+      console.log(JSON.stringify({
+        cartCount: state.cart.length,
+        sectionCount: state.sections.length,
+        requests,
+      }));
         """,
     )
-    assert result == {"cartCount": 1, "sectionCount": 1}
+    assert result == {
+        "cartCount": 1,
+        "sectionCount": 1,
+        "requests": [{
+            "path": "/projects/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/quote",
+            "body": {"expected_revision": 18},
+        }],
+    }
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    assert "projectQuote: {" in source
+    assert "id: project.id" in source
+    assert "revision: project.revision" in source
 
 
 def test_imported_cart_editor_exposes_only_approved_fields():

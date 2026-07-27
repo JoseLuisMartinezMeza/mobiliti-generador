@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from copy import copy, deepcopy
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import hashlib
@@ -24,11 +24,12 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.drawing.image import Image as XlsxImage
 from openpyxl.formatting.formatting import ConditionalFormatting
+from openpyxl.formula import Tokenizer
 from openpyxl.formula.translate import Translator
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.utils.units import pixels_to_EMU
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.cell_range import CellRange
@@ -45,7 +46,7 @@ from .ai_image_provider import (
     image_provider_failure_is_fatal,
     normalize_image_provider,
 )
-from .image_processing import compose_product_montage, improve_image_map
+from .image_processing import improve_image_map, improve_product_image_bytes
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .mobiliti_layout import SectionNeed, plan_mobiliti_layout
 from .mobiliti_pricing import (
@@ -69,11 +70,21 @@ from .ooxml_worksheet import (
 )
 from .official_composer import (
     ComposeRequest,
+    CotizacionImageSource,
     CotizacionMetadata,
     CotizacionPriceTerm,
     CotizacionProduct,
     CotizacionSection,
     CotizacionSheetEditor,
+    FLETE_ROUTES,
+    _clone_row_region,
+    _next_picture_id,
+    _next_relationship_id,
+    _product_image_anchor,
+    _set_formula,
+    _set_inline_string,
+    _set_number,
+    _stable_image_relationship_type,
     _validate_compose_paths,
     compose_official_quote,
 )
@@ -81,8 +92,13 @@ from .official_template import load_template_contract
 from .parser import QuoteItem, col_index, read_items
 from .quotation_sheets import (
     QuotationDataRow,
+    _parse_worksheet_document,
+    _strip_external_image_links_with_embedded_fallback,
     _with_canonical_hash,
+    _xml_bytes,
     build_quotation_data_sheet,
+    official_provider_name,
+    official_region_name,
     transplant_quotation,
 )
 from .supplier_catalog import safe_excel_text
@@ -108,7 +124,10 @@ MIXED_MONEY_FORMATS = {
     "USD": '"USD" $#,##0.00;[Red]-"USD" $#,##0.00;"-"',
     "EUR": '"EUR" €#,##0.00;[Red]-"EUR" €#,##0.00;"-"',
 }
-MIXED_CATALOG_ORDER = ("tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro")
+MIXED_CATALOG_ORDER = (
+    "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro",
+    "jome", "lauco",
+)
 MIXED_CATALOG_LABELS = {
     "tarkett": "Tarkett",
     "offiho": "Offiho",
@@ -117,6 +136,8 @@ MIXED_CATALOG_LABELS = {
     "sunon": "Sunon",
     "alma": "ALMA",
     "lumbro": "Lumbro",
+    "jome": "JOME",
+    "lauco": "Lauco",
 }
 MIXED_CATALOG_BASE_CURRENCIES = {
     "tarkett": "MXN",
@@ -126,6 +147,8 @@ MIXED_CATALOG_BASE_CURRENCIES = {
     "sunon": "USD",
     "alma": "USD",
     "lumbro": "MXN",
+    "jome": "MXN",
+    "lauco": "MXN",
 }
 MIXED_RATE_FIELDS = {
     "catalog",
@@ -162,7 +185,7 @@ SECTION_SUBTOTAL_ROWS = [row + BASE_PROD_PER_SECTION + 1 for row in SECTION_CATS
 MOBILITI_TOTAL_ROW = SECTION_SUBTOTAL_ROWS[-1] + 1
 DEFAULT_EXCHANGE_RATE = 20.0
 DEFAULT_DELIVERY_PLACE = "Guadalajara"
-FRANKFURTER_USD_MXN_URL = "https://api.frankfurter.app/latest?from=USD&to=MXN"
+FRANKFURTER_USD_MXN_URL = "https://api.frankfurter.dev/v2/rate/USD/MXN"
 EXCHANGE_RATE_CACHE_SECONDS = 60 * 60
 EXCHANGE_RATE_CACHE_PATH = Path(os.environ.get("TEMP", "/tmp")) / "mobiliti_usd_mxn_rate.json"
 DEFAULT_DISCOUNT_PERCENT = 40.0
@@ -195,15 +218,6 @@ MOBILITI_SUBTOTAL_FILL_RGB = "FF404040"
 MOBILITI_SECTION_FILL_RGB = "FF3E2500"
 MOBILITI_SECTION_TRAILING_FILL_RGB = "FF262626"
 MOBILITI_SECTION_TEXT_RGB = "FFFFFFFF"
-FLETE_ROUTES = {
-    5: ("Guadalajara", "Monterrey"),
-    7: ("Guadalajara", "Mexico City"),
-    9: ("Guadalajara", "Tijuana"),
-    11: ("Guadalajara", "Mérida, Yucatán"),
-    13: ("Guadalajara", "Querétaro"),
-    15: ("Guadalajara", "State of Mexico"),
-    17: ("Guadalajara", "Guadalajara"),
-}
 LUMBRO_PRICE_ROWS = {
     "MULT-LIDO-INT": 348,
     "LIDO.OP-INT": 380,
@@ -305,10 +319,49 @@ def _extract_usd_mxn_rate(payload: bytes | str) -> float | None:
         data = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else payload)
     except (TypeError, ValueError, UnicodeDecodeError):
         return None
-    rates = data.get("rates") if isinstance(data, dict) else None
-    if not isinstance(rates, dict):
+    if not isinstance(data, dict):
         return None
-    return _positive_num(rates.get("MXN"))
+    direct_rate = _positive_num(data.get("rate"))
+    if direct_rate:
+        return direct_rate
+    rates = data.get("rates")
+    return _positive_num(rates.get("MXN")) if isinstance(rates, dict) else None
+
+
+def _fetch_latest_usd_mxn_row() -> dict[str, str] | None:
+    """Obtiene la referencia diaria USD/MXN más reciente disponible."""
+
+    request = Request(
+        FRANKFURTER_USD_MXN_URL,
+        headers={"User-Agent": "mobiliti-quote-engine/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TypeError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    rate = _positive_num(payload.get("rate"))
+    effective_date = str(payload.get("date") or "").strip()
+    try:
+        effective_day = date.fromisoformat(effective_date)
+    except ValueError:
+        return None
+    if effective_day > date.today():
+        return None
+    if (
+        not rate
+        or str(payload.get("base") or "").upper() != "USD"
+        or str(payload.get("quote") or "").upper() != "MXN"
+    ):
+        return None
+    return {
+        "currency": "USD",
+        "effective_date": effective_date,
+        "mxn_per_unit": f"{rate:.6f}",
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _read_cached_usd_mxn_rate(now: float | None = None) -> float | None:
@@ -336,15 +389,8 @@ def _write_cached_usd_mxn_rate(rate: float) -> None:
 
 
 def _fetch_usd_mxn_exchange_rate() -> float | None:
-    request = Request(
-        FRANKFURTER_USD_MXN_URL,
-        headers={"User-Agent": "mobiliti-quote-engine/1.0"},
-    )
-    try:
-        with urlopen(request, timeout=5) as response:
-            return _extract_usd_mxn_rate(response.read())
-    except OSError:
-        return None
+    row = _fetch_latest_usd_mxn_row()
+    return _positive_num(row.get("mxn_per_unit")) if row is not None else None
 
 
 def _exchange_rate(metadata: dict[str, Any]) -> float:
@@ -468,13 +514,7 @@ def _find_provider_discount_start(ws) -> int | None:
 
 
 def _official_mobiliti_provider(value: Any) -> str:
-    provider = str(value or "").strip()
-    if " ".join(provider.casefold().split()) in {
-        LUMBRO_LEGACY_PROVIDER.casefold(),
-        LUMBRO_PROVIDER.casefold(),
-    }:
-        return LUMBRO_PROVIDER
-    return provider
+    return official_provider_name(value)
 
 
 def _set_defined_name_range(wb: Workbook, name: str, attr_text: str) -> None:
@@ -2381,7 +2421,7 @@ def _official_presentation_lines(
                 if _uses_mixed_catalog_prices(metadata)
                 else provider_default
             )
-            provider = provider or provider_default
+            provider = _official_mobiliti_provider(provider or provider_default)
             currency, original, rate, converted = _official_item_cost(item, metadata)
             mode = str(item.modo_precio or "").strip().lower()
             imported = mode == "imported"
@@ -2411,7 +2451,7 @@ def _official_presentation_lines(
                 ),
                 category=safe_excel_text(category),
                 provider=safe_excel_text(provider),
-                region="imported" if imported else DEFAULT_MOBILITI_REGION,
+                region=official_region_name(DEFAULT_MOBILITI_REGION),
                 original_currency=currency,
                 original_cost=original,
                 frozen_rate=rate,
@@ -2762,6 +2802,8 @@ def _build_official_mobiliti(
     needs: Sequence[SectionNeed],
     canonical_rows: Sequence[QuotationDataRow],
     metadata: dict[str, Any],
+    quotation_rows: Mapping[str, int],
+    quotation_rates: Mapping[str, Decimal],
 ) -> MobilitiSheetMutation:
     row_map = plan_mobiliti_layout(needs)
     if len(lines) != len(row_map.item_rows):
@@ -2772,13 +2814,26 @@ def _build_official_mobiliti(
         zip(lines, row_map.item_rows, strict=True),
         start=1,
     ):
+        quotation_row = quotation_rows.get(line.item_key)
+        if type(quotation_row) is not int or quotation_row <= 0:
+            raise ValueError(
+                f"Fila Quotation ausente para {line.item_key}"
+            )
         writes.extend(
             (
                 MobilitiCellWrite(f"D{target_row}", "text", line.name),
                 MobilitiCellWrite(f"E{target_row}", "text", line.category),
                 MobilitiCellWrite(f"F{target_row}", "text", line.provider),
-                MobilitiCellWrite(f"H{target_row}", "number", line.quantity),
-                MobilitiCellWrite(f"K{target_row}", "number", line.m3),
+                MobilitiCellWrite(
+                    f"H{target_row}",
+                    "formula",
+                    f"=Quotation!H{quotation_row}",
+                ),
+                MobilitiCellWrite(
+                    f"K{target_row}",
+                    "formula",
+                    f"=Quotation!I{quotation_row}",
+                ),
                 MobilitiCellWrite(f"P{target_row}", "text", line.region),
             )
         )
@@ -2788,6 +2843,8 @@ def _build_official_mobiliti(
                 section_id=line.section_id,
                 position=position,
                 target_row=target_row,
+                quotation_row=quotation_row,
+                quotation_rate=quotation_rates.get(line.item_key, Decimal("1")),
             )
         )
     writes.extend(
@@ -2803,14 +2860,27 @@ def _build_official_mobiliti(
         writes,
     )
     editor = WorksheetEditor.from_xml(mutation.xml)
+    requested_delivery_place = safe_excel_text(
+        metadata.get("lugar_entrega")
+        or metadata.get("delivery_place")
+        or DEFAULT_DELIVERY_PLACE
+    )
+    delivery_places = {
+        " ".join(destination.split()).casefold(): destination
+        for _origin, destination in FLETE_ROUTES.values()
+    }
+    delivery_place = delivery_places.get(
+        " ".join(requested_delivery_place.split()).casefold()
+    )
+    if delivery_place is None:
+        raise ValueError(
+            "Lugar de entrega no soportado para Mobiliti!K8: "
+            f"{requested_delivery_place}"
+        )
     write_official_currency_selector(
         editor,
         _official_quote_currency(metadata),
-        safe_excel_text(
-            metadata.get("lugar_entrega")
-            or metadata.get("delivery_place")
-            or DEFAULT_DELIVERY_PLACE
-        ),
+        delivery_place,
     )
     return MobilitiSheetMutation(editor.to_xml(), mutation.row_map)
 
@@ -2831,12 +2901,23 @@ def _official_cotizacion_description(
     )
 
 
+def _quotation_description_formula(
+    item_key: str,
+    quotation_rows: Mapping[str, int],
+) -> str:
+    quotation_row = quotation_rows.get(item_key)
+    if type(quotation_row) is not int or quotation_row <= 1:
+        raise ValueError(f"Fila Quotation ausente para {item_key}")
+    return f"=Quotation!D{quotation_row}"
+
+
 def _legacy_cotizacion_product(
     line: _OfficialPresentationLine,
     target_row: int,
     *,
     language: str,
     discount: Decimal,
+    quotation_rows: Mapping[str, int],
 ) -> CotizacionProduct:
     return CotizacionProduct(
         item_key=line.item_key,
@@ -2846,6 +2927,10 @@ def _legacy_cotizacion_product(
         quantity=line.quantity,
         mobiliti_row=target_row,
         discount=discount,
+        description_formula=_quotation_description_formula(
+            line.item_key,
+            quotation_rows,
+        ),
         image_content=line.image_content,
         image_content_type=line.image_content_type,
     )
@@ -2855,6 +2940,7 @@ def _legacy_cotizacion_sections(
     lines: Sequence[_OfficialPresentationLine],
     mobiliti: MobilitiSheetMutation,
     metadata: dict[str, Any],
+    quotation_rows: Mapping[str, int],
 ) -> tuple[CotizacionSection, ...]:
     target_by_key = {
         line.item_key: target_row
@@ -2876,6 +2962,7 @@ def _legacy_cotizacion_sections(
                 target_by_key[line.item_key],
                 language=language,
                 discount=discount,
+                quotation_rows=quotation_rows,
             )
         )
     return tuple(
@@ -2908,10 +2995,16 @@ def _project_cotizacion_sections(
     lines: Sequence[_OfficialPresentationLine],
     mobiliti: MobilitiSheetMutation,
     metadata: dict[str, Any],
+    quotation_rows: Mapping[str, int],
 ) -> tuple[CotizacionSection, ...]:
     context = metadata.get("project_context")
     if context is None:
-        return _legacy_cotizacion_sections(lines, mobiliti, metadata)
+        return _legacy_cotizacion_sections(
+            lines,
+            mobiliti,
+            metadata,
+            quotation_rows,
+        )
     if not isinstance(context, Mapping):
         raise ValueError("Contexto de Proyecto inválido")
     compositions = context.get("compositions")
@@ -3058,13 +3151,13 @@ def _project_cotizacion_sections(
                 ]
             )
         )
-        montage = compose_product_montage(
-            principal.image_content,
-            [
-                component.image_content
-                for component in components[1:]
-                if component.image_content is not None
-            ],
+        complement_images = tuple(
+            CotizacionImageSource(
+                content=component.image_content,
+                content_type=component.image_content_type,
+            )
+            for component in components[1:]
+            if component.image_content is not None
         )
         _title, products = section_order.setdefault(
             section_id,
@@ -3079,8 +3172,13 @@ def _project_cotizacion_sections(
                 quantity=principal.quantity,
                 mobiliti_row=target_by_key[principal_id],
                 discount=discount,
-                image_content=montage,
-                image_content_type="image/png" if montage is not None else None,
+                description_formula=_quotation_description_formula(
+                    principal_id,
+                    quotation_rows,
+                ),
+                image_content=principal.image_content,
+                image_content_type=principal.image_content_type,
+                complement_images=complement_images,
                 price_terms=tuple(price_terms),
             )
         )
@@ -3094,6 +3192,7 @@ def _project_cotizacion_sections(
                         target_by_key[accessory.item_key],
                         language=language,
                         discount=discount,
+                        quotation_rows=quotation_rows,
                     )
                 )
                 consumed_lumbro.add(accessory.item_key)
@@ -3118,9 +3217,16 @@ def _build_official_cotizacion(
     lines: Sequence[_OfficialPresentationLine],
     mobiliti: MobilitiSheetMutation,
     metadata: dict[str, Any],
+    quotation_rows: Mapping[str, int],
 ):
-    sections = _project_cotizacion_sections(lines, mobiliti, metadata)
-    return CotizacionSheetEditor.from_xml(
+    cotizacion_lines = _improve_official_cotizacion_images(lines, metadata)
+    sections = _project_cotizacion_sections(
+        cotizacion_lines,
+        mobiliti,
+        metadata,
+        quotation_rows,
+    )
+    mutation = CotizacionSheetEditor.from_xml(
         base.parts[base.sheet_part("Cotizacion")]
     ).compose(
         metadata=CotizacionMetadata(
@@ -3134,15 +3240,1769 @@ def _build_official_cotizacion(
         ),
         sections=sections,
     )
+    return mutation, sections
+
+
+def _improve_official_cotizacion_images(
+    lines: Sequence[_OfficialPresentationLine],
+    metadata: Mapping[str, Any],
+) -> tuple[_OfficialPresentationLine, ...]:
+    """Mejora sólo la proyección visual de Cotizacion y conserva Quotation."""
+
+    image_keys = {
+        "image_provider",
+        "proveedor_imagen",
+        "image_cleanup_strength",
+        "limpieza_imagen",
+        "image_background",
+        "fondo_imagen",
+        "image_prompt",
+        "prompt_imagen",
+    }
+    if not any(key in metadata for key in image_keys):
+        return tuple(lines)
+    background = str(
+        metadata.get("image_background", metadata.get("fondo_imagen", "white"))
+    ).strip().lower()
+    background = {
+        "blanco": "white",
+        "transparente": "transparent",
+    }.get(background, background)
+    if background not in {"white", "transparent"}:
+        background = "white"
+    cleanup_strength = str(
+        metadata.get(
+            "image_cleanup_strength",
+            metadata.get("limpieza_imagen", "balanced"),
+        )
+    ).strip().lower()
+    if cleanup_strength not in {"normal", "balanced", "aggressive"}:
+        cleanup_strength = "balanced"
+
+    improved: list[_OfficialPresentationLine] = []
+    for line in lines:
+        if line.image_content is None or line.image_content_type is None:
+            improved.append(line)
+            continue
+        try:
+            content, content_type = improve_product_image_bytes(
+                line.image_content,
+                line.image_content_type,
+                background=background,
+                min_size=900,
+                cleanup_strength=cleanup_strength,
+                remove_shadow=line.origin == "imported",
+            )
+        except (OSError, ValueError):
+            improved.append(line)
+            continue
+        improved.append(
+            replace(
+                line,
+                image_content=content,
+                image_content_type=content_type,
+            )
+        )
+    return tuple(improved)
+
+
+def _quotation_cell_text(
+    cell: ET.Element | None,
+    shared_strings: Sequence[bytes],
+) -> str:
+    if cell is None:
+        return ""
+    cell_type = cell.attrib.get("t")
+    if cell_type == "inlineStr":
+        return "".join(
+            node.text or ""
+            for node in cell.findall(f".//{{{_SHEET_NS}}}t")
+        )
+    value = cell.findtext(f"{{{_SHEET_NS}}}v")
+    if cell_type == "s" and value is not None and value.isdigit():
+        index = int(value)
+        if index >= len(shared_strings):
+            raise ValueError("Shared string fuera de rango en Quotation")
+        root = ET.fromstring(shared_strings[index])
+        return "".join(
+            node.text or "" for node in root.findall(f".//{{{_SHEET_NS}}}t")
+        )
+    return value or ""
+
+
+def _quotation_row_cell(row: ET.Element, column: str) -> ET.Element | None:
+    row_number = row.attrib.get("r", "")
+    return row.find(f"{{{_SHEET_NS}}}c[@r='{column}{row_number}']")
+
+
+@dataclass(frozen=True)
+class _QuotationContentLayout:
+    first_row: int
+    last_row: int
+    last_populated_row: int
+    section_rows: tuple[int, ...]
+    product_rows: tuple[int, ...]
+    product_sections: Mapping[int, str]
+
+
+@dataclass(frozen=True)
+class _QuotationColumnLayout:
+    transformed: bool
+    description: str
+    dimension: str
+    color: str
+    quantity: str
+    volume: str
+    total_volume: str
+    unit_price: str
+    total_price: str
+    remark: str
+    visible_end: int
+
+
+def _quotation_column_layout(
+    rows: Mapping[int, ET.Element],
+    layout: _QuotationContentLayout,
+    shared_strings: Sequence[bytes],
+) -> _QuotationColumnLayout:
+    header = rows.get(layout.first_row - 1)
+    if header is None:
+        raise ValueError("Quotation sin encabezado visible")
+    fourth = _quotation_cell_text(
+        _quotation_row_cell(header, "D"),
+        shared_strings,
+    ).strip()
+    fifth = _quotation_cell_text(
+        _quotation_row_cell(header, "E"),
+        shared_strings,
+    ).strip()
+    tenth = _quotation_cell_text(
+        _quotation_row_cell(header, "J"),
+        shared_strings,
+    ).strip()
+    eleventh = _quotation_cell_text(
+        _quotation_row_cell(header, "K"),
+        shared_strings,
+    ).strip()
+    description_headers = {"description", "descripcion", "descripción"}
+    if (
+        fourth.casefold() == "trasformacion"
+        and fifth.casefold() in description_headers
+    ):
+        return _QuotationColumnLayout(
+            transformed=True,
+            description="E",
+            dimension="F",
+            color="G",
+            quantity="H",
+            volume="I",
+            total_volume="J",
+            unit_price="K",
+            total_price="L",
+            remark="M",
+            visible_end=13,
+        )
+    if (
+        fourth.casefold() in description_headers
+        or (
+            not fourth
+            and not fifth
+            and tenth.casefold() in {"unit price", "list price"}
+            and eleventh.casefold() in {"tot.price", "total price"}
+        )
+    ):
+        return _QuotationColumnLayout(
+            transformed=False,
+            description="D",
+            dimension="E",
+            color="F",
+            quantity="G",
+            volume="H",
+            total_volume="I",
+            unit_price="J",
+            total_price="K",
+            remark="L",
+            visible_end=12,
+        )
+    raise ValueError("Esquema de columnas Quotation no reconocido")
+
+
+def _quotation_content_rows(
+    sheet_root: ET.Element,
+    shared_strings: Sequence[bytes],
+) -> _QuotationContentLayout:
+    sheet_data = sheet_root.find(f"{{{_SHEET_NS}}}sheetData")
+    if sheet_data is None:
+        raise ValueError("Quotation original sin sheetData")
+    populated: list[int] = []
+    section_rows: list[int] = []
+    product_rows: list[int] = []
+    product_sections: dict[int, str] = {}
+    current_section = ""
+    for row in sheet_data.findall(f"{{{_SHEET_NS}}}row"):
+        row_number_text = row.attrib.get("r", "")
+        if not row_number_text.isdigit():
+            raise ValueError("Fila invalida en Quotation original")
+        row_number = int(row_number_text)
+        cells = row.findall(f"{{{_SHEET_NS}}}c")
+        if any(
+            cell.find(f"{{{_SHEET_NS}}}f") is not None
+            or _quotation_cell_text(cell, shared_strings).strip()
+            for cell in cells
+        ):
+            populated.append(row_number)
+        first = _quotation_cell_text(
+            _quotation_row_cell(row, "A"),
+            shared_strings,
+        ).strip()
+        second = _quotation_cell_text(
+            _quotation_row_cell(row, "B"),
+            shared_strings,
+        ).strip()
+        if first.startswith("-"):
+            current_section = " ".join(first.lstrip("-").split())
+            if not current_section:
+                raise ValueError("Seccion vacia en Quotation original")
+            section_rows.append(row_number)
+        try:
+            numeric_first = Decimal(first)
+        except (InvalidOperation, ValueError):
+            numeric_first = None
+        if numeric_first is not None and numeric_first.is_finite() and second:
+            if not current_section:
+                raise ValueError("Producto sin seccion en Quotation original")
+            product_rows.append(row_number)
+            product_sections[row_number] = current_section
+    if not populated or not section_rows or not product_rows:
+        raise ValueError("Quotation original sin filas de formato reutilizables")
+    content_rows = (*section_rows, *product_rows)
+    return _QuotationContentLayout(
+        first_row=min(content_rows),
+        last_row=max(content_rows),
+        last_populated_row=max(populated),
+        section_rows=tuple(section_rows),
+        product_rows=tuple(product_rows),
+        product_sections=product_sections,
+    )
+
+
+def _move_quotation_row(source: ET.Element, target_row: int) -> ET.Element:
+    source_row_text = source.attrib.get("r", "")
+    if not source_row_text.isdigit() or target_row <= 0:
+        raise ValueError("Fila invalida al desplazar Quotation")
+    source_row = int(source_row_text)
+    clone = deepcopy(source)
+    clone.attrib["r"] = str(target_row)
+    row_delta = target_row - source_row
+    for cell in clone.findall(f"{{{_SHEET_NS}}}c"):
+        coordinate = cell.attrib.get("r", "")
+        match = re.fullmatch(r"(?P<column>[A-Z]+)(?P<row>[1-9][0-9]*)", coordinate)
+        if match is None or int(match.group("row")) != source_row:
+            raise ValueError("Coordenada invalida al desplazar Quotation")
+        target_coordinate = f"{match.group('column')}{target_row}"
+        formula = cell.find(f"{{{_SHEET_NS}}}f")
+        if formula is not None and formula.text:
+            translated = _translate_formula_value(
+                "=" + formula.text,
+                coordinate,
+                target_coordinate,
+            )
+            if isinstance(translated, str) and translated.startswith("="):
+                formula.text = translated[1:]
+                cached = cell.find(f"{{{_SHEET_NS}}}v")
+                if cached is not None:
+                    cell.remove(cached)
+            reference = formula.attrib.get("ref")
+            if reference:
+                try:
+                    formula_range = CellRange(reference)
+                    formula_range.shift(row_shift=row_delta)
+                    formula.attrib["ref"] = str(formula_range)
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        "Referencia de formula invalida al desplazar Quotation"
+                    ) from None
+        cell.attrib["r"] = target_coordinate
+    return clone
+
+
+def _quotation_cell_column(cell: ET.Element) -> int:
+    coordinate = cell.attrib.get("r", "")
+    match = re.fullmatch(r"(?P<column>[A-Z]+)[1-9][0-9]*", coordinate)
+    if match is None:
+        raise ValueError("Coordenada de celda invalida en Quotation")
+    return column_index_from_string(match.group("column"))
+
+
+def _remove_quotation_sidecars(
+    row: ET.Element,
+    visible_end: int = 12,
+) -> None:
+    for cell in list(row.findall(f"{{{_SHEET_NS}}}c")):
+        if _quotation_cell_column(cell) > visible_end:
+            row.remove(cell)
+
+
+def _restore_quotation_sidecars(
+    sheet_data: ET.Element,
+    sidecars: Mapping[int, Sequence[ET.Element]],
+    source_rows: Mapping[int, ET.Element],
+) -> None:
+    rows = {
+        int(row.attrib["r"]): row
+        for row in sheet_data.findall(f"{{{_SHEET_NS}}}row")
+    }
+    for row_number, cells in sidecars.items():
+        target = rows.get(row_number)
+        if target is None:
+            target = ET.Element(
+                f"{{{_SHEET_NS}}}row",
+                dict(source_rows[row_number].attrib),
+            )
+            target.attrib["r"] = str(row_number)
+            sheet_data.append(target)
+            rows[row_number] = target
+        existing = {
+            cell.attrib.get("r", ""): cell
+            for cell in target.findall(f"{{{_SHEET_NS}}}c")
+        }
+        for source_cell in cells:
+            coordinate = source_cell.attrib["r"]
+            if coordinate in existing:
+                target.remove(existing[coordinate])
+            target.append(deepcopy(source_cell))
+        target[:] = sorted(
+            target,
+            key=lambda cell: (
+                _quotation_cell_column(cell)
+                if cell.tag == f"{{{_SHEET_NS}}}c"
+                else 1_000_000
+            ),
+        )
+    sheet_data[:] = sorted(
+        sheet_data,
+        key=lambda row: int(row.attrib["r"]),
+    )
+
+
+def _quotation_row_formula(row: ET.Element, column: str) -> str | None:
+    cell = _quotation_row_cell(row, column)
+    if cell is None:
+        return None
+    formula = cell.find(f"{{{_SHEET_NS}}}f")
+    return None if formula is None else "=" + (formula.text or "")
+
+
+def _shift_quotation_merge(reference: str, row_delta: int) -> str:
+    try:
+        cell_range = CellRange(reference)
+        cell_range.shift(row_shift=row_delta)
+    except (TypeError, ValueError):
+        raise ValueError("Merge invalido al desplazar Quotation") from None
+    return str(cell_range)
+
+
+def _replace_quotation_row(sheet_data: ET.Element, row: ET.Element) -> None:
+    target = int(row.attrib["r"])
+    for existing in list(sheet_data):
+        if existing.tag == f"{{{_SHEET_NS}}}row" and int(existing.attrib["r"]) == target:
+            sheet_data.remove(existing)
+            break
+    sheet_data.append(row)
+    sheet_data[:] = sorted(
+        sheet_data,
+        key=lambda item: int(item.attrib.get("r", "0")),
+    )
+
+
+def _quotation_media_extension(line: _OfficialPresentationLine) -> tuple[str, str]:
+    if line.image_content_type == "image/png":
+        return "png", "image/png"
+    if line.image_content_type == "image/jpeg":
+        return "jpeg", "image/jpeg"
+    raise ValueError("Formato de imagen de Proyecto no permitido en Quotation")
+
+
+def _quotation_decimal_value(
+    row: ET.Element,
+    column: str,
+    shared_strings: Sequence[bytes],
+) -> Decimal | None:
+    text = _quotation_cell_text(
+        _quotation_row_cell(row, column),
+        shared_strings,
+    ).strip()
+    if not text:
+        return None
+    try:
+        value = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    return value if value.is_finite() else None
+
+
+def _imported_line_matches_original(
+    row: ET.Element,
+    line: _OfficialPresentationLine,
+    shared_strings: Sequence[bytes],
+) -> bool:
+    name = _quotation_cell_text(
+        _quotation_row_cell(row, "B"),
+        shared_strings,
+    ).strip()
+    dimensions = _quotation_cell_text(
+        _quotation_row_cell(row, "E"),
+        shared_strings,
+    ).strip()
+    quantity = _quotation_decimal_value(row, "G", shared_strings)
+    price = _quotation_decimal_value(row, "J", shared_strings)
+    return (
+        name == line.name.strip()
+        and (not line.dimensions.strip() or dimensions == line.dimensions.strip())
+        and quantity == line.quantity
+        and price == line.original_cost
+    )
+
+
+def _ensure_image_content_type(
+    content_types: ET.Element,
+    extension: str,
+    content_type: str,
+) -> None:
+    namespace = "http://schemas.openxmlformats.org/package/2006/content-types"
+    matches = [
+        item
+        for item in content_types.findall(f"{{{namespace}}}Default")
+        if item.attrib.get("Extension", "").casefold() == extension.casefold()
+    ]
+    if matches:
+        if any(item.attrib.get("ContentType") != content_type for item in matches):
+            raise ValueError("Content type de imagen incompatible en Quotation")
+        return
+    ET.SubElement(
+        content_types,
+        f"{{{namespace}}}Default",
+        {"Extension": extension, "ContentType": content_type},
+    )
+
+
+def _quotation_column_width_emu(
+    sheet_root: ET.Element,
+    column_index: int,
+) -> int:
+    if type(column_index) is not int or column_index < 1:
+        raise ValueError("Columna Quotation inválida")
+    sheet_format = sheet_root.find(f"{{{_SHEET_NS}}}sheetFormatPr")
+    default_width = 8.43
+    if sheet_format is not None and sheet_format.attrib.get("defaultColWidth"):
+        default_width = float(sheet_format.attrib["defaultColWidth"])
+    columns = sheet_root.find(f"{{{_SHEET_NS}}}cols")
+    width = default_width
+    if columns is not None:
+        for item in columns.findall(f"{{{_SHEET_NS}}}col"):
+            minimum = int(item.attrib.get("min", "0"))
+            maximum = int(item.attrib.get("max", "0"))
+            if minimum <= column_index <= maximum:
+                width = float(item.attrib.get("width", default_width))
+    if not math.isfinite(width) or width <= 0:
+        raise ValueError("Ancho de columna Quotation inválido")
+    pixels = (
+        max(1, round(width * 12))
+        if width < 1
+        else max(1, math.floor(width * 7 + 5))
+    )
+    return int(pixels_to_EMU(pixels))
+
+
+def _quotation_row_height_emu(
+    sheet_root: ET.Element,
+    row_number: int,
+) -> int:
+    if type(row_number) is not int or row_number < 1:
+        raise ValueError("Fila Quotation inválida")
+    sheet_format = sheet_root.find(f"{{{_SHEET_NS}}}sheetFormatPr")
+    default_height = 15.0
+    if sheet_format is not None and sheet_format.attrib.get("defaultRowHeight"):
+        default_height = float(sheet_format.attrib["defaultRowHeight"])
+    row = sheet_root.find(
+        f"{{{_SHEET_NS}}}sheetData/{{{_SHEET_NS}}}row[@r='{row_number}']"
+    )
+    height = (
+        float(row.attrib["ht"])
+        if row is not None and row.attrib.get("ht")
+        else default_height
+    )
+    if not math.isfinite(height) or height <= 0:
+        raise ValueError("Altura de fila Quotation inválida")
+    return max(1, round(height * 12_700))
+
+
+def _quotation_image_box(
+    sheet_root: ET.Element,
+    row_number: int,
+) -> tuple[int, int, int, int, int, int]:
+    cell_width = _quotation_column_width_emu(sheet_root, 3)
+    cell_height = _quotation_row_height_emu(sheet_root, row_number)
+    horizontal_margin = max(1, round(cell_width * 0.04))
+    vertical_margin = max(1, round(cell_height * 0.04))
+    width = cell_width - 2 * horizontal_margin
+    height = cell_height - 2 * vertical_margin
+    if width <= 0 or height <= 0:
+        raise ValueError("Celda Photo sin espacio utilizable")
+    return (
+        cell_width,
+        cell_height,
+        horizontal_margin,
+        vertical_margin,
+        width,
+        height,
+    )
+
+
+def _quotation_anchor_dimensions(anchor: ET.Element) -> tuple[int, int]:
+    extent = anchor.find(f"{{{_XDR_NS}}}ext")
+    if extent is None:
+        extent = anchor.find(
+            f".//{{{_DRAWING_NS}}}xfrm/{{{_DRAWING_NS}}}ext"
+        )
+    if extent is None:
+        raise ValueError("Imagen Quotation sin dimensiones")
+    width = int(extent.attrib.get("cx", "0"))
+    height = int(extent.attrib.get("cy", "0"))
+    if width <= 0 or height <= 0:
+        raise ValueError("Dimensiones de imagen Quotation inválidas")
+    return width, height
+
+
+def _contained_quotation_product_anchor(
+    anchor: ET.Element,
+    *,
+    target_row: int,
+    sheet_root: ET.Element,
+) -> ET.Element:
+    picture = anchor.find(f"{{{_XDR_NS}}}pic")
+    if picture is None:
+        raise ValueError("Ancla de producto Quotation sin imagen")
+    source_width, source_height = _quotation_anchor_dimensions(anchor)
+    (
+        _cell_width,
+        _cell_height,
+        left,
+        top,
+        box_width,
+        box_height,
+    ) = _quotation_image_box(sheet_root, target_row)
+    scale = min(1.0, box_width / source_width, box_height / source_height)
+    width = max(1, int(source_width * scale))
+    height = max(1, int(source_height * scale))
+    column_offset = left + (box_width - width) // 2
+    row_offset = top + (box_height - height) // 2
+
+    normalized = ET.Element(f"{{{_XDR_NS}}}oneCellAnchor")
+    marker = ET.SubElement(normalized, f"{{{_XDR_NS}}}from")
+    for tag, value in (
+        ("col", 2),
+        ("colOff", column_offset),
+        ("row", target_row - 1),
+        ("rowOff", row_offset),
+    ):
+        ET.SubElement(marker, f"{{{_XDR_NS}}}{tag}").text = str(value)
+    ET.SubElement(
+        normalized,
+        f"{{{_XDR_NS}}}ext",
+        {"cx": str(width), "cy": str(height)},
+    )
+    picture_copy = deepcopy(picture)
+    shape_extent = picture_copy.find(
+        f".//{{{_DRAWING_NS}}}xfrm/{{{_DRAWING_NS}}}ext"
+    )
+    if shape_extent is not None:
+        shape_extent.attrib.update({"cx": str(width), "cy": str(height)})
+    normalized.append(picture_copy)
+    client_data = anchor.find(f"{{{_XDR_NS}}}clientData")
+    normalized.append(
+        deepcopy(client_data)
+        if client_data is not None
+        else ET.Element(f"{{{_XDR_NS}}}clientData")
+    )
+    return normalized
+
+
+def _augment_quotation_drawing(
+    package: XlsxPackage,
+    sheet_part: str,
+    sheet_root: ET.Element,
+    images: Sequence[tuple[int, _OfficialPresentationLine]],
+    *,
+    content_first_row: int | None = None,
+    content_last_row: int | None = None,
+    last_populated_row: int | None = None,
+    content_row_map: Mapping[int, int] | None = None,
+    footer_delta: int = 0,
+) -> tuple[dict[str, bytes], dict[str, bytes]]:
+    row_map = dict(content_row_map or {})
+    remap_requested = content_first_row is not None
+    if not images and not remap_requested:
+        return {}, {}
+    drawings = sheet_root.findall(f"{{{_SHEET_NS}}}drawing")
+    if not drawings:
+        if images:
+            raise ValueError(
+                "Quotation original sin dibujo reutilizable para agregar imagenes"
+            )
+        return {}, {}
+    if len(drawings) != 1:
+        raise ValueError("Quotation original requiere un dibujo unico para agregar imagenes")
+    if remap_requested and (
+        content_last_row is None
+        or last_populated_row is None
+        or content_first_row > content_last_row
+        or content_last_row > last_populated_row
+    ):
+        raise ValueError("Rango de contenido invalido al desplazar imagenes Quotation")
+    sheet_rels_part = relationship_part_name(sheet_part)
+    sheet_rels = ET.fromstring(package.parts[sheet_rels_part])
+    drawing_id = drawings[0].attrib.get(f"{{{_OFFICE_REL_NS}}}id", "")
+    drawing_relationship = next(
+        (
+            item
+            for item in sheet_rels.findall(f"{{{_PKG_REL_NS}}}Relationship")
+            if item.attrib.get("Id") == drawing_id
+            and item.attrib.get("Type") in relationship_type_uris("drawing")
+        ),
+        None,
+    )
+    if drawing_relationship is None:
+        raise ValueError("Relacion de dibujo invalida en Quotation original")
+    drawing_part = resolve_internal_target(
+        sheet_part,
+        drawing_relationship.attrib["Target"],
+    )
+    drawing_rels_part = relationship_part_name(drawing_part)
+    drawing_root = ET.fromstring(package.parts[drawing_part])
+    drawing_rels = ET.fromstring(package.parts[drawing_rels_part])
+    content_types = ET.fromstring(package.parts["[Content_Types].xml"])
+    if remap_requested:
+        assert content_first_row is not None
+        assert content_last_row is not None
+        assert last_populated_row is not None
+        for anchor in list(drawing_root):
+            marker = anchor.find(f"{{{_XDR_NS}}}from")
+            row_node = (
+                marker.find(f"{{{_XDR_NS}}}row")
+                if marker is not None
+                else None
+            )
+            if row_node is None or row_node.text is None:
+                continue
+            source_row = int(row_node.text) + 1
+            if content_first_row <= source_row <= content_last_row:
+                target_row = row_map.get(source_row)
+                if target_row is None:
+                    drawing_root.remove(anchor)
+                    continue
+                if anchor.find(f"{{{_XDR_NS}}}pic") is not None:
+                    index = list(drawing_root).index(anchor)
+                    drawing_root.remove(anchor)
+                    drawing_root.insert(
+                        index,
+                        _contained_quotation_product_anchor(
+                            anchor,
+                            target_row=target_row,
+                            sheet_root=sheet_root,
+                        ),
+                    )
+                    continue
+                row_delta = target_row - source_row
+            elif content_last_row < source_row <= last_populated_row:
+                row_delta = footer_delta
+            else:
+                row_delta = 0
+            if row_delta:
+                for marker_name in ("from", "to"):
+                    target_marker = anchor.find(f"{{{_XDR_NS}}}{marker_name}")
+                    target_row_node = (
+                        target_marker.find(f"{{{_XDR_NS}}}row")
+                        if target_marker is not None
+                        else None
+                    )
+                    if target_row_node is None or target_row_node.text is None:
+                        continue
+                    shifted = int(target_row_node.text) + row_delta
+                    if shifted < 0:
+                        raise ValueError(
+                            "Imagen fuera de rango al desplazar Quotation"
+                        )
+                    target_row_node.text = str(shifted)
+    additions: dict[str, bytes] = {}
+    used_relationship_ids = {
+        item.attrib.get("Id", "")
+        for item in drawing_rels.findall(f"{{{_PKG_REL_NS}}}Relationship")
+    }
+    picture_id = _next_picture_id(drawing_root)
+    for sequence, (row, line) in enumerate(images, start=1):
+        extension, content_type = _quotation_media_extension(line)
+        media_part = f"xl/media/project_quotation_{sequence:04d}.{extension}"
+        while media_part in package.parts or media_part in additions:
+            sequence += 1
+            media_part = f"xl/media/project_quotation_{sequence:04d}.{extension}"
+        relationship_id = _next_relationship_id(used_relationship_ids)
+        used_relationship_ids.add(relationship_id)
+        ET.SubElement(
+            drawing_rels,
+            f"{{{_PKG_REL_NS}}}Relationship",
+            {
+                "Id": relationship_id,
+                "Type": _stable_image_relationship_type(drawing_rels),
+                "Target": posixpath.relpath(
+                    media_part,
+                    posixpath.dirname(drawing_part),
+                ),
+            },
+        )
+        assert line.image_content is not None
+        with PILImage.open(BytesIO(line.image_content)) as image:
+            width, height = image.size
+            image.verify()
+        (
+            cell_width,
+            cell_height,
+            box_left,
+            box_top,
+            box_width,
+            box_height,
+        ) = _quotation_image_box(sheet_root, row)
+        anchor = _product_image_anchor(
+            relationship_id=relationship_id,
+            picture_id=picture_id,
+            target_row=row,
+            width=width,
+            height=height,
+            name=f"Imagen de Proyecto {sequence:04d}",
+            cell_width=cell_width,
+            cell_height=cell_height,
+            box=(box_left, box_top, box_width, box_height),
+        )
+        marker = anchor.find(f"{{{_XDR_NS}}}from")
+        column = marker.find(f"{{{_XDR_NS}}}col") if marker is not None else None
+        if column is None:
+            raise ValueError("Ancla de imagen invalida para Quotation")
+        column.text = "2"
+        drawing_root.append(anchor)
+        picture_id += 1
+        additions[media_part] = line.image_content
+        _ensure_image_content_type(content_types, extension, content_type)
+    replacements = {
+        drawing_part: ET.tostring(
+            drawing_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        ),
+        drawing_rels_part: ET.tostring(
+            drawing_rels,
+            encoding="utf-8",
+            xml_declaration=True,
+        ),
+        "[Content_Types].xml": ET.tostring(
+            content_types,
+            encoding="utf-8",
+            xml_declaration=True,
+        ),
+    }
+    return replacements, additions
+
+
+def _augment_original_quotation(
+    source: bytes,
+    lines: Sequence[_OfficialPresentationLine],
+) -> tuple[bytes, dict[str, int], dict[str, Decimal]]:
+    """Conserva la Quotation importada y agrega al final las líneas del catálogo."""
+
+    if not isinstance(source, bytes):
+        raise TypeError("La Quotation original debe recibirse como bytes")
+    normalized = _normalized_quotation_snapshot(source)
+    package = XlsxPackage.from_bytes(normalized)
+    try:
+        sheet_part = package.sheet_part("Quotation")
+    except KeyError as error:
+        raise ValueError("La fuente importada no contiene Quotation") from error
+    sheet_root, sheet_namespace_prefixes = _parse_worksheet_document(
+        package.parts[sheet_part]
+    )
+    shared_strings = package.shared_strings()
+    layout = _quotation_content_rows(sheet_root, shared_strings)
+    sheet_data = sheet_root.find(f"{{{_SHEET_NS}}}sheetData")
+    assert sheet_data is not None
+    source_rows = {
+        int(row.attrib["r"]): row
+        for row in sheet_data.findall(f"{{{_SHEET_NS}}}row")
+    }
+    columns = _quotation_column_layout(source_rows, layout, shared_strings)
+    absolute_sidecars = {
+        row_number: tuple(
+            deepcopy(cell)
+            for cell in row.findall(f"{{{_SHEET_NS}}}c")
+            if _quotation_cell_column(cell) > columns.visible_end
+        )
+        for row_number, row in source_rows.items()
+        if layout.first_row <= row_number <= layout.last_populated_row
+    }
+    absolute_sidecars = {
+        row_number: cells
+        for row_number, cells in absolute_sidecars.items()
+        if cells
+    }
+    section_style_row = source_rows[layout.section_rows[-1]]
+    product_style_row = source_rows[layout.product_rows[-1]]
+    quotation_rows: dict[str, int] = {}
+    quotation_rates: dict[str, Decimal] = {}
+    grouped_lines: OrderedDict[
+        str, tuple[str, list[_OfficialPresentationLine]]
+    ] = OrderedDict()
+    for line in lines:
+        if line.item_key in quotation_rows:
+            raise ValueError("Linea de Proyecto duplicada al ampliar Quotation")
+        section_key = safe_excel_text(line.section_id).strip()
+        if not section_key:
+            section_key = "title:" + " ".join(line.section_title.split()).casefold()
+        title, grouped = grouped_lines.setdefault(
+            section_key,
+            (line.section_title, []),
+        )
+        if title != line.section_title:
+            raise ValueError("Titulo de seccion inconsistente al ampliar Quotation")
+        grouped.append(line)
+    if not grouped_lines:
+        raise ValueError("Proyecto sin lineas para ampliar Quotation")
+
+    available_sections: dict[str, list[int]] = {}
+    for row_number in layout.section_rows:
+        title = _quotation_cell_text(
+            _quotation_row_cell(source_rows[row_number], "A"),
+            shared_strings,
+        )
+        key = " ".join(title.lstrip("-").split()).casefold()
+        available_sections.setdefault(key, []).append(row_number)
+
+    planned_rows: list[ET.Element] = []
+    planned_merge_sources: list[tuple[int, int]] = []
+    source_product_targets: dict[int, int] = {}
+    used_product_rows: set[int] = set()
+    product_targets: list[int] = []
+    product_index = 0
+    cursor = layout.first_row
+    added_images: list[tuple[int, _OfficialPresentationLine]] = []
+    for _section_id, (section_title, grouped) in grouped_lines.items():
+        title_key = " ".join(section_title.split()).casefold()
+        matching_sections = available_sections.get(title_key, [])
+        section_source_row = (
+            matching_sections.pop(0)
+            if matching_sections
+            else int(section_style_row.attrib["r"])
+        )
+        section_target_row = cursor
+        section = _move_quotation_row(
+            source_rows[section_source_row],
+            section_target_row,
+        )
+        _remove_quotation_sidecars(section, columns.visible_end)
+        _set_inline_string(
+            section,
+            f"A{section_target_row}",
+            "- " + safe_excel_text(section_title),
+        )
+        planned_merge_sources.append((section_source_row, section_target_row))
+        planned_rows.append(section)
+        cursor += 1
+        first_product_row = cursor
+        for line in grouped:
+            product_index += 1
+            source_product_row = (
+                line.source_row
+                if line.origin == "imported"
+                and line.source_row in layout.product_rows
+                else None
+            )
+            if source_product_row is not None:
+                if source_product_row in used_product_rows:
+                    raise ValueError(
+                        "Fila importada duplicada al ampliar Quotation"
+                    )
+                used_product_rows.add(source_product_row)
+                product_source = source_rows[source_product_row]
+                source_product_targets[source_product_row] = cursor
+            else:
+                product_source = product_style_row
+            product_source_row = int(product_source.attrib["r"])
+            product = _move_quotation_row(product_source, cursor)
+            _remove_quotation_sidecars(product, columns.visible_end)
+            _set_number(product, f"A{cursor}", Decimal(product_index))
+            _set_inline_string(product, f"B{cursor}", safe_excel_text(line.name))
+            if source_product_row is None:
+                _set_inline_string(
+                    product,
+                    f"{columns.description}{cursor}",
+                    safe_excel_text(line.description),
+                )
+            _set_inline_string(
+                product,
+                f"{columns.dimension}{cursor}",
+                safe_excel_text(line.dimensions),
+            )
+            _set_number(product, f"{columns.quantity}{cursor}", line.quantity)
+            _set_number(product, f"{columns.volume}{cursor}", line.m3)
+            _set_formula(
+                product,
+                f"{columns.total_volume}{cursor}",
+                (
+                    f"={columns.quantity}{cursor}"
+                    f"*{columns.volume}{cursor}"
+                ),
+            )
+            _set_number(
+                product,
+                f"{columns.unit_price}{cursor}",
+                line.converted_cost,
+            )
+            _set_formula(
+                product,
+                f"{columns.total_price}{cursor}",
+                (
+                    f"={columns.quantity}{cursor}"
+                    f"*{columns.unit_price}{cursor}"
+                ),
+            )
+            if source_product_row is None:
+                for column in ("C", columns.color, columns.remark):
+                    _set_inline_string(product, f"{column}{cursor}", "")
+            planned_merge_sources.append((product_source_row, cursor))
+            planned_rows.append(product)
+            if source_product_row is None and line.image_content is not None:
+                added_images.append((cursor, line))
+            quotation_rows[line.item_key] = cursor
+            quotation_rates[line.item_key] = Decimal("1")
+            product_targets.append(cursor)
+            cursor += 1
+        last_product_row = cursor - 1
+        _set_inline_string(
+            section,
+            f"{columns.total_volume}{section_target_row}",
+            f"- {safe_excel_text(section_title)} Tot.Price :",
+        )
+        _set_formula(
+            section,
+            f"{columns.unit_price}{section_target_row}",
+            (
+                f"=SUM({columns.total_price}{first_product_row}:"
+                f"{columns.total_price}{last_product_row})"
+            ),
+        )
+
+    new_last_content_row = cursor - 1
+    footer_delta = new_last_content_row - layout.last_row
+    footer_rows: list[ET.Element] = []
+    footer_targets: dict[int, ET.Element] = {}
+    for source_row_number in range(
+        layout.last_row + 1,
+        layout.last_populated_row + 1,
+    ):
+        source_row = source_rows.get(source_row_number)
+        if source_row is None:
+            continue
+        moved = _move_quotation_row(
+            source_row,
+            source_row_number + footer_delta,
+        )
+        _remove_quotation_sidecars(moved, columns.visible_end)
+        footer_rows.append(moved)
+        footer_targets[source_row_number] = moved
+
+    total_source_row = next(
+        (
+            row_number
+            for row_number in footer_targets
+            if _quotation_row_formula(
+                source_rows[row_number],
+                columns.total_volume,
+            )
+            is not None
+            and _quotation_row_formula(
+                source_rows[row_number],
+                columns.total_price,
+            )
+            is not None
+        ),
+        None,
+    )
+    if total_source_row is not None:
+        total_row = footer_targets[total_source_row]
+        target_row = total_source_row + footer_delta
+        first_product_target = min(product_targets)
+        last_product_target = max(product_targets)
+        _set_formula(
+            total_row,
+            f"{columns.total_volume}{target_row}",
+            (
+                f"=SUM({columns.total_volume}{first_product_target}:"
+                f"{columns.total_volume}{last_product_target})"
+            ),
+        )
+        _set_formula(
+            total_row,
+            f"{columns.total_price}{target_row}",
+            (
+                f"=SUM({columns.total_price}{first_product_target}:"
+                f"{columns.total_price}{last_product_target})"
+            ),
+        )
+
+    planned_target_numbers = {int(row.attrib["r"]) for row in planned_rows}
+    footer_target_numbers = {int(row.attrib["r"]) for row in footer_rows}
+    retained_rows = [
+        row
+        for row in sheet_data.findall(f"{{{_SHEET_NS}}}row")
+        if (
+            int(row.attrib["r"]) < layout.first_row
+            or int(row.attrib["r"]) > layout.last_populated_row
+        )
+        and int(row.attrib["r"]) not in planned_target_numbers
+        and int(row.attrib["r"]) not in footer_target_numbers
+    ]
+    sheet_data[:] = sorted(
+        (*retained_rows, *planned_rows, *footer_rows),
+        key=lambda row: int(row.attrib["r"]),
+    )
+    _restore_quotation_sidecars(
+        sheet_data,
+        absolute_sidecars,
+        source_rows,
+    )
+
+    merge_cells = sheet_root.find(f"{{{_SHEET_NS}}}mergeCells")
+    if merge_cells is not None:
+        original_merges = [
+            item.attrib.get("ref", "")
+            for item in merge_cells.findall(f"{{{_SHEET_NS}}}mergeCell")
+        ]
+        output_merges: list[str] = []
+        content_merge_map: dict[int, list[int]] = {}
+        for source_row_number, target_row_number in planned_merge_sources:
+            content_merge_map.setdefault(source_row_number, []).append(
+                target_row_number
+            )
+        for reference in original_merges:
+            try:
+                cell_range = CellRange(reference)
+            except (TypeError, ValueError):
+                raise ValueError("Merge invalido en Quotation original") from None
+            if cell_range.max_row < layout.first_row:
+                output_merges.append(reference)
+                continue
+            if cell_range.min_row > layout.last_row:
+                if cell_range.min_row <= layout.last_populated_row:
+                    if cell_range.max_row > layout.last_populated_row:
+                        raise ValueError(
+                            "Merge cruza el pie dinamico de Quotation"
+                        )
+                    output_merges.append(
+                        _shift_quotation_merge(reference, footer_delta)
+                    )
+                else:
+                    output_merges.append(reference)
+                continue
+            if (
+                cell_range.min_row < layout.first_row
+                or cell_range.max_row > layout.last_row
+                or cell_range.min_row != cell_range.max_row
+            ):
+                raise ValueError(
+                    "Merge cruza el bloque dinamico de Quotation"
+                )
+            for target_row in content_merge_map.get(cell_range.min_row, ()):
+                output_merges.append(
+                    _shift_quotation_merge(
+                        reference,
+                        target_row - cell_range.min_row,
+                    )
+                )
+        unique_merges = list(dict.fromkeys(output_merges))
+        for item in list(merge_cells):
+            merge_cells.remove(item)
+        for reference in unique_merges:
+            ET.SubElement(
+                merge_cells,
+                f"{{{_SHEET_NS}}}mergeCell",
+                {"ref": reference},
+            )
+        merge_cells.attrib["count"] = str(len(unique_merges))
+
+    dimension = sheet_root.find(f"{{{_SHEET_NS}}}dimension")
+    if dimension is not None:
+        try:
+            dimension_range = CellRange(dimension.attrib["ref"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("Dimension invalida en Quotation original") from None
+        target_last_populated = layout.last_populated_row + footer_delta
+        if target_last_populated > dimension_range.max_row:
+            dimension.attrib["ref"] = (
+                f"{get_column_letter(dimension_range.min_col)}"
+                f"{dimension_range.min_row}:"
+                f"{get_column_letter(max(dimension_range.max_col, columns.visible_end))}"
+                f"{target_last_populated}"
+            )
+    drawing_replacements, media_additions = _augment_quotation_drawing(
+        package,
+        sheet_part,
+        sheet_root,
+        tuple(added_images),
+        content_first_row=layout.first_row,
+        content_last_row=layout.last_row,
+        last_populated_row=layout.last_populated_row,
+        content_row_map=source_product_targets,
+        footer_delta=footer_delta,
+    )
+    replacements = {
+        sheet_part: _xml_bytes(sheet_root, sheet_namespace_prefixes),
+        **drawing_replacements,
+    }
+    snapshot = package.to_bytes(
+        PackageMutation(
+            replacements=replacements,
+            additions=media_additions,
+        )
+    )
+    XlsxPackage.from_bytes(snapshot)
+    return snapshot, quotation_rows, quotation_rates
+
+
+_QUOTATION_TRANSFORMATION_COLUMN = 4
+_QUOTATION_TRANSFORMATION_HEADER = "Trasformacion"
+_QUOTATION_DRAWING_NS = (
+    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+)
+_A1_CELL_TOKEN = re.compile(
+    r"(?P<column_absolute>\$?)(?P<column>[A-Z]+)"
+    r"(?P<row_absolute>\$?)(?P<row>[1-9][0-9]*)"
+)
+_QUOTATION_FORMULA_COLUMN = re.compile(r"(?P<absolute>\$?)(?P<column>[A-Z]+)")
+
+
+def _shift_a1_cell_for_quotation_column(cell: str) -> str:
+    match = _A1_CELL_TOKEN.fullmatch(cell)
+    if match is None:
+        raise ValueError("Referencia A1 inválida al ampliar Quotation")
+    column = column_index_from_string(match.group("column"))
+    if column >= _QUOTATION_TRANSFORMATION_COLUMN:
+        column += 1
+    return (
+        f"{match.group('column_absolute')}{get_column_letter(column)}"
+        f"{match.group('row_absolute')}{match.group('row')}"
+    )
+
+
+def _shift_quotation_column_range(reference: str) -> str:
+    try:
+        ranges = []
+        for token in reference.split():
+            start, separator, end = token.partition(":")
+            shifted_start = _shift_a1_cell_for_quotation_column(start)
+            shifted_end = (
+                _shift_a1_cell_for_quotation_column(end)
+                if separator
+                else ""
+            )
+            ranges.append(
+                f"{shifted_start}:{shifted_end}"
+                if separator
+                else shifted_start
+            )
+        if not ranges:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Referencia inválida al insertar columna en Quotation"
+        ) from None
+    return " ".join(ranges)
+
+
+def _shift_quotation_formula_range(value: str) -> str:
+    sheet_prefix = ""
+    reference = value
+    if "!" in value:
+        raw_sheet, reference = value.rsplit("!", 1)
+        normalized_sheet = raw_sheet
+        if (
+            len(normalized_sheet) >= 2
+            and normalized_sheet.startswith("'")
+            and normalized_sheet.endswith("'")
+        ):
+            normalized_sheet = normalized_sheet[1:-1].replace("''", "'")
+        if (
+            "[" in normalized_sheet
+            or normalized_sheet.casefold() != "quotation"
+        ):
+            return value
+        sheet_prefix = raw_sheet + "!"
+
+    shifted_parts: list[str] = []
+    for part in reference.split(":"):
+        if _A1_CELL_TOKEN.fullmatch(part):
+            shifted_parts.append(_shift_a1_cell_for_quotation_column(part))
+            continue
+        column_match = _QUOTATION_FORMULA_COLUMN.fullmatch(part)
+        if column_match is None:
+            return value
+        try:
+            column = column_index_from_string(column_match.group("column"))
+        except ValueError:
+            return value
+        if column > 16_384:
+            return value
+        if column >= _QUOTATION_TRANSFORMATION_COLUMN:
+            column += 1
+        shifted_parts.append(
+            f"{column_match.group('absolute')}{get_column_letter(column)}"
+        )
+    return sheet_prefix + ":".join(shifted_parts)
+
+
+def _shift_quotation_formula(formula: str) -> str:
+    if not isinstance(formula, str) or not formula.startswith("="):
+        raise ValueError("Fórmula inválida al insertar columna en Quotation")
+    try:
+        tokens = Tokenizer(formula).items
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Fórmula inválida al insertar columna en Quotation"
+        ) from None
+    return "=" + "".join(
+        _shift_quotation_formula_range(token.value)
+        if token.type == "OPERAND" and token.subtype == "RANGE"
+        else token.value
+        for token in tokens
+    )
+
+
+def _shift_quotation_formula_text(formula: str) -> str:
+    """Traslada una fórmula OOXML conservando si incluía el signo igual."""
+
+    if not isinstance(formula, str) or not formula.strip():
+        raise ValueError("Fórmula vacía al insertar columna en Quotation")
+    has_equals = formula.startswith("=")
+    shifted = _shift_quotation_formula(formula if has_equals else "=" + formula)
+    return shifted if has_equals else shifted[1:]
+
+
+def _shift_quotation_column_definitions(sheet_root: ET.Element) -> None:
+    columns = sheet_root.find(f"{{{_SHEET_NS}}}cols")
+    if columns is None:
+        return
+    shifted: list[ET.Element] = []
+    for definition in list(columns):
+        if definition.tag != f"{{{_SHEET_NS}}}col":
+            shifted.append(deepcopy(definition))
+            continue
+        try:
+            minimum = int(definition.attrib["min"])
+            maximum = int(definition.attrib["max"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("Definición de columna inválida en Quotation") from None
+        if minimum <= 0 or maximum < minimum:
+            raise ValueError("Definición de columna inválida en Quotation")
+        if maximum < _QUOTATION_TRANSFORMATION_COLUMN:
+            shifted.append(deepcopy(definition))
+            continue
+        if minimum < _QUOTATION_TRANSFORMATION_COLUMN:
+            before = deepcopy(definition)
+            before.attrib["max"] = str(_QUOTATION_TRANSFORMATION_COLUMN - 1)
+            shifted.append(before)
+        inserted = deepcopy(definition)
+        inserted.attrib["min"] = str(_QUOTATION_TRANSFORMATION_COLUMN)
+        inserted.attrib["max"] = str(_QUOTATION_TRANSFORMATION_COLUMN)
+        if minimum <= _QUOTATION_TRANSFORMATION_COLUMN <= maximum:
+            shifted.append(inserted)
+        moved = deepcopy(definition)
+        moved.attrib["min"] = str(
+            max(minimum, _QUOTATION_TRANSFORMATION_COLUMN) + 1
+        )
+        moved.attrib["max"] = str(maximum + 1)
+        shifted.append(moved)
+    columns[:] = sorted(
+        shifted,
+        key=lambda item: (
+            int(item.attrib.get("min", "0")),
+            int(item.attrib.get("max", "0")),
+        ),
+    )
+
+
+def _shift_quotation_worksheet_references(sheet_root: ET.Element) -> None:
+    reference_attributes = {
+        "dimension": ("ref",),
+        "mergeCell": ("ref",),
+        "autoFilter": ("ref",),
+        "sortState": ("ref",),
+        "hyperlink": ("ref",),
+        "conditionalFormatting": ("sqref",),
+        "dataValidation": ("sqref",),
+        "ignoredError": ("sqref",),
+        "protectedRange": ("sqref",),
+        "selection": ("activeCell", "sqref"),
+        "pane": ("topLeftCell",),
+    }
+    for auto_filter in (
+        element
+        for element in sheet_root.iter()
+        if element.tag.rsplit("}", 1)[-1] == "autoFilter"
+    ):
+        reference = auto_filter.attrib.get("ref")
+        if not reference:
+            continue
+        try:
+            filter_range = CellRange(reference)
+        except (TypeError, ValueError):
+            raise ValueError("Rango de filtro inválido en Quotation") from None
+        if not (
+            filter_range.min_col < _QUOTATION_TRANSFORMATION_COLUMN
+            <= filter_range.max_col
+        ):
+            continue
+        insertion_index = (
+            _QUOTATION_TRANSFORMATION_COLUMN - filter_range.min_col
+        )
+        for filter_column in (
+            element
+            for element in auto_filter.iter()
+            if element.tag.rsplit("}", 1)[-1] == "filterColumn"
+        ):
+            try:
+                column_id = int(filter_column.attrib["colId"])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(
+                    "Columna de filtro inválida en Quotation"
+                ) from None
+            if column_id >= insertion_index:
+                filter_column.attrib["colId"] = str(column_id + 1)
+    for element in sheet_root.iter():
+        local_name = element.tag.rsplit("}", 1)[-1]
+        namespace = (
+            element.tag[1:].split("}", 1)[0]
+            if element.tag.startswith("{")
+            else ""
+        )
+        for attribute in reference_attributes.get(local_name, ()):
+            value = element.attrib.get(attribute)
+            if value:
+                element.attrib[attribute] = _shift_quotation_column_range(value)
+        if local_name == "sqref" and element.text and element.text.strip():
+            element.text = _shift_quotation_column_range(element.text)
+        if (
+            local_name in {"formula", "formula1", "formula2"}
+            and element.text
+            and element.text.strip()
+        ):
+            element.text = _shift_quotation_formula_text(element.text)
+        elif (
+            local_name == "f"
+            and namespace != _SHEET_NS
+            and element.text
+            and element.text.strip()
+        ):
+            element.text = _shift_quotation_formula_text(element.text)
+
+
+def _shift_quotation_formula_cell(cell: ET.Element) -> None:
+    coordinate = cell.attrib.get("r", "")
+    match = re.fullmatch(
+        r"(?P<column>[A-Z]+)(?P<row>[1-9][0-9]*)",
+        coordinate,
+    )
+    if match is None:
+        raise ValueError("Coordenada inválida al insertar columna en Quotation")
+    column = column_index_from_string(match.group("column"))
+    formula = cell.find(f"{{{_SHEET_NS}}}f")
+    if formula is not None:
+        if formula.text:
+            formula.text = _shift_quotation_formula("=" + formula.text)[1:]
+        reference = formula.attrib.get("ref")
+        if reference:
+            formula.attrib["ref"] = _shift_quotation_column_range(reference)
+        cached = cell.find(f"{{{_SHEET_NS}}}v")
+        if cached is not None:
+            cell.remove(cached)
+    if column >= _QUOTATION_TRANSFORMATION_COLUMN:
+        cell.attrib["r"] = (
+            f"{get_column_letter(column + 1)}{match.group('row')}"
+        )
+
+
+def _insert_quotation_text_cell(
+    row: ET.Element,
+    coordinate: str,
+    value: str,
+) -> None:
+    row_number = row.attrib.get("r", "")
+    if not row_number.isdigit() or not coordinate.endswith(row_number):
+        raise ValueError("Fila inválida al escribir transformación Quotation")
+    style_source = _quotation_row_cell(row, "E")
+    if style_source is not None and _quotation_row_cell(row, "D") is None:
+        clone = deepcopy(style_source)
+        clone.attrib["r"] = coordinate
+        for child in list(clone):
+            clone.remove(child)
+        clone.attrib.pop("t", None)
+        row.append(clone)
+    _set_inline_string(row, coordinate, safe_excel_text(value))
+    row[:] = sorted(
+        row,
+        key=lambda item: (
+            _quotation_cell_column(item)
+            if item.tag == f"{{{_SHEET_NS}}}c"
+            else 1_000_000
+        ),
+    )
+
+
+def _shift_quotation_related_parts(
+    package: XlsxPackage,
+    sheet_part: str,
+    sheet_root: ET.Element,
+) -> dict[str, bytes]:
+    rels_part = relationship_part_name(sheet_part)
+    if rels_part not in package.parts:
+        return {}
+    rels_root = ET.fromstring(package.parts[rels_part])
+    relationships = {
+        item.attrib.get("Id"): item
+        for item in rels_root.findall(f"{{{_PKG_REL_NS}}}Relationship")
+    }
+    replacements: dict[str, bytes] = {}
+    for drawing in sheet_root.findall(f"{{{_SHEET_NS}}}drawing"):
+        relationship_id = drawing.attrib.get(f"{{{_OFFICE_REL_NS}}}id")
+        relationship = relationships.get(relationship_id)
+        if relationship is None:
+            raise ValueError("Dibujo Quotation sin relación")
+        drawing_part = resolve_internal_target(
+            sheet_part,
+            relationship.attrib.get("Target", ""),
+        )
+        drawing_root = ET.fromstring(package.parts[drawing_part])
+        for marker_name in ("from", "to"):
+            for marker in drawing_root.findall(
+                f".//{{{_QUOTATION_DRAWING_NS}}}{marker_name}"
+            ):
+                column = marker.find(f"{{{_QUOTATION_DRAWING_NS}}}col")
+                if column is None or column.text is None:
+                    raise ValueError("Ancla de dibujo inválida en Quotation")
+                try:
+                    index = int(column.text)
+                except ValueError:
+                    raise ValueError(
+                        "Ancla de dibujo inválida en Quotation"
+                    ) from None
+                if index >= _QUOTATION_TRANSFORMATION_COLUMN - 1:
+                    column.text = str(index + 1)
+        replacements[drawing_part] = ET.tostring(
+            drawing_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+    for relationship in relationships.values():
+        relationship_type = relationship.attrib.get("Type")
+        if relationship_type in relationship_type_uris("comments"):
+            comments_part = resolve_internal_target(
+                sheet_part,
+                relationship.attrib.get("Target", ""),
+            )
+            comments_root = ET.fromstring(package.parts[comments_part])
+            for comment in comments_root.iter():
+                if comment.tag.rsplit("}", 1)[-1] != "comment":
+                    continue
+                reference = comment.attrib.get("ref")
+                if reference:
+                    comment.attrib["ref"] = _shift_quotation_column_range(
+                        reference
+                    )
+            replacements[comments_part] = ET.tostring(
+                comments_root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+            continue
+        if relationship_type in relationship_type_uris("vmlDrawing"):
+            vml_part = resolve_internal_target(
+                sheet_part,
+                relationship.attrib.get("Target", ""),
+            )
+            vml_root = ET.fromstring(package.parts[vml_part])
+            for element in vml_root.iter():
+                local_name = element.tag.rsplit("}", 1)[-1]
+                if local_name == "Column" and element.text is not None:
+                    try:
+                        column_index = int(element.text)
+                    except ValueError:
+                        raise ValueError(
+                            "Columna VML inválida en Quotation"
+                        ) from None
+                    if column_index >= _QUOTATION_TRANSFORMATION_COLUMN - 1:
+                        element.text = str(column_index + 1)
+                elif local_name == "Anchor" and element.text:
+                    parts = [part.strip() for part in element.text.split(",")]
+                    if len(parts) != 8:
+                        raise ValueError("Ancla VML inválida en Quotation")
+                    try:
+                        coordinates = [int(part) for part in parts]
+                    except ValueError:
+                        raise ValueError(
+                            "Ancla VML inválida en Quotation"
+                        ) from None
+                    for position in (0, 4):
+                        if (
+                            coordinates[position]
+                            >= _QUOTATION_TRANSFORMATION_COLUMN - 1
+                        ):
+                            coordinates[position] += 1
+                    element.text = ", ".join(str(value) for value in coordinates)
+            replacements[vml_part] = ET.tostring(
+                vml_root,
+                encoding="utf-8",
+                xml_declaration=True,
+            )
+            continue
+        if relationship_type not in relationship_type_uris("table"):
+            continue
+        table_part = resolve_internal_target(
+            sheet_part,
+            relationship.attrib.get("Target", ""),
+        )
+        table_root = ET.fromstring(package.parts[table_part])
+        table_reference = table_root.attrib.get("ref")
+        try:
+            table_range = (
+                CellRange(table_reference)
+                if table_reference
+                else None
+            )
+        except (TypeError, ValueError):
+            raise ValueError("Rango de tabla inválido en Quotation") from None
+        for element in table_root.iter():
+            if element.tag.rsplit("}", 1)[-1] in {
+                "table",
+                "autoFilter",
+                "sortState",
+                "sortCondition",
+            }:
+                reference = element.attrib.get("ref")
+                if reference:
+                    element.attrib["ref"] = _shift_quotation_column_range(
+                        reference
+                    )
+            local_name = element.tag.rsplit("}", 1)[-1]
+            if (
+                local_name in {"calculatedColumnFormula", "totalsRowFormula"}
+                and element.text
+                and element.text.strip()
+            ):
+                element.text = _shift_quotation_formula_text(element.text)
+        if (
+            table_range is not None
+            and table_range.min_col < _QUOTATION_TRANSFORMATION_COLUMN
+            <= table_range.max_col
+        ):
+            insertion_index = (
+                _QUOTATION_TRANSFORMATION_COLUMN - table_range.min_col
+            )
+            for filter_column in (
+                element
+                for element in table_root.iter()
+                if element.tag.rsplit("}", 1)[-1] == "filterColumn"
+            ):
+                try:
+                    column_id = int(filter_column.attrib["colId"])
+                except (KeyError, TypeError, ValueError):
+                    raise ValueError(
+                        "Columna de filtro de tabla inválida"
+                    ) from None
+                if column_id >= insertion_index:
+                    filter_column.attrib["colId"] = str(column_id + 1)
+            table_columns = next(
+                (
+                    element
+                    for element in table_root
+                    if element.tag.rsplit("}", 1)[-1] == "tableColumns"
+                ),
+                None,
+            )
+            if table_columns is None:
+                raise ValueError("Tabla Quotation sin definición de columnas")
+            columns = [
+                element
+                for element in table_columns
+                if element.tag.rsplit("}", 1)[-1] == "tableColumn"
+            ]
+            expected_columns = table_range.max_col - table_range.min_col + 1
+            if len(columns) != expected_columns:
+                raise ValueError("Definición de tabla Quotation inconsistente")
+            column_ids: list[int] = []
+            for column in columns:
+                try:
+                    column_id = int(column.attrib["id"])
+                except (KeyError, TypeError, ValueError):
+                    raise ValueError(
+                        "Identificador de columna de tabla inválido"
+                    ) from None
+                if column_id <= 0 or column_id in column_ids:
+                    raise ValueError(
+                        "Identificador de columna de tabla inválido"
+                    )
+                column_ids.append(column_id)
+            namespace = table_columns.tag.rsplit("}", 1)[0].lstrip("{")
+            inserted = ET.Element(
+                f"{{{namespace}}}tableColumn",
+                {
+                    "id": str(max(column_ids, default=0) + 1),
+                    "name": _QUOTATION_TRANSFORMATION_HEADER,
+                },
+            )
+            table_columns.insert(insertion_index, inserted)
+            table_columns.attrib["count"] = str(len(columns) + 1)
+        replacements[table_part] = ET.tostring(
+            table_root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+    return replacements
+
+
+def _shift_quotation_defined_names(package: XlsxPackage) -> bytes | None:
+    root = ET.fromstring(package.parts["xl/workbook.xml"])
+    changed = False
+
+    for defined_name in root.findall(
+        f"{{{_SHEET_NS}}}definedNames/{{{_SHEET_NS}}}definedName"
+    ):
+        if defined_name.text:
+            shifted = _shift_quotation_formula_text(defined_name.text)
+            if shifted != defined_name.text:
+                defined_name.text = shifted
+                changed = True
+    if not changed:
+        return None
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _insert_quotation_transformation_column(
+    source: bytes,
+    quotation_rows: Mapping[str, int],
+    processed_descriptions: Mapping[str, str],
+) -> bytes:
+    if not isinstance(source, bytes):
+        raise TypeError("La Quotation ampliada debe recibirse como bytes")
+    if set(quotation_rows) != set(processed_descriptions):
+        raise ValueError("Descripciones procesadas de Quotation incompletas")
+    package = XlsxPackage.from_bytes(source)
+    sheet_part = package.sheet_part("Quotation")
+    sheet_root, namespace_prefixes = _parse_worksheet_document(
+        package.parts[sheet_part]
+    )
+    sheet_data = sheet_root.find(f"{{{_SHEET_NS}}}sheetData")
+    if sheet_data is None:
+        raise ValueError("Quotation ampliada sin sheetData")
+    shared_strings = package.shared_strings()
+    layout = _quotation_content_rows(sheet_root, shared_strings)
+    rows = {
+        int(row.attrib["r"]): row
+        for row in sheet_data.findall(f"{{{_SHEET_NS}}}row")
+    }
+    column_layout = _quotation_column_layout(rows, layout, shared_strings)
+
+    def write_processed_descriptions() -> None:
+        used_rows: set[int] = set()
+        for item_key, row_number in quotation_rows.items():
+            if (
+                type(row_number) is not int
+                or row_number not in rows
+                or row_number in used_rows
+            ):
+                raise ValueError("Fila de transformación Quotation inválida")
+            used_rows.add(row_number)
+            _insert_quotation_text_cell(
+                rows[row_number],
+                f"D{row_number}",
+                processed_descriptions[item_key],
+            )
+
+    if column_layout.transformed:
+        write_processed_descriptions()
+        result = package.to_bytes(
+            PackageMutation(
+                replacements={
+                    sheet_part: _xml_bytes(sheet_root, namespace_prefixes),
+                }
+            )
+        )
+        XlsxPackage.from_bytes(result)
+        return result
+
+    for row in rows.values():
+        for cell in reversed(row.findall(f"{{{_SHEET_NS}}}c")):
+            _shift_quotation_formula_cell(cell)
+        row[:] = sorted(
+            row,
+            key=lambda item: (
+                _quotation_cell_column(item)
+                if item.tag == f"{{{_SHEET_NS}}}c"
+                else 1_000_000
+            ),
+        )
+    header_row = rows.get(layout.first_row - 1)
+    if header_row is None:
+        raise ValueError("Quotation sin encabezado visible para transformación")
+    _insert_quotation_text_cell(
+        header_row,
+        f"D{layout.first_row - 1}",
+        _QUOTATION_TRANSFORMATION_HEADER,
+    )
+    write_processed_descriptions()
+    _shift_quotation_column_definitions(sheet_root)
+    _shift_quotation_worksheet_references(sheet_root)
+    replacements = {
+        sheet_part: _xml_bytes(sheet_root, namespace_prefixes),
+        **_shift_quotation_related_parts(package, sheet_part, sheet_root),
+    }
+    workbook_xml = _shift_quotation_defined_names(package)
+    if workbook_xml is not None:
+        replacements["xl/workbook.xml"] = workbook_xml
+    result = package.to_bytes(PackageMutation(replacements=replacements))
+    XlsxPackage.from_bytes(result)
+    return result
 
 
 def _normalized_quotation_source(path: Path) -> bytes:
     """Devuelve un snapshot OOXML auditado sin mutar el XLSX recibido."""
 
     package = XlsxPackage.read(Path(path), audit=False)
-    names = set(package.parts)
-    replacements: dict[str, bytes] = {}
-    for name, bounded_payload in package.parts.items():
+    return _normalized_quotation_package(package)
+
+
+def _normalized_quotation_snapshot(content: bytes) -> bytes:
+    """Normaliza un snapshot en memoria producido al ampliar Quotation."""
+
+    package = XlsxPackage.from_bytes(content, audit=False)
+    return _normalized_quotation_package(package)
+
+
+def _normalized_quotation_package(package: XlsxPackage) -> bytes:
+    sanitized_parts = _strip_external_image_links_with_embedded_fallback(
+        package.parts
+    )
+    names = set(sanitized_parts)
+    replacements: dict[str, bytes] = {
+        name: content
+        for name, content in sanitized_parts.items()
+        if content != package.parts[name]
+    }
+    for name, bounded_payload in sanitized_parts.items():
         payload = bounded_payload
         entry_changed = False
         if name.endswith(".rels"):
@@ -3283,19 +5143,48 @@ def generate_quote(
             normalized_source,
             metadata,
         )
+    quotation_snapshot, quotation_rows, quotation_rates = _augment_original_quotation(
+        normalized_original or normalized_source,
+        lines,
+    )
     mobiliti = _build_official_mobiliti(
         base,
         lines,
         needs,
         canonical_rows,
         metadata,
+        quotation_rows,
+        quotation_rates,
     )
-    cotizacion = _build_official_cotizacion(base, lines, mobiliti, metadata)
-    quotation = (
-        transplant_quotation(normalized_original, base)
-        if normalized_original is not None
-        else None
+    cotizacion, cotizacion_sections = _build_official_cotizacion(
+        base,
+        lines,
+        mobiliti,
+        metadata,
+        quotation_rows,
     )
+    description_language = normalize_description_language(
+        metadata.get(
+            "description_language",
+            metadata.get("idioma_descripcion", "es"),
+        )
+    )
+    processed_descriptions_by_key = {
+        line.item_key: _official_cotizacion_description(
+            line,
+            description_language,
+        )
+        for line in lines
+    }
+    for section in cotizacion_sections:
+        for product in section.products:
+            processed_descriptions_by_key[product.item_key] = product.description
+    quotation_snapshot = _insert_quotation_transformation_column(
+        quotation_snapshot,
+        quotation_rows,
+        processed_descriptions_by_key,
+    )
+    quotation = transplant_quotation(quotation_snapshot, base)
     compose_official_quote(
         ComposeRequest(
             template=official_template,

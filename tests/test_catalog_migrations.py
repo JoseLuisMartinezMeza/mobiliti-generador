@@ -4,13 +4,17 @@ from pathlib import Path
 
 SETUP = Path("mobiliti_saas/supabase_setup")
 CATALOG_MIGRATION = SETUP / "2026_07_multi_supplier_catalogs.sql"
+JOME_LAUCO_MIGRATION = SETUP / "2026_07_jome_lauco_catalogs.sql"
 JOBS_RLS_MIGRATION = SETUP / "2026_07_jobs_rls.sql"
 BOOTSTRAP = SETUP / "create_tables.sql"
 MIXED_MIGRATION = SETUP / "2026_07_mixed_catalog_cart.sql"
 PHYSICAL_LIMITS_MIGRATION = SETUP / "2026_07_quote_physical_limits.sql"
 PHYSICAL_QUOTE_LINE_LIMIT = 1_048_512
-SQL_FILES = (CATALOG_MIGRATION, BOOTSTRAP)
-EXPECTED_SUPPLIERS = ("cr-global", "sonara", "sunon", "alma", "lumbro")
+SQL_FILES = (BOOTSTRAP,)
+EXPECTED_SUPPLIERS = (
+    "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
+)
+MIXED_CATALOG_COUNT = 9
 SUPPLIER_ALLOWLIST_CONTEXTS = (
     ("catalog sources", "CREATE TABLE IF NOT EXISTS saas_catalog_sources"),
     ("catalog snapshots", "CREATE TABLE IF NOT EXISTS saas_catalog_snapshot_versions"),
@@ -47,45 +51,30 @@ def _function_definition(sql, name):
     return re.sub(r"\s+", " ", sql[start:end]).strip()
 
 
-def test_quote_physical_limits_migration_replaces_both_reservation_rpcs_safely():
-    migration = PHYSICAL_LIMITS_MIGRATION.read_text(encoding="utf-8")
+def test_jome_lauco_migration_replaces_both_reservation_rpcs_safely():
+    migration = JOME_LAUCO_MIGRATION.read_text(encoding="utf-8")
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
 
     for name in ("saas_reserve_catalog_items", "saas_reserve_mixed_cart"):
-        migrated = _function_definition(migration, name)
         current = _function_definition(bootstrap, name)
-        assert migrated == current
-        assert f"> {PHYSICAL_QUOTE_LINE_LIMIT}" in migrated
-        assert "SECURITY DEFINER" in migrated
-        assert "SET search_path = public, pg_temp" in migrated
-        assert "FOR UPDATE" in migrated
-        assert "pg_advisory_xact_lock" in migrated
+        assert f"public.{name}" in migration
+        assert f"> {PHYSICAL_QUOTE_LINE_LIMIT}" in current
+        assert "SECURITY DEFINER" in current
+        assert "SET search_path = public, pg_temp" in current
+        assert "FOR UPDATE" in current
+        assert "pg_advisory_xact_lock" in current
 
-    catalog = _function_definition(migration, "saas_reserve_catalog_items")
-    historical_catalog = _function_definition(
-        CATALOG_MIGRATION.read_text(encoding="utf-8"),
-        "saas_reserve_catalog_items",
-    )
-    assert catalog == historical_catalog.replace(
-        "jsonb_array_length(p_lines) > 500",
-        f"jsonb_array_length(p_lines) > {PHYSICAL_QUOTE_LINE_LIMIT}",
-    )
+    catalog = _function_definition(bootstrap, "saas_reserve_catalog_items")
     assert "jsonb_array_length(p_lines) = 0" in catalog
     assert "jsonb_array_length(p_lines) > 500" not in catalog
+    assert "'jome','lauco'" in catalog
     assert "ORDER BY line ->> 'internal_id'" in catalog
     assert "INSERT INTO saas_catalog_reservations" in catalog
     assert "RETURN NEXT" in catalog
 
-    mixed = _function_definition(migration, "saas_reserve_mixed_cart")
-    historical_mixed = _function_definition(
-        MIXED_MIGRATION.read_text(encoding="utf-8"),
-        "saas_reserve_mixed_cart",
-    )
-    assert mixed == historical_mixed.replace(
-        "v_total_lines > 500",
-        f"v_total_lines > {PHYSICAL_QUOTE_LINE_LIMIT}",
-    )
-    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 7" in mixed
+    mixed = _function_definition(bootstrap, "saas_reserve_mixed_cart")
+    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 9" in mixed
+    assert "'jome','lauco'" in mixed
     assert "jsonb_array_length(v_group -> 'items') = 0" in mixed
     assert "IF v_total_lines = 0 THEN RETURN '[]'::JSONB; END IF;" in mixed
     assert "v_total_lines > 500" not in mixed
@@ -99,8 +88,8 @@ def test_quote_physical_limits_migration_replaces_both_reservation_rpcs_safely()
         "saas_reserve_mixed_cart(INTEGER, UUID, JSONB)",
     )
     for signature in signatures:
-        assert f"REVOKE ALL ON FUNCTION {signature}" in migration
-        assert f"GRANT EXECUTE ON FUNCTION {signature} TO service_role" in migration
+        assert f"REVOKE ALL ON FUNCTION {signature}" in bootstrap
+        assert f"GRANT EXECUTE ON FUNCTION {signature} TO service_role" in bootstrap
 
 
 def test_mixed_cart_rpcs_are_additive_atomic_and_service_role_only():
@@ -217,7 +206,7 @@ def _supplier_cardinality_guards(sql):
     ]
 
 
-def test_all_supplier_sql_allowlists_include_lumbro():
+def test_final_supplier_sql_allowlists_include_jome_and_lauco():
     for sql_path in SQL_FILES:
         sql = sql_path.read_text(encoding="utf-8")
         contexts = _supplier_allowlist_context_sql(sql)
@@ -235,22 +224,24 @@ def test_supplier_allowlist_helper_handles_supplier_operands_and_ignores_false_p
     sql = """
         -- p_supplier IN ('cr-global', 'sonara', 'sunon', 'alma')
         /* p_supplier = ANY(ARRAY['cr-global','sonara','sunon','alma']::TEXT[]) */
-        category IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro')
-        OR other_supplier IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro')
-        OR 'supplier IN (''cr-global'', ''sonara'', ''sunon'', ''alma'', ''lumbro'')' = 'example'
+        category IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco')
+        OR other_supplier IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco')
+        OR 'supplier IN (''cr-global'', ''sonara'', ''sunon'', ''alma'', ''lumbro'', ''jome'', ''lauco'')' = 'example'
         p_supplier IN (
             'cr-global'::TEXT,
             'sonara',
             'sunon',
             'alma',
-            'lumbro'
+            'lumbro',
+            'jome',
+            'lauco'
         )
         OR enabled_supplier.value NOT IN (
             'cr-global'::public.supplier_code,
-            'sonara', 'sunon', 'alma', 'lumbro'
+            'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco'
         )
         OR p_supplier = ANY(ARRAY[
-            'cr-global', 'sonara', 'sunon', 'alma', 'lumbro'
+            'cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco'
         ]::public.supplier_code[])
     """
 
@@ -270,24 +261,65 @@ def test_no_stale_four_supplier_sequences_remain_after_normalizing_sql():
         assert not stale_allowlist.search(_normalized_sql(sql_path.read_text(encoding="utf-8")))
 
 
-def test_supplier_array_cardinality_guards_allow_five_and_reject_invalid_inputs():
+def test_supplier_array_cardinality_guards_allow_seven_and_reject_invalid_inputs():
     for sql_path in SQL_FILES:
         sql = sql_path.read_text(encoding="utf-8")
         guards = _supplier_cardinality_guards(sql)
 
         assert len(guards) == 2
-        assert guards == [(1, 5), (1, 5)]
+        assert guards == [(1, 7), (1, 7)]
         for function_name in (
             "saas_recover_stale_catalog_sync_runs",
             "saas_claim_next_catalog_sync",
         ):
             function_sql = _function_sql(sql, function_name)
-            assert _supplier_cardinality_guards(function_sql) == [(1, 5)]
+            assert _supplier_cardinality_guards(function_sql) == [(1, 7)]
             assert "COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers)" in function_sql
             assert _supplier_allowlists(function_sql) == [EXPECTED_SUPPLIERS]
 
         assert all(minimum <= len(EXPECTED_SUPPLIERS) <= maximum for minimum, maximum in guards)
-        assert all(6 > maximum for _, maximum in guards)
+        assert all(8 > maximum for _, maximum in guards)
+
+
+def test_forward_jome_lauco_migration_widens_constraints_without_destructive_table_work():
+    migration = JOME_LAUCO_MIGRATION.read_text(encoding="utf-8")
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    constraints = (
+        ("saas_catalog_sources", "saas_catalog_sources_supplier_check"),
+        ("saas_catalog_snapshot_versions", "saas_catalog_snapshot_versions_supplier_check"),
+        ("saas_catalog_reservations", "saas_catalog_reservations_supplier_check"),
+    )
+
+    for table, constraint in constraints:
+        assert f"ALTER TABLE {table}\n    DROP CONSTRAINT IF EXISTS {constraint};" in migration
+        assert (
+            f"ALTER TABLE {table}\n    ADD CONSTRAINT {constraint}\n"
+            "    CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco'));"
+        ) in migration
+
+    functions = (
+        "saas_recover_stale_catalog_sync_runs",
+        "saas_claim_next_catalog_sync",
+        "saas_catalog_reservation_summary",
+        "saas_reserve_catalog_items",
+        "saas_reserve_mixed_cart",
+    )
+    assert migration.count("pg_get_functiondef") == 1
+    for function_name in functions:
+        current = _function_definition(bootstrap, function_name)
+        assert f"public.{function_name}" in migration
+        assert "SECURITY DEFINER" in current
+        assert "SET search_path = public, pg_temp" in current
+
+    assert "CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 7" in migration
+    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 9" in migration
+    mixed = _function_definition(bootstrap, "saas_reserve_mixed_cart")
+    assert f"v_total_lines > {PHYSICAL_QUOTE_LINE_LIMIT}" in mixed
+    assert "pg_advisory_xact_lock" in mixed
+    assert "FOR UPDATE" in mixed
+    assert "DROP TABLE" not in migration.upper()
+    assert "TRUNCATE" not in migration.upper()
+    assert "DELETE FROM" not in migration.upper()
 
 
 def test_catalog_migration_is_additive_and_enables_rls():
@@ -923,17 +955,16 @@ def test_jobs_rls_is_guarded_idempotent_and_non_destructive():
         assert destructive not in upper_sql
 
 
-def test_bootstrap_mirrors_catalog_migrations():
+def test_bootstrap_builds_historic_catalog_schema_with_final_jome_lauco_state():
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
-    catalog_migration = CATALOG_MIGRATION.read_text(encoding="utf-8")
     jobs_migration = JOBS_RLS_MIGRATION.read_text(encoding="utf-8")
-    mixed_migration = MIXED_MIGRATION.read_text(encoding="utf-8")
 
-    assert bootstrap.count(catalog_migration) == 1
     assert bootstrap.count(jobs_migration) == 1
-    assert bootstrap.count(mixed_migration) == 1
     legacy_snapshots = _statement(
         bootstrap,
         "CREATE TABLE IF NOT EXISTS saas_supplier_catalog_snapshots",
     )
     assert "supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett'))" in legacy_snapshots
+    assert "CREATE TABLE IF NOT EXISTS saas_catalog_sources" in bootstrap
+    assert "CREATE OR REPLACE FUNCTION saas_reserve_mixed_cart" in bootstrap
+    assert "'cr-global','sonara','sunon','alma','lumbro','jome','lauco'" in bootstrap

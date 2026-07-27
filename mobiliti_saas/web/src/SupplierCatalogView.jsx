@@ -186,12 +186,12 @@ function configuredBasePrice(item, configuration) {
 }
 
 function canAddSupplierItem(item, supplier, configuredPrice) {
-  const reviewAllowed = ["lumbro", "sonara"].includes(supplier)
+  const reviewAllowed = Boolean(supplier)
     && item.code_status === "needs_review"
-    && item.base_currency === "MXN"
     && decimal(item.tax_rate) === 0.16;
   const codeAllowed = item.code_status === "verified" || reviewAllowed;
-  return codeAllowed && decimal(configuredPrice) > 0 && item.base_currency !== "XXX";
+  const priceAllowed = decimal(configuredPrice) > 0 || reviewAllowed;
+  return codeAllowed && priceAllowed && item.base_currency !== "XXX";
 }
 
 function warningKey(value) {

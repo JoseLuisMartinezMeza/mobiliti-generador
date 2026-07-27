@@ -1,14 +1,13 @@
 {
-  "sha256": "fc87b105b2809fbb892986e084bf1aaeffc77ff7d2b7e4b5da7ef6d8c4d028f5",
-  "defined_name_count": 31,
+  "sha256": "25f79e3ae533aa8f560be3e80586c19993ea65c0a07c500eb458738f9915b251",
+  "defined_name_count": 29,
   "external_link_parts": 12,
   "spec_formula_count": 1314,
   "sheet_states": {
     "Cotizacion": "visible",
-    "sheep": "visible",
     "Mobiliti": "visible",
     "Estrategia Comercial ": "visible",
-    "Fletes": "hidden",
+    "Fletes": "visible",
     "Proveedores": "hidden",
     "SPEC LAMINADO JOME": "hidden",
     "SPEC-GUIDE-LUMBRO": "hidden",

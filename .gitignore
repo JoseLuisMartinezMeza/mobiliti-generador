@@ -27,8 +27,14 @@ salidas/
 outputs/
 .cache/
 mobiliti_saas/.mobiliti_dev_store/
+.mobiliti_dev_store/
+.playwright-mcp/
+tmp/
+.superpowers/sdd/artifacts/
 *.tmp
 *.temp
+*.bak.xlsx
+*-validation.png
 
 # Secrets / local credentials
 .env

@@ -16,6 +16,7 @@ import sys
 import hashlib
 import hmac
 import io
+import mimetypes
 import re
 import threading
 import unicodedata
@@ -86,6 +87,7 @@ from mobiliti_saas.quote_engine.quotation_import import (  # noqa: E402
 )
 from mobiliti_saas.quote_engine.engine import (  # noqa: E402
     OFFICIAL_TEMPLATE_CONTRACT_PATH,
+    _fetch_latest_usd_mxn_row,
 )
 from mobiliti_saas.quote_engine.official_template import (  # noqa: E402
     load_template_contract,
@@ -149,13 +151,17 @@ TARKETT_CATALOG_PATH = os.environ.get("TARKETT_CATALOG_PATH")
 TARKETT_CATALOG_DB_ENABLED = _env_bool("TARKETT_CATALOG_DB_ENABLED", bool(os.environ.get("VERCEL")))
 TARKETT_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("TARKETT_CATALOG_DB_TTL_SECONDS", "300")))
 OFFIHO_CATALOG_PATH = os.environ.get("OFFIHO_CATALOG_PATH")
-CATALOG_SUPPLIER_ORDER = ("cr-global", "sonara", "sunon", "alma", "lumbro")
+CATALOG_SUPPLIER_ORDER = (
+    "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
+)
 CATALOG_SUPPLIER_LABELS = {
     "cr-global": "CR Global",
     "sonara": "Sonara",
     "sunon": "Sunon",
     "alma": "ALMA",
     "lumbro": "Lumbro",
+    "jome": "JOME",
+    "lauco": "Lauco",
 }
 
 
@@ -1277,6 +1283,59 @@ def db_set_project_status(
     )
 
 
+def db_delete_archived_project(
+    project_id: str,
+    usuario_id: int,
+    *,
+    expected_revision: int,
+) -> bool:
+    """Elimina sólo el registro archivado; conserva activos compartidos."""
+
+    if DEV_MODE:
+        with _DEV_CATALOG_RESERVATION_LOCK:
+            store = _dev_load()
+            projects = store.setdefault("projects", [])
+            index = next(
+                (
+                    position
+                    for position, row in enumerate(projects)
+                    if row.get("id") == project_id
+                    and int(row.get("usuario_id", 0)) == int(usuario_id)
+                    and row.get("status") == "archived"
+                    and int(row.get("revision", 0)) == int(expected_revision)
+                ),
+                None,
+            )
+            if index is None:
+                return False
+            projects.pop(index)
+            _dev_save(store)
+            return True
+    if _use_postgres():
+        row = _pg_write(
+            """
+            DELETE FROM saas_projects
+            WHERE id = %s
+              AND usuario_id = %s
+              AND status = 'archived'
+              AND revision = %s
+            RETURNING id
+            """,
+            (project_id, usuario_id, expected_revision),
+        )
+        return bool(row)
+    rows = _supabase_req(
+        "DELETE",
+        (
+            f"/saas_projects?id=eq.{project_id}"
+            f"&usuario_id=eq.{usuario_id}"
+            f"&status=eq.archived"
+            f"&revision=eq.{expected_revision}"
+        ),
+    )
+    return bool(rows)
+
+
 def db_create_quote_job(usuario_id: int, template: str, metadata: dict, input_path: str, job_id: str = None):
     now = _iso(datetime.now(timezone.utc))
     data = {
@@ -1421,7 +1480,8 @@ def db_list_tarkett_reservations(status: str = "active"):
 
 
 _MIXED_RESERVATION_CATALOGS = (
-    "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro"
+    "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro",
+    "jome", "lauco",
 )
 
 
@@ -2437,7 +2497,7 @@ def db_list_exchange_rates() -> list[dict]:
                     "limit": "30",
                 },
             )
-    return [
+    normalized = [
         {
             "currency": str(row.get("currency") or ""),
             "effective_date": row.get("effective_date").isoformat()
@@ -2450,6 +2510,13 @@ def db_list_exchange_rates() -> list[dict]:
         }
         for row in (rows if isinstance(rows, (list, tuple)) else [])
     ]
+    latest_usd = _fetch_latest_usd_mxn_row()
+    if latest_usd is not None:
+        normalized = [
+            row for row in normalized if row["currency"].upper() != "USD"
+        ]
+        normalized.insert(0, latest_usd)
+    return normalized
 
 
 def db_list_catalog_sync_runs(limit: int = 50) -> list[dict]:
@@ -4293,6 +4360,7 @@ _PROJECT_MUTATION_FIELDS = frozenset({
     "name", "payload", "expected_revision", "operation_id",
 })
 _PROJECT_STATUS_FIELDS = frozenset({"expected_revision", "operation_id"})
+_PROJECT_DELETE_FIELDS = frozenset({"expected_revision", "confirm_name"})
 
 
 def _project_uuid(value: object) -> str:
@@ -4398,6 +4466,15 @@ def _project_for_current_user(project_id: str, usuario_id: int) -> dict:
     if not project:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
     return project
+
+
+def _project_with_visible_import_images(project: dict) -> dict:
+    visible = deepcopy(project)
+    for line in visible["payload"]["lines"]:
+        image_key = line.get("image_asset_key")
+        if line.get("source") == "imported" and image_key:
+            line["display_cache"]["image_url"] = _create_signed_download(image_key)
+    return visible
 
 
 def _copy_project_import_asset(path: str, content: bytes, content_type: str) -> None:
@@ -4670,9 +4747,8 @@ def projects_list(status: str = "active", current_user: dict = Depends(get_curre
 
 @app.get("/projects/{project_id}")
 def projects_get(project_id: str, current_user: dict = Depends(get_current_user)):
-    return {"project": _project_for_current_user(
-        _project_uuid(project_id), current_user["id"]
-    )}
+    project = _project_for_current_user(_project_uuid(project_id), current_user["id"])
+    return {"project": _project_with_visible_import_images(project)}
 
 
 @app.post("/projects/{project_id}/imports/{job_id}")
@@ -4769,6 +4845,37 @@ def projects_patch(project_id: str, body: dict, current_user: dict = Depends(get
     if saved:
         return {"project": saved}
     _project_conflict(_project_for_current_user(project_id, current_user["id"]))
+
+
+@app.delete("/projects/{project_id}")
+def projects_delete(project_id: str, body: dict, current_user: dict = Depends(get_current_user)):
+    _require_active_subscription(current_user["id"])
+    _project_unexpected_fields(body, _PROJECT_DELETE_FIELDS)
+    project_id = _project_uuid(project_id)
+    current = _project_for_current_user(project_id, current_user["id"])
+    if current.get("status") != "archived":
+        raise HTTPException(
+            status_code=409,
+            detail="Archiva el Proyecto antes de eliminarlo",
+        )
+    expected_revision = _project_expected_revision(body.get("expected_revision"))
+    if current["revision"] != expected_revision:
+        _project_conflict(current)
+    if body.get("confirm_name") != current["name"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Escribe el nombre exacto del Proyecto",
+        )
+    if db_delete_archived_project(
+        project_id,
+        current_user["id"],
+        expected_revision=expected_revision,
+    ):
+        return {"deleted": True, "project_id": project_id}
+    latest = db_get_project(project_id, current_user["id"])
+    if latest:
+        _project_conflict(latest)
+    raise HTTPException(status_code=404, detail="Proyecto no encontrado")
 
 
 def _projects_set_status(
@@ -6836,9 +6943,10 @@ def dev_storage_download(encoded_path: str):
     source = _dev_storage_file(object_path)
     if not source.exists():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
+    media_type = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
     return FileResponse(
         source,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=media_type,
         filename=source.name,
     )
 

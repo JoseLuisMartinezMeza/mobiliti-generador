@@ -429,14 +429,14 @@ def test_kun_merged_block_splits_bases_from_one_aggregated_cushion_family(source
     item = _item(_snapshot(source_bundle), "KUN-1")
 
     assert [option["price_net"] for option in item["base_price_options"]] == [
-        "666.666667",
-        "800.000000",
+        "100.000000",
+        "120.000000",
     ]
     assert all(option["available"] for option in item["base_price_options"])
     assert [option["price_net"] for option in item["add_on_options"]] == [
-        "140.000000",
-        "273.333333",
-        "406.666667",
+        "21.000000",
+        "41.000000",
+        "61.000000",
     ]
     assert {option["family"] for option in item["add_on_options"]} == {"cushion"}
     assert all(option["available"] for option in item["add_on_options"])
@@ -449,16 +449,57 @@ def test_kun_merged_block_splits_bases_from_one_aggregated_cushion_family(source
     assert image["source"]["cell_or_bbox"] == "B8"
 
 
+def test_kun_catalog_publishes_official_costs_instead_of_validated_sale_prices(
+    source_bundle,
+):
+    item = _item(_snapshot(source_bundle), "KUN-1")
+
+    assert [option["price_net"] for option in item["base_price_options"]] == [
+        "100.000000",
+        "120.000000",
+    ]
+    assert [option["price_net"] for option in item["add_on_options"]] == [
+        "21.000000",
+        "41.000000",
+        "61.000000",
+    ]
+    assert item["attributes"]["price_reconciliation"]["method"] == "official_cost"
+
+
+def test_kun_uses_official_costs_when_identity_price_cells_are_blank(
+    source_bundle,
+):
+    def clear_identity_prices(workbook):
+        design = workbook["KUN DESIGN"]
+        design["E8"] = None
+        design["F8"] = None
+
+    changed = _edit(source_bundle, KUN_PATH, clear_identity_prices)
+    item = _item(_snapshot(changed), "KUN-1")
+
+    assert item["code_status"] == "verified"
+    assert [option["price_net"] for option in item["base_price_options"]] == [
+        "100.000000",
+        "120.000000",
+    ]
+    evidence = item["attributes"]["price_evidence"]
+    assert {
+        entry["source"]["sheet_or_page"]
+        for entry in evidence
+        if entry["kind"] == "base"
+    } == {"Costo Alma"}
+
+
 def test_kun_single_base_and_materially_lower_alternative(source_bundle):
     snapshot = _snapshot(source_bundle)
     single = _item(snapshot, "KUN-SINGLE")
     low = _item(snapshot, "KUN-LOW")
 
     assert len(single["base_price_options"]) == 1
-    assert single["base_price_options"][0]["price_net"] == "333.333333"
+    assert single["base_price_options"][0]["price_net"] == "50.000000"
     assert [option["price_net"] for option in low["base_price_options"]] == [
-        "6666.666667",
-        "666.666667",
+        "1000.000000",
+        "100.000000",
     ]
 
 
@@ -537,8 +578,8 @@ def test_alma_base_and_add_on_prices_flow_into_supplier_cart(source_bundle):
         [],
     )
 
-    assert payload["items"][0]["unit_price_base"] == "940.000000"
-    assert payload["items"][0]["line_total"] == "1880.00"
+    assert payload["items"][0]["unit_price_base"] == "141.000000"
+    assert payload["items"][0]["line_total"] == "282.00"
     assert payload["items"][1]["unit_price_base"] == "110.000000"
     assert payload["items"][1]["line_total"] == "110.00"
 
@@ -595,13 +636,18 @@ def test_duplicate_codes_stay_separate_and_missing_code_stays_blocked(source_bun
     assert missing["sku"] == "" and missing["price_net"] == "0.000000"
     assert any("c\u00f3digo" in warning.casefold() for warning in missing["warnings"])
 
-    with pytest.raises(ValueError, match="verificar"):
-        build_supplier_cart_payload(
-            [{"internal_id": missing["internal_id"], "quantity": "1"}],
-            snapshot,
-            "USD",
-            [],
-        )
+    line = build_supplier_cart_payload(
+        [{"internal_id": missing["internal_id"], "quantity": "1"}],
+        snapshot,
+        "USD",
+        [],
+    )["items"][0]
+    assert line["code_status"] == "needs_review"
+    assert line["unit_price_base"] == "0.000000"
+    assert line["warnings"][-2:] == [
+        "Codigo por verificar",
+        "Precio por confirmar",
+    ]
 
 
 def test_formula_dash_blank_malformed_extreme_and_negative_prices_fail_closed(source_bundle):
@@ -616,13 +662,16 @@ def test_formula_dash_blank_malformed_extreme_and_negative_prices_fail_closed(so
     pavilion_refs = {row["cell_or_bbox"] for row in json.loads(pavilion["source_reference"])}
     assert {"F19", "G19", "H19", "I19"}.issubset(pavilion_refs)
 
-    with pytest.raises(ValueError, match="verificar"):
-        build_supplier_cart_payload(
-            [{"internal_id": pavilion["internal_id"], "quantity": "1"}],
-            snapshot,
-            "USD",
-            [],
-        )
+    line = build_supplier_cart_payload(
+        [{"internal_id": pavilion["internal_id"], "quantity": "1"}],
+        snapshot,
+        "USD",
+        [],
+    )["items"][0]
+    assert line["code_status"] == "needs_review"
+    assert line["unit_price_base"] == "0.000000"
+    assert "Codigo por verificar" in line["warnings"]
+    assert "Precio por confirmar" in line["warnings"]
 
 
 def test_sub_quantum_direct_price_fails_closed(source_bundle):
@@ -789,9 +838,9 @@ def test_ignored_real_sources_report_coverage_metrics():
         "kun_verified": sum(item["code_status"] == "verified" for item in kun),
         "kun_needs_review": sum(item["code_status"] == "needs_review" for item in kun),
         "kun_pavilion": sum(item["collection"] == "PAVILION" for item in kun),
-        "kun_derived": sum(
+        "kun_official_cost": sum(
             item["attributes"]["price_reconciliation"]["method"]
-            == "derived_from_identity_cost"
+            == "official_cost"
             for item in kun
         ),
     }
@@ -822,5 +871,5 @@ def test_ignored_real_sources_report_coverage_metrics():
         "kun_verified": 262,
         "kun_needs_review": 48,
         "kun_pavilion": 3,
-        "kun_derived": 2,
+        "kun_official_cost": 307,
     }

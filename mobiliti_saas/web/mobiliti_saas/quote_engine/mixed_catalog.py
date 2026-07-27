@@ -46,10 +46,14 @@ from .tarkett_catalog import build_tarkett_cart_payload
 
 
 MIXED_CATALOG_CART_SOURCE_TYPE = "mixed_catalog_cart"
-MIXED_CATALOG_ORDER = ("tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro")
+MIXED_CATALOG_ORDER = (
+    "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro",
+    "jome", "lauco",
+)
 MIXED_CATALOG_LABELS = {
     "tarkett": "Tarkett", "offiho": "Offiho", "cr-global": "CR Global",
     "sonara": "Sonara", "sunon": "Sunon", "alma": "ALMA", "lumbro": "Lumbro",
+    "jome": "JOME", "lauco": "Lauco",
 }
 MIXED_GROUP_SOURCE_TYPES = {
     "tarkett": "tarkett_cart",
@@ -59,10 +63,13 @@ MIXED_GROUP_SOURCE_TYPES = {
     "sunon": "supplier_cart",
     "alma": "supplier_cart",
     "lumbro": "supplier_cart",
+    "jome": "supplier_cart",
+    "lauco": "supplier_cart",
 }
 MIXED_EXPECTED_BASE_CURRENCY = {
     "tarkett": "MXN", "offiho": "MXN", "cr-global": "MXN", "sonara": "MXN",
-    "sunon": "USD", "alma": "USD", "lumbro": "MXN",
+    "sunon": "USD", "alma": "USD", "lumbro": "MXN", "jome": "MXN",
+    "lauco": "MXN",
 }
 MIXED_QUOTE_CURRENCIES = frozenset({"MXN", "USD", "EUR"})
 MAX_MIXED_CATALOG_LINES = XLSX_MAX_ROWS - MOBILITI_RESERVED_ROWS_AFTER_TOTAL
@@ -314,6 +321,7 @@ def _normalize_imported_source(
     quote_currency: str,
     rate_rows: list[dict],
     discount: Decimal,
+    today: date,
 ) -> dict[str, Any] | None:
     if imported_source is None:
         return None
@@ -395,6 +403,7 @@ def _normalize_imported_source(
         rate_rows=rate_rows,
         discount_percent=str(discount),
         allow_duplicate_source_rows=allow_duplicate_source_rows,
+        today=today,
     )
     items = [{
         **metadata,
@@ -583,7 +592,12 @@ def _supplier_line(
         "code_status": str(raw["code_status"]), "configuration": str(raw.get("configuration") or ""),
         "attributes": deepcopy(raw.get("attributes") or {}), "variant": "", "availability_type": availability,
         "available_quantity": stock, "stock": stock, "lead_time": str(raw.get("lead_time") or ""),
-        "price_source": "catalog", "stock_status": "",
+        "price_source": (
+            "missing"
+            if Decimal(str(raw["unit_price_base"])) <= 0
+            else "catalog"
+        ),
+        "stock_status": "",
         "image_kind": str(raw.get("image_kind") or "placeholder"),
         "warnings": list(raw.get("warnings") or []),
     }
@@ -623,6 +637,7 @@ def build_mixed_catalog_cart_payload(
         quote_currency=quote_currency,
         rate_rows=rate_rows,
         discount=discount,
+        today=effective_today,
     )
     if not ordered_rows and normalized_import is None:
         raise ValueError("La cotizacion debe contener al menos una linea")
@@ -887,7 +902,7 @@ def _validate_reservation(line: dict[str, Any], catalog: str) -> None:
     identity = _identity_text(reservation["identity"], "identity")
     _identity_text(
         reservation["sku"], "sku",
-        allow_empty=line["code_status"] == "needs_review" and catalog in {"sonara", "lumbro"},
+        allow_empty=line["code_status"] == "needs_review" and catalog not in {"tarkett", "offiho"},
     )
     if reservation["quantity"] != line["quantity"] or reservation["stock"] != line["stock"]:
         raise ValueError("Reserva mixta invalida")
@@ -1081,8 +1096,6 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             for field, required in (("name", True), ("description", False), ("unit", True), ("source_reference", True), ("configuration", False), ("variant", False), ("lead_time", False), ("price_source", True)):
                 _bounded(line[field], field, required=required)
             if line["code_status"] not in {"verified", "needs_review"} or (not line["code"] and line["code_status"] != "needs_review"):
-                raise ValueError("Grupos mixtos invalidos")
-            if line["code_status"] == "needs_review" and catalog not in {"sonara", "lumbro"}:
                 raise ValueError("Grupos mixtos invalidos")
             if catalog in {"tarkett", "offiho"} and line["code_status"] != "verified":
                 raise ValueError("Grupos mixtos invalidos")

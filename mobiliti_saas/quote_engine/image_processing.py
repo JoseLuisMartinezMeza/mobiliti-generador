@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from io import BytesIO
 from typing import Any
 from pathlib import Path
@@ -187,7 +188,7 @@ def improve_product_image(
     options = _build_options(background, min_size, cleanup_strength)
     provider = normalize_image_provider(image_provider or os.environ.get("IMAGE_PROVIDER"))
     provider_signature = _provider_signature(provider, image_prompt)
-    output_suffix = ".jpg" if provider != "dezgo" and options.background == "white" else ".png"
+    output_suffix = ".png"
     output = output_root / f"{_cache_key(source, options, provider_signature)}{output_suffix}"
     if output.exists():
         if provider == "dezgo":
@@ -255,6 +256,232 @@ def improve_image_map(
     return improved
 
 
+def improve_product_image_bytes(
+    content: bytes,
+    content_type: str,
+    *,
+    background: str = "white",
+    min_size: int = 900,
+    cleanup_strength: str = "balanced",
+    remove_shadow: bool = False,
+) -> tuple[bytes, str]:
+    """Mejora bytes PNG/JPEG sin crear otra canalización ni alterar el original."""
+
+    if content_type not in {"image/png", "image/jpeg"}:
+        raise ValueError("Content type de imagen no permitido")
+    options = _build_options(background, min_size, cleanup_strength)
+    image = _decode_bounded_montage_image(content)
+    try:
+        if remove_shadow:
+            try:
+                processed = _process_imported_image_without_shadow(image, options)
+            except Exception:
+                # Una máscara insegura nunca debe bloquear la cotización ni pasar
+                # por otra limpieza que pueda borrar superficies claras reales.
+                processed = image.convert("RGBA")
+        else:
+            processed = _process_image(image, options)
+        if options.background == "white" and not remove_shadow:
+            processed = _remove_light_edge_background(
+                processed.convert("RGBA"),
+                replace(options, cleanup_strength="normal"),
+            )
+            processed = _trim_outer_background_padding(
+                _trim_transparent_edges(processed)
+            )
+        if processed.width <= 0 or processed.height <= 0:
+            raise ValueError("La mejora produjo una imagen vacía")
+        if processed.mode == "RGBA" and processed.getchannel("A").getbbox() is None:
+            raise ValueError("La mejora eliminó todo el producto")
+        processed = _upscale_if_needed(processed, options.min_size)
+        output_image = (
+            _flatten_to_white(processed).convert("RGB")
+            if options.background == "white"
+            else processed.convert("RGBA")
+        )
+        output = BytesIO()
+        output_image.save(output, "PNG", optimize=True)
+    finally:
+        image.close()
+    payload = output.getvalue()
+    if not payload or len(payload) > MAX_MONTAGE_BYTES:
+        raise ValueError("Tamaño de imagen mejorada inválido")
+    return payload, "image/png"
+
+
+def _process_imported_image_without_shadow(
+    image: Image.Image,
+    options: ImageProcessingOptions,
+) -> Image.Image:
+    source = image.convert("RGBA")
+    source = _downscale_if_needed(source, MAX_WORKING_IMAGE_EDGE)
+    # El alfa importado puede incluir la sombra de piso; no es una autoridad de
+    # primer plano. Todas las imágenes de este flujo deben obtener una máscara.
+    segmented = _segment_product_locally(source)
+
+    alpha = segmented.convert("RGBA").getchannel("A")
+    if not _valid_product_mask(alpha):
+        raise ValueError("La segmentación produjo una máscara insegura")
+    alpha = _restore_thin_connected_structure(source, alpha)
+    if not _valid_product_mask(alpha):
+        raise ValueError("La recuperación produjo una máscara insegura")
+
+    result = source.copy()
+    result.putalpha(alpha)
+    result = _trim_transparent_edges(result)
+    result = _upscale_if_needed(result, options.min_size)
+    # No aplicar UnsharpMask después de segmentar: en patas metálicas de 1–2 px
+    # puede convertir un gris claro real en un borde negro artificial.
+    return result
+
+
+@lru_cache(maxsize=2)
+def _local_segmentation_session(model_name: str):
+    from rembg import new_session
+
+    return new_session(model_name)
+
+
+def _segment_product_locally(source: Image.Image) -> Image.Image:
+    from rembg import remove
+
+    model_name = str(os.environ.get("IMAGE_SEGMENTATION_MODEL", "silueta")).strip() or "silueta"
+    session = _local_segmentation_session(model_name)
+    segmented = remove(
+        source.convert("RGBA"),
+        session=session,
+        alpha_matting=False,
+        post_process_mask=False,
+    )
+    if not isinstance(segmented, Image.Image):
+        raise ValueError("Respuesta de segmentación inválida")
+    return segmented.convert("RGBA")
+
+
+def _has_meaningful_transparency(image: Image.Image) -> bool:
+    alpha = image.convert("RGBA").getchannel("A")
+    minimum, maximum = alpha.getextrema()
+    if maximum <= 8 or minimum >= 245:
+        return False
+    histogram = alpha.histogram()
+    visible = sum(histogram[9:])
+    return 0 < visible < image.width * image.height * 0.985
+
+
+def _valid_product_mask(alpha: Image.Image) -> bool:
+    bbox = alpha.getbbox()
+    if not bbox:
+        return False
+    histogram = alpha.histogram()
+    visible = sum(histogram[9:])
+    total = max(1, alpha.width * alpha.height)
+    ratio = visible / total
+    if ratio < 0.006 or ratio > 0.94:
+        return False
+    left, top, right, bottom = bbox
+    bbox_ratio = ((right - left) * (bottom - top)) / total
+    partial_ratio = sum(histogram[9:245]) / total
+    if bbox_ratio >= 0.98 and partial_ratio >= 0.12:
+        return False
+    return right - left >= 2 and bottom - top >= 2
+
+
+def _restore_thin_connected_structure(
+    source: Image.Image,
+    alpha: Image.Image,
+) -> Image.Image:
+    """Recupera bordes delgados conectados sin reincorporar sombras anchas."""
+
+    rgba = source.convert("RGBA")
+    gray = _flatten_to_white(rgba).convert("L")
+    width, height = gray.size
+    alpha_bbox = alpha.getbbox()
+    if not alpha_bbox or alpha_bbox[3] >= height * 0.82:
+        # El modelo ya cubre la base/ruedas del objeto. Rescatar bordes en este
+        # caso sólo volvería a introducir el contorno de la sombra.
+        return alpha.copy()
+    rescue_y_start = max(1, int(height * 0.28))
+    gray_pixels = gray.load()
+    source_alpha = rgba.getchannel("A").load()
+    background = sum(_estimate_background_color(rgba)) / 3
+    candidate = Image.new("L", gray.size, 0)
+    candidate_pixels = candidate.load()
+
+    for y in range(rescue_y_start, height - 1):
+        for x in range(1, width - 1):
+            value = gray_pixels[x, y]
+            if source_alpha[x, y] <= 8:
+                continue
+            contrast = _local_contrast(gray_pixels, x, y)
+            # No rescatar el borde blanco antialiasado que rodea al producto.
+            # Las patas claras reales conservan una separación apreciable del
+            # fondo, mientras que ese halo está casi al mismo nivel.
+            if contrast < 10 or abs(value - background) < 18:
+                continue
+            if y >= height * 0.55:
+                # Una pata perdida produce principalmente contraste transversal
+                # (vertical/diagonal). La orilla de una sombra de piso produce
+                # contraste vertical y no debe volver a entrar a la máscara.
+                if value < 175:
+                    continue
+                transverse = max(
+                    abs(value - gray_pixels[x - 1, y]),
+                    abs(value - gray_pixels[x + 1, y]),
+                )
+                longitudinal = max(
+                    abs(value - gray_pixels[x, y - 1]),
+                    abs(value - gray_pixels[x, y + 1]),
+                )
+                if transverse < max(10, longitudinal * 0.75):
+                    continue
+            candidate_pixels[x, y] = 255
+
+    if candidate.getbbox() is None:
+        return alpha.copy()
+
+    seed_zone = alpha.point(lambda value: 255 if value > 8 else 0).filter(
+        ImageFilter.MaxFilter(5)
+    )
+    seed_pixels = seed_zone.load()
+    visited = Image.new("L", gray.size, 0)
+    visited_pixels = visited.load()
+    queue: deque[tuple[int, int]] = deque()
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            if candidate_pixels[x, y] and seed_pixels[x, y]:
+                visited_pixels[x, y] = 255
+                queue.append((x, y))
+
+    while queue:
+        x, y = queue.popleft()
+        for nx, ny in _neighbors(width, height, x, y):
+            if candidate_pixels[nx, ny] and not visited_pixels[nx, ny]:
+                visited_pixels[nx, ny] = 255
+                queue.append((nx, ny))
+
+    # Conservar sólo el trazo detectado. Dilatarlo reincorporaría píxeles de una
+    # sombra que toque una pata, justo el artefacto que se quiere eliminar.
+    return ImageChops.lighter(alpha, visited)
+
+
+def _decontaminate_white_fringe(image: Image.Image) -> Image.Image:
+    rgba = image.convert("RGBA")
+    pixels = rgba.load()
+    for y in range(rgba.height):
+        for x in range(rgba.width):
+            r, g, b, a = pixels[x, y]
+            if a <= 8 or a >= 250:
+                continue
+            ratio = a / 255
+            pixels[x, y] = (
+                max(0, min(255, round((r - 255 * (1 - ratio)) / ratio))),
+                max(0, min(255, round((g - 255 * (1 - ratio)) / ratio))),
+                max(0, min(255, round((b - 255 * (1 - ratio)) / ratio))),
+                a,
+            )
+    return rgba
+
+
 def _normalize_provider_output(output: Path, options: ImageProcessingOptions) -> None:
     with Image.open(output) as img:
         processed = img.convert("RGBA")
@@ -270,7 +497,7 @@ def _normalize_provider_output(output: Path, options: ImageProcessingOptions) ->
 def _save_processed_image(img: Image.Image, output: Path, options: ImageProcessingOptions) -> None:
     if options.background == "white":
         rgb = _flatten_to_white(img).convert("RGB")
-        rgb.save(output, "JPEG", quality=82, optimize=True, progressive=True)
+        rgb.save(output, "PNG", optimize=True)
         return
     img.save(output, "PNG", optimize=True)
 

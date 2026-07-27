@@ -56,9 +56,11 @@ ufw --force enable
 install -d -m 0755 "$(dirname "${APP_DIR}")"
 if [[ -d "${APP_DIR}/.git" ]]; then
   git -C "${APP_DIR}" fetch origin "${GIT_REF}"
-  git -C "${APP_DIR}" reset --hard "origin/${GIT_REF}"
 else
-  rm -rf "${APP_DIR}"
+  if [[ -e "${APP_DIR}" ]]; then
+    echo "Refusing to replace non-git path ${APP_DIR}. Move it aside first." >&2
+    exit 1
+  fi
   git clone --branch "${GIT_REF}" --single-branch "${GIT_REPO}" "${APP_DIR}"
 fi
 
@@ -70,7 +72,9 @@ fi
 
 cat >/usr/local/bin/mobiliti-worker-deploy <<EOF
 #!/usr/bin/env bash
-exec bash "${APP_DIR}/deploy/hetzner/deploy.sh" "\$@"
+set -euo pipefail
+git -C "${APP_DIR}" fetch origin "${GIT_REF}"
+git -C "${APP_DIR}" show FETCH_HEAD:deploy/hetzner/deploy.sh | APP_DIR="${APP_DIR}" GIT_REF="${GIT_REF}" bash -s -- "\$@"
 EOF
 chmod 0755 /usr/local/bin/mobiliti-worker-deploy
 

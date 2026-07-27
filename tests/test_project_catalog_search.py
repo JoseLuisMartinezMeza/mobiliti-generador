@@ -56,6 +56,105 @@ def test_search_returns_canonical_references_without_commercial_or_source_fields
         assert forbidden not in serialized
 
 
+def test_search_exposes_base_choices_without_prices_and_prefills_only_a_single_choice():
+    single = _supplier_item("lauco", "Silla única", "L-1")
+    single["base_price_options"] = [
+        {"id": "lauco:l-1:grade-1", "name": "Tapiz Grado 1", "price_net": "11780", "available": True},
+        {"id": "lauco:l-1:unavailable", "name": "No disponible", "price_net": "14990", "available": False},
+    ]
+    multiple = _supplier_item("lauco", "Silla múltiple", "L-2")
+    multiple["base_price_options"] = [
+        {"id": "lauco:l-2:grade-1", "name": "Tapiz Grado 1", "price_net": "15350", "available": True},
+        {"id": "lauco:l-2:grade-2", "name": "Tapiz Grado 2", "price_net": "19630", "available": True},
+    ]
+
+    result = search_catalog_products(
+        {"lauco": {"items": [single, multiple]}},
+        query="silla",
+        supplier="lauco",
+        offset=0,
+        limit=20,
+    )
+
+    by_code = {item["official_code"]: item for item in result["items"]}
+    assert by_code["L-1"]["base_options"] == [
+        {"id": "lauco:l-1:grade-1", "name": "Tapiz Grado 1"},
+    ]
+    assert by_code["L-1"]["identity"]["base_option_id"] == "lauco:l-1:grade-1"
+    assert by_code["L-1"]["snapshot"]["configuration"] == "Tapiz Grado 1"
+    assert by_code["L-2"]["base_options"] == [
+        {"id": "lauco:l-2:grade-1", "name": "Tapiz Grado 1"},
+        {"id": "lauco:l-2:grade-2", "name": "Tapiz Grado 2"},
+    ]
+    assert by_code["L-2"]["identity"]["base_option_id"] == ""
+    assert by_code["L-2"]["snapshot"]["configuration"] == ""
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "11780" not in serialized
+    assert "14990" not in serialized
+    assert "15350" not in serialized
+    assert "19630" not in serialized
+
+
+def test_search_exposes_available_add_on_choices_without_prices():
+    configurable = _supplier_item("alma", "Silla configurable", "A-1")
+    configurable["base_price_options"] = [
+        {"id": "base-aluminio", "name": "Aluminio", "price_net": "250", "available": True},
+        {"id": "base-madera", "name": "Madera", "price_net": "300", "available": True},
+    ]
+    configurable["add_on_options"] = [
+        {
+            "id": "cojin-a",
+            "name": "Cojín A",
+            "family": "cojin",
+            "price_net": "35.10",
+            "available": True,
+            "compatible_base_option_ids": ["base-aluminio"],
+        },
+        {
+            "id": "cojin-b",
+            "name": "Cojín B",
+            "family": "cojin",
+            "price_net": "50",
+            "available": True,
+        },
+        {
+            "id": "no-disponible",
+            "name": "No disponible",
+            "family": "cojin",
+            "price_net": "99",
+            "available": False,
+        },
+    ]
+
+    result = search_catalog_products(
+        {"alma": {"items": [configurable]}},
+        query="configurable",
+        supplier="alma",
+        offset=0,
+        limit=20,
+    )
+
+    item = result["items"][0]
+    assert item["add_on_options"] == [
+        {
+            "id": "cojin-a",
+            "name": "Cojín A",
+            "family": "cojin",
+            "compatible_base_option_ids": ["base-aluminio"],
+        },
+        {
+            "id": "cojin-b",
+            "name": "Cojín B",
+            "family": "cojin",
+            "compatible_base_option_ids": [],
+        },
+    ]
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "35.10" not in serialized
+    assert '"50"' not in serialized
+    assert "99" not in serialized
+
+
 def test_search_uses_all_seven_catalogs_and_stable_pagination():
     catalogs = {
         "lumbro": {"items": [_supplier_item("lumbro", "Silla Álfa", "L-2")]},

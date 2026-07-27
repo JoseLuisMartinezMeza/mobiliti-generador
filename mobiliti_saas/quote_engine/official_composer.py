@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 import errno
 from io import BytesIO
+import math
 import os
 from pathlib import Path
 import posixpath
@@ -91,16 +92,33 @@ MAX_EXCEL_FORMULA_LENGTH = 8_192
 XLSX_MAX_ROWS = 1_048_576
 CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW = 16
 CANONICAL_COTIZACION_FIRST_PRODUCT_ROW = 17
-CANONICAL_COTIZACION_TOTAL_START = 21
-CANONICAL_COTIZACION_TOTAL_ROW = 25
+CANONICAL_COTIZACION_TOTAL_START = 20
+CANONICAL_COTIZACION_TOTAL_ROW = 24
 CANONICAL_COTIZACION_TOTAL_SPAN = (
     CANONICAL_COTIZACION_TOTAL_ROW - CANONICAL_COTIZACION_TOTAL_START
 )
-CANONICAL_COTIZACION_TERMS_START = 29
-CANONICAL_COTIZACION_PRINT_END = 77
+CANONICAL_COTIZACION_TERMS_START = 28
+CANONICAL_COTIZACION_PRINT_END = 76
 CANONICAL_MOBILITI_TOTAL_ROW = 573
 CANONICAL_MOBILITI_AUX_START = 574
 CANONICAL_MOBILITI_AUX_END = 610
+FLETE_ROUTES = {
+    5: ("Guadalajara", "Monterrey"),
+    7: ("Guadalajara", "Mexico City"),
+    9: ("Guadalajara", "Tijuana"),
+    11: ("Guadalajara", "Mérida, Yucatán"),
+    13: ("Guadalajara", "Querétaro"),
+    15: ("Guadalajara", "State of Mexico"),
+    17: ("Guadalajara", "Guadalajara"),
+}
+FLETE_CATEGORY_ROWS = {
+    16: ("Bancos", Decimal("0.2"), Decimal("56")),
+    17: ("Cocineta", Decimal("0.2"), Decimal("1790")),
+    18: ("Pizarrones", Decimal("0.2"), Decimal("210")),
+}
+FLETE_CATEGORY_LABEL_ROWS = {8: "Escritorios-WorkStation"}
+_COTIZACION_IMAGE_CELL_WIDTH_EMU = 5_019_675
+_COTIZACION_IMAGE_CELL_HEIGHT_EMU = 4_408_170
 CANONICAL_MOBILITI_SECTION_COUNT = 16
 CANONICAL_MOBILITI_BLOCK_HEIGHT = 35
 CANONICAL_MOBILITI_FIRST_SECTION_ROW = 13
@@ -322,6 +340,32 @@ class CotizacionFormulaContract:
 
 
 @dataclass(frozen=True)
+class CotizacionImageSource:
+    """Fuente binaria o local de una imagen visible de producto."""
+
+    path: Path | None = None
+    content: bytes | None = None
+    content_type: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.path is not None:
+            object.__setattr__(self, "path", Path(self.path))
+        if self.content is not None:
+            if not isinstance(self.content, bytes):
+                raise TypeError("Bytes de imagen Cotizacion inválidos")
+            object.__setattr__(self, "content", bytes(self.content))
+        if (self.path is None) == (self.content is None):
+            raise ValueError("La imagen Cotizacion requiere una fuente única")
+        if self.content is not None and self.content_type not in {
+            PNG_CONTENT_TYPE,
+            JPEG_CONTENT_TYPE,
+        }:
+            raise ValueError("Content type de imagen Cotizacion inválido")
+        if self.path is not None and self.content_type is not None:
+            raise ValueError("La ruta de imagen no declara content type anticipado")
+
+
+@dataclass(frozen=True)
 class CotizacionProduct:
     """Una línea visible de ``Cotizacion`` enlazada a una fila Mobiliti."""
 
@@ -332,9 +376,11 @@ class CotizacionProduct:
     quantity: Decimal
     mobiliti_row: int
     discount: Decimal = Decimal("0")
+    description_formula: str | None = None
     image_path: Path | None = None
     image_content: bytes | None = None
     image_content_type: str | None = None
+    complement_images: tuple[CotizacionImageSource, ...] = ()
     price_terms: tuple[CotizacionPriceTerm, ...] = ()
 
     def __post_init__(self) -> None:
@@ -354,6 +400,13 @@ class CotizacionProduct:
             isinstance(term, CotizacionPriceTerm) for term in self.price_terms
         ):
             raise TypeError("Términos de precio Cotizacion inválidos")
+        if not isinstance(self.complement_images, tuple) or not all(
+            isinstance(image, CotizacionImageSource)
+            for image in self.complement_images
+        ):
+            raise TypeError("Imágenes de complemento Cotizacion inválidas")
+        if self.description_formula is not None:
+            _validate_cotizacion_description_formula(self.description_formula)
         price_terms = self.price_terms or (CotizacionPriceTerm(self.mobiliti_row),)
         mobiliti_rows = tuple(term.mobiliti_row for term in price_terms)
         if len(mobiliti_rows) != len(set(mobiliti_rows)):
@@ -400,10 +453,13 @@ class CotizacionProductImage:
     target_row: int
     content: bytes | None = None
     content_type: str | None = None
+    position: int = 0
 
     def __post_init__(self) -> None:
         if type(self.target_row) is not int or not 1 <= self.target_row <= XLSX_MAX_ROWS:
             raise ValueError("Fila de imagen Cotizacion inválida")
+        if type(self.position) is not int or self.position < 0:
+            raise ValueError("Posición de imagen Cotizacion inválida")
         if self.path is not None:
             object.__setattr__(self, "path", Path(self.path))
         if self.content is not None:
@@ -556,22 +612,22 @@ class CotizacionSheetEditor:
         try:
             category_template = rows[16]
             product_template = rows[17]
-            total_templates = tuple(rows[number] for number in range(21, 26))
-            gap_templates = tuple(rows[number] for number in range(26, 29))
+            total_templates = tuple(rows[number] for number in range(20, 25))
+            gap_templates = tuple(rows[number] for number in range(25, 28))
         except KeyError as error:
             raise ValueError("Bloques oficiales de Cotizacion incompletos") from error
         product_h_formula = _formula_text(product_template, "H17")
         product_j_formula = _formula_text(product_template, "J17")
-        subtotal_formula = _formula_text(total_templates[0], "H21")
+        subtotal_formula = _formula_text(total_templates[0], "H20")
         if None in {product_h_formula, product_j_formula, subtotal_formula}:
             raise ValueError("Fórmulas oficiales de Cotizacion incompletas")
         official_f = _require_cell(product_template, "F17")
         official_i = _require_cell(product_template, "I17")
         if (
-            _formula_text(product_template, "F17") is not None
-            or official_f.find(f"{{{MAIN}}}v") is not None
-            or _formula_text(product_template, "I17") != "=F17-H17"
-            or official_i.findtext(f"{{{MAIN}}}v") != "0"
+            _formula_text(product_template, "F17") != "=Mobiliti!X14"
+            or official_f.findtext(f"{{{MAIN}}}v") != "0"
+            or _formula_text(product_template, "I17") is not None
+            or official_i.find(f"{{{MAIN}}}v") is not None
         ):
             raise ValueError("Firma oficial F/I inesperada")
         formula_contract = CotizacionFormulaContract()
@@ -598,11 +654,36 @@ class CotizacionSheetEditor:
                 if first_discount_row is None:
                     first_discount_row = target_row
                 row = _clone_row_region(product_template, 17, target_row, last_column=10)
-                _set_inline_string(row, f"A{target_row}", product.name)
                 _clear_cell_value(_require_cell(row, f"B{target_row}"))
-                _set_inline_string(row, f"C{target_row}", product.description)
-                _set_inline_string(row, f"D{target_row}", product.dimensions)
-                _set_number(row, f"E{target_row}", product.quantity)
+                if product.description_formula is None:
+                    _set_inline_string(row, f"A{target_row}", product.name)
+                    _set_inline_string(row, f"C{target_row}", product.description)
+                    _set_inline_string(row, f"D{target_row}", product.dimensions)
+                    _set_number(row, f"E{target_row}", product.quantity)
+                else:
+                    quotation_row = _validate_cotizacion_description_formula(
+                        product.description_formula
+                    )
+                    _set_formula(
+                        row,
+                        f"A{target_row}",
+                        f"=Mobiliti!D{product.mobiliti_row}",
+                    )
+                    _set_formula(
+                        row,
+                        f"C{target_row}",
+                        product.description_formula,
+                    )
+                    _set_formula(
+                        row,
+                        f"D{target_row}",
+                        f"=Quotation!F{quotation_row}",
+                    )
+                    _set_formula(
+                        row,
+                        f"E{target_row}",
+                        f"=Mobiliti!H{product.mobiliti_row}",
+                    )
                 contract_formulas = formula_contract.product_formulas(
                     price_terms=product.price_terms,
                     target_row=target_row,
@@ -639,13 +720,24 @@ class CotizacionSheetEditor:
                 )
                 dynamic_rows.append(row)
                 product_rows.append(target_row)
+                image_sources: list[CotizacionImageSource] = []
                 if product.image_path is not None or product.image_content is not None:
-                    images.append(
-                        CotizacionProductImage(
-                            product.image_path,
-                            target_row,
+                    image_sources.append(
+                        CotizacionImageSource(
+                            path=product.image_path,
                             content=product.image_content,
                             content_type=product.image_content_type,
+                        )
+                    )
+                image_sources.extend(product.complement_images)
+                for position, source in enumerate(image_sources):
+                    images.append(
+                        CotizacionProductImage(
+                            source.path,
+                            target_row,
+                            content=source.content,
+                            content_type=source.content_type,
+                            position=position,
                         )
                     )
                 cursor += 1
@@ -654,7 +746,7 @@ class CotizacionSheetEditor:
         total_delta = total_start - CANONICAL_COTIZACION_TOTAL_START
         totals = [
             _clone_row_region(row, source, source + total_delta, last_column=10)
-            for source, row in zip(range(21, 26), total_templates, strict=True)
+            for source, row in zip(range(20, 25), total_templates, strict=True)
         ]
         subtotal_row = total_start
         total_row = CANONICAL_COTIZACION_TOTAL_ROW + total_delta
@@ -662,7 +754,7 @@ class CotizacionSheetEditor:
             raise ValueError("Cotizacion excede la capacidad física de XLSX")
         translated_subtotal = translate_formula(
             subtotal_formula,
-            origin="H21",
+            origin="H20",
             target=f"H{subtotal_row}",
             sheet="Cotizacion",
         )
@@ -675,7 +767,7 @@ class CotizacionSheetEditor:
             raise ValueError("Rango subtotal oficial Cotizacion inesperado")
         translated_subtotal = translate_formula(
             subtotal_formula,
-            origin="H21",
+            origin="H20",
             target=f"H{subtotal_row}",
             range_overrides={
                 subtotal_ranges[0]: f"J{product_rows[0]}:J{product_rows[-1]}"
@@ -694,6 +786,11 @@ class CotizacionSheetEditor:
                 source = CANONICAL_COTIZACION_TOTAL_START + offset
                 source_formula = _formula_text(total_templates[offset], f"H{source}")
                 if source_formula is not None:
+                    if offset == 2:
+                        source_formula = (
+                            f"=H{CANONICAL_COTIZACION_TOTAL_START}"
+                            f"+H{CANONICAL_COTIZACION_TOTAL_START + 1}"
+                        )
                     _set_formula(
                         row,
                         f"H{target}",
@@ -707,7 +804,7 @@ class CotizacionSheetEditor:
         dynamic_rows.extend(totals)
         dynamic_rows.extend(
             _clone_row_region(row, source, source + total_delta, last_column=10)
-            for source, row in zip(range(26, 29), gap_templates, strict=True)
+            for source, row in zip(range(25, 28), gap_templates, strict=True)
         )
 
         terms_rows = [
@@ -835,6 +932,15 @@ def build_allowlisted_mutation(
             "Cotizacion",
         ),
     }
+    mobiliti_drawing_replacements = _relocate_mobiliti_auxiliary_drawing(
+        base,
+        request.mobiliti.row_map,
+    )
+    _merge_disjoint(
+        replacements,
+        mobiliti_drawing_replacements,
+        "dibujo auxiliar Mobiliti",
+    )
     additions: dict[str, bytes] = {}
     _merge_disjoint(replacements, cotizacion.related_parts, "partes Cotizacion")
     _merge_disjoint(additions, cotizacion.related_additions, "adiciones Cotizacion")
@@ -898,6 +1004,7 @@ def build_allowlisted_mutation(
         "xl/_rels/workbook.xml.rels",
         "[Content_Types].xml",
         *cotizacion.related_parts,
+        *mobiliti_drawing_replacements,
         *validated_addition_replacements,
     }
     if calc_chain_part is not None:
@@ -1013,9 +1120,30 @@ def verify_output_contract(
         for column in ("W", "X"):
             if _formula_in_root(mobiliti, f"{column}{target_row}") is None:
                 raise ValueError(f"Fórmula oficial Mobiliti!{column}{target_row} ausente")
+        x_formula = _formula_in_root(mobiliti, f"X{target_row}") or ""
+        if "MINIFS(" in x_formula and any(
+            expected not in x_formula
+            for expected in (
+                f"$W$14:$W${row_map.last_product_row}",
+                f"$D$14:$D${row_map.last_product_row}",
+            )
+        ):
+            raise ValueError(
+                f"Rangos globales Mobiliti!X{target_row} desactualizados"
+            )
         price = _cell_in_root(mobiliti, f"J{target_row}")
-        if price is None or price.find(f"{{{MAIN}}}f") is not None:
-            raise ValueError(f"Mobiliti!J{target_row} no es un costo congelado numérico")
+        if price is None:
+            raise ValueError(f"Mobiliti!J{target_row} no contiene un costo")
+        price_formula = price.find(f"{{{MAIN}}}f")
+        if price_formula is not None and re.fullmatch(
+            r"(?:Quotation!K[1-9][0-9]*|"
+            r"ROUND\(Quotation!K[1-9][0-9]*"
+            r"\*[0-9]+(?:\.[0-9]+)?,2\))",
+            price_formula.text or "",
+        ) is None:
+            raise ValueError(
+                f"Mobiliti!J{target_row} no referencia un costo de Quotation"
+            )
 
 
 def merge_cotizacion_product_images(
@@ -1027,12 +1155,17 @@ def merge_cotizacion_product_images(
     if mutation.related_parts or mutation.related_additions:
         raise ValueError("Cotizacion ya contiene partes relacionadas no verificadas")
     image_rows = tuple(image.target_row for image in mutation.images)
-    if len(image_rows) != len(set(image_rows)) or not set(image_rows).issubset(
-        mutation.product_rows
-    ):
-        raise ValueError(
-            "Las imágenes Cotizacion deben pertenecer a filas de producto únicas"
-        )
+    if not set(image_rows).issubset(mutation.product_rows):
+        raise ValueError("Las imágenes Cotizacion deben pertenecer a filas de producto")
+    images_by_row: dict[int, list[CotizacionProductImage]] = {}
+    for image in mutation.images:
+        images_by_row.setdefault(image.target_row, []).append(image)
+    for images in images_by_row.values():
+        positions = tuple(image.position for image in images)
+        if positions != tuple(range(len(images))):
+            raise ValueError(
+                "Las posiciones de imágenes Cotizacion deben ser únicas y consecutivas"
+            )
     sheet_part = base.sheet_part("Cotizacion")
     sheet_root = ET.fromstring(base.parts[sheet_part])
     drawing_nodes = sheet_root.findall(f"{{{MAIN}}}drawing")
@@ -1082,6 +1215,13 @@ def merge_cotizacion_product_images(
         item.attrib.get("Id", "")
         for item in drawing_rels.findall(f"{{{PKG_REL}}}Relationship")
     }
+    row_sequences = {
+        row: sequence
+        for sequence, row in enumerate(
+            (row for row in mutation.product_rows if row in images_by_row),
+            start=1,
+        )
+    }
     for sequence, image in enumerate(mutation.images, start=1):
         content, extension, content_type, width, height = _read_product_image(image)
         media_part = _allocate_media_part(base, related_additions, sequence, extension)
@@ -1096,6 +1236,19 @@ def merge_cotizacion_product_images(
                 "Target": posixpath.relpath(media_part, posixpath.dirname(drawing_part)),
             },
         )
+        row_images = images_by_row[image.target_row]
+        row_sequence = row_sequences[image.target_row]
+        if len(row_images) == 1:
+            image_name = f"Imagen de producto {sequence:04d}"
+            image_box = None
+        elif image.position == 0:
+            image_name = f"Imagen principal {row_sequence:04d}"
+            image_box = _cotizacion_image_box(image.position, len(row_images))
+        else:
+            image_name = (
+                f"Imagen complemento {row_sequence:04d}-{image.position:02d}"
+            )
+            image_box = _cotizacion_image_box(image.position, len(row_images))
         drawing_root.append(
             _product_image_anchor(
                 relationship_id=rel_id,
@@ -1103,7 +1256,10 @@ def merge_cotizacion_product_images(
                 target_row=image.target_row,
                 width=width,
                 height=height,
-                name=f"Imagen de producto {sequence:04d}",
+                name=image_name,
+                cell_width=_COTIZACION_IMAGE_CELL_WIDTH_EMU,
+                cell_height=_COTIZACION_IMAGE_CELL_HEIGHT_EMU,
+                box=image_box,
             )
         )
         next_picture_id += 1
@@ -1128,6 +1284,63 @@ def merge_cotizacion_product_images(
     )
 
 
+def _relocate_mobiliti_auxiliary_drawing(
+    base: XlsxPackage,
+    row_map: MobilitiRowMap,
+) -> dict[str, bytes]:
+    """Desplaza sólo los objetos ubicados bajo la tabla canónica de Mobiliti."""
+
+    delta = row_map.total_row - CANONICAL_MOBILITI_TOTAL_ROW
+    if delta == 0:
+        return {}
+
+    sheet_part = base.sheet_part("Mobiliti")
+    sheet_root = ET.fromstring(base.parts[sheet_part])
+    drawing_nodes = sheet_root.findall(f"{{{MAIN}}}drawing")
+    if len(drawing_nodes) != 1:
+        raise ValueError("Mobiliti oficial no contiene un dibujo único")
+    relationship_id = drawing_nodes[0].attrib.get(f"{{{REL}}}id")
+    relationships_part = relationship_part_name(sheet_part)
+    relationships = ET.fromstring(base.parts[relationships_part])
+    relationship = next(
+        (
+            item
+            for item in relationships.findall(f"{{{PKG_REL}}}Relationship")
+            if item.attrib.get("Id") == relationship_id
+            and item.attrib.get("Type") in relationship_type_uris("drawing")
+        ),
+        None,
+    )
+    if relationship is None:
+        raise ValueError("Relación de dibujo Mobiliti inválida")
+    drawing_part = resolve_internal_target(
+        sheet_part,
+        relationship.attrib["Target"],
+    )
+    source = base.parts.get(drawing_part)
+    if source is None:
+        raise ValueError("Parte de dibujo Mobiliti ausente")
+    drawing_root, namespace_prefixes = _parse_xml_document(
+        source,
+        "Dibujo oficial Mobiliti inválido",
+    )
+
+    shifted = 0
+    for anchor in drawing_root:
+        marker = anchor.find(f"{{{XDR}}}from")
+        if marker is None:
+            continue
+        row = marker.find(f"{{{XDR}}}row")
+        if row is None or row.text is None:
+            raise ValueError("Ancla de dibujo Mobiliti inválida")
+        if int(row.text) + 1 >= CANONICAL_MOBILITI_AUX_START:
+            _shift_anchor_rows(anchor, delta)
+            shifted += 1
+    if shifted == 0:
+        raise ValueError("Dibujo auxiliar Mobiliti no encontrado")
+    return {drawing_part: _xml_bytes(drawing_root, namespace_prefixes)}
+
+
 def _stable_image_relationship_type(drawing_rels: ET.Element) -> str:
     allowed = relationship_type_uris("image")
     for relationship in drawing_rels.findall(f"{{{PKG_REL}}}Relationship"):
@@ -1139,6 +1352,49 @@ def _stable_image_relationship_type(drawing_rels: ET.Element) -> str:
 
 def _translate_fletes(payload: bytes, row_map: MobilitiRowMap) -> bytes:
     root = _worksheet_root(payload, "Fletes")
+    sheet_data = root.find(f"{{{MAIN}}}sheetData")
+    if sheet_data is None:
+        raise ValueError("Fletes no contiene sheetData")
+    rows = {
+        int(row.attrib["r"]): row
+        for row in sheet_data.findall(f"{{{MAIN}}}row")
+    }
+    required_rows = (
+        set(FLETE_ROUTES)
+        | set(FLETE_CATEGORY_ROWS)
+        | set(FLETE_CATEGORY_LABEL_ROWS)
+    )
+    if not required_rows.issubset(rows):
+        raise ValueError("Filas oficiales de Fletes incompletas")
+    for row, (origin, destination) in FLETE_ROUTES.items():
+        _set_inline_string(rows[row], f"A{row}", origin)
+        _set_inline_string(rows[row], f"C{row}", destination)
+    for row, category in FLETE_CATEGORY_LABEL_ROWS.items():
+        _set_inline_string(rows[row], f"I{row}", category)
+        _set_inline_string(rows[row], f"M{row}", category)
+    for row, (category, factor, installation) in FLETE_CATEGORY_ROWS.items():
+        _set_inline_string(rows[row], f"I{row}", category)
+        _set_number(rows[row], f"J{row}", factor)
+        _set_formula(
+            rows[row],
+            f"K{row}",
+            (
+                f"=IF(Mobiliti!$K$4=TRUE,"
+                f"((J{row}/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
+                f"(J{row}/$J$21)*Mobiliti!$P$9)"
+            ),
+        )
+        _set_inline_string(rows[row], f"M{row}", category)
+        installation_text = format(installation, "f")
+        _set_formula(
+            rows[row],
+            f"N{row}",
+            (
+                f"=IF(Mobiliti!$K$4=TRUE,"
+                f"({installation_text}/Mobiliti!$K$6),"
+                f"{installation_text})"
+            ),
+        )
     source = _formula_in_root(root, "D19")
     if source is None or _formula_range_tokens(source).count("Mobiliti!H573") != 1:
         raise ValueError("Fórmula oficial inesperada: Fletes!D19")
@@ -1182,9 +1438,9 @@ def _validate_exact_mobiliti_surface(
         "D": ("text",),
         "E": ("text",),
         "F": ("text",),
-        "H": ("number",),
-        "J": ("number",),
-        "K": ("text", "number"),
+        "H": ("number", "formula"),
+        "J": ("number", "formula"),
+        "K": ("text", "number", "formula"),
         "P": ("text",),
     }
     writes: list[MobilitiCellWrite] = []
@@ -1226,6 +1482,26 @@ _COTIZACION_PRICE_TERM = re.compile(
     rf"(?:\*(?P<numerator>{_COTIZACION_POSITIVE_DECIMAL}))?"
     rf"(?:/(?P<denominator>{_COTIZACION_POSITIVE_DECIMAL}))?"
 )
+_COTIZACION_DESCRIPTION_FORMULA = re.compile(
+    r"=Quotation!D(?P<row>[1-9][0-9]*)\Z"
+)
+
+
+def _validate_cotizacion_description_formula(formula: str) -> int:
+    match = (
+        None
+        if (
+        not isinstance(formula, str)
+        or len(formula) > MAX_EXCEL_FORMULA_LENGTH
+        )
+        else _COTIZACION_DESCRIPTION_FORMULA.fullmatch(formula)
+    )
+    if match is None:
+        raise ValueError("Fórmula de descripción Cotizacion fuera de contrato")
+    row = int(match.group("row"))
+    if row > XLSX_MAX_ROWS:
+        raise ValueError("Fórmula de descripción Cotizacion fuera de contrato")
+    return row
 
 
 def _cotizacion_price_terms_from_formula(
@@ -1328,11 +1604,6 @@ def _validate_exact_cotizacion_surface(
         if current_title is None:
             raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
         product_sequence += 1
-        quantity = _exact_typed_value(
-            _require_root_cell(candidate, f"E{worksheet_row}"),
-            "number",
-            allow_blank=False,
-        )
         if first_discount is None:
             first_discount = _exact_typed_value(
                 _require_root_cell(candidate, f"G{worksheet_row}"),
@@ -1350,24 +1621,75 @@ def _validate_exact_cotizacion_surface(
             price_terms = (CotizacionPriceTerm(int(match.group(1))),)
         mobiliti_row = price_terms[0].mobiliti_row
         mobiliti_rows.extend(term.mobiliti_row for term in price_terms)
+        description_cell = _require_root_cell(candidate, f"C{worksheet_row}")
+        description_node = description_cell.find(f"{{{MAIN}}}f")
+        if description_node is None:
+            description = _exact_inline_text(
+                description_cell,
+                f"C{worksheet_row}",
+            )
+            description_formula = None
+            name = _exact_inline_text(
+                _require_root_cell(candidate, f"A{worksheet_row}"),
+                f"A{worksheet_row}",
+            )
+            dimensions = _exact_inline_text(
+                _require_root_cell(candidate, f"D{worksheet_row}"),
+                f"D{worksheet_row}",
+            )
+            quantity = _exact_typed_value(
+                _require_root_cell(candidate, f"E{worksheet_row}"),
+                "number",
+                allow_blank=False,
+            )
+        else:
+            description_formula = (
+                "="
+                + _exact_formula_text(
+                    description_cell,
+                    f"C{worksheet_row}",
+                )
+            )
+            quotation_row = _validate_cotizacion_description_formula(
+                description_formula
+            )
+            if (
+                "="
+                + _exact_formula_text(
+                    _require_root_cell(candidate, f"A{worksheet_row}"),
+                    f"A{worksheet_row}",
+                )
+                != f"=Mobiliti!D{mobiliti_row}"
+                or "="
+                + _exact_formula_text(
+                    _require_root_cell(candidate, f"D{worksheet_row}"),
+                    f"D{worksheet_row}",
+                )
+                != f"=Quotation!F{quotation_row}"
+                or "="
+                + _exact_formula_text(
+                    _require_root_cell(candidate, f"E{worksheet_row}"),
+                    f"E{worksheet_row}",
+                )
+                != f"=Mobiliti!H{mobiliti_row}"
+            ):
+                raise ValueError(
+                    "Cotizacion no cumple el contrato exacto de referencias"
+                )
+            description = ""
+            name = "referenced"
+            dimensions = ""
+            quantity = Decimal("1")
         current_products.append(
             CotizacionProduct(
                 item_key=f"contract-{product_sequence}",
-                name=_exact_inline_text(
-                    _require_root_cell(candidate, f"A{worksheet_row}"),
-                    f"A{worksheet_row}",
-                ),
-                description=_exact_inline_text(
-                    _require_root_cell(candidate, f"C{worksheet_row}"),
-                    f"C{worksheet_row}",
-                ),
-                dimensions=_exact_inline_text(
-                    _require_root_cell(candidate, f"D{worksheet_row}"),
-                    f"D{worksheet_row}",
-                ),
+                name=name,
+                description=description,
+                dimensions=dimensions,
                 quantity=quantity,
                 mobiliti_row=mobiliti_row,
                 discount=first_discount,
+                description_formula=description_formula,
                 price_terms=price_terms,
             )
         )
@@ -1467,6 +1789,8 @@ def _exact_typed_value(
         if not value.is_finite():
             raise ValueError(f"Número tipado inválido: {coordinate}")
         return value
+    if kind == "formula":
+        return "=" + _exact_formula_text(cell, coordinate)
     raise ValueError(f"Tipo de celda no permitido: {kind}")
 
 
@@ -1484,6 +1808,12 @@ def _exact_allowed_typed_value(
         kind = "text"
     elif cell_type == "b":
         kind = "boolean"
+    elif (
+        cell_type is None
+        and len(children) == 1
+        and children[0].tag == f"{{{MAIN}}}f"
+    ):
+        kind = "formula"
     elif cell_type is None:
         kind = "number"
     else:
@@ -3007,6 +3337,48 @@ def _allocate_media_part(
         suffix += 1
 
 
+def _cotizacion_image_box(
+    position: int,
+    image_count: int,
+) -> tuple[int, int, int, int]:
+    """Devuelve un rectángulo interno para principal y miniaturas."""
+
+    if (
+        type(position) is not int
+        or type(image_count) is not int
+        or image_count < 2
+        or not 0 <= position < image_count
+    ):
+        raise ValueError("Distribución de imágenes Cotizacion inválida")
+    margin = 120_000
+    gap = 90_000
+    strip_width = 1_350_000
+    content_height = _COTIZACION_IMAGE_CELL_HEIGHT_EMU - 2 * margin
+    strip_left = _COTIZACION_IMAGE_CELL_WIDTH_EMU - margin - strip_width
+    if position == 0:
+        width = strip_left - gap - margin
+        if width <= 0 or content_height <= 0:
+            raise ValueError("Área principal de imagen Cotizacion inválida")
+        return margin, margin, width, content_height
+
+    complement_count = image_count - 1
+    columns = 1 if complement_count <= 3 else 2
+    rows = math.ceil(complement_count / columns)
+    box_width = (strip_width - gap * (columns - 1)) // columns
+    box_height = (content_height - gap * (rows - 1)) // rows
+    complement_index = position - 1
+    column = complement_index % columns
+    row = complement_index // columns
+    if box_width <= 0 or box_height <= 0:
+        raise ValueError("Área de complemento Cotizacion insuficiente")
+    return (
+        strip_left + column * (box_width + gap),
+        margin + row * (box_height + gap),
+        box_width,
+        box_height,
+    )
+
+
 def _product_image_anchor(
     *,
     relationship_id: str,
@@ -3015,15 +3387,66 @@ def _product_image_anchor(
     width: int,
     height: int,
     name: str,
+    cell_width: int | None = None,
+    cell_height: int | None = None,
+    box: tuple[int, int, int, int] | None = None,
 ) -> ET.Element:
     max_width = 3_200_000
     max_height = 3_000_000
-    scale = min(max_width / width, max_height / height)
-    cx = max(1, int(width * scale))
-    cy = max(1, int(height * scale))
+    if (cell_width is None) != (cell_height is None):
+        raise ValueError("Geometría parcial de celda para imagen Cotizacion")
+    if box is not None:
+        if cell_width is None or cell_height is None:
+            raise ValueError("Rectángulo de imagen sin geometría de celda")
+        if (
+            not isinstance(box, tuple)
+            or len(box) != 4
+            or not all(type(value) is int for value in box)
+        ):
+            raise TypeError("Rectángulo de imagen Cotizacion inválido")
+        box_left, box_top, box_width, box_height = box
+        if (
+            box_left < 0
+            or box_top < 0
+            or box_width <= 0
+            or box_height <= 0
+            or box_left + box_width > cell_width
+            or box_top + box_height > cell_height
+        ):
+            raise ValueError("Rectángulo de imagen fuera de la celda Cotizacion")
+        scale = min(box_width / width, box_height / height)
+        cx = max(1, int(width * scale))
+        cy = max(1, int(height * scale))
+        column_offset = box_left + (box_width - cx) // 2
+        row_offset = box_top + (box_height - cy) // 2
+    else:
+        if cell_width is not None:
+            max_width = min(max_width, cell_width)
+            max_height = min(max_height, cell_height)
+        scale = min(max_width / width, max_height / height)
+        cx = max(1, int(width * scale))
+        cy = max(1, int(height * scale))
+    if box is None and cell_width is None:
+        column_offset = 0
+        row_offset = 0
+    elif box is None:
+        if (
+            type(cell_width) is not int
+            or type(cell_height) is not int
+            or cell_width < cx
+            or cell_height < cy
+        ):
+            raise ValueError("Geometría de celda insuficiente para imagen Cotizacion")
+        column_offset = (cell_width - cx) // 2
+        row_offset = (cell_height - cy) // 2
     anchor = ET.Element(f"{{{XDR}}}oneCellAnchor")
     marker = ET.SubElement(anchor, f"{{{XDR}}}from")
-    for tag, text in (("col", "1"), ("colOff", "0"), ("row", str(target_row - 1)), ("rowOff", "0")):
+    for tag, text in (
+        ("col", "1"),
+        ("colOff", str(column_offset)),
+        ("row", str(target_row - 1)),
+        ("rowOff", str(row_offset)),
+    ):
         ET.SubElement(marker, f"{{{XDR}}}{tag}").text = text
     ET.SubElement(anchor, f"{{{XDR}}}ext", {"cx": str(cx), "cy": str(cy)})
     picture = ET.SubElement(anchor, f"{{{XDR}}}pic")

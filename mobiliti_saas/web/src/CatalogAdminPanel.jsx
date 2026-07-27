@@ -5,7 +5,10 @@ const SUPPLIERS = [
   ["cr-global", "CR Global"],
   ["sonara", "Sonara"],
   ["sunon", "Sunon"],
-  ["alma", "ALMA"]
+  ["alma", "ALMA"],
+  ["lumbro", "Lumbro"],
+  ["jome", "JOME"],
+  ["lauco", "Lauco"]
 ];
 
 function formatDate(value) {

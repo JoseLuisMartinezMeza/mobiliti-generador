@@ -1,6 +1,7 @@
 import os
 import sys
 import hashlib
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
@@ -140,11 +141,13 @@ def test_dev_mode_import_preview_mixed_checkout_worker_and_xlsx(tmp_path, monkey
         "items": [offiho],
         "by_inventory_key": {offiho.inventory_key: offiho},
     })
+    exchange_date = date.today().isoformat()
+    exchange_retrieved_at = datetime.now(timezone.utc).isoformat()
     monkeypatch.setattr(index, "db_list_exchange_rates", lambda: [{
         "currency": "USD",
-        "effective_date": "2026-07-21",
+        "effective_date": exchange_date,
         "mxn_per_unit": "18.500000",
-        "retrieved_at": "2026-07-21T00:00:00Z",
+        "retrieved_at": exchange_retrieved_at,
     }])
 
     client = TestClient(index.app)
@@ -262,51 +265,51 @@ def test_dev_mode_import_preview_mixed_checkout_worker_and_xlsx(tmp_path, monkey
         assert len(source_rows) == 8
         assert names[3:5] == ["ALUFSEN", "CAT60SC Altaes Task Chair"]
         edited_row = source_rows[names.index("CAI63SW Alien Task Chair")]
-        assert quotation.cell(edited_row, 4).value.startswith(
-            "Descripcion revisada dev | Fuente: quotation-import.xlsx#Quotation!11"
+        assert quotation.cell(edited_row, 4).value == (
+            "Silla modelo Alien Task Chair.\nDescripcion revisada dev."
         )
-        assert quotation.cell(edited_row, 7).value == 2
-        assert quotation.cell(edited_row, 10).value == 1517
-        assert quotation.cell(edited_row, 14).value == "USD"
-        assert quotation.cell(edited_row, 15).value == 82
-        assert quotation.cell(edited_row, 16).value == 18.5
+        assert quotation.cell(edited_row, 5).value == "Descripción 2"
+        assert quotation.cell(edited_row, 6).value == "602 x 600 mm"
+        assert quotation.cell(edited_row, 8).value == 2
+        assert quotation.cell(edited_row, 11).value == 1517
         assert len(quotation._images) >= 7
 
         cotizacion = workbook["Cotizacion"]
         product_rows = [
             row for row in range(1, cotizacion.max_row + 1)
-            if str(cotizacion.cell(row, 1).value or "").startswith("=Quotation!B")
+            if str(cotizacion.cell(row, 1).value or "").startswith("=Mobiliti!D")
         ]
         assert len(product_rows) == 8
         assert cotizacion.cell(product_rows[0], 7).value == 0.4
         assert [cotizacion.cell(row, 7).value for row in product_rows[1:]] == [
-            f"=G${product_rows[0]}"
+            f"=$G${product_rows[0]}"
         ] * 7
         mobiliti = workbook["Mobiliti"]
-        guarded_blank_rows = [
+        official_blank_rows = [
             row for row in range(1, mobiliti.max_row + 1)
             if mobiliti.cell(row, 4).value is None
-            and str(mobiliti.cell(row, 23).value or "").startswith(
-                f'=IF(COUNTA($D{row},$E{row},$F{row},$H{row},$J{row},$K{row})=0,"",'
-            )
+            and str(mobiliti.cell(row, 23).value or "").startswith("=IF(F")
+            and str(mobiliti.cell(row, 24).value or "").startswith("=_xlfn.MINIFS(")
         ]
-        assert guarded_blank_rows
-        blank_row = guarded_blank_rows[0]
+        assert official_blank_rows
+        blank_row = official_blank_rows[0]
         assert all(
             mobiliti.cell(blank_row, column).value is None
             for column in (4, 5, 6, 8, 10, 11, 16)
         )
-        assert str(mobiliti.cell(blank_row, 24).value).startswith(
-            f'=IF(COUNTA($D{blank_row},$E{blank_row},$F{blank_row},'
+        assert str(mobiliti.cell(blank_row, 23).value).startswith(
+            f'=IF(F{blank_row}="Offiho",J{blank_row},'
         )
-        assert str(mobiliti.cell(blank_row, 35).value).startswith(
-            f'=IF(COUNTA($D{blank_row},$E{blank_row},$F{blank_row},'
+        assert str(mobiliti.cell(blank_row, 24).value).startswith(
+            "=_xlfn.MINIFS("
+        )
+        assert mobiliti.cell(blank_row, 35).value == (
+            f'=IF(AH{blank_row}<30%,"ERROR","OK")'
         )
         assert all(
-            "$K$6" not in str(sheet.cell(row, column).value or "")
+            "$K$6" not in str(cell.value or "")
             for sheet in (quotation, mobiliti, cotizacion)
-            for row in range(1, sheet.max_row + 1)
-            for column in range(1, sheet.max_column + 1)
+            for cell in sheet._cells.values()
         )
     finally:
         workbook.close()
