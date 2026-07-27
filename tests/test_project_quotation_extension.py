@@ -486,6 +486,37 @@ def test_original_quotation_keeps_one_final_project_list_without_stale_imports()
         workbook.close()
 
 
+def test_original_quotation_without_section_title_uses_project_section():
+    workbook = load_workbook(BytesIO(_source_workbook()))
+    workbook["Quotation"]["A8"] = "-  "
+    source = BytesIO()
+    workbook.save(source)
+    workbook.close()
+    imported = _line(
+        "imported-1",
+        origin="imported",
+        source_row=9,
+        title="Mobiliario",
+        name="Producto original",
+        image=_png_bytes("blue"),
+        cost=Decimal("125"),
+    )
+
+    augmented, quotation_rows, _quotation_rates = engine._augment_original_quotation(
+        source.getvalue(),
+        (imported,),
+    )
+
+    result = load_workbook(BytesIO(augmented), data_only=False)
+    sheet = result["Quotation"]
+    try:
+        assert sheet["A8"].value == "- Mobiliario"
+        assert sheet["B9"].value == "Producto original"
+        assert quotation_rows == {"imported-1": 9}
+    finally:
+        result.close()
+
+
 def test_original_quotation_replaces_preformatted_blank_rows_when_project_expands():
     workbook = load_workbook(BytesIO(_source_workbook()))
     sheet = workbook["Quotation"]

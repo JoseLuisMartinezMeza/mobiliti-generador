@@ -311,7 +311,7 @@ def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, st
             number = sheet.cell(row=row, column=1).value
             name = sheet.cell(row=row, column=2).value
             if isinstance(number, str) and number.startswith("-"):
-                current_category = str(number).strip("- ").strip()
+                current_category = str(number).strip("- ").strip() or "Sin categoria"
                 items.append({"tipo": "categoria", "row": row, "nombre": current_category})
                 continue
             if (name is None or name == "") and (number is None or number == ""):

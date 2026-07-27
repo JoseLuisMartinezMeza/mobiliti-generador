@@ -3460,9 +3460,7 @@ def _quotation_content_rows(
             shared_strings,
         ).strip()
         if first.startswith("-"):
-            current_section = " ".join(first.lstrip("-").split())
-            if not current_section:
-                raise ValueError("Seccion vacia en Quotation original")
+            current_section = " ".join(first.lstrip("-").split()) or "Mobiliario"
             section_rows.append(row_number)
         try:
             numeric_first = Decimal(first)

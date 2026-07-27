@@ -112,6 +112,23 @@ def test_build_import_manifest_normalizes_section_and_optional_provider_workbook
     assert manifest["sections"][0]["title"] == "SALA DE JUNTAS NORTE"
 
 
+def test_build_import_manifest_uses_default_for_blank_section_title(tmp_path):
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    workbook = load_workbook(source)
+    workbook["Quotation"]["A8"] = "-  "
+    workbook.save(source)
+    workbook.close()
+
+    manifest, _ = build_import_manifest(
+        source.read_bytes(),
+        import_id=IMPORT_ID,
+        original_filename=source.name,
+    )
+
+    assert manifest["sections"][0]["title"] == "Sin categoria"
+    assert manifest["items"][0]["category"] == "Sin categoria"
+
+
 @pytest.mark.parametrize(
     ("cell", "value"),
     [
