@@ -10,6 +10,11 @@ def test_hetzner_deploy_uses_immutable_release_worktrees():
     assert 'worktree add --detach "${RELEASE_DIR}" "${TARGET_COMMIT}"' in deploy
     assert 'RELEASES_DIR="${RELEASES_DIR:-/opt/mobiliti-worker/releases}"' in deploy
     assert 'WORKER_IMAGE_TAG="${TARGET_COMMIT}"' in deploy
+    assert 'docker rename "${ACTIVE_CONTAINER}" "${BACKUP_CONTAINER}"' in deploy
+    assert "restore_previous_worker" in deploy
+    assert 'docker rename "${BACKUP_CONTAINER}" "${ACTIVE_CONTAINER}"' in deploy
+    assert "docker container rm" not in deploy
+    assert "docker rm" not in deploy
     assert "git reset --hard" not in deploy
     assert "rm -rf" not in deploy
 
