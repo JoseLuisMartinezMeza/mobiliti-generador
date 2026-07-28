@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -163,6 +164,28 @@ def test_shared_supplier_tabs_are_visible_and_routed_to_the_common_view():
     assert "export default function SupplierCatalogView" in component
     assert '"source": "/catalogs"' in vercel
     assert '"source": "/catalogs/:path*"' in vercel
+
+
+def test_vercel_routes_project_workspace_requests_to_fastapi_before_spa():
+    """Project CRUD/import requests must not fall through to index.html."""
+
+    config = json.loads(
+        Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+    )
+    rewrites = config["rewrites"]
+    route_pairs = [
+        (rewrite["source"], rewrite["destination"])
+        for rewrite in rewrites
+    ]
+
+    assert ("/projects", "/api/index") in route_pairs
+    assert ("/projects/:path*", "/api/index") in route_pairs
+    assert route_pairs.index(("/projects", "/api/index")) < route_pairs.index(
+        ("/(.*)", "/index.html")
+    )
+    assert route_pairs.index(("/projects/:path*", "/api/index")) < route_pairs.index(
+        ("/(.*)", "/index.html")
+    )
 
 
 def test_offiho_catalog_uses_factual_filters_cache_and_pagination_contracts():

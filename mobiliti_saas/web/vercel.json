@@ -48,6 +48,14 @@
       "destination": "/api/index"
     },
     {
+      "source": "/projects",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/projects/:path*",
+      "destination": "/api/index"
+    },
+    {
       "source": "/generar-cotizacion",
       "destination": "/api/index"
     },
