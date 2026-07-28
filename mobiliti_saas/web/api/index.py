@@ -131,8 +131,8 @@ R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
 R2_BUCKET = os.environ.get("R2_BUCKET", QUOTE_STORAGE_BUCKET).strip() or QUOTE_STORAGE_BUCKET
 R2_REGION = os.environ.get("R2_REGION", "auto").strip() or "auto"
 MAX_QUOTE_UPLOAD_MB = int(os.environ.get("MAX_QUOTE_UPLOAD_MB", "25"))
-MAX_QUOTE_HISTORY_PER_USER = int(os.environ.get("MAX_QUOTE_HISTORY_PER_USER", "3"))
-MAX_ACTIVE_QUOTE_JOBS_PER_USER = max(1, min(20, int(os.environ.get("MAX_ACTIVE_QUOTE_JOBS_PER_USER", "3"))))
+MAX_QUOTE_HISTORY_PER_USER = int(os.environ.get("MAX_QUOTE_HISTORY_PER_USER", "5"))
+MAX_ACTIVE_QUOTE_JOBS_PER_USER = max(1, min(20, int(os.environ.get("MAX_ACTIVE_QUOTE_JOBS_PER_USER", "5"))))
 QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS = int(os.environ.get("QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS", "14"))
 DELETE_COMPLETED_QUOTE_INPUTS = _env_bool("DELETE_COMPLETED_QUOTE_INPUTS", True)
 QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS = int(os.environ.get("QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS", "1"))
@@ -3563,33 +3563,45 @@ def _require_queued_quote_job(updated: dict) -> dict:
 def _cleanup_failed_catalog_quote(
     job_id: str,
     input_path: str,
-    release_reservations,
+    release_reservations=None,
     *,
     additional_storage_paths: list[str] | None = None,
+    primary_failure: str | None = None,
 ) -> None:
+    def pending_error(stage: str) -> str:
+        cleanup_error = f"cleanup_pending:{stage}"
+        return (
+            f"{cleanup_error}|{primary_failure}"
+            if primary_failure
+            else cleanup_error
+        )
+
     def mark_pending(stage: str) -> None:
         try:
             db_update_quote_job(
                 job_id,
                 {
                     "status": "failed",
-                    "error_message": f"cleanup_pending:{stage}",
+                    "error_message": pending_error(stage),
                 },
             )
         except Exception:
             pass
-        print(
-            json.dumps(
-                {"event": "catalog_quote_cleanup_pending", "job_id": job_id, "stage": stage},
-                separators=(",", ":"),
-            )
-        )
+        event = {
+            "event": "catalog_quote_cleanup_pending",
+            "job_id": job_id,
+            "stage": stage,
+        }
+        if primary_failure:
+            event["primary_failure"] = primary_failure
+        print(json.dumps(event, separators=(",", ":")))
 
-    try:
-        release_reservations(job_id)
-    except Exception:
-        mark_pending("release_reservations")
-        return
+    if release_reservations is not None:
+        try:
+            release_reservations(job_id)
+        except Exception:
+            mark_pending("release_reservations")
+            return
     try:
         storage_paths = [input_path, *(additional_storage_paths or [])]
         _delete_storage_paths(list(dict.fromkeys(storage_paths)))
@@ -3745,6 +3757,67 @@ def _release_quote_reservations(job: dict) -> None:
     db_release_tarkett_reservations(job_id)
     db_release_offiho_reservations(job_id)
     db_release_catalog_reservations(job_id)
+
+
+def _atomic_delete_quote_job(job: dict) -> None:
+    try:
+        job_id = str(uuid.UUID(str(job.get("id") or "")))
+        usuario_id = int(job.get("usuario_id"))
+    except (TypeError, ValueError, AttributeError):
+        raise RuntimeError("Cotizacion invalida para eliminacion") from None
+    if usuario_id <= 0:
+        raise RuntimeError("Cotizacion invalida para eliminacion")
+    deleted = _supabase_req(
+        "POST",
+        "/rpc/saas_delete_quote_job",
+        json_data={"p_quote_job_id": job_id, "p_usuario_id": usuario_id},
+    )
+    if deleted is not True:
+        raise RuntimeError("Cotizacion no encontrada para eliminacion")
+
+
+def _is_supabase_schema_compat_error(exc: RuntimeError) -> bool:
+    message = str(exc)
+    return (
+        message.startswith("Supabase HTTP 400")
+        or message.startswith("Supabase HTTP 404")
+    )
+
+
+def _release_quote_reservations_rest_compat(job: dict) -> None:
+    job_id = str(job.get("id") or "").strip()
+    if not job_id:
+        raise RuntimeError("Cotizacion sin identificador")
+    for release in (
+        db_release_tarkett_reservations,
+        db_release_offiho_reservations,
+        db_release_catalog_reservations,
+    ):
+        try:
+            release(job_id)
+        except RuntimeError as exc:
+            if not _is_supabase_schema_compat_error(exc):
+                raise
+
+
+def _release_and_delete_quote_job(job: dict) -> None:
+    try:
+        _release_quote_reservations(job)
+        db_delete_quote_job(str(job["id"]))
+    except RuntimeError as exc:
+        if (
+            DEV_MODE
+            or _use_postgres()
+            or not _is_supabase_schema_compat_error(exc)
+        ):
+            raise
+        _release_quote_reservations_rest_compat(job)
+        try:
+            db_delete_quote_job(str(job["id"]))
+        except RuntimeError as delete_exc:
+            if not _is_supabase_schema_compat_error(delete_exc):
+                raise
+            _atomic_delete_quote_job(job)
 
 
 def _delete_storage_paths(paths: list[str]) -> None:
@@ -4026,8 +4099,7 @@ def _run_quote_retention(usuario_id: int, jobs: list[dict] | None = None, dry_ru
         summary["deleted_reasons"][reason] = summary["deleted_reasons"].get(reason, 0) + 1
         deleted_job_ids.add(str(job["id"]))
         if not dry_run:
-            _release_quote_reservations(job)
-            db_delete_quote_job(job["id"])
+            _release_and_delete_quote_job(job)
             _delete_quote_storage(job)
             summary["storage_objects_deleted"] += len(paths)
 
@@ -5687,11 +5759,19 @@ def _import_source_references_consumer(
     return _quote_job_metadata(source).get("import_consumed_by_job_id") == final_job_id
 
 
-def _preserve_failed_import_consumer(job_id: str, release_reservations) -> None:
+def _preserve_failed_import_consumer(
+    job_id: str,
+    release_reservations=None,
+    *,
+    primary_failure: str | None = None,
+) -> None:
     failed = None
+    error_message = "import_source_restore_pending"
+    if primary_failure:
+        error_message = f"{error_message}|{primary_failure}"
     updates = {
         "status": "failed",
-        "error_message": "import_source_restore_pending",
+        "error_message": error_message,
     }
     for expected_status in ("draft", "queued"):
         try:
@@ -5717,6 +5797,8 @@ def _preserve_failed_import_consumer(job_id: str, release_reservations) -> None:
             return
         failed = current
     if failed.get("status") != "failed":
+        return
+    if release_reservations is None:
         return
     try:
         release_reservations(job_id)
@@ -5865,6 +5947,9 @@ def _enqueue_mixed_payload(
     job_created = False
     import_consumed = False
     additional_cleanup_paths: list[str] = []
+    reservation_groups = build_mixed_reservation_groups(cart_payload)
+    release_reservations = db_release_mixed_cart if reservation_groups else None
+    stage = "create_job"
     try:
         db_create_quote_job(
             current_user["id"],
@@ -5875,6 +5960,7 @@ def _enqueue_mixed_payload(
         )
         job_created = True
         if import_source_bytes is not None:
+            stage = "copy_import_source"
             additional_cleanup_paths.append(source_copy_path)
             _storage_upload_bytes(
                 source_copy_path,
@@ -5900,11 +5986,15 @@ def _enqueue_mixed_payload(
             imported_source["source_path"] = source_copy_path
             metadata["import_source_path"] = source_copy_path
             validate_mixed_catalog_payload(cart_payload)
-        snapshot = db_reserve_mixed_cart(
-            current_user["id"],
-            job_id,
-            build_mixed_reservation_groups(cart_payload),
-        )
+        snapshot = []
+        if reservation_groups:
+            stage = "reserve"
+            snapshot = db_reserve_mixed_cart(
+                current_user["id"],
+                job_id,
+                reservation_groups,
+            )
+        stage = "serialize"
         _apply_mixed_reservation_snapshot(cart_payload, snapshot)
         validate_mixed_catalog_payload(cart_payload)
         content = json.dumps(
@@ -5919,12 +6009,22 @@ def _enqueue_mixed_payload(
             ],
             encoded_bytes=len(content),
         )
+        stage = "upload_input"
         _storage_upload_bytes(input_path, content, "application/json")
         if import_job is not None:
+            stage = "consume_import"
             _consume_import_draft(import_job, job_id)
             import_consumed = True
+        stage = "queue"
         return db_queue_mixed_quote_job(job_id, metadata)
-    except Exception:
+    except Exception as exc:
+        primary_failure = f"enqueue:{stage}:{type(exc).__name__}"
+        print(json.dumps({
+            "event": "mixed_quote_enqueue_failed",
+            "job_id": job_id,
+            "stage": stage,
+            "error_type": type(exc).__name__,
+        }, separators=(",", ":")))
         import_restored = not import_consumed
         if import_consumed:
             try:
@@ -5944,13 +6044,18 @@ def _enqueue_mixed_payload(
                     import_restored = False
         if job_created:
             if import_consumed and not import_restored:
-                _preserve_failed_import_consumer(job_id, db_release_mixed_cart)
+                _preserve_failed_import_consumer(
+                    job_id,
+                    release_reservations,
+                    primary_failure=primary_failure,
+                )
             else:
                 _cleanup_failed_catalog_quote(
                     job_id,
                     input_path,
-                    db_release_mixed_cart,
+                    release_reservations,
                     additional_storage_paths=additional_cleanup_paths,
+                    primary_failure=primary_failure,
                 )
         raise
 
@@ -6875,8 +6980,7 @@ def cotizaciones_delete(job_id: str, current_user: dict = Depends(get_current_us
     job = _quote_job_for_user(job_id, current_user["id"])
     try:
         job = _prepare_import_consumer_delete(job)
-        _release_quote_reservations(job)
-        db_delete_quote_job(job_id)
+        _release_and_delete_quote_job(job)
         _delete_quote_storage(job)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=f"Error eliminando cotizacion: {e}")

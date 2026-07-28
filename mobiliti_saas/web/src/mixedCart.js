@@ -1342,18 +1342,29 @@ function projectQuoteFields(quoteFields) {
 
 function projectDisplayCache(snapshot) {
   const copied = copySnapshot(snapshot);
-  return { name: copied.name, code: copied.code, image_url: copied.image_url };
+  return {
+    name: copied.name,
+    code: copied.code,
+    image_url: copied.image_url,
+    configuration: copied.configuration,
+  };
 }
 
 function hydrateProjectDisplayCache(displayCache) {
-  exactProjectKeys(displayCache, new Set(["name", "code", "image_url"]), "display_cache invalido");
+  const required = new Set(["name", "code", "image_url"]);
+  const allowed = new Set([...required, "configuration"]);
+  if (!displayCache || typeof displayCache !== "object" || Array.isArray(displayCache)
+      || [...required].some((key) => !hasOwn(displayCache, key))
+      || Object.keys(displayCache).some((key) => !allowed.has(key))) {
+    throw new Error("display_cache invalido");
+  }
   return {
     name: displayCache.name,
     code: displayCache.code,
     image_url: displayCache.image_url,
     unit: "",
     availability: "",
-    configuration: "",
+    configuration: displayCache.configuration || "",
     warnings: [],
   };
 }

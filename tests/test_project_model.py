@@ -19,6 +19,25 @@ def test_project_payload_accepts_one_level_and_counts_physical_rows():
     assert project_physical_line_count(normalized) == 2
 
 
+def test_project_display_cache_preserves_configuration_and_accepts_legacy_rows():
+    configured = valid_project_payload()
+    configured["lines"][0]["display_cache"]["configuration"] = (
+        "Aluminio + Tela A + Cojín"
+    )
+
+    normalized = normalize_project_payload(configured)
+    legacy = normalize_project_payload(valid_project_payload())
+
+    assert normalized["lines"][0]["display_cache"]["configuration"] == (
+        "Aluminio + Tela A + Cojín"
+    )
+    assert legacy["lines"][0]["display_cache"] == {
+        "name": "Silla",
+        "code": "CHAIR-1",
+        "image_url": "",
+    }
+
+
 @pytest.mark.parametrize("mutation", ["duplicate", "orphan", "nested", "cycle"])
 def test_project_payload_rejects_invalid_graph(mutation):
     payload = valid_project_payload()

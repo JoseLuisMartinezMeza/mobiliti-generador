@@ -176,6 +176,95 @@ def test_cr_global_picker_target_matches_before_and_after_project_round_trip():
     }
 
 
+def test_alma_and_lauco_configuration_labels_survive_project_round_trip():
+    model_url = Path("mobiliti_saas/web/src/mixedCart.js").resolve().as_uri()
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=f"""
+          import * as workspace from {json.dumps(WORKSPACE_MODULE)};
+          import * as model from {json.dumps(model_url)};
+          import * as picker from {json.dumps(PICKER_MODULE)};
+          const cases = [
+            {{
+              catalog: "alma",
+              official_code: "ALMA-42",
+              identity: {{internal_id: "alma-42", base_option_id: "", add_on_option_ids: []}},
+              base_options: [
+                {{id: "base-aluminio", name: "Aluminio"}},
+                {{id: "base-madera", name: "Madera"}},
+              ],
+              add_on_options: [{{
+                id: "tela-a", name: "Tela A", family: "tapiz",
+                compatible_base_option_ids: [],
+              }}],
+              snapshot: {{name: "Silla ALMA", image_url: "", availability: "Sobre pedido"}},
+              selectedBase: "base-madera",
+              selectedAddOns: ["tela-a"],
+            }},
+            {{
+              catalog: "lauco",
+              official_code: "A4 1P",
+              identity: {{internal_id: "lauco:a4-1p", base_option_id: "", add_on_option_ids: []}},
+              base_options: [
+                {{id: "grado-1", name: "Tela Grado 1"}},
+                {{id: "grado-2", name: "Tela Grado 2"}},
+              ],
+              add_on_options: [],
+              snapshot: {{name: "Sillón Lauco", image_url: "", availability: "Sobre pedido"}},
+              selectedBase: "grado-2",
+              selectedAddOns: [],
+            }},
+          ];
+          const lines = cases.map((item, position) => {{
+            const selection = picker.createCanonicalProductSelection(
+              item,
+              item.selectedBase,
+              item.selectedAddOns,
+            );
+            return model.createMixedCartLine({{
+              ...workspace.createProjectPickerTarget(selection),
+              sectionId: "section-1",
+              position,
+            }});
+          }});
+          const state = {{
+            quoteFields: {{proyecto: "", cliente: "", correo: "", telefono: "",
+              direccion: "", razon_social: "", quote_currency: "MXN", descuento: "40"}},
+            sections: [{{id: "section-1", concept: "Recepción"}}],
+            lines,
+          }};
+          const persisted = model.serializeProject(state);
+          const reopened = model.hydrateProject(persisted);
+          console.log(JSON.stringify({{
+            persisted: persisted.lines.map((line) => line.display_cache.configuration),
+            reopened: reopened.lines.map((line) => line.snapshot.configuration),
+            identities: reopened.lines.map((line) => line.identity),
+          }}));
+        """,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "persisted": ["Madera + Tela A", "Tela Grado 2"],
+        "reopened": ["Madera + Tela A", "Tela Grado 2"],
+        "identities": [
+            {
+                "internal_id": "alma-42",
+                "base_option_id": "base-madera",
+                "add_on_option_ids": ["tela-a"],
+            },
+            {
+                "internal_id": "lauco:a4-1p",
+                "base_option_id": "grado-2",
+                "add_on_option_ids": [],
+            },
+        ],
+    }
+
+
 def test_complement_selection_waits_for_explicit_mode_quantity_and_confirmation():
     source = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
     assert "pendingComplement" in source

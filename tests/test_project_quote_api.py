@@ -170,7 +170,7 @@ def test_project_quote_uses_saved_revision_and_does_not_mutate_project(project_c
     assert frozen["groups"][0]["items"][0]["line_id"] == (
         project["payload"]["lines"][0]["line_id"]
     )
-    assert events == ["create_job", "reserve", "upload", "queue", "wake"]
+    assert events == ["create_job", "upload", "queue", "wake"]
     assert len(jobs) == 1
     assert client.get(
         f"/projects/{project['id']}", headers=headers
@@ -323,7 +323,7 @@ def test_project_quote_copies_but_does_not_consume_promoted_import(
     assert source_key in storage
     assert jobs[0]["status"] == "queued"
     assert events == [
-        "create_job", "upload", "reserve", "upload", "queue", "wake",
+        "create_job", "upload", "upload", "queue", "wake",
     ]
 
 

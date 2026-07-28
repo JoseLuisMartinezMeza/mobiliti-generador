@@ -675,6 +675,9 @@ def _valid_mixed_worker_payload():
 def _project_mixed_worker_payload(*, include_complement=False):
     payload = _valid_mixed_worker_payload()
     project = valid_project_payload()
+    project["lines"][0]["display_cache"]["configuration"] = (
+        "Madera + Tela A"
+    )
     if not include_complement:
         project["lines"] = project["lines"][:1]
     principal_id = project["lines"][0]["line_id"]
@@ -729,6 +732,12 @@ def test_worker_passes_validated_project_context_to_official_engine(monkeypatch)
     assert seen["metadata"]["project_id"] == expected["project_id"]
     assert seen["metadata"]["project_revision"] == expected["project_revision"]
     assert seen["metadata"]["project_payload_hash"] == expected["project_payload_hash"]
+    assert (
+        seen["metadata"]["project_context"]["normalized_project_payload"]["lines"][0][
+            "display_cache"
+        ]["configuration"]
+        == "Madera + Tela A"
+    )
 
 
 def test_worker_rejects_project_component_absent_from_resolved_mixed_payload(
@@ -784,6 +793,7 @@ def _valid_imported_worker_payload(tmp_path):
         }],
         quote_currency="MXN",
         commercial_discount_percent="40",
+        today=date(2026, 7, 21),
         presentation_sections=[{
             "id": "section-1",
             "title": "Recepción",

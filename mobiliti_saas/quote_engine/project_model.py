@@ -34,7 +34,8 @@ IMPORTED_LINE_FIELDS = COMMON_LINE_FIELDS | frozenset({
     "description", "dimension", "unit_price", "image_asset_key",
     "source_asset_key",
 })
-DISPLAY_CACHE_FIELDS = frozenset({"name", "code", "image_url"})
+DISPLAY_CACHE_REQUIRED_FIELDS = frozenset({"name", "code", "image_url"})
+DISPLAY_CACHE_FIELDS = DISPLAY_CACHE_REQUIRED_FIELDS | frozenset({"configuration"})
 
 
 def _text(value: object, field: str, *, required: bool = True, limit: int = 2_000) -> str:
@@ -329,13 +330,26 @@ def _validate_line_positions(lines: list[dict]) -> None:
 
 
 def _normalize_display_cache(raw: object) -> dict:
-    if not isinstance(raw, dict) or set(raw) != DISPLAY_CACHE_FIELDS:
+    keys = set(raw) if isinstance(raw, dict) else set()
+    if (
+        not isinstance(raw, dict)
+        or not DISPLAY_CACHE_REQUIRED_FIELDS.issubset(keys)
+        or not keys.issubset(DISPLAY_CACHE_FIELDS)
+    ):
         raise ValueError("display_cache inválido")
-    return {
+    normalized = {
         "name": _text(raw["name"], "display_cache.name", required=False, limit=500),
         "code": _text(raw["code"], "display_cache.code", required=False, limit=500),
         "image_url": _text(raw["image_url"], "display_cache.image_url", required=False, limit=2_000),
     }
+    if "configuration" in raw:
+        normalized["configuration"] = _text(
+            raw["configuration"],
+            "display_cache.configuration",
+            required=False,
+            limit=2_000,
+        )
+    return normalized
 
 
 def _asset_key(value: object, field: str) -> str:

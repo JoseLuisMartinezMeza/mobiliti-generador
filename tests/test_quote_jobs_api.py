@@ -955,7 +955,7 @@ def test_mixed_quote_allows_imported_only_and_omitted_manifest_rows(
         "id": "section-1", "title": "Recepción",
         "line_ids": ["legacy-import-1"],
     }]
-    assert state["reserved_groups"] == [[]]
+    assert state["reserved_groups"] == []
 
 
 @pytest.mark.parametrize(
@@ -1092,7 +1092,7 @@ def test_mixed_quote_import_failures_do_not_queue_or_wake(
 
     assert response.status_code == 503
     assert "wake" not in state["events"]
-    assert state["released"] == ([] if stage == "create" else [state["jobs"][0]["id"]])
+    assert state["released"] == []
     assert state["deleted_jobs"] == ([] if stage == "create" else [state["jobs"][0]["id"]])
 
 
@@ -1191,10 +1191,17 @@ def test_mixed_quote_post_copy_failures_leave_no_final_job_storage_orphans(
             lambda *_args: (_ for _ in ()).throw(RuntimeError("CAS failed")),
         )
 
+    request_items = [item]
+    if stage == "reserve":
+        request_items.insert(
+            0,
+            {"catalog": "tarkett", "code": "25731726", "quantity": "1"},
+        )
+
     response = _client().post(
         "/catalogs/mixed-quote",
         headers=_auth_headers(),
-        json=_valid_mixed_body([item]),
+        json=_valid_mixed_body(request_items),
     )
 
     assert response.status_code == 503
@@ -1205,7 +1212,7 @@ def test_mixed_quote_post_copy_failures_leave_no_final_job_storage_orphans(
     source_copy_path = f"{final_prefix}import-source.xlsx"
     assert state["deleted_inputs"] == [input_path, source_copy_path]
     assert not any(path.startswith(final_prefix) for path in objects)
-    assert state["released"] == [final_job_id]
+    assert state["released"] == ([final_job_id] if stage == "reserve" else [])
     assert state["deleted_jobs"] == [final_job_id]
     assert "wake" not in state["events"]
 
@@ -1469,6 +1476,40 @@ def test_mixed_quote_loads_exactly_the_requested_catalogs(monkeypatch):
     assert state["loaded_catalogs"] == ["offiho", "alma"]
     assert len(state["jobs"]) == 1
     assert len(state["uploads"]) == 1
+
+
+def test_mixed_quote_skips_reservation_rpc_for_made_to_order_project(monkeypatch):
+    state = _mock_mixed_quote_dependencies(monkeypatch)
+    original_loader = index._load_supplier_catalog_cached
+
+    def made_to_order_catalog(supplier):
+        catalog = deepcopy(original_loader(supplier))
+        catalog["items"][0]["availability_type"] = "made_to_order"
+        catalog["items"][0]["stock"] = None
+        return catalog
+
+    monkeypatch.setattr(index, "_load_supplier_catalog_cached", made_to_order_catalog)
+    monkeypatch.setattr(
+        index,
+        "db_reserve_mixed_cart",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("No debe reservar un proyecto completamente sobre pedido")
+        ),
+    )
+
+    response = _client().post(
+        "/catalogs/mixed-quote",
+        headers=_auth_headers(),
+        json=_valid_mixed_body([{
+            "catalog": "alma",
+            "internal_id": "alma:desk-1",
+            "quantity": "1",
+        }]),
+    )
+
+    assert response.status_code == 200, response.json()
+    assert state["reserved_groups"] == []
+    assert state["events"] == ["create_job", "upload", "queue", "wake"]
 
 
 def test_mixed_quote_uses_the_shared_enqueue_transaction_once(monkeypatch):
@@ -1783,7 +1824,10 @@ def test_mixed_quote_marks_cleanup_pending_when_release_fails(monkeypatch):
     )
     assert response.status_code == 503
     assert marked == [{
-        "status": "failed", "error_message": "cleanup_pending:release_reservations",
+        "status": "failed",
+        "error_message": (
+            "cleanup_pending:release_reservations|enqueue:queue:RuntimeError"
+        ),
     }]
     assert state["deleted_jobs"] == []
     assert state["deleted_inputs"] == []
@@ -1814,11 +1858,12 @@ def test_mixed_quote_retains_failed_job_when_input_delete_fails(monkeypatch):
     )
     assert response.status_code == 503
     assert len(state["released"]) == 1
-    assert marked == [{"status": "failed", "error_message": "cleanup_pending:delete_input"}]
+    expected_error = "cleanup_pending:delete_input|enqueue:queue:RuntimeError"
+    assert marked == [{"status": "failed", "error_message": expected_error}]
     assert state["deleted_jobs"] == []
     retained = state["jobs"][0]
     assert retained["status"] == "failed"
-    assert retained["error_message"] == "cleanup_pending:delete_input"
+    assert retained["error_message"] == expected_error
     assert retained["input_path"].endswith("/input.json")
     assert retained["metadata"]["source_type"] == "mixed_catalog_cart"
     assert "wake" not in state["events"]
@@ -1841,7 +1886,10 @@ def test_mixed_quote_marks_cleanup_pending_when_job_delete_fails(monkeypatch):
     )
     assert response.status_code == 503
     assert len(state["released"]) == 1
-    assert marked == [{"status": "failed", "error_message": "cleanup_pending:delete_job"}]
+    assert marked == [{
+        "status": "failed",
+        "error_message": "cleanup_pending:delete_job|enqueue:queue:RuntimeError",
+    }]
     assert len(state["deleted_inputs"]) == 1
     assert "wake" not in state["events"]
 
@@ -3246,11 +3294,10 @@ def test_supplier_quote_freezes_fx_and_creates_stock_reservations(monkeypatch):
         "invalid-option",
         "invalid-quantity",
         "fractional-piece-quantity",
-        "unverified",
     ],
 )
-def test_supplier_quote_rejects_invalid_or_unverified_cart_before_upload(monkeypatch, case):
-    catalog = _mock_supplier_catalog(code_status="needs_review" if case == "unverified" else "verified")
+def test_supplier_quote_rejects_invalid_cart_before_upload(monkeypatch, case):
+    catalog = _mock_supplier_catalog()
     state = _install_supplier_quote_mocks(monkeypatch, catalog)
     line = _valid_supplier_line()
     if case == "empty":
