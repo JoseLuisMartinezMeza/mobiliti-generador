@@ -363,15 +363,23 @@ def test_catalog_add_requires_active_project_and_projects_view_creates_one():
     assert "onActivateProject={activateCreatedProject}" in main
 
 
-def test_blocked_import_is_parked_and_routes_to_projects():
+def test_import_without_active_project_creates_and_opens_project_automatically():
     main = MAIN.read_text(encoding="utf-8")
     start = main.index("function importQuotationPreview(preview, options)")
     end = main.index("function removeMixedCartLineFromApp", start)
     import_flow = main[start:end]
-    assert "blockExternalProjectEntry({preview, options})" in import_flow
-    assert "setPendingImportDraft((current) => current || pendingDraft)" in main
-    assert 'setView("proyectos")' in main
-    assert "El borrador importado se conservar" in main
+    assert "await createNewProject(" in import_flow
+    assert "activateCreatedProject" in import_flow
+    assert "importedProjectName(preview, options)" in import_flow
+    assert "blockExternalProjectEntry({preview, options})" not in import_flow
+    preview_start = main.index("async function previewImport()")
+    preview_end = main.index("async function confirmImport()", preview_start)
+    preview_flow = main[preview_start:preview_end]
+    assert "await onImportPreview(preview" in preview_flow
+    assert "setImportPreview(preview)" in preview_flow
+    assert preview_flow.index("await onImportPreview(preview") < preview_flow.index(
+        "setImportPreview(preview)"
+    )
 
 
 def test_existing_project_adoption_retains_draft_until_confirmed_autosave():
@@ -473,6 +481,8 @@ def test_new_project_flow_posts_backend_valid_payload_then_opens_created_project
             (project) => activated.push(project),
             projectState,
             {{current: false}},
+            null,
+            "Quotation importada",
           );
           await server.close();
           console.log(JSON.stringify({{calls, activated, created}}));
@@ -487,7 +497,7 @@ def test_new_project_flow_posts_backend_valid_payload_then_opens_created_project
     assert result["calls"][0]["path"] == "/projects"
     assert result["calls"][0]["options"]["method"] == "POST"
     body = json.loads(result["calls"][0]["options"]["body"])
-    assert body["name"] == "Nuevo Proyecto"
+    assert body["name"] == "Quotation importada"
     assert normalize_project_payload(body["payload"]) == body["payload"]
     assert body["payload"]["quote_fields"]["proyecto"] == "Adoptado"
     assert len(body["payload"]["lines"]) == 1

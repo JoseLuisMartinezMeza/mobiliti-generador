@@ -33,7 +33,7 @@ import SupplierCatalogView from "./SupplierCatalogView";
 import CatalogAdminPanel from "./CatalogAdminPanel";
 import MixedCartDrawer from "./MixedCartDrawer";
 import ProjectEditor from "./ProjectEditor";
-import ProjectsView from "./ProjectsView";
+import ProjectsView, {createNewProject} from "./ProjectsView";
 import {createProjectOperationId, projectMixedQuoteLines} from "./projectWorkspace.js";
 import {useProjectAutosave} from "./useProjectAutosave.js";
 import {
@@ -538,6 +538,16 @@ function previewNeedsSourceCurrency(preview) {
   return preview?.currency_status === "required";
 }
 
+function importedProjectName(preview, options) {
+  const explicitName = String(options?.quoteForm?.proyecto || "").trim();
+  if (explicitName) return explicitName.slice(0, 120);
+  const filename = String(preview?.original_filename || "")
+    .replace(/\.[^.]+$/u, "")
+    .replace(/\s*[-_]\s*quotation\s+sheet(?:\s*[-_].*)?$/iu, "")
+    .trim();
+  return (filename || "Proyecto importado").slice(0, 120);
+}
+
 function QuoteForm({
   token,
   onJobChange,
@@ -547,6 +557,7 @@ function QuoteForm({
   onImportPreview,
   confirmedImport,
   pendingImportId,
+  autoCreateProject,
 }) {
   const { request } = useApi(token);
   const [form, setForm] = useState(emptyQuote);
@@ -738,6 +749,25 @@ function QuoteForm({
       const draft = await uploadQuoteDraft(file, form.template);
       const preview = await request(`/cotizaciones/${draft.job_id}/import-preview`, { method: "POST" });
       if (requestEpoch !== requestEpochRef.current) return;
+      const sourceCurrency = preview.source_currency || "";
+      const provider = String(preview.provider || "").trim();
+      if (autoCreateProject
+          && provider
+          && (!previewNeedsSourceCurrency(preview) || sourceCurrency)) {
+        const imported = await onImportPreview(preview, {
+          sourceCurrency,
+          provider,
+          quoteForm: form,
+        });
+        if (requestEpoch !== requestEpochRef.current) return;
+        if (imported) {
+          setImportPreview(null);
+          setImportCurrency("");
+          setImportProvider("");
+          uploadDraftRef.current = null;
+          return;
+        }
+      }
       setImportPreview(preview);
       setImportCurrency(preview.source_currency || "");
       setImportProvider(preview.provider || "");
@@ -2438,6 +2468,7 @@ function App() {
   const [projectChangeVersion, setProjectChangeVersion] = useState(0);
   const projectLoadEpochRef = useRef(0);
   const pendingImportAdoptionRef = useRef(null);
+  const automaticProjectCreationRef = useRef(false);
   const activeProjectRef = useRef(null);
   const canMutateActiveProjectRef = useRef(false);
   const [mixedCart, setMixedCart] = useState([]);
@@ -2727,10 +2758,37 @@ function App() {
   }
 
   async function importQuotationPreview(preview, options) {
+    const importDraft = {preview, options};
+    if (!activeProject?.id) {
+      setPendingImportDraft(importDraft);
+      try {
+        const created = await createNewProject(
+          request,
+          activateCreatedProject,
+          {
+            quoteFields: projectQuoteFieldsFromMixedQuote({
+              ...EMPTY_MIXED_QUOTE,
+              ...(options?.quoteForm || {}),
+            }),
+            sections: createInitialMixedCartSections(),
+            lines: [],
+          },
+          automaticProjectCreationRef,
+          importDraft,
+          importedProjectName(preview, options),
+        );
+        return Boolean(created);
+      } catch (failure) {
+        setPendingImportDraft((current) => current === importDraft ? null : current);
+        const message = failure.message || "No se pudo crear el Proyecto importado.";
+        setMixedQuoteError(message);
+        throw failure;
+      }
+    }
     const allowed = runProjectLineEntry({
       allowed: canMutateActiveProject,
       mutate: () => true,
-      onBlocked: () => blockExternalProjectEntry({preview, options}),
+      onBlocked: () => blockExternalProjectEntry(),
     });
     if (!allowed) return false;
     if (pendingImportAdoptionRef.current) {
@@ -2739,7 +2797,6 @@ function App() {
     }
     const projectId = activeProject.id;
     const loadEpoch = projectLoadEpochRef.current;
-    const importDraft = {preview, options};
     try {
       const durableDraft = await promoteProjectImport({
         request,
@@ -3024,6 +3081,7 @@ function App() {
       onImportPreview={importQuotationPreview}
       confirmedImport={confirmedImport}
       pendingImportId={pendingImportDraft?.preview?.import_id || ""}
+      autoCreateProject={!activeProject?.id}
       onJobChange={(job) => {
         setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       }}

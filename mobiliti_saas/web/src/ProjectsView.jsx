@@ -31,6 +31,7 @@ export async function createNewProject(
   projectState = null,
   inFlightRef = {current: false},
   submittedAdoption = null,
+  projectName = "Nuevo Proyecto",
 ) {
   if (inFlightRef.current) return null;
   inFlightRef.current = true;
@@ -43,7 +44,7 @@ export async function createNewProject(
     const data = await request("/projects", {
       method: "POST",
       body: JSON.stringify({
-        name: "Nuevo Proyecto",
+        name: String(projectName || "").trim() || "Nuevo Proyecto",
         payload: serializeProject(state),
       }),
     });
