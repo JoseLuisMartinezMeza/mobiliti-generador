@@ -156,8 +156,11 @@ docker build --pull -f mobiliti_saas\worker\Dockerfile -t mobiliti-worker .
 El contexto del build usa la allowlist del `.dockerignore` raiz; no cambies el
 contexto a un directorio mas amplio ni reincorpores `.git`, historiales,
 catalogos fuente o archivos de entorno. La imagen instala
-`mobiliti_saas/worker/requirements.lock`, usa una base Alpine fijada por digest
-y ejecuta el runtime como UID/GID `10001`, no como `root`.
+`mobiliti_saas/worker/requirements.lock`, usa una base Debian slim/glibc
+fijada por digest y ejecuta el runtime como UID/GID `10001`, no como `root`.
+El runtime reserva `/tmp` para la caché de Numba y el modelo local de
+segmentación de imágenes; en producción ese directorio debe conservar el
+volumen temporal declarado en `deploy/hetzner/docker-compose.yml`.
 
 Run local contra Supabase:
 

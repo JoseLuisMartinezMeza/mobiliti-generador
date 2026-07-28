@@ -203,7 +203,9 @@ anterior. Para actualizarlo, resuelve y prueba las dependencias en una imagen
 aislada, fija el resultado completo y repite `pip check`, importaciones,
 Docker Scout y el smoke de generacion. La imagen corre como UID/GID `10001` y
 debe desplegarse con filesystem raiz de solo lectura, `cap-drop=ALL` y
-`no-new-privileges`; `/tmp` es el unico espacio temporal requerido.
+`no-new-privileges`; `/tmp` es el unico espacio temporal requerido. También
+aloja `NUMBA_CACHE_DIR` y `U2NET_HOME` para que la limpieza local de fondos
+funcione con el usuario no privilegiado y reutilice el modelo descargado.
 
 ## Contrato de plantilla oficial y capacidad dinámica
 

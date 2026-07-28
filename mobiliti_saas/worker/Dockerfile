@@ -1,9 +1,12 @@
-FROM python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV PIP_NO_CACHE_DIR=1
+ENV HOME=/tmp
+ENV NUMBA_CACHE_DIR=/tmp/numba-cache
+ENV U2NET_HOME=/tmp/.u2net
 ENV QUOTE_ENGINE=python
 ENV WORKER_POLL_SECONDS=10
 ENV WORKER_STALE_MINUTES=30
@@ -13,11 +16,12 @@ ENV TEMPLATE_PATH="/app/templates/Formato Cotizacion 2026 Oficial.xlsx"
 WORKDIR /app
 
 COPY mobiliti_saas/worker/requirements.lock /app/requirements.lock
-RUN apk add --no-cache libstdc++=15.2.0-r5 \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
     && python -m pip install --upgrade pip==26.1.2 \
     && pip install -r /app/requirements.lock \
-    && addgroup -S -g 10001 mobiliti \
-    && adduser -S -D -H -u 10001 -G mobiliti mobiliti
+    && groupadd --system --gid 10001 mobiliti \
+    && useradd --system --uid 10001 --gid 10001 --no-create-home mobiliti
 
 COPY mobiliti_saas/worker /app/mobiliti_saas/worker
 COPY mobiliti_saas/quote_engine /app/mobiliti_saas/quote_engine

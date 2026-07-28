@@ -70,22 +70,28 @@ def test_worker_dockerfile_runs_http_worker_with_matching_healthcheck():
     assert "http://127.0.0.1:{port}/health" in dockerfile
 
 
-def test_worker_dockerfile_uses_pinned_alpine_runtime_as_non_root():
+def test_worker_dockerfile_installs_image_segmentation_in_pinned_glibc_runtime():
     dockerfile = (saas_doctor.ROOT / "mobiliti_saas" / "worker" / "Dockerfile").read_text(
         encoding="utf-8"
     )
     lock = saas_doctor.ROOT / "mobiliti_saas" / "worker" / "requirements.lock"
+    locked_requirements = lock.read_text(encoding="utf-8").splitlines()
 
-    assert dockerfile.startswith("FROM python:3.12-alpine@sha256:")
-    assert "apk add --no-cache libstdc++=" in dockerfile
+    assert dockerfile.startswith("FROM python:3.12-slim@sha256:")
+    assert "apt-get install -y --no-install-recommends libgomp1" in dockerfile
+    assert "ENV HOME=/tmp" in dockerfile
+    assert "ENV NUMBA_CACHE_DIR=/tmp/numba-cache" in dockerfile
+    assert "ENV U2NET_HOME=/tmp/.u2net" in dockerfile
     assert "python -m pip install --upgrade pip==26.1.2" in dockerfile
     assert "requirements.lock /app/requirements.lock" in dockerfile
     assert "pip install -r /app/requirements.lock" in dockerfile
     assert "USER 10001:10001" in dockerfile
+    assert "rembg==2.0.75" in locked_requirements
+    assert "onnxruntime==1.26.0" in locked_requirements
     assert lock.exists()
     assert all(
         not line or line.startswith("#") or "==" in line
-        for line in lock.read_text(encoding="utf-8").splitlines()
+        for line in locked_requirements
     )
 
 
