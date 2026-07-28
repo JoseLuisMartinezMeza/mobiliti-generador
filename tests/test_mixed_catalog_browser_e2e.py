@@ -1182,6 +1182,67 @@ def test_browser_imports_uploaded_quotation_into_global_cart_and_quotes(
         context.close()
 
 
+def test_browser_imports_uploaded_quotation_when_project_does_not_exist_yet(
+    vite_url, browser, import_fixture
+):
+    source, preview = import_fixture
+    stub = ApiStub([], import_preview=preview)
+    stub.enable_project_routes(project_id=PROJECT_ID)
+    context, page = new_page(browser, {"width": 1440, "height": 1000}, stub, vite_url)
+    console_errors = capture_console_errors(page)
+    page_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    try:
+        page.goto(vite_url)
+        page.get_by_role("button", name="Nueva", exact=True).click()
+        page.locator('input[type="file"][accept=".xlsx,.pdf"]').set_input_files(
+            source
+        )
+        page.get_by_role(
+            "button", name="Previsualizar e importar al proyecto", exact=True
+        ).click()
+        preview_panel = page.get_by_role(
+            "region", name="Previsualizacion de importacion"
+        )
+        preview_panel.wait_for(state="visible")
+        page.wait_for_function(
+            """
+            () => {
+              const panel = document.querySelector(".quotation-import-preview");
+              if (!panel) return false;
+              const bounds = panel.getBoundingClientRect();
+              return bounds.top >= 0 && bounds.bottom <= window.innerHeight;
+            }
+            """,
+            timeout=2_000,
+        )
+        assert preview_panel.evaluate(
+            "(panel) => document.activeElement === panel"
+        )
+        preview_panel.get_by_label(
+            re.compile(r"^Moneda de origen")
+        ).select_option("USD")
+        preview_panel.get_by_role(
+            "button", name="Confirmar importacion al proyecto", exact=True
+        ).click()
+
+        page.get_by_role("heading", name="Proyectos", exact=True).wait_for(
+            state="visible"
+        )
+        page.get_by_role("button", name="Nuevo Proyecto", exact=True).click()
+        editor = page.locator(".project-editor")
+        editor.wait_for(state="visible")
+
+        assert editor.locator(".project-principal").count() == 7
+        assert stub.saved_project is not None
+        assert len(stub.saved_project["payload"]["lines"]) == 7
+        assert stub.upload_count == 1
+        assert stub.unexpected_requests == []
+        assert_no_browser_failures(page, console_errors, page_errors)
+    finally:
+        context.close()
+
+
 def test_browser_submits_700_lines_once_from_compact_collapsed_cart(
     vite_url, browser, import_fixture
 ):

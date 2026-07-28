@@ -561,6 +561,7 @@ function QuoteForm({
   const [importProvider, setImportProvider] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef(null);
+  const importPreviewRef = useRef(null);
   const uploadDraftRef = useRef(null);
   const requestInFlightRef = useRef(false);
   const requestEpochRef = useRef(0);
@@ -573,6 +574,18 @@ function QuoteForm({
     setImportProvider("");
     uploadDraftRef.current = null;
   }, [confirmedImport, importPreview?.import_id]);
+
+  useEffect(() => {
+    if (!importPreview?.import_id) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      importPreviewRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      importPreviewRef.current?.focus({preventScroll: true});
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [importPreview?.import_id]);
 
   useEffect(() => {
     if (!job?.id || !["queued", "processing", "draft"].includes(job.status)) return;
@@ -897,7 +910,12 @@ function QuoteForm({
           {downloadUrl && !downloadState ? <div className="download-line">Ultima descarga: {downloadUrl}</div> : null}
 
           {importPreview ? (
-            <section className="quotation-import-preview" aria-label="Previsualizacion de importacion">
+            <section
+              ref={importPreviewRef}
+              className="quotation-import-preview"
+              aria-label="Previsualizacion de importacion"
+              tabIndex={-1}
+            >
               <h3>Previsualizacion: {importPreview.original_filename || file?.name}</h3>
               <p>{importPreview.items?.length || 0} producto(s) en {importPreview.sections?.length || 0} seccion(es).</p>
               {previewNeedsSourceCurrency(importPreview) || importPreview.source_currency ? <label>
