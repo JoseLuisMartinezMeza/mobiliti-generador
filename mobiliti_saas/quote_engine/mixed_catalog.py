@@ -425,7 +425,7 @@ def _normalize_imported_source(
 
 def _normalize_project_context(
     value: object,
-    occurrence_ids: list[str],
+    occurrence_section_ids: dict[str, str],
 ) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -458,10 +458,17 @@ def _normalize_project_context(
     payload_ids = [
         line["line_id"] for line in expected["normalized_project_payload"]["lines"]
     ]
+    occurrence_ids = list(occurrence_section_ids)
     component_ids: list[str] = []
     price_term_ids: list[str] = []
     for composition in expected["compositions"]:
-        component_ids.extend(composition["component_line_ids"])
+        composition_component_ids = composition["component_line_ids"]
+        if any(
+            occurrence_section_ids.get(line_id) != composition["section_id"]
+            for line_id in composition_component_ids
+        ):
+            raise ValueError("Contexto de Proyecto invalido")
+        component_ids.extend(composition_component_ids)
         price_term_ids.extend(
             term["line_id"] for term in composition["price_terms"]
         )
@@ -655,9 +662,14 @@ def build_mixed_catalog_cart_payload(
         presentation_sections,
         occurrences,
     )
+    occurrence_section_ids = {
+        line_id: section["id"]
+        for section in normalized_sections
+        for line_id in section["line_ids"]
+    }
     normalized_project_context = _normalize_project_context(
         project_context,
-        occurrence_ids,
+        occurrence_section_ids,
     )
     validate_quote_size(
         section_counts=[len(section["line_ids"]) for section in normalized_sections],
@@ -1163,6 +1175,7 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
         raise ValueError("Secciones mixtas invalidas")
     section_ids: set[str] = set()
     flattened_keys: list[str] = []
+    occurrence_section_ids: dict[str, str] = {}
     for section in sections:
         if not isinstance(section, dict) or set(section) != MIXED_SECTION_FIELDS:
             raise ValueError("Secciones mixtas invalidas")
@@ -1178,9 +1191,13 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
         line_ids = section.get("line_ids")
         if not isinstance(line_ids, list) or not line_ids:
             raise ValueError("Secciones mixtas invalidas")
-        flattened_keys.extend(
+        normalized_line_ids = [
             _identity_text(value, "section_item_key", limit=MAX_MIXED_TEXT)
             for value in line_ids
+        ]
+        flattened_keys.extend(normalized_line_ids)
+        occurrence_section_ids.update(
+            (line_id, section_id) for line_id in normalized_line_ids
         )
     if (
         len(flattened_keys) != total
@@ -1194,7 +1211,7 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
     )
     normalized_project_context = _normalize_project_context(
         payload["project_context"],
-        flattened_keys,
+        occurrence_section_ids,
     )
     if normalized_project_context != payload["project_context"]:
         raise ValueError("Contexto de Proyecto invalido")

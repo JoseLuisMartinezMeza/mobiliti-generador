@@ -475,6 +475,65 @@ def test_project_context_must_be_exact_and_reference_every_occurrence(
         )
 
 
+def test_project_context_rejects_occurrence_presented_in_the_wrong_section(
+    mixed_catalogs,
+    rate_rows,
+):
+    project = valid_project_payload()
+    principal = project["lines"][0]
+    principal["line_id"] = FIRST_LINE_ID
+    principal["identity"]["internal_id"] = "sunon:desk-1"
+    second = deepcopy(principal)
+    second.update({
+        "line_id": SECOND_LINE_ID,
+        "section_id": "section-5",
+        "position": 0,
+        "quantity": "2",
+    })
+    project["sections"].append({
+        "section_id": "section-5",
+        "concept": "Privados",
+        "position": 1,
+    })
+    project["lines"] = [principal, second]
+
+    with pytest.raises(ValueError, match="Contexto de Proyecto invalido"):
+        build_mixed_catalog_cart_payload(
+            [
+                {
+                    "line_id": FIRST_LINE_ID,
+                    "catalog": "sunon",
+                    "internal_id": "sunon:desk-1",
+                    "quantity": "10",
+                },
+                {
+                    "line_id": SECOND_LINE_ID,
+                    "catalog": "sunon",
+                    "internal_id": "sunon:desk-1",
+                    "quantity": "2",
+                },
+            ],
+            catalogs=mixed_catalogs,
+            rate_rows=rate_rows,
+            quote_currency="MXN",
+            commercial_discount_percent="40",
+            presentation_sections=[
+                {
+                    "id": "section-1",
+                    "title": "Recepción",
+                    "line_ids": [SECOND_LINE_ID],
+                },
+                {
+                    "id": "section-5",
+                    "title": "Privados",
+                    "line_ids": [FIRST_LINE_ID],
+                },
+            ],
+            project_context=project_context(project, "project-7", 3),
+            today=date(2026, 7, 19),
+        )
+
+
 def test_imported_line_checkout_contains_only_reference_and_allowed_overrides():
     bundle = run_mixed_cart_js(
         "createImportedCartBundle",

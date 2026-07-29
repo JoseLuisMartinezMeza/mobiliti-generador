@@ -48,7 +48,13 @@ from .ai_image_provider import (
 )
 from .image_processing import improve_image_map, improve_product_image_bytes
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
-from .mobiliti_layout import SectionNeed, plan_mobiliti_layout
+from .mobiliti_layout import (
+    BASE_FIRST_SECTION_ROW,
+    BASE_PRODUCT_CAPACITY,
+    BASE_SECTION_COUNT,
+    SectionNeed,
+    plan_mobiliti_layout,
+)
 from .mobiliti_pricing import (
     PricingRowBinding,
     build_mobiliti_pricing_writes,
@@ -171,17 +177,16 @@ MIXED_MOBILITI_MONEY_COLS = (
     33,
 )
 PERCENT_FORMAT = "0%"
-MOBILITI_SECTION_COUNT = 32
-BASE_PROD_PER_SECTION = 33
-MAX_PROD_PER_SECTION = 64
-MOBILITI_FIRST_SECTION_ROW = 13
-MOBILITI_SECTION_BLOCK_HEIGHT = BASE_PROD_PER_SECTION + 2
+MOBILITI_FIRST_SECTION_ROW = BASE_FIRST_SECTION_ROW
+MOBILITI_SECTION_BLOCK_HEIGHT = BASE_PRODUCT_CAPACITY + 2
 SECTION_CATS = [
     MOBILITI_FIRST_SECTION_ROW + index * MOBILITI_SECTION_BLOCK_HEIGHT
-    for index in range(MOBILITI_SECTION_COUNT)
+    for index in range(BASE_SECTION_COUNT)
 ]
 SECTION_PROD_STARTS = [row + 1 for row in SECTION_CATS]
-SECTION_SUBTOTAL_ROWS = [row + BASE_PROD_PER_SECTION + 1 for row in SECTION_CATS]
+SECTION_SUBTOTAL_ROWS = [
+    row + BASE_PRODUCT_CAPACITY + 1 for row in SECTION_CATS
+]
 MOBILITI_TOTAL_ROW = SECTION_SUBTOTAL_ROWS[-1] + 1
 DEFAULT_EXCHANGE_RATE = 20.0
 DEFAULT_DELIVERY_PLACE = "Guadalajara"
@@ -1029,48 +1034,14 @@ def _clear_mobiliti_row_values(ws, row: int) -> None:
         provider_cell.border = copy(product_cell.border)
 
 
-def _normalize_mobiliti_section_capacities(capacities: list[int]) -> list[int]:
-    normalized = [
-        max(MAX_PROD_PER_SECTION, capacity) if capacity > BASE_PROD_PER_SECTION else BASE_PROD_PER_SECTION
-        for capacity in capacities[:MOBILITI_SECTION_COUNT]
-    ]
-    while len(normalized) < MOBILITI_SECTION_COUNT:
-        normalized.append(BASE_PROD_PER_SECTION)
-    return normalized
-
-
-def _mobiliti_section_capacities(
-    items: list[QuoteItem],
-    category_dictionary: dict[str, str],
-    metadata: dict[str, Any] | None = None,
-) -> list[int]:
-    needs: list[int] = []
-
-    for item in items:
-        if item.tipo == "categoria":
-            if not needs or needs[-1] > 0:
-                needs.append(0)
-            continue
-        if item.tipo != "producto":
-            continue
-
-        if not needs:
-            needs.append(0)
-
-        category = classify_product_name(str(item.nombre or ""), category_dictionary)
-        rows_needed = 1
-        if _item_auto_electrification(item, metadata or {}):
-            rows_needed += len(_lumbro_accessories_for_item(item, category))
-        needs[-1] += rows_needed
-
-    return _normalize_mobiliti_section_capacities(needs)
-
-
 def _mobiliti_product_ranges(ws) -> list[tuple[int, int]]:
     ranges = getattr(ws, "_mobiliti_product_ranges", None)
     if ranges:
         return list(ranges)
-    return [(start_row, BASE_PROD_PER_SECTION) for start_row in SECTION_PROD_STARTS]
+    return [
+        (start_row, BASE_PRODUCT_CAPACITY)
+        for start_row in SECTION_PROD_STARTS
+    ]
 
 
 def _set_mobiliti_auxiliary_total_references(ws, total_row: int) -> None:
@@ -2821,7 +2792,11 @@ def _build_official_mobiliti(
             )
         writes.extend(
             (
-                MobilitiCellWrite(f"D{target_row}", "text", line.name),
+                MobilitiCellWrite(
+                    f"D{target_row}",
+                    "formula",
+                    f"=Quotation!B{quotation_row}",
+                ),
                 MobilitiCellWrite(f"E{target_row}", "text", line.category),
                 MobilitiCellWrite(f"F{target_row}", "text", line.provider),
                 MobilitiCellWrite(

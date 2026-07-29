@@ -257,6 +257,14 @@ def _cell_formula_in_root(root: ET.Element, coordinate: str) -> str | None:
     return None if formula is None else f"={formula.text or ''}"
 
 
+def _mobiliti_product_name(workbook, row: int):
+    value = workbook["Mobiliti"].cell(row, 4).value
+    match = re.fullmatch(r"=Quotation!B([1-9][0-9]*)", str(value or ""))
+    if match is None:
+        return value
+    return workbook["Quotation"].cell(int(match.group(1)), 2).value
+
+
 def _terms_signature(root: ET.Element, *, start: int, end: int) -> tuple:
     signature = []
     for row_number in range(start, end + 1):
@@ -1206,9 +1214,11 @@ def test_active_engine_references_visible_quotation_and_mobiliti_fields(
         assert quotation["K9"].value == 1000
         assert quotation["L9"].value == "=H9*K9"
         assert quotation_data.max_column == 16
+        assert mobiliti["D14"].value == "=Quotation!B9"
         assert mobiliti["H14"].value == "=Quotation!H9"
         assert mobiliti["J14"].value == "=Quotation!K9"
         assert mobiliti["K14"].value == "=Quotation!I9"
+        assert mobiliti["D15"].value == "=Quotation!B10"
         assert mobiliti["H15"].value == "=Quotation!H10"
         assert mobiliti["J15"].value == "=Quotation!K10"
         assert mobiliti["K15"].value == "=Quotation!I10"
@@ -1263,7 +1273,7 @@ def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
             ):
                 continue
             mobiliti_row = int(product_formula.removeprefix("=Mobiliti!D"))
-            product_name = workbook["Mobiliti"].cell(mobiliti_row, 4).value
+            product_name = _mobiliti_product_name(workbook, mobiliti_row)
             if product_name in rows_by_name:
                 rows_by_name[product_name].append(row)
         assert all(len(rows) == 1 for rows in rows_by_name.values())
@@ -1552,7 +1562,7 @@ def test_active_engine_omitted_original_keeps_legacy_visible_quotation(
     assert package.sheet_part("Quotation")
 
 
-def test_active_engine_explicit_none_omits_visible_quotation(
+def test_active_engine_explicit_none_keeps_visible_quotation_for_live_formulas(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "none-original.xlsx"
@@ -1571,8 +1581,13 @@ def test_active_engine_explicit_none_omits_visible_quotation(
     )
 
     package = XlsxPackage.read(output)
-    with pytest.raises(KeyError):
-        package.sheet_part("Quotation")
+    assert package.sheet_part("Quotation")
+    workbook = load_workbook(output, data_only=False, keep_links=False)
+    try:
+        assert workbook["Mobiliti"]["D14"].value == "=Quotation!B9"
+        assert workbook["Mobiliti"]["J14"].value == "=Quotation!K9"
+    finally:
+        workbook.close()
 
 
 def test_active_engine_explicit_original_transplants_that_workbook(
@@ -1623,7 +1638,7 @@ def test_active_engine_explicit_original_transplants_that_workbook(
             is not None
         )
         mobiliti_row = int(cotizacion_formula.removeprefix("=Mobiliti!D"))
-        assert workbook["Mobiliti"].cell(mobiliti_row, 4).value == "Producto generado"
+        assert _mobiliti_product_name(workbook, mobiliti_row) == "Producto generado"
     finally:
         workbook.close()
 
@@ -1671,10 +1686,10 @@ def test_active_engine_embedded_source_image_reaches_cotizacion_anchor(
                 )
                 and re.fullmatch(r"=Mobiliti!D[1-9][0-9]*", product_formula)
                 is not None
-                and workbook["Mobiliti"].cell(
+                and _mobiliti_product_name(
+                    workbook,
                     int(product_formula.removeprefix("=Mobiliti!D")),
-                    4,
-                ).value
+                )
                 == "Silla con imagen"
             )
         )
@@ -1755,7 +1770,7 @@ def test_active_engine_uses_one_audited_source_snapshot_after_preflight(
         mobiliti_rows = [
             row
             for row in range(1, workbook["Mobiliti"].max_row + 1)
-            if workbook["Mobiliti"].cell(row, 4).value
+            if _mobiliti_product_name(workbook, row)
             == "Producto snapshot original"
         ]
         assert len(mobiliti_rows) == 1
@@ -1765,7 +1780,7 @@ def test_active_engine_uses_one_audited_source_snapshot_after_preflight(
             for row in range(16, workbook["Cotizacion"].max_row + 1)
         )
         assert all(
-            workbook["Mobiliti"].cell(row, 4).value != "Producto carrera hostil"
+            _mobiliti_product_name(workbook, row) != "Producto carrera hostil"
             for row in range(1, workbook["Mobiliti"].max_row + 1)
         )
     finally:
@@ -1807,7 +1822,7 @@ def test_composer_rejects_any_change_outside_the_exact_sheet_allowlist(
         root = ET.fromstring(request.cotizacion.xml)
         product_row = request.cotizacion.product_rows[0]
         if surface == "cotizacion_terms":
-            terms_row = 29 + request.cotizacion.terms_row_delta
+            terms_row = 28 + request.cotizacion.terms_row_delta
             term = _cell(root, f"A{terms_row}")
             value = term.find(f"{{{MAIN}}}v")
             assert value is not None
@@ -2299,7 +2314,7 @@ def test_estrategia_subtotal_translation_only_changes_range_tokens() -> None:
     assert formula is not None
     formula.text = (
         'IF("Cotizacion!H25"="literal",0,'
-        'IF(B61=0,C61,B61*Cotizacion!H25))'
+        'IF(B61=0,C61,B61*Cotizacion!H24))'
     )
     row_map = plan_mobiliti_layout([SectionNeed("large", "Large", 100)])
 

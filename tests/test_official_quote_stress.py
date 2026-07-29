@@ -7,6 +7,7 @@ from collections import Counter
 from decimal import Decimal
 import hashlib
 from pathlib import Path
+import re
 import sys
 from typing import Sequence
 from xml.etree import ElementTree as ET
@@ -25,6 +26,7 @@ from mobiliti_saas.quote_engine.ooxml_package import (
 from mobiliti_saas.quote_engine.quotation_sheets import (
     QuotationDataRow,
     _with_canonical_hash,
+    official_provider_name,
 )
 from mobiliti_saas.quote_engine import engine as quote_engine
 
@@ -48,6 +50,7 @@ OFFICIAL_ALLOWED_PARTS = frozenset(
         "xl/calcChain.xml",
         "xl/drawings/_rels/drawing1.xml.rels",
         "xl/drawings/drawing1.xml",
+        "xl/drawings/drawing2.xml",
         "xl/styles.xml",
         "xl/workbook.xml",
         "xl/worksheets/quotation_data1.xml",
@@ -99,6 +102,27 @@ STRESS_SHAPES = (
     QuoteShape([40] * 20),
     QuoteShape([100] * 10),
 )
+PRUEBA_SECTION_IDS = (
+    "section-1",
+    "section-5",
+    "section-6",
+    "section-7",
+    "section-8",
+    "section-9",
+    "section-10",
+    "section-11",
+    "section-12",
+    "section-13",
+    "section-14",
+    "section-15",
+    "section-16",
+    "section-17",
+    "section-18",
+    "section-19",
+    "section-20",
+    "section-22",
+)
+PRUEBA_SHAPE = QuoteShape([37, *([5] * 12), *([4] * 5)])
 
 
 @dataclass(frozen=True)
@@ -375,9 +399,16 @@ def excel_com_roundtrip(
     def workbook_cell(workbook, sheet_name: str, coordinate: str):
         column_name, row = coordinate_from_string(coordinate)
         column = column_index_from_string(column_name)
-        return retry_com(
-            lambda: workbook.Worksheets.Item(sheet_name).Cells.Item(row, column)
-        )
+
+        def resolve_cell():
+            cell = workbook.Worksheets.Item(sheet_name).Cells.Item(row, column)
+            if cell is None:
+                raise AttributeError(
+                    f"Excel aún no expone {sheet_name}!{coordinate}"
+                )
+            return cell
+
+        return retry_com(resolve_cell)
 
     def assert_dynamic_surface(workbook) -> None:
         for (sheet_name, coordinate), expected in formula_expectations.items():
@@ -538,9 +569,16 @@ def synthetic_mixed_request(
     *,
     include_imported: bool,
     catalogs: Sequence[str],
+    section_ids: Sequence[str] | None = None,
 ) -> SyntheticMixedRequest:
     if not include_imported or tuple(catalogs) != SEVEN_CATALOGS:
         raise ValueError("La matriz stress exige importado y los siete catalogos")
+    resolved_section_ids = tuple(section_ids or ())
+    if resolved_section_ids and (
+        len(resolved_section_ids) != len(shape.section_counts)
+        or len(set(resolved_section_ids)) != len(resolved_section_ids)
+    ):
+        raise ValueError("Los IDs persistentes no corresponden a la forma stress")
     imported_name = "Stress Item 0001 [imported]"
     original = tmp_path / "original-imported.xlsx"
     _write_original_quotation(original, imported_name)
@@ -556,7 +594,11 @@ def synthetic_mixed_request(
     rows: list[QuotationDataRow] = []
     names: list[str] = []
     for section_index, item_count in enumerate(shape.section_counts, start=1):
-        section_id = f"stress-section-{section_index}"
+        section_id = (
+            resolved_section_ids[section_index - 1]
+            if resolved_section_ids
+            else f"stress-section-{section_index}"
+        )
         section_title = f"Stress Section {section_index}"
         worksheet.cell(row, 1).value = f"- {section_title}"
         row += 1
@@ -613,7 +655,7 @@ def synthetic_mixed_request(
                         frozen_rate=Decimal("1"),
                         converted_cost=cost,
                         quantity=Decimal("1"),
-                        provider=provider,
+                        provider=official_provider_name(provider),
                         region="imported" if imported else "Centro",
                         source_hash=source_hash,
                         upstream_row_hash=upstream_hash,
@@ -683,6 +725,55 @@ def _cell_map(package: XlsxPackage, sheet_name: str) -> dict[str, ET.Element]:
     }
 
 
+def _row_element(package: XlsxPackage, sheet_name: str, row: int) -> ET.Element:
+    root = _worksheet_root(package, sheet_name)
+    element = root.find(f".//{{{SHEET_NS}}}row[@r='{row}']")
+    assert element is not None, f"{sheet_name}!{row} no existe"
+    return element
+
+
+def _row_presentation_signature(
+    package: XlsxPackage,
+    sheet_name: str,
+    row: int,
+) -> tuple[dict[str, str], dict[str, str | None]]:
+    element = _row_element(package, sheet_name, row)
+    row_attributes = {
+        key: value
+        for key, value in element.attrib.items()
+        if key
+        in {
+            "ht",
+            "customHeight",
+            "thickBot",
+            "hidden",
+            "outlineLevel",
+            "collapsed",
+            "s",
+            "customFormat",
+        }
+    }
+    cell_styles = {
+        coordinate_from_string(cell.attrib["r"])[0]: cell.attrib.get("s")
+        for cell in element.findall(f"{{{SHEET_NS}}}c")
+        if column_index_from_string(
+            coordinate_from_string(cell.attrib["r"])[0]
+        )
+        <= column_index_from_string("AH")
+    }
+    return row_attributes, cell_styles
+
+
+def _cell_package_signature(cell: ET.Element | None) -> tuple[str, str, str]:
+    assert cell is not None
+    value = cell.find(f"{{{SHEET_NS}}}v")
+    return (
+        cell.attrib.get("s", ""),
+        cell.attrib.get("t", ""),
+        "" if value is None else (value.text or ""),
+    )
+
+
 def _cell_text(cell: ET.Element | None) -> str:
     if cell is None:
         return ""
@@ -705,6 +796,39 @@ def _quotation_data_keys(package: XlsxPackage) -> list[str]:
         for row in range(2, len(cells) + 2)
         if f"A{row}" in cells
     ]
+
+
+def _assert_live_mobiliti_name_cost_references(
+    package: XlsxPackage,
+    mobiliti_rows: Sequence[int],
+    names: Sequence[str],
+    canonical_rows: Sequence[object],
+) -> dict[str, int]:
+    mobiliti = _cell_map(package, "Mobiliti")
+    quotation = _cell_map(package, "Quotation")
+    quotation_rows_by_name = {
+        _cell_text(cell): int(coordinate[1:])
+        for coordinate, cell in quotation.items()
+        if coordinate.startswith("B") and _cell_text(cell) in set(names)
+    }
+    assert list(quotation_rows_by_name) == list(names)
+    for mobiliti_row, canonical, name in zip(
+        mobiliti_rows,
+        canonical_rows,
+        names,
+        strict=True,
+    ):
+        quotation_row = quotation_rows_by_name[name]
+        assert _formula(mobiliti[f"D{mobiliti_row}"]) == (
+            f"Quotation!B{quotation_row}"
+        )
+        assert _formula(mobiliti[f"J{mobiliti_row}"]) == (
+            f"Quotation!K{quotation_row}"
+        )
+        assert Decimal(
+            quotation[f"K{quotation_row}"].findtext(f"{{{SHEET_NS}}}v")
+        ) == canonical.converted_cost
+    return quotation_rows_by_name
 
 
 def _formulas_containing(package: XlsxPackage, token: str) -> Counter[str]:
@@ -809,6 +933,166 @@ def _assert_subtotals_cover_all_items(
     assert expected in {_formula(cell) for cell in cotizacion.values()}
 
 
+def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = as_persistent_project_request(
+        synthetic_mixed_request(
+            tmp_path,
+            PRUEBA_SHAPE,
+            include_imported=True,
+            catalogs=SEVEN_CATALOGS,
+            section_ids=PRUEBA_SECTION_IDS,
+        )
+    )
+    output = run_local_worker_job(tmp_path, request, monkeypatch)
+    package = XlsxPackage.read(output)
+    official = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    layout = plan_mobiliti_layout(
+        [
+            SectionNeed(section_id, f"Stress Section {index}", count)
+            for index, (section_id, count) in enumerate(
+                zip(
+                    PRUEBA_SECTION_IDS,
+                    PRUEBA_SHAPE.section_counts,
+                    strict=True,
+                ),
+                start=1,
+            )
+        ]
+    )
+
+    context = request.metadata["project_context"]
+    assert [section["section_id"] for section in context["normalized_project_payload"]["sections"]] == list(
+        PRUEBA_SECTION_IDS
+    )
+    assert len(context["normalized_project_payload"]["lines"]) == 117
+    assert Counter(
+        line["role"] for line in context["normalized_project_payload"]["lines"]
+    ) == Counter({"principal": 115, "complement": 2})
+    assert len(context["compositions"]) == 115
+    assert layout.sections[0].capacity == 37
+    assert layout.sections[0].subtotal_row == 51
+    assert layout.sections[-1].id == "section-22"
+    assert layout.total_row == 647
+    assert all(
+        current.section_row == previous.subtotal_row + 1
+        for previous, current in zip(
+            layout.sections,
+            layout.sections[1:],
+        )
+    )
+
+    keys = _quotation_data_keys(package)
+    assert keys == [row.item_key for row in request.quotation_data]
+    assert len(keys) == len(set(keys)) == 117
+
+    mobiliti = _cell_map(package, "Mobiliti")
+    _assert_live_mobiliti_name_cost_references(
+        package,
+        layout.item_rows,
+        request.names,
+        request.quotation_data,
+    )
+    global_last_product_row = layout.last_product_row
+    expected_w_range = f"$W$14:$W${global_last_product_row}"
+    expected_d_range = f"$D$14:$D${global_last_product_row}"
+    assert all(
+        expected_w_range in _formula(mobiliti[f"X{row}"])
+        and expected_d_range in _formula(mobiliti[f"X{row}"])
+        and _formula(mobiliti[f"W{row}"])
+        for row in (
+            *layout.item_rows,
+            layout.sections[-1].subtotal_row - 1,
+        )
+    )
+
+    cotizacion = _cell_map(package, "Cotizacion")
+    cotizacion_formulas = [_formula(cell) for cell in cotizacion.values()]
+    visible_name_rows = sorted(
+        (
+            coordinate_from_string(coordinate)[1],
+            formula,
+        )
+        for coordinate, cell in cotizacion.items()
+        if coordinate.startswith("A")
+        and (formula := _formula(cell)).startswith("Mobiliti!D")
+    )
+    assert len(visible_name_rows) == 115
+    referenced_price_rows = Counter(
+        int(row)
+        for formula in cotizacion_formulas
+        for row in re.findall(r"Mobiliti!X\$?(\d+)", formula)
+    )
+    assert set(layout.item_rows) <= set(referenced_price_rows)
+    assert any(
+        set(layout.item_rows[:3])
+        <= {
+            int(row)
+            for row in re.findall(r"Mobiliti!X\$?(\d+)", formula)
+        }
+        for formula in cotizacion_formulas
+    )
+    _assert_subtotals_cover_all_items(
+        package,
+        layout,
+        [row for row, _formula_text in visible_name_rows],
+    )
+
+    assert _row_presentation_signature(package, "Mobiliti", 13) == (
+        _row_presentation_signature(official, "Mobiliti", 13)
+    )
+    assert _row_presentation_signature(package, "Mobiliti", 14)[0] == (
+        _row_presentation_signature(official, "Mobiliti", 14)[0]
+    )
+    assert _row_presentation_signature(
+        package,
+        "Mobiliti",
+        layout.sections[0].product_start + layout.sections[0].capacity - 1,
+    ) == _row_presentation_signature(package, "Mobiliti", 15)
+    assert _row_presentation_signature(
+        package,
+        "Mobiliti",
+        layout.sections[0].subtotal_row,
+    ) == _row_presentation_signature(official, "Mobiliti", 47)
+    assert _row_presentation_signature(
+        package,
+        "Mobiliti",
+        layout.sections[-1].section_row,
+    ) == _row_presentation_signature(official, "Mobiliti", 48)
+    assert _row_presentation_signature(
+        package,
+        "Mobiliti",
+        layout.sections[-1].product_start,
+    ) == _row_presentation_signature(package, "Mobiliti", 15)
+    assert _row_presentation_signature(
+        package,
+        "Mobiliti",
+        layout.sections[-1].product_start + layout.sections[-1].item_count,
+    ) == _row_presentation_signature(package, "Mobiliti", 15)
+    assert _row_presentation_signature(
+        package,
+        "Mobiliti",
+        layout.sections[-1].subtotal_row,
+    ) == _row_presentation_signature(official, "Mobiliti", 82)
+
+    footer_shift = layout.total_row - 573
+    official_mobiliti = _cell_map(official, "Mobiliti")
+    assert _cell_package_signature(
+        mobiliti[f"D{578 + footer_shift}"]
+    ) == _cell_package_signature(official_mobiliti["D578"])
+    assert _cell_package_signature(
+        mobiliti[f"AK{578 + footer_shift}"]
+    ) == _cell_package_signature(official_mobiliti["AK578"])
+    _assert_calc_chain_targets_formula_cells(package, layout.item_rows)
+    assert_package_preserved(
+        OFFICIAL_TEMPLATE,
+        output,
+        allowed_parts=set(OFFICIAL_ALLOWED_PARTS),
+    )
+
+
 @pytest.mark.parametrize(
     "shape",
     STRESS_SHAPES,
@@ -840,21 +1124,23 @@ def test_large_quotes_preserve_every_line_and_official_contract(
     assert len(set(keys)) == shape.total_items
 
     mobiliti = _cell_map(package, "Mobiliti")
-    assert [_cell_text(mobiliti[f"D{row}"]) for row in layout.item_rows] == list(
-        request.names
+    quotation_rows_by_name = _assert_live_mobiliti_name_cost_references(
+        package,
+        layout.item_rows,
+        request.names,
+        request.quotation_data,
     )
     cotizacion = _cell_map(package, "Cotizacion")
-    cotizacion_names = [
-        _cell_text(cell)
+    cotizacion_name_references = [
+        (coordinate_from_string(coordinate)[1], _formula(cell))
         for coordinate, cell in cotizacion.items()
-        if coordinate.startswith("A") and _cell_text(cell) in set(request.names)
+        if coordinate.startswith("A") and _formula(cell).startswith("Mobiliti!D")
     ]
-    assert cotizacion_names == list(request.names)
-    cotizacion_rows = sorted(
-        int(coordinate[1:])
-        for coordinate, cell in cotizacion.items()
-        if coordinate.startswith("A") and _cell_text(cell) in set(request.names)
-    )
+    cotizacion_name_references.sort()
+    assert [formula for _, formula in cotizacion_name_references] == [
+        f"Mobiliti!D{row}" for row in layout.item_rows
+    ]
+    cotizacion_rows = [row for row, _ in cotizacion_name_references]
     official = XlsxPackage.read(OFFICIAL_TEMPLATE)
     # El formato oficial contiene referencias historicas en superficies
     # protegidas. La generacion no puede inventar ninguna adicional.
@@ -867,14 +1153,7 @@ def test_large_quotes_preserve_every_line_and_official_contract(
         for row in layout.item_rows
         for column in ("W", "X")
     )
-    assert all(
-        mobiliti[f"J{row}"].find(f"{{{SHEET_NS}}}f") is None
-        and Decimal(mobiliti[f"J{row}"].findtext(f"{{{SHEET_NS}}}v"))
-        == canonical.converted_cost
-        for row, canonical in zip(
-            layout.item_rows, request.quotation_data, strict=True
-        )
-    )
+    quotation = _cell_map(package, "Quotation")
     _assert_subtotals_cover_all_items(package, layout, cotizacion_rows)
     _assert_calc_chain_targets_formula_cells(package, layout.item_rows)
     assert_package_preserved(
@@ -883,11 +1162,9 @@ def test_large_quotes_preserve_every_line_and_official_contract(
         allowed_parts=set(OFFICIAL_ALLOWED_PARTS),
     )
 
-    quotation = _cell_map(package, "Quotation")
     visible_values = {_cell_text(cell) for cell in quotation.values()}
-    assert request.names[0] in visible_values
-    assert request.names[1] not in visible_values
-    assert _formula(quotation["N9"]) == "G9*J9"
+    assert set(request.names) <= visible_values
+    assert _formula(quotation["O9"]) == "H9*K9"
 
 FORBIDDEN_LEGACY_ENGINE_SYMBOLS = {
     "_sanitize_template_workbook",

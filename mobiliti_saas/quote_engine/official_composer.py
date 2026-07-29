@@ -1435,7 +1435,7 @@ def _validate_exact_mobiliti_surface(
         for section in row_map.sections
     ]
     input_kinds = {
-        "D": ("text",),
+        "D": ("text", "formula"),
         "E": ("text",),
         "F": ("text",),
         "H": ("number", "formula"),

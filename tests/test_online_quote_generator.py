@@ -105,7 +105,7 @@ def test_generate_online_quote_creates_valid_xlsx(tmp_path):
     assert ws["H17"].value == "=F17*G17"
     assert ws["I17"].value == "=F17-H17"
     assert ws["J17"].value == "=E17*I17"
-    assert mob["D14"].value == "Mesa Uno"
+    assert mob["D14"].value == "=Quotation!B9"
     assert mob["H14"].value == "=Quotation!H9"
     assert mob["J14"].value == "=Quotation!K9"
     assert mob["K14"].value == "=Quotation!I9"

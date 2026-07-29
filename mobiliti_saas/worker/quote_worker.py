@@ -1662,7 +1662,58 @@ def update_progress(client: SupabaseClient, job: dict, percent: int) -> None:
     )
 
 
+_PROJECT_WORKER_COUNT_FIELDS = (
+    "project_section_count",
+    "project_principal_count",
+    "project_complement_count",
+    "project_physical_line_count",
+    "project_max_section_lines",
+)
+
+
+def _emit_project_quote_worker_stage(
+    job: dict,
+    stage: str,
+    *,
+    started_at: float,
+    error_code: str | None = None,
+) -> None:
+    metadata = job.get("metadata") or {}
+    project_id = metadata.get("project_id")
+    project_revision = metadata.get("project_revision")
+    project_payload_hash = metadata.get("project_payload_hash")
+    if (
+        not isinstance(project_id, str)
+        or not project_id
+        or not isinstance(project_revision, int)
+        or isinstance(project_revision, bool)
+        or not isinstance(project_payload_hash, str)
+        or len(project_payload_hash) != 64
+    ):
+        return
+    event = {
+        "event": "project_quote_worker",
+        "stage": stage,
+        "duration_ms": max(
+            0,
+            int(round((time.perf_counter() - started_at) * 1000)),
+        ),
+        "job_id": str(job.get("id") or ""),
+        "project_id": project_id,
+        "project_revision": project_revision,
+        "project_payload_hash": project_payload_hash,
+    }
+    for field in _PROJECT_WORKER_COUNT_FIELDS:
+        value = metadata.get(field)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            event[field] = value
+    if error_code:
+        event["error_code"] = error_code
+    print(json.dumps(event, ensure_ascii=True, separators=(",", ":")))
+
+
 def process_job(client: SupabaseClient, job: dict) -> dict | None:
+    worker_started_at = time.perf_counter()
     claimed = claim_job(client, job)
     if not claimed:
         print(f"Job {job['id']} ya fue tomado por otro worker.")
@@ -1674,6 +1725,11 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
     output_path = f"users/{job['usuario_id']}/jobs/{job_id}/attempts/{attempt_token}/output.xlsx"
     output_may_exist = False
     completed_durable = False
+    _emit_project_quote_worker_stage(
+        job,
+        "claimed",
+        started_at=worker_started_at,
+    )
 
     with tempfile.TemporaryDirectory(prefix="mobiliti-quote-") as tmp:
         tmp_dir = Path(tmp)
@@ -1692,8 +1748,18 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
                     tmp_dir,
                     client=client,
                 )
+                _emit_project_quote_worker_stage(
+                    job,
+                    "input_prepared",
+                    started_at=worker_started_at,
+                )
                 heartbeat.ensure_owned()
                 _run_generator(job, generator_input, local_output)
+                _emit_project_quote_worker_stage(
+                    job,
+                    "workbook_composed",
+                    started_at=worker_started_at,
+                )
                 heartbeat.ensure_owned()
                 generation_seconds = round(time.perf_counter() - started_at, 1)
                 update_progress(client, job, 90)
@@ -1722,6 +1788,11 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
                     "finalizacion",
                 )
                 completed_durable = True
+                _emit_project_quote_worker_stage(
+                    job,
+                    "completed",
+                    started_at=worker_started_at,
+                )
             except WorkerLeaseLost as completion_error:
                 try:
                     _patch_current_attempt(
@@ -1770,6 +1841,12 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
             raise
         except Exception as exc:
             generation_seconds = round(time.perf_counter() - started_at, 1)
+            _emit_project_quote_worker_stage(
+                job,
+                "failed",
+                started_at=worker_started_at,
+                error_code="project_quote_worker_failed",
+            )
             try:
                 _patch_current_attempt(
                     client,

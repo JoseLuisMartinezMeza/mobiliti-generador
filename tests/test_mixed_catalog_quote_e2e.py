@@ -614,6 +614,27 @@ def _ordered_rows_for_values(ws, column: int, values) -> list[int]:
     return rows
 
 
+def _ordered_mobiliti_rows_for_product_names(mobiliti, quotation, names) -> list[int]:
+    rows = []
+    cursor = 0
+    for name in names:
+        cursor = next(
+            row
+            for row in range(cursor + 1, mobiliti.max_row + 1)
+            if _mobiliti_product_name(mobiliti, quotation, row) == name
+        )
+        rows.append(cursor)
+    return rows
+
+
+def _mobiliti_product_name(mobiliti, quotation, row: int):
+    value = mobiliti.cell(row, 4).value
+    match = re.fullmatch(r"=Quotation!B([1-9][0-9]*)", str(value or ""))
+    if match is None:
+        return value
+    return quotation.cell(int(match.group(1)), 2).value
+
+
 def _assert_exact_quotation_data(audit, expected_rows) -> None:
     assert audit.sheet_state == "veryHidden"
     assert tuple(audit.cell(1, column).value for column in range(1, 17)) == (
@@ -1823,6 +1844,10 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
                 hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in local_images.values()
             },
+            expected_image_colors={
+                Image.open(path).convert("RGB").getpixel((0, 0))
+                for path in local_images.values()
+            },
         )
     finally:
         wb.close()
@@ -1840,6 +1865,7 @@ def _assert_task9_final_workbook(
     quote_currency: str,
     automatic_rate: str,
     expected_image_hashes: set[str],
+    expected_image_colors: set[tuple[int, int, int]],
 ) -> None:
     assert wb.sheetnames.count("Cotizacion") == 1
     assert wb.sheetnames.count("Mobiliti") == 1
@@ -1968,7 +1994,11 @@ def _assert_task9_final_workbook(
     base_names = [payload_items[key]["name"] for key in base_keys]
     derived_names = ["LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"]
     final_names = [base_names[0], *derived_names, *base_names[1:]]
-    mobiliti_rows = _ordered_rows_for_values(mobiliti, 4, final_names)
+    mobiliti_rows = _ordered_mobiliti_rows_for_product_names(
+        mobiliti,
+        quotation,
+        final_names,
+    )
     cotizacion_rows = _ordered_rows_for_values(
         cotizacion,
         1,
@@ -2079,11 +2109,13 @@ def _assert_task9_final_workbook(
     assert cotizacion.cell(total_row, 8).value == f"=H{before_tax}+H{tax_row}"
     assert mobiliti["K4"].value is (quote_currency != "MXN")
 
-    cotizacion_hashes = {
-        hashlib.sha256(image._data()).hexdigest()
-        for image in cotizacion._images
-    }
-    assert expected_image_hashes <= cotizacion_hashes
+    cotizacion_center_colors = set()
+    for image in cotizacion._images:
+        rendered = Image.open(BytesIO(image._data())).convert("RGB")
+        cotizacion_center_colors.add(
+            rendered.getpixel((rendered.width // 2, rendered.height // 2))
+        )
+    assert expected_image_colors <= cotizacion_center_colors
     quotation_hashes = {
         hashlib.sha256(image._data()).hexdigest()
         for image in quotation._images

@@ -166,6 +166,11 @@ def test_project_quote_uses_saved_revision_and_does_not_mutate_project(project_c
     frozen = json.loads(storage[job["input_path"]])
     assert job["metadata"]["project_id"] == project["id"]
     assert job["metadata"]["project_revision"] == project["revision"]
+    assert job["metadata"]["project_section_count"] == 1
+    assert job["metadata"]["project_principal_count"] == 1
+    assert job["metadata"]["project_complement_count"] == 0
+    assert job["metadata"]["project_physical_line_count"] == 1
+    assert job["metadata"]["project_max_section_lines"] == 1
     assert frozen["project_context"]["project_revision"] == project["revision"]
     assert frozen["groups"][0]["items"][0]["line_id"] == (
         project["payload"]["lines"][0]["line_id"]
@@ -175,6 +180,101 @@ def test_project_quote_uses_saved_revision_and_does_not_mutate_project(project_c
     assert client.get(
         f"/projects/{project['id']}", headers=headers
     ).json()["project"]["revision"] == project["revision"]
+
+
+def test_project_quote_preserves_non_contiguous_section_ids_before_enqueue(
+    project_client,
+):
+    client, headers, project, storage, jobs, events = project_client
+    second = deepcopy(project["payload"]["lines"][0])
+    second.update({
+        "line_id": "55555555-5555-4555-8555-555555555555",
+        "section_id": "section-5",
+        "position": 0,
+    })
+    project["payload"]["sections"].append({
+        "section_id": "section-5",
+        "concept": "Privados",
+        "position": 1,
+    })
+    project["payload"]["lines"].append(second)
+
+    response = client.post(
+        f"/projects/{project['id']}/quote",
+        headers=headers,
+        json={"expected_revision": project["revision"]},
+    )
+
+    assert response.status_code == 202, response.json()
+    frozen = json.loads(storage[response.json()["job"]["input_path"]])
+    assert [section["id"] for section in frozen["sections"]] == [
+        "section-1",
+        "section-5",
+    ]
+    presentation_section_by_line = {
+        line_id: section["id"]
+        for section in frozen["sections"]
+        for line_id in section["line_ids"]
+    }
+    for composition in frozen["project_context"]["compositions"]:
+        assert {
+            presentation_section_by_line[line_id]
+            for line_id in composition["component_line_ids"]
+        } == {composition["section_id"]}
+    assert events == ["create_job", "upload", "queue", "wake"]
+    assert len(jobs) == 1
+
+
+def test_project_quote_rejects_section_mapping_drift_before_job(
+    project_client,
+    monkeypatch,
+    caplog,
+):
+    client, headers, project, storage, jobs, events = project_client
+    second = deepcopy(project["payload"]["lines"][0])
+    second.update({
+        "line_id": "55555555-5555-4555-8555-555555555555",
+        "section_id": "section-5",
+        "position": 0,
+    })
+    project["payload"]["sections"].append({
+        "section_id": "section-5",
+        "concept": "Privados",
+        "position": 1,
+    })
+    project["payload"]["lines"].append(second)
+    real_project_context = index.project_context
+
+    def mismatched_context(payload, project_id, revision):
+        altered = deepcopy(payload)
+        altered["lines"][0]["section_id"] = "section-5"
+        altered["lines"][1]["section_id"] = "section-1"
+        return real_project_context(altered, project_id, revision)
+
+    monkeypatch.setattr(index, "project_context", mismatched_context)
+    caplog.set_level("INFO", logger="mobiliti.project_quote")
+
+    response = client.post(
+        f"/projects/{project['id']}/quote",
+        headers=headers,
+        json={"expected_revision": project["revision"]},
+    )
+
+    assert response.status_code == 400
+    assert "Contexto de Proyecto invalido" in response.json()["detail"]
+    assert jobs == []
+    assert storage == {}
+    assert events == []
+    events_logged = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "mobiliti.project_quote"
+    ]
+    assert events_logged[-1]["stage"] == "preflight_failed"
+    assert events_logged[-1]["error_code"] == "project_section_mapping_invalid"
+    assert events_logged[-1]["project_id"] == project["id"]
+    assert events_logged[-1]["project_revision"] == project["revision"]
+    assert isinstance(events_logged[-1]["duration_ms"], int)
 
 
 def test_project_quote_rejects_stale_revision_before_creating_job(project_client):

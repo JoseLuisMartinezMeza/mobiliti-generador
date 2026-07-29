@@ -146,6 +146,18 @@ def _mixed_metadata(
     }
 
 
+def _resolved_simple_reference(workbook, value):
+    for _ in range(8):
+        match = re.fullmatch(
+            r"='?([^']+)'?!([A-Z]+[1-9][0-9]*)",
+            value,
+        ) if isinstance(value, str) else None
+        if match is None:
+            return value
+        value = workbook[match.group(1)][match.group(2)].value
+    raise AssertionError(f"Cadena de referencias demasiado profunda: {value}")
+
+
 def _row_for_formula(ws, column: int, formula: str) -> int:
     direct = [
         row
@@ -161,7 +173,10 @@ def _row_for_formula(ws, column: int, formula: str) -> int:
     return next(
         row
         for row in range(1, ws.max_row + 1)
-        if ws.cell(row, column).value == expected
+        if _resolved_simple_reference(
+            ws.parent,
+            ws.cell(row, column).value,
+        ) == expected
     )
 
 
@@ -171,6 +186,73 @@ def _mixed_tests_never_resolve_a_live_legacy_rate(monkeypatch):
         raise AssertionError("mixed mode must not resolve the legacy exchange rate")
 
     monkeypatch.setattr(engine, "_exchange_rate", fail_if_called)
+
+
+def test_mobiliti_product_code_and_cost_reference_the_same_quotation_row(tmp_path):
+    source = _write_mixed_source(
+        tmp_path / "linked-product-codes.xlsx",
+        [
+            _mixed_line(
+                name="Piso Tarkett",
+                provider="Tarkett",
+                discount=40,
+                mode="list",
+                auto=False,
+                price=123.46,
+                original_currency="MXN",
+                original_price=123.456,
+                frozen_rate=1,
+            ),
+            _mixed_line(
+                name="Silla ALMA",
+                provider="ALMA",
+                discount=0,
+                mode="net",
+                auto=False,
+                price=1850,
+                original_currency="USD",
+                original_price=100,
+                frozen_rate=18.5,
+            ),
+            _mixed_line(
+                name="Silla importada",
+                provider="Proveedor importado",
+                discount=40,
+                mode="imported",
+                auto=False,
+                price=1517,
+                original_currency="USD",
+                original_price=82,
+                frozen_rate=18.5,
+            ),
+        ],
+    )
+    output = tmp_path / "linked-product-codes-final.xlsx"
+
+    generate_quote(source, output, _mixed_metadata(), TEMPLATE)
+
+    wb = load_workbook(output, data_only=False)
+    try:
+        mobiliti = wb["Mobiliti"]
+        expected_rows = {
+            "Tarkett MX": 9,
+            "Alma - Exterior": 10,
+            "Proveedor Externo": 11,
+        }
+        for provider, quotation_row in expected_rows.items():
+            target_row = next(
+                row
+                for row in range(1, mobiliti.max_row + 1)
+                if mobiliti.cell(row, 6).value == provider
+            )
+            code_cell = mobiliti.cell(target_row, 4)
+            cost_cell = mobiliti.cell(target_row, 10)
+            assert code_cell.data_type == "f"
+            assert code_cell.value == f"=Quotation!B{quotation_row}"
+            assert cost_cell.data_type == "f"
+            assert cost_cell.value == f"=Quotation!K{quotation_row}"
+    finally:
+        wb.close()
 
 
 def _write_quotation(path: Path, *, mixed: bool) -> Path:
@@ -367,22 +449,24 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
         tarkett_cot = _row_for_formula(cot, 1, "=Quotation!B9")
         alma_cot = _row_for_formula(cot, 1, "=Quotation!B10")
         imported_cot = _row_for_formula(cot, 1, "=Quotation!B11")
-        assert mobiliti.cell(tarkett_mob, 6).value == "Tarkett"
-        assert mobiliti.cell(alma_mob, 6).value == "ALMA"
-        assert mobiliti.cell(imported_mob, 6).value == "Proveedor importado"
-        assert mobiliti.cell(tarkett_mob, 10).value == _converted_price(
-            123.456, mxn_rate
-        )
-        assert mobiliti.cell(alma_mob, 10).value == _converted_price(100, usd_rate)
-        assert mobiliti.cell(imported_mob, 10).value == _converted_price(82, usd_rate)
+        assert mobiliti.cell(tarkett_mob, 6).value == "Tarkett MX"
+        assert mobiliti.cell(alma_mob, 6).value == "Alma - Exterior"
+        assert mobiliti.cell(imported_mob, 6).value == "Proveedor Externo"
+        for mobiliti_row, source_row, expected_price in (
+            (tarkett_mob, 9, _converted_price(123.456, mxn_rate)),
+            (alma_mob, 10, _converted_price(100, usd_rate)),
+            (imported_mob, 11, _converted_price(82, usd_rate)),
+        ):
+            assert mobiliti.cell(mobiliti_row, 10).value == (
+                f"=Quotation!K{source_row}"
+            )
+            assert wb["Quotation"].cell(source_row, 11).value == expected_price
         assert cot.cell(tarkett_cot, 7).value == 0.4
         assert cot.cell(alma_cot, 7).value == f"=$G${tarkett_cot}"
         assert cot.cell(imported_cot, 7).value == f"=$G${tarkett_cot}"
-        assert mobiliti.cell(tarkett_mob, 27).value == f"=W{tarkett_mob}*Z{tarkett_mob}"
-        assert mobiliti.cell(alma_mob, 27).value == f"=W{alma_mob}*Z{alma_mob}"
-        assert mobiliti.cell(imported_mob, 27).value == (
-            f"=W{imported_mob}*Z{imported_mob}"
-        )
+        for row in (tarkett_mob, alma_mob, imported_mob):
+            assert mobiliti.cell(row, 27).value == f"=Cotizacion!G${tarkett_cot}"
+            assert mobiliti.cell(row, 28).value == f"=W{row}*AA{row}"
         assert cot.cell(tarkett_cot, 6).value == f"=Mobiliti!X{tarkett_mob}"
         assert cot.cell(alma_cot, 6).value == f"=Mobiliti!X{alma_mob}"
         assert cot.cell(imported_cot, 6).value == f"=Mobiliti!X{imported_mob}"
@@ -403,15 +487,15 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
                 19,
                 20,
                 21,
-                22,
-                23,
-                24,
-                27,
-                28,
-                29,
-                31,
-                32,
-            ):
+                    22,
+                    23,
+                    24,
+                    25,
+                    28,
+                    29,
+                    30,
+                    32,
+                ):
                 assert money_literal in mobiliti.cell(row, column).number_format
         if currency == "EUR":
             assert all(
@@ -625,30 +709,58 @@ def test_mixed_lumbro_accessories_are_selective_and_use_frozen_rate(
         cot = wb["Cotizacion"]
         mobiliti = wb["Mobiliti"]
         parent_mob = _row_for_formula(mobiliti, 4, "=Quotation!B9")
-        alma_mob = _row_for_formula(mobiliti, 4, "=Quotation!B10")
-        manual_mob = _row_for_formula(mobiliti, 4, "=Quotation!B11")
+        alma_source_row = next(
+            row
+            for row in range(9, wb["Quotation"].max_row + 1)
+            if wb["Quotation"].cell(row, 2).value == "Estacion Lido 8PAX ALMA"
+        )
+        manual_source_row = next(
+            row
+            for row in range(9, wb["Quotation"].max_row + 1)
+            if wb["Quotation"].cell(row, 2).value == "LIDO.OP-INT manual"
+        )
+        alma_mob = _row_for_formula(
+            mobiliti,
+            4,
+            f"=Quotation!B{alma_source_row}",
+        )
+        manual_mob = _row_for_formula(
+            mobiliti,
+            4,
+            f"=Quotation!B{manual_source_row}",
+        )
         automatic_rows = [
             row
             for row in range(1, mobiliti.max_row + 1)
-            if mobiliti.cell(row, 4).value in {"LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"}
+            if _resolved_simple_reference(
+                wb,
+                mobiliti.cell(row, 4).value,
+            ) in {"LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"}
         ]
         assert len(automatic_rows) == 3
         assert parent_mob < automatic_rows[0] < alma_mob < manual_mob
         lumbro_prices = engine._load_lumbro_prices(TEMPLATE)
         for row in automatic_rows:
-            code = mobiliti.cell(row, 4).value
-            assert mobiliti.cell(row, 10).value == _converted_price(
+            code = _resolved_simple_reference(wb, mobiliti.cell(row, 4).value)
+            source_match = re.fullmatch(
+                r"=Quotation!B([1-9][0-9]*)",
+                mobiliti.cell(row, 4).value,
+            )
+            assert source_match is not None
+            source_row = int(source_match.group(1))
+            assert mobiliti.cell(row, 10).value == f"=Quotation!K{source_row}"
+            assert wb["Quotation"].cell(source_row, 11).value == _converted_price(
                 lumbro_prices[code].price_mxn,
                 mxn_rate,
             )
-            assert mobiliti.cell(row, 27).value == f"=W{row}*Z{row}"
+            assert mobiliti.cell(row, 28).value == f"=W{row}*AA{row}"
         parent_cot = _row_for_formula(cot, 1, "=Quotation!B9")
         assert cot.cell(parent_cot, 6).value == f"=Mobiliti!X{parent_mob}"
         for offset, row in enumerate(automatic_rows, start=1):
-            assert cot.cell(parent_cot + offset, 1).value == mobiliti.cell(row, 4).value
+            assert cot.cell(parent_cot + offset, 1).value == f"=Mobiliti!D{row}"
             assert cot.cell(parent_cot + offset, 6).value == f"=Mobiliti!X{row}"
         assert cot.cell(parent_cot, 7).value == 0.4
-        assert mobiliti.cell(manual_mob, 6).value == "Lumbro"
+        assert mobiliti.cell(manual_mob, 6).value == "Lumbro CH"
     finally:
         wb.close()
 
@@ -679,7 +791,10 @@ def test_mixed_job_without_eligible_auto_lines_needs_no_auto_rate(tmp_path):
     wb = load_workbook(output, data_only=False)
     try:
         assert not any(
-            wb["Mobiliti"].cell(row, 4).value in {"LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"}
+            _resolved_simple_reference(
+                wb,
+                wb["Mobiliti"].cell(row, 4).value,
+            ) in {"LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"}
             for row in range(1, wb["Mobiliti"].max_row + 1)
         )
     finally:
@@ -1007,14 +1122,22 @@ def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets
             else:
                 assert cot.cell(cot_row, 7).value == f"=$G${first_cot_row}"
             assert mobiliti.cell(mobiliti_row, 10).value == (
+                f"=Quotation!K{source_row}"
+            )
+            assert wb["Quotation"].cell(source_row, 11).value == (
                 2.68 if source_row == 9 else 0.01
             )
-            assert mobiliti.cell(mobiliti_row, 27).value == (
-                f"=W{mobiliti_row}*Z{mobiliti_row}"
+            assert mobiliti.cell(mobiliti_row, 28).value == (
+                f"=W{mobiliti_row}*AA{mobiliti_row}"
             )
             assert mobiliti.cell(mobiliti_row, 23).value.startswith(
                 f'=IF(F{mobiliti_row}="Offiho",J{mobiliti_row},'
             )
-            assert mobiliti.cell(mobiliti_row, 24).value == f"=(W{mobiliti_row}*H{mobiliti_row})"
+            assert mobiliti.cell(mobiliti_row, 24).value == (
+                f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row})"
+            )
+            assert mobiliti.cell(mobiliti_row, 25).value == (
+                f"=(W{mobiliti_row}*H{mobiliti_row})"
+            )
     finally:
         wb.close()

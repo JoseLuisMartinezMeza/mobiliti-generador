@@ -3,6 +3,11 @@ from xml.etree import ElementTree as ET
 
 from openpyxl.utils.cell import column_index_from_string
 
+from mobiliti_saas.quote_engine import engine
+from mobiliti_saas.quote_engine.mobiliti_layout import (
+    BASE_PRODUCT_CAPACITY,
+    BASE_SECTION_COUNT,
+)
 from mobiliti_saas.quote_engine.mobiliti_layout import SectionNeed, plan_mobiliti_layout
 from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage
 from mobiliti_saas.quote_engine.ooxml_worksheet import build_mobiliti_sheet
@@ -52,4 +57,16 @@ def test_official_composer_clones_row_14_formula_surface_into_twenty_sections():
     assert all(
         _formula_columns(root, section.product_start) == canonical_columns
         for section in mutation.row_map.sections
+    )
+
+
+def test_production_engine_does_not_expose_legacy_section_or_product_caps():
+    assert not hasattr(engine, "MOBILITI_SECTION_COUNT")
+    assert not hasattr(engine, "MAX_PROD_PER_SECTION")
+    assert not hasattr(engine, "_mobiliti_section_capacities")
+    assert not hasattr(engine, "_normalize_mobiliti_section_capacities")
+    assert len(engine.SECTION_PROD_STARTS) == BASE_SECTION_COUNT
+    assert all(
+        capacity == BASE_PRODUCT_CAPACITY
+        for _start, capacity in engine._mobiliti_product_ranges(object())
     )

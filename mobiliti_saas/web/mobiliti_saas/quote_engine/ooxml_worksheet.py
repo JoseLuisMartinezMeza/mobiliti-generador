@@ -499,6 +499,31 @@ def clone_section_header(
     _set_cell_value(clone, f"{get_column_letter(title_column)}{target_row}", "text", title)
 
 
+_ROW_PRESENTATION_ATTRIBUTES = (
+    "ht",
+    "customHeight",
+    "thickBot",
+    "thickTop",
+    "hidden",
+    "outlineLevel",
+    "collapsed",
+    "s",
+    "customFormat",
+)
+
+
+def _copy_row_presentation(
+    target_row: ET.Element,
+    source_row: ET.Element,
+) -> None:
+    """Copia solo la presentación de una fila sin alterar su identidad ni fórmulas."""
+
+    for attribute in _ROW_PRESENTATION_ATTRIBUTES:
+        target_row.attrib.pop(attribute, None)
+        if attribute in source_row.attrib:
+            target_row.set(attribute, source_row.attrib[attribute])
+
+
 def clone_formula_row(
     editor: WorksheetEditor,
     canonical_row: ET.Element,
@@ -506,6 +531,7 @@ def clone_formula_row(
     row_map: MobilitiRowMap,
     *,
     source_row: int = 49,
+    presentation_row: ET.Element | None = None,
 ) -> None:
     clone = editor.replace_table_row(
         target_row,
@@ -514,6 +540,8 @@ def clone_formula_row(
         row_map,
         clear_input_formulas=True,
     )
+    if presentation_row is not None:
+        _copy_row_presentation(clone, presentation_row)
     provider = _find_cell(clone, 6)
     yellow_reference = _find_cell(clone, 8)
     if provider is None or yellow_reference is None or "s" not in yellow_reference.attrib:
@@ -1166,7 +1194,7 @@ def _validate_write_value(
         if not isinstance(value, str):
             raise TypeError("Una escritura formula requiere str")
         match = re.fullmatch(
-            r"(?:=Quotation![HIK]([1-9][0-9]*)|"
+            r"(?:=Quotation![BHIK]([1-9][0-9]*)|"
             r"=ROUND\(Quotation!K([1-9][0-9]*)"
             r"\*([0-9]+(?:\.[0-9]+)?),2\))",
             value,
@@ -1470,6 +1498,9 @@ def build_mobiliti_sheet(
                 target_row,
                 row_map,
                 source_row=product_source_row,
+                presentation_row=(
+                    None if target_row == first_product_row else canonical.product_row
+                ),
             )
             if target_row != first_product_row:
                 target_currency = _find_cell(editor.require_row(target_row), 3)

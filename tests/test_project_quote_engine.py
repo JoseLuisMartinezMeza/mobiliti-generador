@@ -382,14 +382,19 @@ def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):
     try:
         mobiliti = workbook["Mobiliti"]
         assert [mobiliti.cell(row, 4).value for row in (14, 15, 16)] == [
-            "MAIN-1",
-            "PER-1",
-            "FIXED-1",
+            "=Quotation!B9",
+            "=Quotation!B10",
+            "=Quotation!B11",
         ]
         assert [mobiliti.cell(row, 8).value for row in (14, 15, 16)] == [
             "=Quotation!H9",
             "=Quotation!H10",
             "=Quotation!H11",
+        ]
+        assert [mobiliti.cell(row, 10).value for row in (14, 15, 16)] == [
+            "=Quotation!K9",
+            "=Quotation!K10",
+            "=Quotation!K11",
         ]
         quotation = workbook["Quotation"]
         assert [quotation.cell(row, 8).value for row in (9, 10, 11)] == [

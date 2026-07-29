@@ -8,6 +8,9 @@ from io import BytesIO
 import hashlib
 import json
 from pathlib import Path
+import re
+import subprocess
+import sys
 import uuid
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
@@ -39,8 +42,6 @@ from test_official_quote_stress import (
     _cell_map,
     _cell_text,
     _formula,
-    excel_com_roundtrip,
-    excel_desktop_unavailable_reason,
     quote_worker,
 )
 from test_official_template_contract import assert_official_template_contract
@@ -251,21 +252,24 @@ def _imported_line(
 def _stress_project_payload() -> dict:
     payload = _project_payload()
     payload["quote_fields"]["proyecto"] = "Proyecto stress persistido"
+    section_ids = (
+        "section-1",
+        *(f"section-{section}" for section in range(5, 24)),
+    )
     payload["sections"] = [
         {
-            "section_id": f"section-{section}",
-            "concept": f"Stress Section {section}",
-            "position": section - 1,
+            "section_id": section_id,
+            "concept": f"Stress Section {position}",
+            "position": position - 1,
         }
-        for section in range(1, 21)
+        for position, section_id in enumerate(section_ids, start=1)
     ]
     lines: list[dict] = []
     principal_counter = 0
-    for section in range(1, 21):
-        section_id = f"section-{section}"
+    for section_position, section_id in enumerate(section_ids, start=1):
         for offset in range(35):
             line_id = str(uuid.uuid4())
-            if section == 1 and offset == 0:
+            if section_position == 1 and offset == 0:
                 lines.append(
                     {
                         "line_id": line_id,
@@ -277,7 +281,7 @@ def _stress_project_payload() -> dict:
                 )
                 parent_id = line_id
                 continue
-            if section == 1 and offset in {1, 2}:
+            if section_position == 1 and offset in {1, 2}:
                 lines.append(
                     {
                         "line_id": line_id,
@@ -318,7 +322,7 @@ def _stress_project_payload() -> dict:
                     "role": "principal",
                     "section_id": section_id,
                     "parent_line_id": None,
-                    "position": offset - 2 if section == 1 else offset,
+                    "position": offset - 2 if section_position == 1 else offset,
                     "quantity": "1",
                     "source": "catalog",
                     "catalog": "sunon",
@@ -685,9 +689,49 @@ def test_project_quote_preserves_original_quotation_and_template_contract(
     template_package = XlsxPackage.read(OFFICIAL_TEMPLATE)
     exact_additions = _exact_generated_additions(template_package, output_package)
     fletes_part = template_package.sheet_part("Fletes")
-    assert _formula_semantic_xml(
-        output_package.parts[fletes_part]
-    ) == _formula_semantic_xml(template_package.parts[fletes_part])
+    template_fletes = _cell_map(template_package, "Fletes")
+    output_fletes = _cell_map(output_package, "Fletes")
+    template_formulas = {
+        coordinate: _formula(cell)
+        for coordinate, cell in template_fletes.items()
+        if _formula(cell)
+    }
+    output_formulas = {
+        coordinate: _formula(cell)
+        for coordinate, cell in output_fletes.items()
+        if _formula(cell)
+    }
+    assert {
+        coordinate: output_formulas[coordinate]
+        for coordinate in template_formulas
+    } == template_formulas
+    expected_category_formulas = {
+        "K16": (
+            "IF(Mobiliti!$K$4=TRUE,"
+            "((J16/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
+            "(J16/$J$21)*Mobiliti!$P$9)"
+        ),
+        "N16": "IF(Mobiliti!$K$4=TRUE,(56/Mobiliti!$K$6),56)",
+        "K17": (
+            "IF(Mobiliti!$K$4=TRUE,"
+            "((J17/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
+            "(J17/$J$21)*Mobiliti!$P$9)"
+        ),
+        "N17": "IF(Mobiliti!$K$4=TRUE,(1790/Mobiliti!$K$6),1790)",
+        "K18": (
+            "IF(Mobiliti!$K$4=TRUE,"
+            "((J18/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
+            "(J18/$J$21)*Mobiliti!$P$9)"
+        ),
+        "N18": "IF(Mobiliti!$K$4=TRUE,(210/Mobiliti!$K$6),210)",
+    }
+    assert {
+        coordinate: output_formulas[coordinate]
+        for coordinate in expected_category_formulas
+    } == expected_category_formulas
+    assert set(output_formulas) - set(template_formulas) == set(
+        expected_category_formulas
+    )
     assert_package_preserved(
         OFFICIAL_TEMPLATE,
         output,
@@ -712,6 +756,16 @@ def test_project_quote_expands_past_16_sections_and_33_components(
     assert ZipFile(output).testzip() is None
     assert request["item_count"] == 700
     assert len(request["sections"]) == 20
+    assert [section["id"] for section in request["sections"]] == [
+        "section-1",
+        *(f"section-{section}" for section in range(5, 24)),
+    ]
+    assert [
+        section["section_id"]
+        for section in request["project_context"]["normalized_project_payload"][
+            "sections"
+        ]
+    ] == [section["id"] for section in request["sections"]]
     assert request["imported_source"]["items"][0]["source_row"] == 11
     identities = [
         line["identity"]["internal_id"]
@@ -767,6 +821,17 @@ def _excel_acceptance_surface(
                 target=coordinate,
                 sheet="Mobiliti",
             )
+            if column == "X":
+                expected = re.sub(
+                    r"\$W\$14:\$W\$\d+",
+                    f"$W$14:$W${result.layout.last_product_row}",
+                    expected,
+                )
+                expected = re.sub(
+                    r"\$D\$14:\$D\$\d+",
+                    f"$D$14:$D${result.layout.last_product_row}",
+                    expected,
+                )
             actual = f"={_formula(mobiliti[coordinate])}"
             assert actual == expected
             expectations[("Mobiliti", coordinate)] = actual
@@ -795,11 +860,98 @@ def _excel_acceptance_surface(
     return expectations, tuple(sorted(inspected))
 
 
+def _excel_desktop_static_unavailable_reason() -> str | None:
+    if sys.platform != "win32":
+        return "La aceptación de Excel requiere Windows"
+    try:
+        import pythoncom  # noqa: F401
+        import win32com.client  # noqa: F401
+        import winreg
+    except ImportError as exc:
+        return f"pywin32 no está disponible: {exc}"
+    try:
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r"Excel.Application\CLSID"):
+            pass
+    except OSError as exc:
+        return f"Excel de escritorio no está registrado: {exc}"
+    return None
+
+
+def _excel_com_roundtrip_isolated(
+    source: Path,
+    destination: Path,
+    *,
+    formula_expectations: dict[tuple[str, str], str],
+    inspected_cells: tuple[tuple[str, str], ...],
+    specification: Path,
+) -> Path:
+    specification.write_text(
+        json.dumps(
+            {
+                "source": str(source),
+                "destination": str(destination),
+                "formula_expectations": [
+                    {
+                        "sheet": sheet,
+                        "coordinate": coordinate,
+                        "formula": formula,
+                    }
+                    for (sheet, coordinate), formula in formula_expectations.items()
+                ],
+                "inspected_cells": [
+                    {"sheet": sheet, "coordinate": coordinate}
+                    for sheet, coordinate in inspected_cells
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    child_script = """
+import json
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path.cwd() / "tests"))
+from test_official_quote_stress import excel_com_roundtrip
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expectations = {
+    (entry["sheet"], entry["coordinate"]): entry["formula"]
+    for entry in payload["formula_expectations"]
+}
+inspected = tuple(
+    (entry["sheet"], entry["coordinate"])
+    for entry in payload["inspected_cells"]
+)
+excel_com_roundtrip(
+    Path(payload["source"]),
+    Path(payload["destination"]),
+    formula_expectations=expectations,
+    inspected_cells=inspected,
+)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", child_script, str(specification)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        "Excel COM aislado no completó el roundtrip.\n"
+        f"STDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+    )
+    assert destination.exists()
+    return destination
+
+
 def test_project_quote_excel_desktop_acceptance_for_four_persisted_cases(
     persisted_project_outputs: dict[str, PersistedQuoteResult],
     tmp_path: Path,
 ) -> None:
-    unavailable = excel_desktop_unavailable_reason()
+    unavailable = _excel_desktop_static_unavailable_reason()
     if unavailable is not None:
         pytest.skip(unavailable)
 
@@ -807,11 +959,12 @@ def test_project_quote_excel_desktop_acceptance_for_four_persisted_cases(
         result = persisted_project_outputs[case_name]
         source_hash = hashlib.sha256(result.output.read_bytes()).hexdigest()
         expectations, inspected_cells = _excel_acceptance_surface(result)
-        validated = excel_com_roundtrip(
+        validated = _excel_com_roundtrip_isolated(
             result.output,
             tmp_path / f"{case_name}-excel-roundtrip.xlsx",
             formula_expectations=expectations,
             inspected_cells=inspected_cells,
+            specification=tmp_path / f"{case_name}-excel-roundtrip.json",
         )
         assert hashlib.sha256(result.output.read_bytes()).hexdigest() == source_hash
         assert validated != result.output

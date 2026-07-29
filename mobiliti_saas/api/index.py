@@ -16,6 +16,7 @@ import sys
 import hashlib
 import hmac
 import io
+import logging
 import mimetypes
 import re
 import threading
@@ -36,6 +37,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from mangum import Mangum
 from PIL import Image, UnidentifiedImageError
+
+
+PROJECT_QUOTE_LOGGER = logging.getLogger("mobiliti.project_quote")
 
 
 for _root in (Path(__file__).resolve().parents[2], Path(__file__).resolve().parents[3] if len(Path(__file__).resolve().parents) > 3 else None):
@@ -4738,6 +4742,71 @@ def _load_project_catalogs(browser_rows: list[dict]) -> tuple[dict, list[dict]]:
     return catalogs, db_list_exchange_rates()
 
 
+def _project_payload_hash(payload: dict) -> str:
+    checked = normalize_project_payload(deepcopy(payload))
+    canonical = json.dumps(
+        checked,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _project_quote_diagnostics(cart_payload: dict) -> dict[str, int]:
+    compositions = cart_payload["project_context"]["compositions"]
+    section_counts = [
+        len(section["line_ids"]) for section in cart_payload["sections"]
+    ]
+    principal_count = len(compositions)
+    complement_count = sum(
+        max(0, len(composition["component_line_ids"]) - 1)
+        for composition in compositions
+    )
+    return {
+        "project_section_count": len(section_counts),
+        "project_principal_count": principal_count,
+        "project_complement_count": complement_count,
+        "project_physical_line_count": sum(section_counts),
+        "project_max_section_lines": max(section_counts, default=0),
+    }
+
+
+def _log_project_quote_stage(
+    stage: str,
+    *,
+    started_at: float,
+    project_id: str,
+    project_revision: int,
+    project_payload_hash: str,
+    diagnostics: dict[str, int] | None = None,
+    error_code: str | None = None,
+) -> None:
+    event: dict[str, Any] = {
+        "event": "project_quote",
+        "stage": stage,
+        "duration_ms": max(
+            0,
+            int(round((time.perf_counter() - started_at) * 1000)),
+        ),
+        "project_id": project_id,
+        "project_revision": project_revision,
+        "project_payload_hash": project_payload_hash,
+    }
+    if diagnostics:
+        event.update(diagnostics)
+    if error_code:
+        event["error_code"] = error_code
+    PROJECT_QUOTE_LOGGER.info(
+        json.dumps(
+            event,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
 def _build_saved_project_quote_payload(
     project: dict,
     usuario_id: int,
@@ -4769,11 +4838,11 @@ def _build_saved_project_quote_payload(
         )
     sections = [
         {
-            "id": f"section-{index}",
+            "id": section["section_id"],
             "title": section["concept"],
             "line_ids": compositions_by_section.get(section["section_id"], []),
         }
-        for index, section in enumerate(checked["sections"], start=1)
+        for section in checked["sections"]
         if compositions_by_section.get(section["section_id"])
     ]
     context = project_context(checked, project["id"], project["revision"])
@@ -5026,6 +5095,8 @@ def projects_quote(
     if project["revision"] != expected_revision:
         _project_conflict(project)
 
+    preflight_started_at = time.perf_counter()
+    persisted_payload_hash = _project_payload_hash(project["payload"])
     try:
         cart_payload, import_source_bytes, import_manifest = (
             _build_saved_project_quote_payload(project, current_user["id"])
@@ -5045,8 +5116,30 @@ def projects_quote(
     except HTTPException:
         raise
     except (TypeError, ValueError, RuntimeError) as exc:
+        error_code = (
+            "project_section_mapping_invalid"
+            if "Contexto de Proyecto invalido" in str(exc)
+            else "project_quote_preflight_invalid"
+        )
+        _log_project_quote_stage(
+            "preflight_failed",
+            started_at=preflight_started_at,
+            project_id=project_id,
+            project_revision=expected_revision,
+            project_payload_hash=persisted_payload_hash,
+            error_code=error_code,
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
+    diagnostics = _project_quote_diagnostics(cart_payload)
+    _log_project_quote_stage(
+        "preflight_validated",
+        started_at=preflight_started_at,
+        project_id=project_id,
+        project_revision=expected_revision,
+        project_payload_hash=persisted_payload_hash,
+        diagnostics=diagnostics,
+    )
     quote_fields = cart_payload["project_context"][
         "normalized_project_payload"
     ]["quote_fields"]
@@ -5081,6 +5174,7 @@ def projects_quote(
         "project_payload_hash": cart_payload["project_context"][
             "project_payload_hash"
         ],
+        **diagnostics,
         "template_contract_hash": contract_hash,
         "estimated_duration_seconds": 120,
     })
@@ -5097,6 +5191,15 @@ def projects_quote(
         metadata["cotizacion"] = metadata["proyecto"]
 
     _enforce_active_quote_limit(current_user["id"])
+    enqueue_started_at = time.perf_counter()
+    _log_project_quote_stage(
+        "enqueue_started",
+        started_at=enqueue_started_at,
+        project_id=project_id,
+        project_revision=expected_revision,
+        project_payload_hash=persisted_payload_hash,
+        diagnostics=diagnostics,
+    )
     try:
         job = _enqueue_mixed_payload(
             current_user=current_user,
@@ -5107,10 +5210,27 @@ def projects_quote(
             import_source_bytes=import_source_bytes,
         )
     except Exception as exc:
+        _log_project_quote_stage(
+            "enqueue_failed",
+            started_at=enqueue_started_at,
+            project_id=project_id,
+            project_revision=expected_revision,
+            project_payload_hash=persisted_payload_hash,
+            diagnostics=diagnostics,
+            error_code="project_quote_enqueue_failed",
+        )
         raise HTTPException(
             status_code=503,
             detail="No fue posible crear la cotizacion del Proyecto",
         ) from exc
+    _log_project_quote_stage(
+        "enqueued",
+        started_at=enqueue_started_at,
+        project_id=project_id,
+        project_revision=expected_revision,
+        project_payload_hash=persisted_payload_hash,
+        diagnostics=diagnostics,
+    )
     _wake_worker()
     return {"mensaje": "Cotizacion del Proyecto en cola", "job": job}
 

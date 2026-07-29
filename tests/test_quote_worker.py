@@ -411,7 +411,7 @@ class FakeClient:
         self.calls.append(("DELETE", object_path, None))
 
 
-def test_process_job_marks_completed(monkeypatch):
+def test_process_job_marks_completed(monkeypatch, capsys):
     client = FakeClient()
 
     def fake_generator(job, input_path, output_path):
@@ -425,7 +425,17 @@ def test_process_job_marks_completed(monkeypatch):
             "id": "job-1",
             "usuario_id": 7,
             "input_path": "users/7/jobs/job-1/input.xlsx",
-            "metadata": {"cotizacion": "COT-001"},
+            "metadata": {
+                "cotizacion": "COT-001",
+                "project_id": PROJECT_ID,
+                "project_revision": 4,
+                "project_payload_hash": "a" * 64,
+                "project_section_count": 18,
+                "project_principal_count": 115,
+                "project_complement_count": 2,
+                "project_physical_line_count": 117,
+                "project_max_section_lines": 37,
+            },
         },
     )
 
@@ -434,6 +444,22 @@ def test_process_job_marks_completed(monkeypatch):
     assert any(method == "UPLOAD" and "/attempts/" in path for method, path, _data in client.calls)
     completed_payload = next(data for _, _, data in client.calls if isinstance(data, dict) and data.get("status") == "completed")
     assert completed_payload["metadata"]["generation_seconds"] >= 0
+    observability = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith('{"event":"project_quote_worker"')
+    ]
+    assert [event["stage"] for event in observability] == [
+        "claimed",
+        "input_prepared",
+        "workbook_composed",
+        "completed",
+    ]
+    assert observability[-1]["project_id"] == PROJECT_ID
+    assert observability[-1]["project_revision"] == 4
+    assert observability[-1]["project_physical_line_count"] == 117
+    assert observability[-1]["project_max_section_lines"] == 37
+    assert isinstance(observability[-1]["duration_ms"], int)
 
 
 def test_supabase_client_storage_methods_route_to_r2(monkeypatch, tmp_path):
