@@ -223,7 +223,8 @@ BEGIN
         PRIMARY KEY (catalog, identity)
     ) ON COMMIT DROP;
 
-    DELETE FROM pg_temp.mixed_reservation_lines;
+    DELETE FROM pg_temp.mixed_reservation_lines
+    WHERE catalog IS NOT NULL;
 
     FOR v_group IN SELECT value FROM jsonb_array_elements(p_groups)
     LOOP
@@ -274,8 +275,8 @@ BEGIN
             IF v_sku = '' AND v_catalog NOT IN ('sonara','lumbro') THEN
                 RAISE EXCEPTION 'mixed reservation sku is invalid';
             END IF;
-            IF (v_item ->> 'quantity') !~ '^(?:0|[1-9][0-9]{0,6})(?:\.[0-9]{1,6})?$'
-               OR (v_item ->> 'stock') !~ '^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,6})?$' THEN
+            IF (v_item ->> 'quantity') !~ '^(?:0|[1-9][0-9]{0,6})(?:[.][0-9]{1,6})?$'
+               OR (v_item ->> 'stock') !~ '^(?:0|[1-9][0-9]{0,9})(?:[.][0-9]{1,6})?$' THEN
                 RAISE EXCEPTION 'mixed reservation decimal is invalid';
             END IF;
             v_quantity := (v_item ->> 'quantity')::NUMERIC;

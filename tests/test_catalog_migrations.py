@@ -9,6 +9,12 @@ JOBS_RLS_MIGRATION = SETUP / "2026_07_jobs_rls.sql"
 BOOTSTRAP = SETUP / "create_tables.sql"
 MIXED_MIGRATION = SETUP / "2026_07_mixed_catalog_cart.sql"
 PHYSICAL_LIMITS_MIGRATION = SETUP / "2026_07_quote_physical_limits.sql"
+MIXED_DECIMAL_REGEX_MIGRATION = (
+    SETUP / "2026_07_fix_mixed_reservation_decimal_regex.sql"
+)
+MIXED_TEMP_CLEANUP_MIGRATION = (
+    SETUP / "2026_07_scope_mixed_temp_cleanup.sql"
+)
 PHYSICAL_QUOTE_LINE_LIMIT = 1_048_512
 SQL_FILES = (BOOTSTRAP,)
 EXPECTED_SUPPLIERS = (
@@ -134,6 +140,66 @@ def test_mixed_cart_rpcs_are_additive_atomic_and_service_role_only():
         assert "delete from pg_temp.mixed_reservation_lines" in normalized
         assert "drop table" not in normalized
         assert "truncate" not in normalized
+
+
+def test_mixed_reservation_decimal_regex_survives_function_rewrites():
+    migration = MIXED_DECIMAL_REGEX_MIGRATION.read_text(encoding="utf-8")
+    normalized_migration = re.sub(r"\s+", " ", migration.lower())
+
+    assert "saas_reserve_mixed_cart(integer, uuid, jsonb)" in normalized_migration
+    assert "chr(92) || chr(92) || '.'" in normalized_migration
+    assert "chr(92) || '.'" in normalized_migration
+    assert "to service_role" in normalized_migration
+
+    for path in (MIXED_MIGRATION, PHYSICAL_LIMITS_MIGRATION, BOOTSTRAP):
+        mixed = _function_definition(
+            path.read_text(encoding="utf-8"),
+            "saas_reserve_mixed_cart",
+        )
+        assert "(?:[.][0-9]{1,6})?" in mixed
+        assert "(?:\\.[0-9]{1,6})?" not in mixed
+
+
+def test_mixed_reservation_temp_cleanup_is_scoped_for_database_guards():
+    migration = MIXED_TEMP_CLEANUP_MIGRATION.read_text(encoding="utf-8")
+    normalized_migration = re.sub(r"\s+", " ", migration.lower())
+
+    for table_name in ("mixed_reservation_lines", "mixed_release_lines"):
+        unscoped = f"delete from pg_temp.{table_name};"
+        scoped = (
+            f"delete from pg_temp.{table_name} "
+            "where catalog is not null;"
+        )
+        assert unscoped not in normalized_migration
+        assert scoped in normalized_migration
+
+    assert "saas_reserve_mixed_cart(integer, uuid, jsonb)" in normalized_migration
+    assert "saas_release_mixed_cart(uuid)" in normalized_migration
+    assert "to service_role" in normalized_migration
+
+    for path in (MIXED_MIGRATION, PHYSICAL_LIMITS_MIGRATION, BOOTSTRAP):
+        normalized = re.sub(
+            r"\s+",
+            " ",
+            path.read_text(encoding="utf-8").lower(),
+        )
+        assert "delete from pg_temp.mixed_reservation_lines;" not in normalized
+        assert (
+            "delete from pg_temp.mixed_reservation_lines "
+            "where catalog is not null;"
+        ) in normalized
+
+    for path in (MIXED_MIGRATION, BOOTSTRAP):
+        normalized = re.sub(
+            r"\s+",
+            " ",
+            path.read_text(encoding="utf-8").lower(),
+        )
+        assert "delete from pg_temp.mixed_release_lines;" not in normalized
+        assert (
+            "delete from pg_temp.mixed_release_lines "
+            "where catalog is not null;"
+        ) in normalized
 
 
 def _statement(sql, prefix):
