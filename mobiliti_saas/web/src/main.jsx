@@ -988,10 +988,6 @@ function QuoteForm({
               {busy ? <Loader2 className="spin" size={18} /> : <UploadCloud size={18} />}
               Previsualizar e importar al proyecto
             </button>
-            <button className="primary-action" disabled={busy}>
-              {busy ? <Loader2 className="spin" size={18} /> : <FileSpreadsheet size={18} />}
-              Generar cotizacion
-            </button>
           </div>
         </form>
       </section>

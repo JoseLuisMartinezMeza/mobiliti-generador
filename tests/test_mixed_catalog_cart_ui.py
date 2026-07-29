@@ -2526,9 +2526,9 @@ def test_imported_editor_touch_targets_use_their_exact_selectors():
         assert any(re.search(r"min-height:\s*(?:4[4-9]|[5-9]\d|[1-9]\d{2,})px", rule) for rule in matching_rules)
 
 
-def test_quote_form_offers_preview_import_without_removing_direct_generation():
+def test_quote_form_offers_preview_import_without_direct_generation():
     source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
 
     assert "Previsualizar e importar al proyecto" in source
-    assert "Generar cotizacion" in source
+    assert "Generar cotizacion" not in source
     assert "/import-preview" in source
