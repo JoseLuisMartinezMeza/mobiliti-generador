@@ -25,6 +25,16 @@ def test_project_editor_has_tabs_and_line_actions():
     assert "quantityMode" in source
 
 
+def test_project_quote_tab_exposes_template_and_description_language():
+    source = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
+    assert "Plantilla de cotizaci" in source
+    assert "Idioma de descripciones" in source
+    assert "quoteFields.template" in source
+    assert "quoteFields.description_language" in source
+    assert 'value="sunon_cdmx_v1c"' in source
+    assert 'value="en"' in source
+
+
 def test_imported_editor_exposes_official_code_provider_and_linkage():
     source = Path(
         "mobiliti_saas/web/src/ImportedCartLineFields.jsx"

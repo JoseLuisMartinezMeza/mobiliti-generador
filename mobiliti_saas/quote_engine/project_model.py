@@ -13,6 +13,8 @@ from .mixed_catalog import MIXED_CATALOG_ORDER
 
 PROJECT_SCHEMA_VERSION = 1
 PROJECT_CURRENCIES = frozenset({"MXN", "USD", "EUR"})
+PROJECT_TEMPLATES = frozenset({"official_2026_gdl", "sunon_cdmx_v1c"})
+PROJECT_DESCRIPTION_LANGUAGES = frozenset({"es", "en"})
 PROJECT_ROLES = frozenset({"principal", "complement"})
 COMPLEMENT_QUANTITY_MODES = frozenset({"per_parent_unit", "fixed_project"})
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -389,7 +391,12 @@ def _normalize_quote_fields(raw: object) -> dict:
         "proyecto", "cliente", "correo", "telefono", "direccion", "razon_social",
         "quote_currency", "descuento",
     )
-    if not isinstance(raw, dict) or set(raw) != set(required):
+    optional = frozenset({"template", "description_language"})
+    if (
+        not isinstance(raw, dict)
+        or not set(required).issubset(raw)
+        or not set(raw).issubset(set(required) | optional)
+    ):
         raise ValueError("Datos de cotización inválidos")
     result = {
         field: _text(raw[field], field, required=False, limit=500)
@@ -402,6 +409,22 @@ def _normalize_quote_fields(raw: object) -> dict:
         raise ValueError("Descuento inválido") from exc
     if not discount.is_finite() or not Decimal("0") <= discount <= Decimal("100"):
         raise ValueError("Descuento inválido")
+    template = _text(
+        raw.get("template", "official_2026_gdl"),
+        "template",
+        limit=64,
+    )
+    if template not in PROJECT_TEMPLATES:
+        raise ValueError("Plantilla de cotizacion invalida")
+    description_language = _text(
+        raw.get("description_language", "es"),
+        "description_language",
+        limit=2,
+    ).lower()
+    if description_language not in PROJECT_DESCRIPTION_LANGUAGES:
+        raise ValueError("Idioma de descripciones invalido")
+    result["template"] = template
+    result["description_language"] = description_language
     return result
 
 

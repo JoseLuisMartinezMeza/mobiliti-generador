@@ -72,7 +72,10 @@ def test_project_survives_new_client_session_and_preserves_ownership(persistent_
     reopened = second.get(f"/projects/{created['id']}", headers=_auth_headers(7))
 
     assert reopened.status_code == 200, reopened.json()
-    assert reopened.json()["project"]["payload"] == payload
+    reopened_payload = reopened.json()["project"]["payload"]
+    assert reopened_payload == created["payload"]
+    assert reopened_payload["quote_fields"]["template"] == "official_2026_gdl"
+    assert reopened_payload["quote_fields"]["description_language"] == "es"
     assert [project["id"] for project in second.get(
         "/projects", headers=_auth_headers(7)
     ).json()["projects"]] == [created["id"]]

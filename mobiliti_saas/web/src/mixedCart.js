@@ -42,10 +42,16 @@ const PROJECT_SCHEMA_VERSION = 1;
 const PROJECT_LINE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROJECT_ROLES = new Set(["principal", "complement"]);
 const COMPLEMENT_QUANTITY_MODES = new Set(["per_parent_unit", "fixed_project"]);
-const PROJECT_QUOTE_FIELDS = new Set([
+const PROJECT_QUOTE_REQUIRED_FIELDS = new Set([
   "proyecto", "cliente", "correo", "telefono", "direccion", "razon_social",
   "quote_currency", "descuento",
 ]);
+const PROJECT_QUOTE_FIELDS = new Set([
+  ...PROJECT_QUOTE_REQUIRED_FIELDS,
+  "template", "description_language",
+]);
+const PROJECT_TEMPLATES = new Set(["official_2026_gdl", "sunon_cdmx_v1c"]);
+const PROJECT_DESCRIPTION_LANGUAGES = new Set(["es", "en"]);
 
 function pythonStrip(value) {
   return value.replace(PYTHON_EDGE_WHITESPACE_PATTERN, "");
@@ -1326,9 +1332,13 @@ function exactProjectKeys(value, keys, message) {
 }
 
 function projectQuoteFields(quoteFields) {
-  exactProjectKeys(quoteFields, PROJECT_QUOTE_FIELDS, "Datos de cotizacion invalidos");
+  if (!quoteFields || typeof quoteFields !== "object" || Array.isArray(quoteFields)
+      || Object.keys(quoteFields).some((key) => !PROJECT_QUOTE_FIELDS.has(key))
+      || [...PROJECT_QUOTE_REQUIRED_FIELDS].some((field) => !hasOwn(quoteFields, field))) {
+    throw new Error("Datos de cotizacion invalidos");
+  }
   const result = {};
-  for (const field of PROJECT_QUOTE_FIELDS) {
+  for (const field of PROJECT_QUOTE_REQUIRED_FIELDS) {
     result[field] = normalizedText(quoteFields[field], field, { allowEmpty: true, limit: 500 });
   }
   const currency = result.quote_currency.toUpperCase();
@@ -1337,7 +1347,26 @@ function projectQuoteFields(quoteFields) {
       || Number(result.descuento) > 100) {
     throw new Error("Descuento invalido");
   }
-  return { ...result, quote_currency: currency };
+  const template = normalizedText(
+    quoteFields.template ?? "official_2026_gdl",
+    "template",
+    {limit: 64},
+  );
+  if (!PROJECT_TEMPLATES.has(template)) throw new Error("Plantilla de cotizacion invalida");
+  const descriptionLanguage = normalizedText(
+    quoteFields.description_language ?? "es",
+    "description_language",
+    {limit: 2},
+  ).toLowerCase();
+  if (!PROJECT_DESCRIPTION_LANGUAGES.has(descriptionLanguage)) {
+    throw new Error("Idioma de descripciones invalido");
+  }
+  return {
+    ...result,
+    quote_currency: currency,
+    template,
+    description_language: descriptionLanguage,
+  };
 }
 
 function projectDisplayCache(snapshot) {

@@ -7,11 +7,28 @@ import json
 import pytest
 
 from project_fixtures import valid_project_payload
+from mobiliti_saas.quote_engine.project_model import normalize_project_payload
 from mobiliti_saas.quote_engine.project_quote import (
     ProjectComponent,
     project_context,
     project_quote_projection,
 )
+
+
+def test_project_quote_preferences_are_normalized_with_legacy_defaults():
+    legacy = valid_project_payload()
+    normalized_legacy = normalize_project_payload(legacy)
+    assert normalized_legacy["quote_fields"]["template"] == "official_2026_gdl"
+    assert normalized_legacy["quote_fields"]["description_language"] == "es"
+
+    selected = valid_project_payload()
+    selected["quote_fields"].update({
+        "template": "sunon_cdmx_v1c",
+        "description_language": "en",
+    })
+    normalized_selected = normalize_project_payload(selected)
+    assert normalized_selected["quote_fields"]["template"] == "sunon_cdmx_v1c"
+    assert normalized_selected["quote_fields"]["description_language"] == "en"
 
 
 def test_project_projection_keeps_physical_rows_and_exact_price_ratios():

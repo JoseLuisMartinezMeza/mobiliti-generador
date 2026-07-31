@@ -498,6 +498,52 @@ def test_project_serialization_round_trips_occurrence_graph():
     }
 
 
+def test_project_quote_preferences_round_trip_and_legacy_defaults():
+    result = run_js(r"""
+      const makeState = (quoteFields) => ({
+        quoteFields,
+        sections: [{id: "section-1", concept: "Reception"}],
+        lines: [model.createMixedCartLine({
+          catalog: "sunon",
+          identity: {internal_id: "sunon:chair", base_option_id: "", add_on_option_ids: []},
+          officialCode: "CHAIR-1",
+          provider: "Sunon",
+          quantity: "1",
+          quantityRules: {min: "1", step: "1", maxDecimals: 0,
+            max: "1000000", integer: true},
+          snapshot: {name: "Chair", code: "CHAIR-1", image_url: "", unit: "PZA",
+            availability: "", configuration: "", warnings: []},
+          sectionId: "section-1",
+          lineId: "11111111-1111-4111-8111-111111111111",
+        })],
+      });
+      const legacyFields = {
+        proyecto: "", cliente: "", correo: "", telefono: "", direccion: "",
+        razon_social: "", quote_currency: "MXN", descuento: "40",
+      };
+      const selected = model.serializeProject(makeState({
+        ...legacyFields,
+        template: "sunon_cdmx_v1c",
+        description_language: "en",
+      }));
+      const reopened = model.hydrateProject(selected);
+      const legacy = model.serializeProject(makeState(legacyFields));
+      const legacyReopened = model.hydrateProject(legacy);
+      console.log(JSON.stringify({
+        selectedPayload: selected.quote_fields,
+        selectedReopened: reopened.quoteFields,
+        legacyPayload: legacy.quote_fields,
+        legacyReopened: legacyReopened.quoteFields,
+      }));
+    """)
+    for fields in (result["selectedPayload"], result["selectedReopened"]):
+        assert fields["template"] == "sunon_cdmx_v1c"
+        assert fields["description_language"] == "en"
+    for fields in (result["legacyPayload"], result["legacyReopened"]):
+        assert fields["template"] == "official_2026_gdl"
+        assert fields["description_language"] == "es"
+
+
 def test_imported_serialization_uses_editable_code_and_provider():
     result = run_js(r"""
       const payload = model.serializeProject({

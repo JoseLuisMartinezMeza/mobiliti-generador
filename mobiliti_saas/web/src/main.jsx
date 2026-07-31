@@ -185,7 +185,8 @@ const EMPTY_MIXED_QUOTE = Object.freeze({
   razon_social: "",
   quote_currency: "MXN",
   descuento: "40",
-  template: "official_2026_gdl"
+  template: "official_2026_gdl",
+  description_language: "es"
 });
 
 function projectQuoteFieldsFromMixedQuote(quote) {
@@ -198,6 +199,8 @@ function projectQuoteFieldsFromMixedQuote(quote) {
     razon_social: quote.razon_social,
     quote_currency: quote.quote_currency,
     descuento: quote.descuento,
+    template: quote.template || "official_2026_gdl",
+    description_language: quote.description_language || "es",
   };
 }
 
@@ -2519,6 +2522,8 @@ function App() {
         razon_social: "",
         quote_currency: "MXN",
         descuento: "40",
+        template: "official_2026_gdl",
+        description_language: "es",
       },
       sections: createInitialMixedCartSections(),
       lines: [],
@@ -2989,7 +2994,7 @@ function App() {
     mixedCartSectionsRef.current = nextProject.sections;
     setMixedCart(nextProject.lines);
     setMixedCartSections(nextProject.sections);
-    setMixedQuote(nextProject.quoteFields);
+    setMixedQuote({...EMPTY_MIXED_QUOTE, ...nextProject.quoteFields});
     setActiveProject((current) => ({...current, name: nextProject.name}));
     setProjectChangeVersion((current) => current + 1);
   }

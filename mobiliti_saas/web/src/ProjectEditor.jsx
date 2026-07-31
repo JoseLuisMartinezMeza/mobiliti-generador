@@ -683,6 +683,36 @@ export default function ProjectEditor({
             />
             <small>El primer producto controla el descuento de todos los productos en Excel.</small>
           </label>
+          <label>
+            <span>Plantilla de cotización</span>
+            <select
+              value={quoteFields.template || "official_2026_gdl"}
+              disabled={disabled}
+              onChange={(event) => commit({
+                ...project,
+                quoteFields: {...quoteFields, template: event.target.value},
+              })}
+            >
+              <option value="official_2026_gdl">Formato Cotización 2026 GDL (1)</option>
+              <option value="sunon_cdmx_v1c">Formato Cotización Único - Sunon CDMX V1C</option>
+            </select>
+            <small>La plantilla seleccionada se usará al generar este Proyecto.</small>
+          </label>
+          <label>
+            <span>Idioma de descripciones</span>
+            <select
+              value={quoteFields.description_language || "es"}
+              disabled={disabled}
+              onChange={(event) => commit({
+                ...project,
+                quoteFields: {...quoteFields, description_language: event.target.value},
+              })}
+            >
+              <option value="es">Descripciones en español</option>
+              <option value="en">Descripciones en inglés</option>
+            </select>
+            <small>Se conserva con el Proyecto y se aplica al generar la cotización.</small>
+          </label>
         </form>
       )}
 
