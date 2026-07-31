@@ -123,6 +123,10 @@ CANONICAL_MOBILITI_SECTION_COUNT = 16
 CANONICAL_MOBILITI_BLOCK_HEIGHT = 35
 CANONICAL_MOBILITI_FIRST_SECTION_ROW = 13
 CANONICAL_MOBILITI_PRODUCT_CAPACITY = 33
+CDMX_LUMBRO_SHEET = "Cantidades Lumbro "
+CDMX_LUMBRO_FIRST_PRODUCT_ROW = 4
+CDMX_LUMBRO_MIN_END_ROW = 28
+CDMX_LUMBRO_LAST_COLUMN = 16
 _CELL = re.compile(r"(?P<column>[A-Z]{1,3})(?P<row>[1-9][0-9]*)\Z")
 _SAFE_IMAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,180}\Z")
 _DANGEROUS_IMPORTED_FUNCTIONS = frozenset(
@@ -489,6 +493,8 @@ class CotizacionSheetMutation:
     images: tuple[CotizacionProductImage, ...] = ()
     terms_row_delta: int = 0
     product_rows: tuple[int, ...] = ()
+    composer_variant: str = "official"
+    section_subtotal_rows: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.xml, bytes):
@@ -505,6 +511,20 @@ class CotizacionSheetMutation:
             type(item) is int and item >= 1 for item in self.product_rows
         ):
             raise TypeError("Filas de producto Cotizacion inválidas")
+        if self.composer_variant not in {"official", "sunon_cdmx_v1c"}:
+            raise ValueError("Variante de compositor Cotizacion inválida")
+        if (
+            not isinstance(self.section_subtotal_rows, tuple)
+            or not all(
+                type(item) is int and item >= 1
+                for item in self.section_subtotal_rows
+            )
+            or tuple(sorted(set(self.section_subtotal_rows)))
+            != self.section_subtotal_rows
+        ):
+            raise TypeError("Filas de subtotal por sección inválidas")
+        if self.composer_variant == "official" and self.section_subtotal_rows:
+            raise ValueError("La plantilla oficial no admite subtotales CDMX")
         object.__setattr__(
             self,
             "related_parts",
@@ -589,6 +609,7 @@ class CotizacionSheetEditor:
         *,
         metadata: CotizacionMetadata,
         sections: Sequence[CotizacionSection],
+        composer_variant: str = "official",
     ) -> CotizacionSheetMutation:
         """Reemplaza únicamente encabezado y bloques dinámicos A:J."""
 
@@ -596,6 +617,8 @@ class CotizacionSheetEditor:
             raise TypeError("Metadata de Cotizacion inválida")
         if isinstance(sections, (str, bytes)) or not isinstance(sections, Sequence):
             raise TypeError("Secciones Cotizacion inválidas")
+        if composer_variant not in {"official", "sunon_cdmx_v1c"}:
+            raise ValueError("Variante de compositor Cotizacion inválida")
         frozen_sections = tuple(sections)
         if not all(isinstance(section, CotizacionSection) for section in frozen_sections):
             raise TypeError("Secciones Cotizacion inválidas")
@@ -621,6 +644,21 @@ class CotizacionSheetEditor:
         subtotal_formula = _formula_text(total_templates[0], "H20")
         if None in {product_h_formula, product_j_formula, subtotal_formula}:
             raise ValueError("Fórmulas oficiales de Cotizacion incompletas")
+        section_subtotal_template: ET.Element | None = None
+        if composer_variant == "sunon_cdmx_v1c":
+            try:
+                section_subtotal_template = rows[18]
+            except KeyError as error:
+                raise ValueError(
+                    "Prototipo de subtotal por área CDMX ausente"
+                ) from error
+            if _formula_text(
+                section_subtotal_template,
+                "J18",
+            ) != "=SUM(J13:J15)":
+                raise ValueError(
+                    "Firma del subtotal por área CDMX inesperada"
+                )
         official_f = _require_cell(product_template, "F17")
         official_i = _require_cell(product_template, "I17")
         if (
@@ -637,6 +675,7 @@ class CotizacionSheetEditor:
         dynamic_rows: list[ET.Element] = []
         dynamic_merges: list[str] = []
         product_rows: list[int] = []
+        section_subtotal_rows: list[int] = []
         images: list[CotizacionProductImage] = []
         cursor = CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW
         first_discount_row: int | None = None
@@ -649,6 +688,7 @@ class CotizacionSheetEditor:
             dynamic_rows.append(header)
             dynamic_merges.append(f"A{cursor}:J{cursor}")
             cursor += 1
+            section_first_product_row = cursor
             for product in section.products:
                 target_row = cursor
                 if first_discount_row is None:
@@ -741,6 +781,30 @@ class CotizacionSheetEditor:
                         )
                     )
                 cursor += 1
+            if section_subtotal_template is not None:
+                section_subtotal_row = cursor
+                footer = _clone_row_region(
+                    section_subtotal_template,
+                    18,
+                    section_subtotal_row,
+                    last_column=10,
+                )
+                _set_inline_string(
+                    footer,
+                    f"I{section_subtotal_row}",
+                    "SUBTOTAL AREA",
+                )
+                _set_formula(
+                    footer,
+                    f"J{section_subtotal_row}",
+                    (
+                        f"=SUM(J{section_first_product_row}:"
+                        f"J{section_subtotal_row - 1})"
+                    ),
+                )
+                dynamic_rows.append(footer)
+                section_subtotal_rows.append(section_subtotal_row)
+                cursor += 1
 
         total_start = cursor
         total_delta = total_start - CANONICAL_COTIZACION_TOTAL_START
@@ -752,34 +816,46 @@ class CotizacionSheetEditor:
         total_row = CANONICAL_COTIZACION_TOTAL_ROW + total_delta
         if total_row + (CANONICAL_COTIZACION_PRINT_END - CANONICAL_COTIZACION_TOTAL_ROW) > XLSX_MAX_ROWS:
             raise ValueError("Cotizacion excede la capacidad física de XLSX")
-        translated_subtotal = translate_formula(
-            subtotal_formula,
-            origin="H20",
-            target=f"H{subtotal_row}",
-            sheet="Cotizacion",
-        )
-        subtotal_ranges = [
-            token
-            for token in _formula_range_tokens(translated_subtotal[1:])
-            if re.fullmatch(r"J[1-9][0-9]*:J[1-9][0-9]*", token)
-        ]
-        if len(subtotal_ranges) != 1:
-            raise ValueError("Rango subtotal oficial Cotizacion inesperado")
-        translated_subtotal = translate_formula(
-            subtotal_formula,
-            origin="H20",
-            target=f"H{subtotal_row}",
-            range_overrides={
-                subtotal_ranges[0]: f"J{product_rows[0]}:J{product_rows[-1]}"
-            },
-            sheet="Cotizacion",
-        )
-        _set_formula(
-            totals[0],
-            f"H{subtotal_row}",
-            translated_subtotal,
-            attributes={"t": "array", "ref": f"H{subtotal_row}"},
-        )
+        if composer_variant == "sunon_cdmx_v1c":
+            subtotal_references = ",".join(
+                f"J{row}" for row in section_subtotal_rows
+            )
+            if not subtotal_references:
+                raise ValueError("Cotizacion CDMX requiere subtotales por área")
+            _set_formula(
+                totals[0],
+                f"H{subtotal_row}",
+                f"=SUM({subtotal_references})",
+            )
+        else:
+            translated_subtotal = translate_formula(
+                subtotal_formula,
+                origin="H20",
+                target=f"H{subtotal_row}",
+                sheet="Cotizacion",
+            )
+            subtotal_ranges = [
+                token
+                for token in _formula_range_tokens(translated_subtotal[1:])
+                if re.fullmatch(r"J[1-9][0-9]*:J[1-9][0-9]*", token)
+            ]
+            if len(subtotal_ranges) != 1:
+                raise ValueError("Rango subtotal oficial Cotizacion inesperado")
+            translated_subtotal = translate_formula(
+                subtotal_formula,
+                origin="H20",
+                target=f"H{subtotal_row}",
+                range_overrides={
+                    subtotal_ranges[0]: f"J{product_rows[0]}:J{product_rows[-1]}"
+                },
+                sheet="Cotizacion",
+            )
+            _set_formula(
+                totals[0],
+                f"H{subtotal_row}",
+                translated_subtotal,
+                attributes={"t": "array", "ref": f"H{subtotal_row}"},
+            )
         for offset, row in enumerate(totals):
             target = total_start + offset
             if offset != 0:
@@ -830,6 +906,8 @@ class CotizacionSheetEditor:
             images=tuple(images),
             terms_row_delta=total_delta,
             product_rows=tuple(product_rows),
+            composer_variant=composer_variant,
+            section_subtotal_rows=tuple(section_subtotal_rows),
         )
 
     def _write_metadata(self, metadata: CotizacionMetadata) -> None:
@@ -913,7 +991,12 @@ def build_allowlisted_mutation(
 
     if not isinstance(base, XlsxPackage) or not isinstance(request, ComposeRequest):
         raise TypeError("Entrada del compositor inválida")
-    if set(request.contract.mutable_sheets) != {"Mobiliti", "Cotizacion"}:
+    mutable_sheets = frozenset(request.contract.mutable_sheets)
+    official_mutable_sheets = frozenset({"Mobiliti", "Cotizacion"})
+    cdmx_mutable_sheets = frozenset(
+        {"Mobiliti", "Cotizacion", CDMX_LUMBRO_SHEET}
+    )
+    if mutable_sheets not in {official_mutable_sheets, cdmx_mutable_sheets}:
         raise ValueError("Contrato de hojas mutables incompatible")
     _validate_declared_sheet_surfaces(base, request)
 
@@ -932,6 +1015,17 @@ def build_allowlisted_mutation(
             "Cotizacion",
         ),
     }
+    cantidades_lumbro_end_row: int | None = None
+    cantidades_lumbro_part: str | None = None
+    if CDMX_LUMBRO_SHEET in mutable_sheets:
+        cantidades_lumbro_part = base.sheet_part(CDMX_LUMBRO_SHEET)
+        cantidades_lumbro_xml, cantidades_lumbro_end_row = (
+            _build_cantidades_lumbro_sheet(
+                base.parts[cantidades_lumbro_part],
+                _count_lumbro_items(request.mobiliti),
+            )
+        )
+        replacements[cantidades_lumbro_part] = cantidades_lumbro_xml
     mobiliti_drawing_replacements = _relocate_mobiliti_auxiliary_drawing(
         base,
         request.mobiliti.row_map,
@@ -981,6 +1075,16 @@ def build_allowlisted_mutation(
             extra_content_types=cotizacion.related_content_types,
         )
     )
+    if cantidades_lumbro_end_row is not None:
+        workbook_xml = _set_sheet_print_area(
+            workbook_xml,
+            base=base,
+            sheet_name=CDMX_LUMBRO_SHEET,
+            first_column="H",
+            first_row=1,
+            last_column="P",
+            last_row=cantidades_lumbro_end_row,
+        )
     replacements["xl/workbook.xml"] = workbook_xml
     replacements["xl/_rels/workbook.xml.rels"] = workbook_rels
     replacements["[Content_Types].xml"] = content_types
@@ -1007,6 +1111,8 @@ def build_allowlisted_mutation(
         *mobiliti_drawing_replacements,
         *validated_addition_replacements,
     }
+    if cantidades_lumbro_part is not None:
+        fixed_replacements.add(cantidades_lumbro_part)
     if calc_chain_part is not None:
         fixed_replacements.add(calc_chain_part)
     unexpected_replacements = set(replacements) - fixed_replacements
@@ -1281,6 +1387,8 @@ def merge_cotizacion_product_images(
         images=mutation.images,
         terms_row_delta=mutation.terms_row_delta,
         product_rows=mutation.product_rows,
+        composer_variant=mutation.composer_variant,
+        section_subtotal_rows=mutation.section_subtotal_rows,
     )
 
 
@@ -1423,6 +1531,127 @@ def _validate_declared_sheet_surfaces(
     )
 
 
+def _count_lumbro_items(mutation: MobilitiSheetMutation) -> int:
+    """Cuenta únicamente renglones reales cuyo proveedor pertenece a Lumbro."""
+
+    if not isinstance(mutation, MobilitiSheetMutation):
+        raise TypeError("Mutación Mobiliti inválida para Cantidades Lumbro")
+    root = _worksheet_root(mutation.xml, "Mobiliti")
+    count = 0
+    for row in mutation.row_map.item_rows:
+        cell = _cell_in_root(root, f"F{row}")
+        if cell is None:
+            continue
+        if cell.attrib.get("t") != "inlineStr":
+            raise ValueError(f"Proveedor Mobiliti!F{row} no es texto canónico")
+        value = "".join(
+            node.text or ""
+            for node in cell.findall(f".//{{{MAIN}}}t")
+        )
+        if "lumbro" in value.casefold():
+            count += 1
+    return count
+
+
+def _build_cantidades_lumbro_sheet(
+    payload: bytes,
+    item_count: int,
+) -> tuple[bytes, int]:
+    """Ajusta el lienzo del reporte Lumbro sin duplicar fórmulas de negocio."""
+
+    if not isinstance(payload, bytes):
+        raise TypeError("Worksheet Cantidades Lumbro inválido")
+    if type(item_count) is not int or item_count < 0:
+        raise ValueError("Cantidad de productos Lumbro inválida")
+    root, prefixes = _parse_xml_document(
+        payload,
+        "Worksheet Cantidades Lumbro inválido",
+    )
+    if root.tag != f"{{{MAIN}}}worksheet":
+        raise ValueError("Parte Cantidades Lumbro no es worksheet")
+    sheet_data = root.find(f"{{{MAIN}}}sheetData")
+    if sheet_data is None:
+        raise ValueError("Cantidades Lumbro no contiene sheetData")
+    rows = {
+        int(row.attrib["r"]): row
+        for row in sheet_data.findall(f"{{{MAIN}}}row")
+        if row.attrib.get("r", "").isdigit()
+    }
+    source = rows.get(CDMX_LUMBRO_FIRST_PRODUCT_ROW)
+    if source is None:
+        raise ValueError("Fila modelo Cantidades Lumbro ausente")
+
+    end_row = max(
+        CDMX_LUMBRO_MIN_END_ROW,
+        CDMX_LUMBRO_FIRST_PRODUCT_ROW - 1 + item_count,
+    )
+    for row in list(sheet_data.findall(f"{{{MAIN}}}row")):
+        row_number = int(row.attrib.get("r", "0") or "0")
+        if row_number > CDMX_LUMBRO_FIRST_PRODUCT_ROW:
+            sheet_data.remove(row)
+    for target_row in range(CDMX_LUMBRO_FIRST_PRODUCT_ROW + 1, end_row + 1):
+        clone = _clone_row_region(
+            source,
+            CDMX_LUMBRO_FIRST_PRODUCT_ROW,
+            target_row,
+            last_column=CDMX_LUMBRO_LAST_COLUMN,
+        )
+        for cell in clone.findall(f"{{{MAIN}}}c"):
+            _clear_cell_value(cell)
+        sheet_data.append(clone)
+
+    dimension = root.find(f"{{{MAIN}}}dimension")
+    if dimension is None:
+        dimension = ET.Element(f"{{{MAIN}}}dimension")
+        root.insert(0, dimension)
+    dimension.attrib["ref"] = f"A1:P{end_row}"
+    return _xml_bytes(root, prefixes), end_row
+
+
+def _set_sheet_print_area(
+    workbook_payload: bytes,
+    *,
+    base: XlsxPackage,
+    sheet_name: str,
+    first_column: str,
+    first_row: int,
+    last_column: str,
+    last_row: int,
+) -> bytes:
+    """Actualiza un Print_Area predeclarado para una hoja del template."""
+
+    if not isinstance(base, XlsxPackage):
+        raise TypeError("Paquete base inválido para Print_Area")
+    for column in (first_column, last_column):
+        if re.fullmatch(r"[A-Z]{1,3}", column) is None:
+            raise ValueError("Columna de Print_Area inválida")
+    if min(first_row, last_row) < 1 or first_row > last_row:
+        raise ValueError("Filas de Print_Area inválidas")
+    root, prefixes = _parse_xml_document(
+        workbook_payload,
+        "Workbook inválido al ajustar Print_Area",
+    )
+    defined_names = root.find(f"{{{MAIN}}}definedNames")
+    if defined_names is None:
+        raise ValueError("Workbook sin nombres definidos")
+    local_sheet_id = str(base.sheet_index(sheet_name))
+    matches = [
+        node
+        for node in defined_names.findall(f"{{{MAIN}}}definedName")
+        if node.attrib.get("name") == "_xlnm.Print_Area"
+        and node.attrib.get("localSheetId") == local_sheet_id
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Print_Area de {sheet_name.rstrip()} no está declarado exactamente una vez"
+        )
+    matches[0].text = (
+        f"'{sheet_name}'!${first_column}${first_row}:"
+        f"${last_column}${last_row}"
+    )
+    return _xml_bytes(root, prefixes)
+
+
 def _validate_exact_mobiliti_surface(
     base: XlsxPackage,
     mutation: MobilitiSheetMutation,
@@ -1531,6 +1760,18 @@ def _cotizacion_price_terms_from_formula(
     return result
 
 
+def _cotizacion_composer_variant(base: XlsxPackage) -> str:
+    """Selecciona la única variante permitida a partir del template firmado."""
+
+    if not isinstance(base, XlsxPackage):
+        raise TypeError("Paquete base Cotizacion inválido")
+    try:
+        base.sheet_part(CDMX_LUMBRO_SHEET)
+    except KeyError:
+        return "official"
+    return "sunon_cdmx_v1c"
+
+
 def _validate_exact_cotizacion_surface(
     base: XlsxPackage,
     mutation: CotizacionSheetMutation,
@@ -1559,6 +1800,23 @@ def _validate_exact_cotizacion_surface(
     subtotal_row = mutation.total_row - CANONICAL_COTIZACION_TOTAL_SPAN
     if subtotal_row <= CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW:
         raise ValueError("Cotizacion no cumple el contrato exacto de totales")
+    expected_variant = _cotizacion_composer_variant(base)
+    if mutation.composer_variant != expected_variant:
+        raise ValueError("Cotizacion no cumple la variante exacta del template")
+    section_subtotal_rows = mutation.section_subtotal_rows
+    if (
+        any(
+            row <= CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW
+            or row >= subtotal_row
+            for row in section_subtotal_rows
+        )
+        or set(section_subtotal_rows) & set(product_rows)
+        or (
+            expected_variant == "sunon_cdmx_v1c"
+            and not section_subtotal_rows
+        )
+    ):
+        raise ValueError("Cotizacion no cumple los subtotales exactos por sección")
     if any(
         row <= CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW or row >= subtotal_row
         for row in product_rows
@@ -1583,15 +1841,53 @@ def _validate_exact_cotizacion_surface(
     sections: list[CotizacionSection] = []
     current_title: str | None = None
     current_products: list[CotizacionProduct] = []
+    current_product_rows: list[int] = []
     product_set = set(product_rows)
+    section_subtotal_set = set(section_subtotal_rows)
     first_discount: Decimal | None = None
     mobiliti_rows: list[int] = []
     product_sequence = 0
     for worksheet_row in range(CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW, subtotal_row):
+        if worksheet_row in section_subtotal_set:
+            if (
+                expected_variant != "sunon_cdmx_v1c"
+                or current_title is None
+                or not current_products
+                or not current_product_rows
+            ):
+                raise ValueError(
+                    "Cotizacion no cumple los subtotales exactos por sección"
+                )
+            if _exact_inline_text(
+                _require_root_cell(candidate, f"I{worksheet_row}"),
+                f"I{worksheet_row}",
+            ) != "SUBTOTAL AREA":
+                raise ValueError(
+                    "Cotizacion no cumple los subtotales exactos por sección"
+                )
+            expected_section_formula = (
+                f"SUM(J{current_product_rows[0]}:J{current_product_rows[-1]})"
+            )
+            if _exact_formula_text(
+                _require_root_cell(candidate, f"J{worksheet_row}"),
+                f"J{worksheet_row}",
+            ) != expected_section_formula:
+                raise ValueError(
+                    "Cotizacion no cumple los subtotales exactos por sección"
+                )
+            sections.append(CotizacionSection(current_title, tuple(current_products)))
+            current_title = None
+            current_products = []
+            current_product_rows = []
+            continue
         if worksheet_row not in product_set:
             if current_title is not None:
                 if not current_products:
                     raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
+                if expected_variant == "sunon_cdmx_v1c":
+                    raise ValueError(
+                        "Cotizacion CDMX omite el subtotal de una sección"
+                    )
                 sections.append(
                     CotizacionSection(current_title, tuple(current_products))
                 )
@@ -1600,6 +1896,7 @@ def _validate_exact_cotizacion_surface(
                 f"A{worksheet_row}",
             )
             current_products = []
+            current_product_rows = []
             continue
         if current_title is None:
             raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
@@ -1693,9 +1990,21 @@ def _validate_exact_cotizacion_surface(
                 price_terms=price_terms,
             )
         )
-    if current_title is None or not current_products:
-        raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
-    sections.append(CotizacionSection(current_title, tuple(current_products)))
+        current_product_rows.append(worksheet_row)
+    if expected_variant == "sunon_cdmx_v1c":
+        if (
+            current_title is not None
+            or current_products
+            or current_product_rows
+            or len(sections) != len(section_subtotal_rows)
+        ):
+            raise ValueError(
+                "Cotizacion no cumple los subtotales exactos por sección"
+            )
+    else:
+        if current_title is None or not current_products:
+            raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
+        sections.append(CotizacionSection(current_title, tuple(current_products)))
     if project_composition:
         mobiliti_contract_invalid = (
             len(mobiliti_rows) != len(set(mobiliti_rows))
@@ -1708,11 +2017,17 @@ def _validate_exact_cotizacion_surface(
 
     expected = CotizacionSheetEditor.from_xml(
         base.parts[base.sheet_part("Cotizacion")]
-    ).compose(metadata=metadata, sections=tuple(sections))
+    ).compose(
+        metadata=metadata,
+        sections=tuple(sections),
+        composer_variant=expected_variant,
+    )
     if (
         expected.total_row != mutation.total_row
         or expected.terms_row_delta != mutation.terms_row_delta
         or expected.product_rows != mutation.product_rows
+        or expected.composer_variant != mutation.composer_variant
+        or expected.section_subtotal_rows != mutation.section_subtotal_rows
     ):
         raise ValueError("Cotizacion no cumple el contrato exacto de layout")
     expected_root = _worksheet_root(expected.xml, "Cotizacion")
@@ -2674,6 +2989,9 @@ def _cotizacion_calc_metadata_source(
     column = match.group("column")
     row = int(match.group("row"))
     editable_column = column_index_from_string(column) <= 10
+    if editable_column and row in mutation.section_subtotal_rows:
+        template = f"{column}18"
+        return template if template in source_metadata else None
     if editable_column and row in mutation.product_rows:
         template = f"{column}{CANONICAL_COTIZACION_FIRST_PRODUCT_ROW}"
         return template if template in source_metadata else None

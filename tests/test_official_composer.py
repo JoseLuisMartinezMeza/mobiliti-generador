@@ -82,6 +82,13 @@ OFFICIAL_TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 Oficial.xlsx"
 )
+CDMX_TEMPLATE = (
+    ROOT
+    / "mobiliti_saas"
+    / "worker"
+    / "templates"
+    / "Formato Cotizacion Sunon CDMX V1C.xlsx"
+)
 CONTRACT_PATH = (
     ROOT
     / "mobiliti_saas"
@@ -701,6 +708,68 @@ def test_composer_handles_twenty_sections_and_one_hundred_product_section(
     assert _cell_formula(package, "Estrategia Comercial ", "D59") == (
         f"=Cotizacion!H{request.cotizacion.total_row}"
     )
+
+
+def test_cdmx_composer_emits_section_subtotals_without_double_counting() -> None:
+    base = XlsxPackage.read(CDMX_TEMPLATE)
+    sections = (
+        CotizacionSection(
+            title="Recepción",
+            products=(
+                CotizacionProduct(
+                    item_key="recepcion-1",
+                    name="Producto 1",
+                    description="Descripción 1",
+                    dimensions="60 x 60 cm",
+                    quantity=Decimal("1"),
+                    mobiliti_row=14,
+                    discount=Decimal("0.40"),
+                ),
+                CotizacionProduct(
+                    item_key="recepcion-2",
+                    name="Producto 2",
+                    description="Descripción 2",
+                    dimensions="70 x 70 cm",
+                    quantity=Decimal("2"),
+                    mobiliti_row=15,
+                    discount=Decimal("0.40"),
+                ),
+            ),
+        ),
+        CotizacionSection(
+            title="Operativos",
+            products=(
+                CotizacionProduct(
+                    item_key="operativos-1",
+                    name="Producto 3",
+                    description="Descripción 3",
+                    dimensions="80 x 80 cm",
+                    quantity=Decimal("3"),
+                    mobiliti_row=49,
+                    discount=Decimal("0.40"),
+                ),
+            ),
+        ),
+    )
+
+    mutation = CotizacionSheetEditor.from_xml(
+        base.parts[base.sheet_part("Cotizacion")]
+    ).compose(
+        metadata=CotizacionMetadata(project="Proyecto CDMX"),
+        sections=sections,
+        composer_variant="sunon_cdmx_v1c",
+    )
+    worksheet = ET.fromstring(mutation.xml)
+
+    assert mutation.section_subtotal_rows == (19, 22)
+    assert _cell_scalar(worksheet, "I19") == "SUBTOTAL AREA"
+    assert _cell_scalar(worksheet, "I22") == "SUBTOTAL AREA"
+    assert _cell_formula_in_root(worksheet, "J19") == "=SUM(J17:J18)"
+    assert _cell_formula_in_root(worksheet, "J22") == "=SUM(J21:J21)"
+    assert _cell_formula_in_root(worksheet, "H23") == "=SUM(J19,J22)"
+    assert "J17" not in _cell_formula_in_root(worksheet, "H23")
+    assert "J18" not in _cell_formula_in_root(worksheet, "H23")
+    assert "J21" not in _cell_formula_in_root(worksheet, "H23")
 
 
 def test_composer_moves_only_mobiliti_auxiliary_shapes_after_section_sixteen(

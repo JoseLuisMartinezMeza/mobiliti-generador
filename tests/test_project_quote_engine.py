@@ -10,6 +10,9 @@ from openpyxl import load_workbook
 from PIL import Image, ImageDraw
 
 from mobiliti_saas.quote_engine import engine, generate_quote
+from mobiliti_saas.quote_engine.image_processing import (
+    ImageSegmentationUnavailableError,
+)
 from mobiliti_saas.quote_engine.mixed_catalog import (
     build_mixed_catalog_cart_payload,
     create_mixed_catalog_quotation_workbook,
@@ -582,6 +585,36 @@ def test_official_image_improvement_falls_back_to_original_invalid_bytes():
         (line,),
         {"image_provider": "pillow", "image_background": "white"},
     ) == (line,)
+
+
+def test_official_image_improvement_does_not_hide_missing_segmentation_runtime(
+    monkeypatch,
+):
+    line = _line(
+        PRINCIPAL_ID,
+        description="Importado",
+        quantity="1",
+        origin="imported",
+        image_content=b"valid-placeholder",
+        image_content_type="image/png",
+    )
+
+    def unavailable_improve(*_args, **_kwargs):
+        raise ImageSegmentationUnavailableError(
+            "La segmentacion local de imagenes no esta disponible"
+        )
+
+    monkeypatch.setattr(
+        engine,
+        "improve_product_image_bytes",
+        unavailable_improve,
+    )
+
+    with pytest.raises(ImageSegmentationUnavailableError):
+        engine._improve_official_cotizacion_images(
+            (line,),
+            {"image_provider": "pillow", "image_background": "white"},
+        )
 
 
 def test_project_projection_keeps_generated_lumbro_as_independent_line():

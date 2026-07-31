@@ -89,13 +89,18 @@ from mobiliti_saas.quote_engine.quotation_import import (  # noqa: E402
     build_import_manifest,
     validate_import_manifest,
 )
-from mobiliti_saas.quote_engine.engine import (  # noqa: E402
-    OFFICIAL_TEMPLATE_CONTRACT_PATH,
-    _fetch_latest_usd_mxn_row,
+from mobiliti_saas.quote_engine.engine import _fetch_latest_usd_mxn_row  # noqa: E402
+from mobiliti_saas.quote_engine.template_profiles import (  # noqa: E402
+    DEFAULT_TEMPLATE_PROFILE_ID,
+    lookup_template_profile,
 )
-from mobiliti_saas.quote_engine.official_template import (  # noqa: E402
-    load_template_contract,
-)
+
+
+def _canonical_template_id(value: object | None) -> str:
+    try:
+        return lookup_template_profile(value).id
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -4614,8 +4619,8 @@ def _validate_project_import_preview_png(content: object) -> bytes | None:
     return content
 
 
-_PROJECT_QUOTE_FIELDS = frozenset({"expected_revision"})
-_PROJECT_QUOTE_TEMPLATE = "Formato Cotizacion 2026 GDL (1).xlsx"
+_PROJECT_QUOTE_FIELDS = frozenset({"expected_revision", "template"})
+_PROJECT_QUOTE_TEMPLATE = DEFAULT_TEMPLATE_PROFILE_ID
 
 
 def _project_normalized_payload(value: dict) -> dict:
@@ -5084,6 +5089,7 @@ def projects_quote(
 ):
     _require_active_subscription(current_user["id"])
     _project_unexpected_fields(body, _PROJECT_QUOTE_FIELDS)
+    template = _canonical_template_id(body.get("template"))
     project_id = _project_uuid(project_id)
     project = _project_for_current_user(project_id, current_user["id"])
     expected_revision = _project_expected_revision(body.get("expected_revision"))
@@ -5147,9 +5153,7 @@ def projects_quote(
         **quote_fields,
         "image_provider": "pillow",
     })
-    contract_hash = load_template_contract(
-        OFFICIAL_TEMPLATE_CONTRACT_PATH
-    ).sha256
+    contract_hash = lookup_template_profile(template).template_contract_sha256
     metadata.update({
         "source_type": "mixed_catalog_cart",
         "original_filename": f"project-{project_id}-r{expected_revision}.json",
@@ -5204,7 +5208,7 @@ def projects_quote(
         job = _enqueue_mixed_payload(
             current_user=current_user,
             cart_payload=cart_payload,
-            template=_PROJECT_QUOTE_TEMPLATE,
+            template=template,
             metadata=metadata,
             import_job=None,
             import_source_bytes=import_source_bytes,
@@ -6286,9 +6290,7 @@ async def mixed_catalog_quote(
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
 
-    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
+    template = _canonical_template_id(body.get("template"))
     _enforce_active_quote_limit(
         current_user["id"],
         exclude_job_id=import_job["id"] if import_job is not None else None,
@@ -6386,9 +6388,7 @@ async def supplier_quote(
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
 
-    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
+    template = _canonical_template_id(body.get("template"))
     _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
     input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
@@ -6588,9 +6588,7 @@ def tarkett_quote(body: dict, current_user: dict = Depends(get_current_user)):
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
 
-    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
+    template = _canonical_template_id(body.get("template"))
 
     _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
@@ -6668,9 +6666,7 @@ def offiho_quote(body: dict, current_user: dict = Depends(get_current_user)):
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
 
-    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
+    template = _canonical_template_id(body.get("template"))
 
     _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
@@ -6812,6 +6808,7 @@ def quotation_import_preview(job_id: str, current_user: dict = Depends(get_curre
     except RuntimeError:
         raise HTTPException(status_code=503, detail="Servicio de cotizaciones no disponible") from None
 
+    template = _canonical_template_id(job.get("template"))
     input_path = str(job.get("input_path") or "").strip().lstrip("/")
     metadata = _quote_job_metadata(job)
     filename = metadata.get("original_filename")
@@ -6845,6 +6842,7 @@ def quotation_import_preview(job_id: str, current_user: dict = Depends(get_curre
         updated = db_update_quote_job(
             job_id,
             {
+                "template": template,
                 "metadata": {
                     **metadata,
                     "import_manifest_path": manifest_path,
@@ -6889,7 +6887,7 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
 
     filename = str(body.get("filename", "input.xlsx")).strip()
     file_size = int(body.get("size", 0) or 0)
-    template = str(body.get("template", "Formato Cotizacion 2026 GDL (1).xlsx")).strip()
+    template = _canonical_template_id(body.get("template"))
 
     input_extension = _quote_input_extension(filename)
     if file_size <= 0:
@@ -7005,6 +7003,7 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
     if job["status"] not in {"draft", "failed"}:
         raise HTTPException(status_code=409, detail="La cotizacion ya fue enviada")
     _require_retryable_failed_quote(job)
+    template = _canonical_template_id(body.get("template") or job.get("template"))
 
     metadata = {**(job.get("metadata") or {}), **_validate_metadata(body)}
     assigned_quote_number = _next_quote_number_for_user(current_user)
@@ -7012,10 +7011,6 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
         metadata["cotizacion"] = assigned_quote_number
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
-    template = str(body.get("template") or job.get("template") or "").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
-
     _enforce_active_quote_limit(current_user["id"], exclude_job_id=job_id)
     try:
         updated = db_update_quote_job(
@@ -7050,6 +7045,7 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
     if job["status"] != "failed":
         raise HTTPException(status_code=409, detail="Solo se pueden reintentar cotizaciones fallidas")
     _require_retryable_failed_quote(job)
+    template = _canonical_template_id(job.get("template"))
 
     _enforce_active_quote_limit(current_user["id"], exclude_job_id=job_id)
     try:
@@ -7057,6 +7053,7 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
             job_id,
             {
                 "status": "queued",
+                "template": template,
                 "error_message": None,
                 "output_path": None,
                 "completed_at": None,

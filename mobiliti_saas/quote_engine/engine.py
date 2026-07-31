@@ -75,6 +75,7 @@ from .ooxml_worksheet import (
     build_mobiliti_sheet,
 )
 from .official_composer import (
+    CDMX_LUMBRO_SHEET,
     ComposeRequest,
     CotizacionImageSource,
     CotizacionMetadata,
@@ -116,6 +117,7 @@ from .sunon_image_provider import (
     normalize_sunon_code,
     sunon_lookup_enabled,
 )
+from .template_profiles import available_template_profiles
 
 
 _PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -251,6 +253,26 @@ OFFICIAL_TEMPLATE_CONTRACT_PATH = (
     / "templates"
     / "formato-cotizacion-2026-oficial.contract.json"
 )
+
+
+def _contract_path_for_template(template_path: str | Path) -> Path:
+    """Empareja activos registrados con su contrato sin aceptar rutas cliente."""
+
+    resolved_template = Path(template_path).resolve(strict=True)
+    template_hash = _official_file_hash(resolved_template)
+    for profile in available_template_profiles():
+        try:
+            registered_template = profile.template_path.resolve(strict=True)
+            registered_contract = profile.contract_path.resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        if resolved_template == registered_template:
+            return registered_contract
+        if load_template_contract(registered_contract).sha256 == template_hash:
+            return registered_contract
+    return OFFICIAL_TEMPLATE_CONTRACT_PATH.resolve(strict=True)
+
+
 _ARGUMENT_OMITTED = object()
 _XDR_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 _DRAWING_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -3194,6 +3216,12 @@ def _build_official_cotizacion(
     metadata: dict[str, Any],
     quotation_rows: Mapping[str, int],
 ):
+    try:
+        base.sheet_part(CDMX_LUMBRO_SHEET)
+    except KeyError:
+        composer_variant = "official"
+    else:
+        composer_variant = "sunon_cdmx_v1c"
     cotizacion_lines = _improve_official_cotizacion_images(lines, metadata)
     sections = _project_cotizacion_sections(
         cotizacion_lines,
@@ -3214,6 +3242,7 @@ def _build_official_cotizacion(
             business_name=safe_excel_text(metadata.get("razon_social", "")),
         ),
         sections=sections,
+        composer_variant=composer_variant,
     )
     return mutation, sections
 
@@ -5081,7 +5110,9 @@ def generate_quote(
         _validate_mixed_catalog_metadata(items, metadata)
     else:
         _validate_authoritative_handoff_metadata(items, metadata)
-    contract = load_template_contract(OFFICIAL_TEMPLATE_CONTRACT_PATH)
+    contract = load_template_contract(
+        _contract_path_for_template(official_template)
+    )
     base = XlsxPackage.read(official_template)
     lumbro_prices = _load_lumbro_prices(official_template)
     if original_quotation_path is _ARGUMENT_OMITTED:

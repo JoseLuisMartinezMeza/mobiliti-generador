@@ -4,6 +4,15 @@ from .classification import classify_product_name, load_category_dictionary
 from .descriptions import build_product_description, normalize_description_language
 from .engine import generate_quote
 from .parser import QuoteItem, detect_columns, read_items
+from .template_profiles import (
+    DEFAULT_TEMPLATE_PROFILE_ID,
+    OFFICIAL_TEMPLATE_PROFILE_ID,
+    SUNON_CDMX_TEMPLATE_PROFILE_ID,
+    TemplateProfile,
+    available_template_profiles,
+    lookup_template_profile,
+    resolve_template_profile,
+)
 from .project_model import (
     CATALOG_LINE_FIELDS,
     COMMON_LINE_FIELDS,
@@ -28,6 +37,9 @@ from .project_quote import (
 
 __all__ = [
     "QuoteItem",
+    "DEFAULT_TEMPLATE_PROFILE_ID",
+    "OFFICIAL_TEMPLATE_PROFILE_ID",
+    "SUNON_CDMX_TEMPLATE_PROFILE_ID",
     "CATALOG_LINE_FIELDS",
     "COMMON_LINE_FIELDS",
     "COMPLEMENT_QUANTITY_MODES",
@@ -39,11 +51,14 @@ __all__ = [
     "ProjectComposition",
     "ProjectPriceTerm",
     "ProjectQuoteProjection",
+    "TemplateProfile",
+    "available_template_profiles",
     "build_product_description",
     "classify_product_name",
     "detect_columns",
     "generate_quote",
     "load_category_dictionary",
+    "lookup_template_profile",
     "normalize_description_language",
     "normalize_project_payload",
     "normalized_match_key",
@@ -52,4 +67,5 @@ __all__ = [
     "project_quote_projection",
     "project_summary",
     "read_items",
+    "resolve_template_profile",
 ]

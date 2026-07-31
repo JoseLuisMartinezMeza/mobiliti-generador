@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine.image_processing import (  # noqa: E402
+    ImageSegmentationUnavailableError,
     improve_image_map,
     improve_product_image,
     improve_product_image_bytes,
@@ -224,6 +225,36 @@ def test_imported_shadow_cleanup_rejects_unsafe_soft_mask(monkeypatch):
     assert rgb.size == (40, 40)
     assert rgb.getpixel((0, 0)) == source_color
     assert rgb.getpixel((20, 20)) == source_color
+
+
+def test_imported_shadow_cleanup_fails_closed_when_segmentation_runtime_is_missing(
+    monkeypatch,
+):
+    image = Image.new("RGB", (40, 40), "white")
+    ImageDraw.Draw(image).rectangle((10, 10, 30, 30), fill="black")
+    stream = BytesIO()
+    image.save(stream, "PNG")
+
+    def unavailable_segmenter(_source):
+        raise ModuleNotFoundError("No module named 'rembg'")
+
+    monkeypatch.setattr(
+        image_processing,
+        "_segment_product_locally",
+        unavailable_segmenter,
+    )
+
+    with pytest.raises(
+        ImageSegmentationUnavailableError,
+        match="segmentacion local de imagenes no esta disponible",
+    ):
+        improve_product_image_bytes(
+            stream.getvalue(),
+            "image/png",
+            background="white",
+            min_size=1,
+            remove_shadow=True,
+        )
 
 
 def test_shadow_removal_is_opt_in(monkeypatch):

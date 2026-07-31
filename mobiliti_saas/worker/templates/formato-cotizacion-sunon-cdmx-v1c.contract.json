@@ -1,0 +1,54 @@
+{
+  "sha256": "4c150193ce0c59de68f1091741d82b0ddf3fc439c1966ca31f35d92a336a0247",
+  "defined_name_count": 32,
+  "external_link_parts": 12,
+  "spec_formula_count": 1314,
+  "sheet_states": {
+    "Cotizacion": "visible",
+    "Mobiliti": "visible",
+    "Estrategia Comercial ": "visible",
+    "Fletes": "visible",
+    "Cantidades Lumbro ": "visible",
+    "Proveedores": "hidden",
+    "SPEC LAMINADO JOME": "hidden",
+    "SPEC-GUIDE-LUMBRO": "hidden",
+    "SPEC-GUIDE ESTRUCTURAS": "hidden",
+    "Spec Guide Estructura ": "hidden",
+    "SPEC-GUIDE-CR GLOBAL": "hidden",
+    "Meses Sin Intereses Tarjetas": "hidden"
+  },
+  "mutable_sheets": [
+    "Mobiliti",
+    "Cotizacion",
+    "Cantidades Lumbro "
+  ],
+  "mutable_cells": {
+    "Mobiliti": [
+      "K4",
+      "K8"
+    ],
+    "Fletes": [
+      "D19"
+    ],
+    "Estrategia Comercial ": [
+      "B7:C37",
+      "D59"
+    ]
+  },
+  "mutable_drawing_regions": {
+    "Cotizacion": [
+      "product-area"
+    ]
+  },
+  "addable_sheets": [
+    "Quotation",
+    "Quotation_Data"
+  ],
+  "protected_prefixes": [
+    "xl/externalLinks/",
+    "xl/richData/"
+  ],
+  "translated_parts": [
+    "xl/calcChain.xml"
+  ]
+}

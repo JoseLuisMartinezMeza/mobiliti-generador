@@ -22,6 +22,10 @@ from .ai_image_provider import (
 )
 
 
+class ImageSegmentationUnavailableError(RuntimeError):
+    """El motor local requerido para limpiar imágenes no está disponible."""
+
+
 class _ProtectionMask:
     def __init__(self, image: Image.Image | None = None) -> None:
         self.image = image
@@ -275,7 +279,9 @@ def improve_product_image_bytes(
         if remove_shadow:
             try:
                 processed = _process_imported_image_without_shadow(image, options)
-            except Exception:
+            except ImageSegmentationUnavailableError:
+                raise
+            except ValueError:
                 # Una máscara insegura nunca debe bloquear la cotización ni pasar
                 # por otra limpieza que pueda borrar superficies claras reales.
                 processed = image.convert("RGBA")
@@ -317,7 +323,12 @@ def _process_imported_image_without_shadow(
     source = _downscale_if_needed(source, MAX_WORKING_IMAGE_EDGE)
     # El alfa importado puede incluir la sombra de piso; no es una autoridad de
     # primer plano. Todas las imágenes de este flujo deben obtener una máscara.
-    segmented = _segment_product_locally(source)
+    try:
+        segmented = _segment_product_locally(source)
+    except Exception as exc:
+        raise ImageSegmentationUnavailableError(
+            "La segmentacion local de imagenes no esta disponible"
+        ) from exc
 
     alpha = segmented.convert("RGBA").getchannel("A")
     if not _valid_product_mask(alpha):

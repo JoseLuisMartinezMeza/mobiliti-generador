@@ -2,7 +2,6 @@ import hashlib
 import json
 from copy import deepcopy
 from datetime import date, timedelta
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -316,18 +315,30 @@ def test_project_quote_requires_active_owned_project_and_exact_body(project_clie
     assert jobs == []
 
 
-def test_project_quote_uses_official_template_contract_hash(project_client):
+@pytest.mark.parametrize("template_id", [None, "sunon_cdmx_v1c"])
+def test_project_quote_uses_selected_template_contract_hash(
+    project_client,
+    template_id,
+):
     client, headers, project, _storage, _jobs, _events = project_client
+    body = {"expected_revision": project["revision"]}
+    if template_id is not None:
+        body["template"] = template_id
 
     response = client.post(
         f"/projects/{project['id']}/quote",
         headers=headers,
-        json={"expected_revision": project["revision"]},
+        json=body,
     )
 
-    contract = json.loads(Path(index.OFFICIAL_TEMPLATE_CONTRACT_PATH).read_text("utf-8"))
+    profile = index.lookup_template_profile(template_id)
+    contract = json.loads(profile.contract_path.read_text("utf-8"))
     assert response.status_code == 202, response.json()
-    assert response.json()["job"]["metadata"]["template_contract_hash"] == contract["sha256"]
+    assert response.json()["job"]["template"] == profile.id
+    assert (
+        response.json()["job"]["metadata"]["template_contract_hash"]
+        == contract["sha256"]
+    )
 
 
 def test_project_quote_resolves_each_occurrence_once_with_physical_quantities(

@@ -89,6 +89,10 @@ from mobiliti_saas.quote_engine.quotation_sheets import (  # noqa: E402
     QuotationDataRow,
     quotation_data_rows,
 )
+from mobiliti_saas.quote_engine.template_profiles import (  # noqa: E402
+    DEFAULT_TEMPLATE_PROFILE_ID,
+    resolve_template_profile,
+)
 
 
 @dataclass(frozen=True)
@@ -691,6 +695,16 @@ def _template_path() -> str:
     return os.environ.get("TEMPLATE_PATH") or str(_default_template())
 
 
+def _template_path_for_job(job: dict) -> str:
+    profile = resolve_template_profile(
+        job.get("template") if isinstance(job, dict) else None,
+        require_files=True,
+    )
+    if profile.id == DEFAULT_TEMPLATE_PROFILE_ID:
+        return _template_path()
+    return str(profile.template_path)
+
+
 def _json_job_source_type(job: dict) -> str | None:
     metadata = job.get("metadata") or {}
     value = metadata.get("source_type")
@@ -1195,7 +1209,11 @@ def _prepare_generator_input(
         )
 
     converted_input = _safe_tmp_target(tmp_dir, "quotation_from_pdf.xlsx")
-    _convert_pdf_to_quotation(local_input, converted_input, _template_path())
+    _convert_pdf_to_quotation(
+        local_input,
+        converted_input,
+        _template_path_for_job(job),
+    )
     metadata = job.get("metadata") or {}
     metadata["input_extension"] = ".pdf"
     metadata["pdf_converted"] = True
@@ -1408,7 +1426,7 @@ def _run_generator(
             source_path=generator_input.parser_source,
             output_path=output_path,
             metadata=metadata,
-            template_path=_template_path(),
+            template_path=_template_path_for_job(job),
             original_quotation_path=generator_input.original_quotation,
             quotation_data_rows=generator_input.quotation_data,
         )

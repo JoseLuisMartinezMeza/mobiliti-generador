@@ -173,7 +173,7 @@ const emptyQuote = {
   image_cleanup_strength: "balanced",
   image_background: "white",
   image_prompt: DEFAULT_IMAGE_PROMPT,
-  template: "Formato Cotizacion 2026 GDL (1).xlsx"
+  template: "official_2026_gdl"
 };
 
 const EMPTY_MIXED_QUOTE = Object.freeze({
@@ -185,7 +185,7 @@ const EMPTY_MIXED_QUOTE = Object.freeze({
   razon_social: "",
   quote_currency: "MXN",
   descuento: "40",
-  template: "Formato Cotizacion 2026 GDL (1).xlsx"
+  template: "official_2026_gdl"
 });
 
 function projectQuoteFieldsFromMixedQuote(quote) {
@@ -892,8 +892,9 @@ function QuoteForm({
           <h3>3. Plantilla y render</h3>
           <div className="template-grid">
             <select value={form.template} disabled={busy} onChange={(event) => updateField("template", event.target.value)}>
-              <option>Formato Cotizacion 2026 GDL (1).xlsx</option>
-              <option>Plantilla Corporativa Mobiliti 2025</option>
+              <option value="official_2026_gdl">Formato Cotización 2026 GDL (1)</option>
+              <option value="official_2026_gdl">Plantilla Corporativa Mobiliti 2025</option>
+              <option value="sunon_cdmx_v1c">Formato Cotización Único - Sunon CDMX V1C</option>
             </select>
             <select value={form.description_language} disabled={busy} onChange={(event) => updateField("description_language", event.target.value)}>
               <option value="es">Descripciones en espanol</option>
@@ -2166,7 +2167,7 @@ function createMixedQuoteController({
     setNotice("");
     try {
       const quoteRequest = projectQuote
-        ? {expected_revision: projectQuote.revision}
+        ? {expected_revision: projectQuote.revision, template: getForm().template}
         : preparedRequest || createMixedQuoteRequestSnapshot(
           getForm(),
           mixedSectionsRef.current,
