@@ -183,6 +183,52 @@ def test_same_canonical_product_can_appear_twice_with_distinct_line_ids(
     assert payload["project_context"]["project_revision"] == 3
 
 
+def test_project_context_preserves_template_and_language_through_mixed_validation(
+    mixed_catalogs,
+    rate_rows,
+):
+    project = valid_project_payload()
+    project["quote_fields"].update({
+        "template": "sunon_cdmx_v1c",
+        "description_language": "en",
+    })
+    principal = project["lines"][0]
+    principal["line_id"] = FIRST_LINE_ID
+    principal["identity"]["internal_id"] = "sunon:desk-1"
+    project["lines"] = [principal]
+
+    payload = build_mixed_catalog_cart_payload(
+        [{
+            "line_id": FIRST_LINE_ID,
+            "catalog": "sunon",
+            "internal_id": "sunon:desk-1",
+            "quantity": principal["quantity"],
+        }],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        presentation_sections=[{
+            "id": project["sections"][0]["section_id"],
+            "title": project["sections"][0]["concept"],
+            "line_ids": [FIRST_LINE_ID],
+        }],
+        project_context=project_context(project, "project-cdmx", 4),
+        today=date(2026, 7, 19),
+    )
+
+    validated = validate_mixed_catalog_payload(payload)
+
+    assert validated["project_context"]["project_id"] == "project-cdmx"
+    assert validated["project_context"]["project_revision"] == 4
+    assert validated["project_context"]["normalized_project_payload"][
+        "quote_fields"
+    ]["template"] == "sunon_cdmx_v1c"
+    assert validated["project_context"]["normalized_project_payload"][
+        "quote_fields"
+    ]["description_language"] == "en"
+
+
 def test_legacy_request_without_line_ids_still_builds_payload(
     mixed_catalogs,
     rate_rows,
