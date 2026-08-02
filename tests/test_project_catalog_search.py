@@ -16,11 +16,12 @@ def _supplier_item(catalog: str, name: str, code: str) -> dict:
         "product_url": f"https://supplier.example/{catalog}",
         "source_reference": "https://source.example/private",
         "stock": 7,
+        "attributes": {"dimensions": "600 x 600 mm"},
         "warnings": ["Precio privado https://private.example"],
     }
 
 
-def test_search_returns_canonical_references_without_commercial_or_source_fields():
+def test_search_returns_safe_display_price_and_dimensions_without_private_source_fields():
     result = search_catalog_products(
         {"sunon": {"items": [_supplier_item("sunon", "Olíve II Chair", "OLIVE-II")] }},
         query="olÍve",
@@ -34,6 +35,8 @@ def test_search_returns_canonical_references_without_commercial_or_source_fields
     assert item == {
         "catalog": "sunon",
         "official_code": "OLIVE-II",
+        "price_net": "100",
+        "base_currency": "USD",
         "identity": {
             "internal_id": "sunon:OLIVE-II",
             "base_option_id": "",
@@ -43,6 +46,7 @@ def test_search_returns_canonical_references_without_commercial_or_source_fields
             "name": "Olíve II Chair",
             "code": "OLIVE-II",
             "image_url": "https://assets.example/sunon.png",
+            "dimensions": "600 x 600 mm",
             "availability": "Disponible",
             "configuration": "",
             "warnings": [],
@@ -50,13 +54,46 @@ def test_search_returns_canonical_references_without_commercial_or_source_fields
     }
     serialized = repr(item)
     for forbidden in (
-        "price_net", "base_currency", "product_url", "source_reference",
+        "product_url", "source_reference",
         "private.example", "Existencia: 7",
     ):
         assert forbidden not in serialized
 
 
-def test_search_exposes_base_choices_without_prices_and_prefills_only_a_single_choice():
+@pytest.mark.parametrize(
+    ("catalog", "identity", "code", "unit_price"),
+    [
+        ("tarkett", {"code": "T-LEGACY"}, "T-LEGACY", "472.63"),
+        (
+            "offiho",
+            {"inventory_key": "offiho:legacy", "code": "O-LEGACY"},
+            "O-LEGACY",
+            "6199.00",
+        ),
+    ],
+)
+def test_search_maps_legacy_unit_price_and_expected_currency(catalog, identity, code, unit_price):
+    raw = {
+        **identity,
+        "name": f"Producto {catalog}",
+        "unit_price": unit_price,
+        "available_quantity": 1,
+    }
+
+    item = search_catalog_products(
+        {catalog: {"items": [raw]}},
+        query="producto",
+        supplier=catalog,
+        offset=0,
+        limit=20,
+    )["items"][0]
+
+    assert item["official_code"] == code
+    assert item["price_net"] == unit_price
+    assert item["base_currency"] == "MXN"
+
+
+def test_search_exposes_safe_base_choice_prices_and_prefills_only_a_single_choice():
     single = _supplier_item("lauco", "Silla única", "L-1")
     single["base_price_options"] = [
         {"id": "lauco:l-1:grade-1", "name": "Tapiz Grado 1", "price_net": "11780", "available": True},
@@ -78,24 +115,24 @@ def test_search_exposes_base_choices_without_prices_and_prefills_only_a_single_c
 
     by_code = {item["official_code"]: item for item in result["items"]}
     assert by_code["L-1"]["base_options"] == [
-        {"id": "lauco:l-1:grade-1", "name": "Tapiz Grado 1"},
+        {"id": "lauco:l-1:grade-1", "name": "Tapiz Grado 1", "price_net": "11780"},
     ]
     assert by_code["L-1"]["identity"]["base_option_id"] == "lauco:l-1:grade-1"
     assert by_code["L-1"]["snapshot"]["configuration"] == "Tapiz Grado 1"
     assert by_code["L-2"]["base_options"] == [
-        {"id": "lauco:l-2:grade-1", "name": "Tapiz Grado 1"},
-        {"id": "lauco:l-2:grade-2", "name": "Tapiz Grado 2"},
+        {"id": "lauco:l-2:grade-1", "name": "Tapiz Grado 1", "price_net": "15350"},
+        {"id": "lauco:l-2:grade-2", "name": "Tapiz Grado 2", "price_net": "19630"},
     ]
     assert by_code["L-2"]["identity"]["base_option_id"] == ""
     assert by_code["L-2"]["snapshot"]["configuration"] == ""
     serialized = json.dumps(result, ensure_ascii=False)
-    assert "11780" not in serialized
+    assert "11780" in serialized
     assert "14990" not in serialized
-    assert "15350" not in serialized
-    assert "19630" not in serialized
+    assert "15350" in serialized
+    assert "19630" in serialized
 
 
-def test_search_exposes_available_add_on_choices_without_prices():
+def test_search_exposes_available_add_on_choices_with_safe_prices():
     configurable = _supplier_item("alma", "Silla configurable", "A-1")
     configurable["base_price_options"] = [
         {"id": "base-aluminio", "name": "Aluminio", "price_net": "250", "available": True},
@@ -140,19 +177,46 @@ def test_search_exposes_available_add_on_choices_without_prices():
             "id": "cojin-a",
             "name": "Cojín A",
             "family": "cojin",
+            "price_net": "35.10",
             "compatible_base_option_ids": ["base-aluminio"],
         },
         {
             "id": "cojin-b",
             "name": "Cojín B",
             "family": "cojin",
+            "price_net": "50",
             "compatible_base_option_ids": [],
         },
     ]
     serialized = json.dumps(result, ensure_ascii=False)
-    assert "35.10" not in serialized
-    assert '"50"' not in serialized
+    assert "35.10" in serialized
+    assert '"50"' in serialized
     assert "99" not in serialized
+
+
+def test_search_omits_invalid_prices_and_currency_instead_of_leaking_bad_values():
+    invalid = _supplier_item("sunon", "Precio invalido", "BAD-1")
+    invalid["price_net"] = "NaN"
+    invalid["base_currency"] = "USD<script>"
+    invalid["base_price_options"] = [
+        {"id": "zero", "name": "Cero", "price_net": "0", "available": True},
+        {"id": "negative", "name": "Negativo", "price_net": "-10", "available": True},
+    ]
+
+    item = search_catalog_products(
+        {"sunon": {"items": [invalid]}},
+        query="invalido",
+        supplier="sunon",
+        offset=0,
+        limit=20,
+    )["items"][0]
+
+    assert "price_net" not in item
+    assert "base_currency" not in item
+    assert item["base_options"] == [
+        {"id": "zero", "name": "Cero"},
+        {"id": "negative", "name": "Negativo"},
+    ]
 
 
 def test_search_uses_all_seven_catalogs_and_stable_pagination():

@@ -36,14 +36,165 @@ function deepCopy(value) {
 }
 
 export function productBaseOptions(item) {
-  if (!Array.isArray(item?.base_options)) return [];
-  return item.base_options.filter((option) => (
+  const options = Array.isArray(item?.base_options)
+    ? item.base_options
+    : Array.isArray(item?.base_price_options)
+      ? item.base_price_options
+      : [];
+  return options.filter((option) => (
     option
     && typeof option.id === "string"
     && option.id
     && typeof option.name === "string"
     && option.name
   ));
+}
+
+function safePositivePrice(value) {
+  if (value === null || value === undefined || typeof value === "boolean") return null;
+  const price = Number(String(value).trim());
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+function safeCurrency(value) {
+  const currency = String(value || "").trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : "";
+}
+
+function formattedMoney(currency, amount) {
+  if (!currency || !Number.isFinite(amount) || amount <= 0) return "";
+  return `${currency} ${new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)}`;
+}
+
+export function productDimensions(item) {
+  return String(
+    item?.snapshot?.dimensions
+    || item?.attributes?.dimensions
+    || item?.dimensions
+    || "",
+  ).trim();
+}
+
+export function productPriceLabel(
+  item,
+  selectedBaseOptionId = "",
+  selectedAddOnOptionIds = [],
+) {
+  const currency = safeCurrency(item?.base_currency);
+  if (!currency) return "Precio por confirmar";
+
+  const baseOptions = productBaseOptions(item);
+  const selectedBase = baseOptions.find((option) => option.id === selectedBaseOptionId);
+  if (selectedBase) {
+    const basePrice = safePositivePrice(selectedBase.price_net);
+    if (basePrice === null) return "Precio por confirmar";
+    const selectedIds = new Set(Array.isArray(selectedAddOnOptionIds) ? selectedAddOnOptionIds : []);
+    const addOnTotal = productAddOnOptions(item, selectedBaseOptionId)
+      .filter((option) => selectedIds.has(option.id))
+      .reduce((total, option) => total + (safePositivePrice(option.price_net) || 0), 0);
+    return formattedMoney(currency, basePrice + addOnTotal) || "Precio por confirmar";
+  }
+
+  const availableBasePrices = baseOptions
+    .map((option) => safePositivePrice(option.price_net))
+    .filter((price) => price !== null);
+  if (availableBasePrices.length) {
+    const amount = Math.min(...availableBasePrices);
+    const label = formattedMoney(currency, amount);
+    return baseOptions.length > 1 ? `Desde ${label}` : label;
+  }
+
+  return formattedMoney(currency, safePositivePrice(item?.price_net)) || "Precio por confirmar";
+}
+
+export function productOptionLabel(option, item, {additive = false} = {}) {
+  const name = String(option?.name || "").trim();
+  const price = formattedMoney(
+    safeCurrency(item?.base_currency),
+    safePositivePrice(option?.price_net),
+  );
+  if (!price) return name;
+  return `${name} · ${additive ? "+ " : ""}${price}`;
+}
+
+function normalizedSupplier(item) {
+  return String(item?.catalog || item?.supplier || "").trim().toLowerCase();
+}
+
+function productDisplayName(item) {
+  return String(item?.snapshot?.name || item?.name || "").trim();
+}
+
+export function productVariantConfiguration(item) {
+  if (normalizedSupplier(item) !== "alma") return "";
+  const match = productDisplayName(item).match(/\brim\s*:\s*(.+)$/i);
+  return match?.[1]?.trim() || "";
+}
+
+export function productBaseConfigurationLabel(item) {
+  const optionNames = productBaseOptions(item)
+    .map((option) => String(option.name || "").toLowerCase())
+    .join(" ");
+  if (normalizedSupplier(item) === "alma" && optionNames.includes("tela")) {
+    return "Calidad de tela";
+  }
+  return "Configuración base";
+}
+
+function normalizedText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function variantSourceCode(item) {
+  if (item?.code_status === "verified" && item?.sku) return item.sku;
+  return item?.attributes?.source_code
+    || item?.attributes?.source_erp_code
+    || item?.attributes?.source_model_code
+    || item?.official_code
+    || item?.sku
+    || "";
+}
+
+export function filterCatalogVariantGroups(
+  groups,
+  {query = "", brand = "", collection = "", availability = ""} = {},
+) {
+  const normalizedQuery = normalizedText(query);
+  return (Array.isArray(groups) ? groups : []).map((group) => {
+    const eligibleVariants = (Array.isArray(group?.variants) ? group.variants : []).filter((item) => {
+      const matchesAvailability = !availability
+        || (availability === "out"
+          ? item?.is_out_of_stock
+          : availability === "stocked"
+            ? item?.availability_type === "stocked" && !item?.is_out_of_stock
+            : item?.availability_type === availability);
+      return (!brand || item?.brand === brand)
+        && (!collection || item?.collection === collection)
+        && matchesAvailability;
+    });
+    if (!eligibleVariants.length) return {...group, matchingVariants: []};
+    const groupMatchesQuery = !normalizedQuery || eligibleVariants.some((item) => {
+      const searchable = normalizedText([
+        variantSourceCode(item),
+        item?.name,
+        item?.description,
+        item?.brand,
+        item?.collection,
+        JSON.stringify(item?.attributes || {}),
+      ].join(" "));
+      return searchable.includes(normalizedQuery);
+    });
+    return {
+      ...group,
+      matchingVariants: groupMatchesQuery ? eligibleVariants : [],
+    };
+  }).filter((group) => group.matchingVariants.length > 0);
 }
 
 export function initialBaseOptionId(item) {

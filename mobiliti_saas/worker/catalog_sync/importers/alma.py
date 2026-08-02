@@ -83,7 +83,7 @@ _MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _KUN_PATH = "SPEC Guide-Alma-KUN.xlsx"
 _KUN_PRICE_PATH = "SPEC GUIDES 2026/ALMA/Spec guide-Alma-KUN Design.xlsx"
 _MONDECASA_PATH = "SPEC Guide-Alma-Mondecasa.xlsx"
-_ALMA_ADAPTER_VERSION = "alma-configurable-pricing-v4"
+_ALMA_ADAPTER_VERSION = "alma-configurable-pricing-v5"
 _FAMILY_ASSET_OVERRIDES = {
     "kun\0bagel\0side table": (
         _KUN_PRICE_PATH,
@@ -478,6 +478,31 @@ def _vertical_code_block(index, row: int) -> tuple[int, int] | None:
     return merged[2], merged[3]
 
 
+def _mondecasa_product_block(index, row: int) -> tuple[int, int] | None:
+    """Return the row span that represents one Mondecasa product.
+
+    Some Mondecasa products merge the code cell vertically, while others leave
+    the continuation code blank and merge only the image or dimensions.  Those
+    continuation rows are configurations of the same product, not standalone
+    products.
+    """
+    code_block = _vertical_code_block(index, row)
+    if code_block is not None:
+        return code_block
+
+    candidates = []
+    for column in (2, 4):
+        merged = index.get((row, column))
+        if (
+            merged is not None
+            and merged[4:] == (column, column)
+            and merged[2] == row
+            and merged[3] > row
+        ):
+            candidates.append((merged[2], merged[3]))
+    return max(candidates, key=lambda block: block[1]) if candidates else None
+
+
 def _category(sheet, index, row: int) -> str | None:
     merged = index.get((row, 1))
     if merged and merged[2] == row and merged[4] == 1 and merged[5] >= 9:
@@ -568,6 +593,20 @@ def _price_evidence(kind: str, label: str, price: Decimal, available: bool, sour
 
 def _base_option(option_id: str, name: str, price: Decimal) -> dict:
     return {"id": option_id, "name": name, "price_net": _money_text(price), "available": True}
+
+
+def _kun_configured_base_label(header: str, column: int) -> str:
+    clean = re.sub(r"\bsolo\s+coj[ií]n\b", "", header, flags=re.IGNORECASE)
+    clean = re.sub(r"[-–—]{3,}", " · ", clean)
+    clean = re.sub(
+        r"\s+(?=(?:espuma|cer[aá]mica)\b)",
+        " · ",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    clean = re.sub(r"(?:\s*·\s*)+", " · ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip(" ·-")
+    return clean or f"Configuración {column - 6}"
 
 
 def _add_on(
@@ -1029,11 +1068,27 @@ def _parse_kun_design_2026(identity_source, identity_sheet, images, formulas, sa
                 cost_refs.append(price_source)
 
         add_ons = []
+        promote_cushion_prices = not base_options
         for identity_column in range(7, 10):
             price = cushion_prices.get(identity_column)
             if price is None:
                 continue
+            refs = cushion_price_refs[identity_column]
+            source = _aggregate_price_ref(refs)
             label = headers[identity_column] or f"Cojín {identity_column}"
+            if promote_cushion_prices:
+                configured_label = _kun_configured_base_label(label, identity_column)
+                base_options.append(
+                    _base_option(
+                        f"base-c{identity_column}",
+                        configured_label,
+                        price,
+                    )
+                )
+                evidence.append(
+                    _price_evidence("base", configured_label, price, True, source)
+                )
+                continue
             add_ons.append(
                 _add_on(
                     f"cushion-c{identity_column}",
@@ -1043,14 +1098,13 @@ def _parse_kun_design_2026(identity_source, identity_sheet, images, formulas, sa
                     True,
                 )
             )
-            refs = cushion_price_refs[identity_column]
             evidence.append(
                 _price_evidence(
                     "add_on",
                     label,
                     price,
                     True,
-                    _aggregate_price_ref(refs),
+                    source,
                 )
             )
 
@@ -1369,7 +1423,7 @@ def _parse_mondecasa_products(source, sheet, images, formulas) -> list[dict]:
         if not headers:
             row += 1
             continue
-        block = _vertical_code_block(index, row)
+        block = _mondecasa_product_block(index, row)
         if block and block[0] < row:
             row += 1
             continue

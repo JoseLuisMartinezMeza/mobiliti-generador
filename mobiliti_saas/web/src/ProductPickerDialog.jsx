@@ -9,7 +9,12 @@ import {
   normalizeWarnings,
   productAddOnFamilies,
   productAddOnOptions,
+  productBaseConfigurationLabel,
   productBaseOptions,
+  productDimensions,
+  productOptionLabel,
+  productPriceLabel,
+  productVariantConfiguration,
   shouldShowProductImage,
 } from "./productPicker";
 
@@ -145,6 +150,8 @@ export default function ProductPickerDialog({
   const selectedKey = selected ? `${selected.catalog}:${selected.official_code}` : "";
   const showImage = shouldShowProductImage(preview.image_url, failedImageKey === selectedKey);
   const baseOptions = productBaseOptions(selected);
+  const baseConfigurationLabel = productBaseConfigurationLabel(selected);
+  const variantConfiguration = productVariantConfiguration(selected);
   const selectedBaseOption = baseOptions.find((option) => option.id === selectedBaseOptionId);
   const addOnOptions = productAddOnOptions(selected, selectedBaseOptionId);
   const addOnFamilies = productAddOnFamilies(selected, selectedBaseOptionId);
@@ -247,6 +254,9 @@ export default function ProductPickerDialog({
               )}
               {!loading && !error && results.map((item) => {
                 const itemSnapshot = item.snapshot || {};
+                const itemVariantConfiguration = productVariantConfiguration(item);
+                const itemDimensions = productDimensions(item);
+                const itemPrice = productPriceLabel(item);
                 const isSelected = selectedKey === `${item.catalog}:${item.official_code}`;
                 return (
                   <button
@@ -271,7 +281,12 @@ export default function ProductPickerDialog({
                     <span className="project-picker-result-copy">
                       <strong>{itemSnapshot.name || "Producto sin nombre"}</strong>
                       <span>{catalogLabel(item.catalog)}</span>
+                      {itemVariantConfiguration ? (
+                        <small>Acabado / material del aro: {itemVariantConfiguration}</small>
+                      ) : null}
                       <small>{item.official_code} · {item.catalog}</small>
+                      {itemDimensions ? <small>Medidas: {itemDimensions}</small> : null}
+                      <small>Precio: {itemPrice}</small>
                     </span>
                   </button>
                 );
@@ -305,11 +320,24 @@ export default function ProductPickerDialog({
                 <strong>{preview.name}</strong>
                 <span>{previewSupplier || "Proveedor no disponible"}</span>
                 <span>Código: {selected.official_code}</span>
+                {variantConfiguration ? (
+                  <span>Acabado / material del aro: {variantConfiguration}</span>
+                ) : null}
+                {productDimensions(selected) ? (
+                  <span>Medidas: {productDimensions(selected)}</span>
+                ) : null}
+                <span>
+                  Precio: {productPriceLabel(
+                    selected,
+                    selectedBaseOptionId,
+                    selectedAddOnOptionIds,
+                  )}
+                </span>
                 {baseOptions.length > 1 ? (
                   <label>
-                    Configuración base
+                    {baseConfigurationLabel}
                     <select
-                      aria-label="Configuración base"
+                      aria-label={baseConfigurationLabel}
                       value={selectedBaseOptionId}
                       onChange={(event) => {
                         const nextBaseId = event.target.value;
@@ -322,17 +350,19 @@ export default function ProductPickerDialog({
                         ));
                       }}
                     >
-                      <option value="">Selecciona una configuración</option>
+                      <option value="">Selecciona {baseConfigurationLabel.toLowerCase()}</option>
                       {baseOptions.map((option) => (
-                        <option key={option.id} value={option.id}>{option.name}</option>
+                        <option key={option.id} value={option.id}>
+                          {productOptionLabel(option, selected)}
+                        </option>
                       ))}
                     </select>
                   </label>
                 ) : (
-                  <span>Configuración: {selectedBaseOption?.name || preview.configuration || "No especificada"}</span>
+                  <span>{baseConfigurationLabel}: {selectedBaseOption?.name || preview.configuration || "No especificada"}</span>
                 )}
                 {baseOptions.length > 1 && !selectedBaseOption ? (
-                  <small>Selecciona una configuración para continuar.</small>
+                  <small>Selecciona {baseConfigurationLabel.toLowerCase()} para continuar.</small>
                 ) : null}
                 {addOnFamilies.map((family) => {
                   const selectedOption = addOnOptions.find((option) => (
@@ -356,7 +386,9 @@ export default function ProductPickerDialog({
                       >
                         <option value="">Sin complemento</option>
                         {family.options.map((option) => (
-                          <option key={option.id} value={option.id}>{option.name}</option>
+                          <option key={option.id} value={option.id}>
+                            {productOptionLabel(option, selected, {additive: true})}
+                          </option>
                         ))}
                       </select>
                     </label>

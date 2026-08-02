@@ -3,7 +3,11 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import unicodedata
 
-from .mixed_catalog import MIXED_CATALOG_ORDER, preflight_mixed_catalog_items
+from .mixed_catalog import (
+    MIXED_CATALOG_ORDER,
+    MIXED_EXPECTED_BASE_CURRENCY,
+    preflight_mixed_catalog_items,
+)
 
 
 MAX_SEARCH_QUERY_LENGTH = 160
@@ -30,6 +34,49 @@ def _text(value: object) -> str:
     return clean
 
 
+def _positive_decimal(value: object) -> str:
+    if value is None or isinstance(value, bool):
+        return ""
+    clean = str(value).strip()
+    try:
+        decimal = Decimal(clean)
+    except (InvalidOperation, TypeError, ValueError):
+        return ""
+    return clean if decimal.is_finite() and decimal > 0 else ""
+
+
+def _currency(value: object) -> str:
+    clean = _text(value).upper()
+    return clean if len(clean) == 3 and clean.isascii() and clean.isalpha() else ""
+
+
+def _catalog_price(catalog: str, raw: dict) -> str:
+    price_net = _positive_decimal(raw.get("price_net"))
+    if price_net:
+        return price_net
+    if catalog in {"tarkett", "offiho"}:
+        return _positive_decimal(raw.get("unit_price"))
+    return ""
+
+
+def _catalog_currency(catalog: str, raw: dict, price_net: str) -> str:
+    base_currency = _currency(raw.get("base_currency"))
+    if base_currency:
+        return base_currency
+    if price_net and catalog in {"tarkett", "offiho"}:
+        return MIXED_EXPECTED_BASE_CURRENCY[catalog]
+    return ""
+
+
+def _dimensions(raw: dict) -> str:
+    attributes = raw.get("attributes")
+    if isinstance(attributes, dict):
+        dimensions = _text(attributes.get("dimensions"))
+        if dimensions:
+            return dimensions
+    return _text(raw.get("dimensions"))
+
+
 def _base_choices(raw: dict) -> list[dict]:
     options = raw.get("base_price_options")
     if not isinstance(options, list):
@@ -43,10 +90,14 @@ def _base_choices(raw: dict) -> list[dict]:
         if not option_id or option_id in seen:
             continue
         seen.add(option_id)
-        choices.append({
+        choice = {
             "id": option_id,
             "name": _text(option.get("name")) or option_id,
-        })
+        }
+        price_net = _positive_decimal(option.get("price_net"))
+        if price_net:
+            choice["price_net"] = price_net
+        choices.append(choice)
     return choices
 
 
@@ -73,12 +124,16 @@ def _add_on_choices(raw: dict, base_choices: list[dict]) -> list[dict]:
                 if candidate and (not base_ids or candidate in base_ids)
             ]
         seen.add(option_id)
-        choices.append({
+        choice = {
             "id": option_id,
             "name": _text(option.get("name")) or option_id,
             "family": family,
             "compatible_base_option_ids": compatible,
-        })
+        }
+        price_net = _positive_decimal(option.get("price_net"))
+        if price_net:
+            choice["price_net"] = price_net
+        choices.append(choice)
     return choices
 
 
@@ -176,11 +231,18 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
             "name": name,
             "code": official_code,
             "image_url": _text(raw.get("image_url")),
+            "dimensions": _dimensions(raw),
             "availability": availability,
             "configuration": base_choices[0]["name"] if len(base_choices) == 1 else "",
             "warnings": _availability_warnings(availability),
         },
     }
+    price_net = _catalog_price(catalog, raw)
+    base_currency = _catalog_currency(catalog, raw, price_net)
+    if price_net:
+        result["price_net"] = price_net
+    if base_currency:
+        result["base_currency"] = base_currency
     if base_choices:
         result["base_options"] = base_choices
     if add_on_choices:

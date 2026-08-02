@@ -490,6 +490,62 @@ def test_kun_uses_official_costs_when_identity_price_cells_are_blank(
     } == {"Costo Alma"}
 
 
+def test_kun_promotes_ghi_to_base_configurations_when_ef_have_no_price(
+    source_bundle,
+):
+    def move_identity_prices_to_ghi(workbook):
+        design = workbook["KUN DESIGN"]
+        design["E10"] = None
+        design["F10"] = None
+        design["G10"] = 55
+        design["H10"] = 65
+        design["I10"] = 75
+
+    changed = _edit(source_bundle, KUN_PATH, move_identity_prices_to_ghi)
+
+    def move_official_prices_to_ghi(workbook):
+        costs = workbook["Costo Alma"]
+        sales = workbook["SPEC Alma"]
+        for sheet in (costs, sales):
+            sheet["D11"] = 0
+            sheet["E11"] = 0
+        for cell, cost in zip(("F11", "G11", "H11"), (55, 65, 75)):
+            costs[cell] = cost
+            sales[cell] = cost / 0.3 / 0.5
+
+    changed = _edit(changed, KUN_PRICE_PATH, move_official_prices_to_ghi)
+    snapshot = _snapshot(changed)
+    item = _item(snapshot, "KUN-SINGLE")
+
+    assert item["code_status"] == "verified"
+    assert [option["price_net"] for option in item["base_price_options"]] == [
+        "55.000000",
+        "65.000000",
+        "75.000000",
+    ]
+    assert [option["name"] for option in item["base_price_options"]] == [
+        "Calidad: Tela A · Espuma Normal · Ceramica A",
+        "Calidad: Tela A+ · Espuma Normal · Ceramica A+",
+        "Calidad: Tela A++ · Espuma Normal · Ceramica A++",
+    ]
+    assert item["add_on_options"] == []
+
+    payload = build_supplier_cart_payload(
+        [
+            {
+                "internal_id": item["internal_id"],
+                "quantity": "1",
+                "base_option_id": item["base_price_options"][1]["id"],
+                "add_on_option_ids": [],
+            }
+        ],
+        snapshot,
+        "USD",
+        [],
+    )
+    assert payload["items"][0]["unit_price_base"] == "65.000000"
+
+
 def test_kun_single_base_and_materially_lower_alternative(source_bundle):
     snapshot = _snapshot(source_bundle)
     single = _item(snapshot, "KUN-SINGLE")
@@ -552,6 +608,40 @@ def test_vertical_merges_create_one_configurable_item_instead_of_duplicates(sour
             option.get("compatible_base_option_ids")
             for option in item["add_on_options"]
         )
+
+
+def test_mondecasa_blank_code_continuation_is_configuration_not_product(source_bundle):
+    def add_spaghetti_variants(workbook):
+        sheet = workbook["MONDECASA"]
+        sheet["A17"] = "AC5795A11RAT"
+        sheet["C17"] = "Spaghetti 2 seat sofa Aluminium frame with straps"
+        sheet["D17"] = "168*82*80cm sitting height: 30cm"
+        sheet["E17"] = 323.7
+        sheet["H17"] = 288.3
+        sheet["C18"] = "Spaghetti 2 seat sofa Aluminium frame with ropes"
+        sheet["E18"] = 357.5
+        sheet["H18"] = 288.3
+        sheet.merge_cells("D17:D18")
+
+    snapshot = _snapshot(_edit(source_bundle, MONDECASA_PATH, add_spaghetti_variants))
+    spaghetti = [
+        item
+        for item in snapshot["items"]
+        if "spaghetti 2 seat sofa" in item["name"].casefold()
+    ]
+
+    assert len(spaghetti) == 1
+    item = spaghetti[0]
+    assert item["attributes"]["source_code"] == "AC5795A11RAT"
+    assert item["attributes"]["dimensions"] == "168*82*80cm sitting height: 30cm"
+    assert [option["price_net"] for option in item["base_price_options"]] == [
+        "323.700000",
+        "357.500000",
+    ]
+    assert [
+        "straps" in item["base_price_options"][0]["name"].casefold(),
+        "ropes" in item["base_price_options"][1]["name"].casefold(),
+    ] == [True, True]
 
 
 def test_alma_base_and_add_on_prices_flow_into_supplier_cart(source_bundle):
@@ -866,10 +956,10 @@ def test_ignored_real_sources_report_coverage_metrics():
     }
     assert emf_parts == 71
     assert metrics == {
-        "items": 654,
+        "items": 614,
         "kun": 310,
-        "kun_verified": 262,
-        "kun_needs_review": 48,
+        "kun_verified": 310,
+        "kun_needs_review": 0,
         "kun_pavilion": 3,
         "kun_official_cost": 307,
     }

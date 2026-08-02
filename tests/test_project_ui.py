@@ -856,6 +856,107 @@ def test_product_picker_base_choice_is_automatic_only_when_unambiguous():
     }
 
 
+def test_product_picker_formats_safe_prices_dimensions_and_configured_total():
+    result = run_picker(r"""
+      const item = {
+        catalog: "alma",
+        price_net: "999",
+        base_currency: "USD",
+        snapshot: {name: "Sofa configurable", dimensions: "168*82*80 cm"},
+        base_options: [
+          {id: "straps", name: "Aluminio con correas", price_net: "323.7"},
+          {id: "ropes", name: "Aluminio con cuerdas", price_net: "357.5"},
+        ],
+        add_on_options: [
+          {id: "cojin", name: "Cojín", family: "cojin", price_net: "35.10", compatible_base_option_ids: []},
+        ],
+      };
+      console.log(JSON.stringify({
+        dimensions: picker.productDimensions(item),
+        fromPrice: picker.productPriceLabel(item),
+        configuredPrice: picker.productPriceLabel(item, "straps", ["cojin"]),
+        baseLabel: picker.productOptionLabel(item.base_options[0], item),
+        addOnLabel: picker.productOptionLabel(item.add_on_options[0], item, {additive: true}),
+        simplePrice: picker.productPriceLabel({price_net: "1234.5", base_currency: "MXN"}),
+        invalidPrice: picker.productPriceLabel({price_net: "NaN", base_currency: "USD"}),
+      }));
+    """)
+
+    assert result == {
+        "dimensions": "168*82*80 cm",
+        "fromPrice": "Desde USD 323.70",
+        "configuredPrice": "USD 358.80",
+        "baseLabel": "Aluminio con correas · USD 323.70",
+        "addOnLabel": "Cojín · + USD 35.10",
+        "simplePrice": "MXN 1,234.50",
+        "invalidPrice": "Precio por confirmar",
+    }
+
+
+def test_alma_picker_exposes_rim_material_and_promoted_fabric_quality_options():
+    result = run_picker(r"""
+      const directCatalogItem = {
+        catalog: "alma",
+        name: "PILLOW Single Sofa Rim: Alu in powder coating",
+        base_price_options: [
+          {id: "base-c7", name: "Calidad: Tela A · Espuma Normal · Ceramica A"},
+          {id: "base-c8", name: "Calidad: Tela A+ · Espuma Normal · Ceramica A+"},
+          {id: "base-c9", name: "Calidad: Tela A++ · Espuma Normal · Ceramica A++"},
+        ],
+      };
+      const projectSearchItem = {
+        catalog: "alma",
+        snapshot: {name: "PILLOW Single Sofa Rim: Teak"},
+        base_options: directCatalogItem.base_price_options,
+      };
+      console.log(JSON.stringify({
+        directOptions: picker.productBaseOptions(directCatalogItem).map((option) => option.id),
+        projectOptions: picker.productBaseOptions(projectSearchItem).map((option) => option.id),
+        directMaterial: picker.productVariantConfiguration(directCatalogItem),
+        projectMaterial: picker.productVariantConfiguration(projectSearchItem),
+        directLabel: picker.productBaseConfigurationLabel(directCatalogItem),
+        projectLabel: picker.productBaseConfigurationLabel(projectSearchItem),
+      }));
+    """)
+
+    assert result == {
+        "directOptions": ["base-c7", "base-c8", "base-c9"],
+        "projectOptions": ["base-c7", "base-c8", "base-c9"],
+        "directMaterial": "Alu in powder coating",
+        "projectMaterial": "Teak",
+        "directLabel": "Calidad de tela",
+        "projectLabel": "Calidad de tela",
+    }
+
+
+def test_supplier_group_search_keeps_alma_sibling_material_variants_visible():
+    result = run_picker(r"""
+      const groups = [{
+        product_key: "kun:kc8804b10tex",
+        variants: [
+          {catalog: "alma", sku: "KC8804B10TEX", name: "PILLOW Single Sofa Rim: Teak", brand: "kun", collection: "PILLOW", availability_type: "made_to_order", attributes: {}},
+          {catalog: "alma", sku: "KC8804B10TEX", name: "PILLOW Single Sofa Rim: Alu in powder coating", brand: "kun", collection: "PILLOW", availability_type: "made_to_order", attributes: {}},
+          {catalog: "alma", sku: "KC8804B10TEX", name: "PILLOW Single Sofa Rim: Alu in teaklook", brand: "kun", collection: "PILLOW", availability_type: "made_to_order", attributes: {}},
+        ],
+      }];
+      const filtered = picker.filterCatalogVariantGroups(groups, {
+        query: "powder coating",
+        brand: "kun",
+        collection: "PILLOW",
+        availability: "made_to_order",
+      });
+      console.log(JSON.stringify({
+        groups: filtered.length,
+        variants: filtered[0]?.matchingVariants.map((item) => picker.productVariantConfiguration(item)),
+      }));
+    """)
+
+    assert result == {
+        "groups": 1,
+        "variants": ["Teak", "Alu in powder coating", "Alu in teaklook"],
+    }
+
+
 def test_product_picker_keeps_one_compatible_add_on_per_family():
     result = run_picker(r"""
       const item = {
@@ -933,10 +1034,11 @@ def test_product_picker_keeps_one_compatible_add_on_per_family():
 
 def test_product_picker_dialog_requires_ambiguous_base_choice_before_confirmation():
     source = Path("mobiliti_saas/web/src/ProductPickerDialog.jsx").read_text(encoding="utf-8")
-    assert 'aria-label="Configuración base"' in source
+    assert "aria-label={baseConfigurationLabel}" in source
+    assert "productBaseConfigurationLabel" in source
     assert "initialBaseOptionId" in source
     assert "disabled={!canConfirm}" in source
-    assert "Selecciona una configuración para continuar." in source
+    assert "Selecciona {baseConfigurationLabel.toLowerCase()} para continuar." in source
 
 
 def test_product_picker_uses_catalog_contract_for_supplier_choices_and_image_fallback():
