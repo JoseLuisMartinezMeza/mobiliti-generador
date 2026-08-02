@@ -148,6 +148,88 @@ def test_imported_line_matches_provider_and_official_code():
     assert result == {"matches": True, "missing": False}
 
 
+def test_replace_all_imported_without_official_code_uses_original_import_identity():
+    result = run_js(r"""
+      const imported = (lineId, importId, sourceRow, sectionId, name = "E904-2.200040 File Cabinet") => ({
+        kind: "imported",
+        role: "principal",
+        lineId,
+        importId,
+        sourceRow,
+        sourceCurrency: "USD",
+        officialCode: "",
+        provider: "SUNON TECHNOLOGY CO.,LTD.",
+        quantity: "1",
+        sectionId,
+        position: 0,
+        snapshot: {
+          name,
+          code: "",
+          description: "File Cabinet",
+          dimension: "2,003*400*845 mm",
+          image_url: "",
+          unit: "PZA",
+          availability: "",
+          configuration: "",
+          warnings: [],
+        },
+        edits: {
+          name,
+          description: "File Cabinet",
+          dimension: "2,003*400*845 mm",
+          unitPrice: "164.53",
+          provider: "SUNON TECHNOLOGY CO.,LTD.",
+        },
+      });
+      const sourceImport = "18a91f71-f06a-4775-9ae7-5fa72b5c2d06";
+      const lines = [
+        imported("11111111-1111-4111-8111-111111111111", sourceImport, 11, "section-1"),
+        imported("22222222-2222-4222-8222-222222222222", sourceImport, 15, "section-2"),
+        imported("33333333-3333-4333-8333-333333333333", sourceImport, 19, "section-3"),
+        imported("44444444-4444-4444-8444-444444444444", "different-import", 11, "section-4"),
+        model.createMixedCartLine({
+          lineId: "55555555-5555-4555-8555-555555555555",
+          catalog: "sunon",
+          identity: {internal_id: "sunon:file-cabinet", base_option_id: "", add_on_option_ids: []},
+          officialCode: "",
+          provider: "SUNON TECHNOLOGY CO.,LTD.",
+          quantity: "1",
+          quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+          snapshot: {name: "E904-2.200040 File Cabinet", code: "", image_url: "", unit: "PZA",
+            availability: "", configuration: "", warnings: []},
+          sectionId: "section-4",
+        }),
+      ];
+      const target = {
+        catalog: "sunon",
+        identity: {internal_id: "sunon:replacement", base_option_id: "", add_on_option_ids: []},
+        officialCode: "REPLACEMENT-1",
+        provider: "Sunon Inc",
+        quantity: "1",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+        snapshot: {name: "Replacement", code: "REPLACEMENT-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+      };
+      const selector = model.projectLineSelector(lines[0]);
+      const replaced = model.replaceAllProjectLines(lines, selector, target);
+      console.log(JSON.stringify({
+        affected: replaced.summary.affected,
+        imported: replaced.summary.imported,
+        sections: replaced.summary.sections,
+        codes: replaced.lines.map((line) => line.officialCode),
+        names: replaced.lines.map((line) => line.snapshot.name),
+      }));
+    """)
+    assert result == {
+        "affected": 3,
+        "imported": 3,
+        "sections": 3,
+        "codes": ["REPLACEMENT-1", "REPLACEMENT-1", "REPLACEMENT-1", "", ""],
+        "names": ["Replacement", "Replacement", "Replacement",
+                  "E904-2.200040 File Cabinet", "E904-2.200040 File Cabinet"],
+    }
+
+
 def test_imported_bundle_copies_row_code_and_provider_and_requires_durable_assets():
     preview, _manifest = promotion_preview()
     promotion = valid_promotion_response()

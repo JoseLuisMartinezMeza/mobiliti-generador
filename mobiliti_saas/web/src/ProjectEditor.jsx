@@ -19,8 +19,9 @@ import {
   moveMixedCartLine,
   moveMixedCartLineToSection,
   projectComplements,
+  projectLineHasMatchIdentity,
   projectLineMatches,
-  projectMatchKey,
+  projectLineSelector,
   removeProjectLineTree,
   renameMixedCartSection,
   replaceAllProjectLines,
@@ -74,10 +75,7 @@ function normalizeProjectPositions(sections, lines) {
 }
 
 function projectImpact(lines, line) {
-  const selector = {
-    provider: line.provider || line.catalog,
-    officialCode: line.officialCode,
-  };
+  const selector = projectLineSelector(line);
   const matched = lines.filter((candidate) => projectLineMatches(candidate, selector));
   const parents = new Map(lines.map((candidate) => [candidate.lineId, candidate]));
   const sectionIds = new Set(matched.map((candidate) => (
@@ -94,9 +92,7 @@ function projectImpact(lines, line) {
       ),
       0,
     ),
-    excludedUnlinked: lines.filter((candidate) => (
-      !projectMatchKey(candidate.provider || candidate.catalog, candidate.officialCode)
-    )).length,
+    excludedUnlinked: lines.filter((candidate) => !projectLineHasMatchIdentity(candidate)).length,
   };
 }
 
@@ -322,10 +318,7 @@ export default function ProjectEditor({
         if (!confirmRemoval(children)) return;
         commitLines(replaceProjectLine(lines, line.lineId, target).lines);
       } else if (mode === "replace-all") {
-        const selector = {
-          provider: line.provider || line.catalog,
-          officialCode: line.officialCode,
-        };
+        const selector = projectLineSelector(line);
         const children = lines
           .filter((candidate) => candidate.role === "principal" && projectLineMatches(candidate, selector))
           .flatMap((candidate) => projectComplements(lines, candidate.lineId));

@@ -1039,21 +1039,63 @@ export function createProjectLineId() {
   return globalThis.crypto.randomUUID();
 }
 
-export function projectMatchKey(provider, officialCode) {
-  const normalizeMatchPart = (value) => String(value || "").normalize("NFKD")
+function normalizeProjectMatchPart(value) {
+  return String(value || "").normalize("NFKD")
     .replace(/\p{M}/gu, "")
     .trim()
     .toLocaleUpperCase()
     .replace(/\s+/gu, " ");
-  const cleanProvider = normalizeMatchPart(provider);
-  const cleanCode = normalizeMatchPart(officialCode);
+}
+
+export function projectMatchKey(provider, officialCode) {
+  const cleanProvider = normalizeProjectMatchPart(provider);
+  const cleanCode = normalizeProjectMatchPart(officialCode);
   return cleanProvider && cleanCode ? `${cleanProvider}\u0000${cleanCode}` : "";
 }
 
+function projectImportedMatchKey({kind, importId, provider, officialCode, importedName}) {
+  if (kind !== "imported" || projectMatchKey(provider, officialCode)) return "";
+  const cleanImportId = normalizeProjectMatchPart(importId);
+  const cleanProvider = normalizeProjectMatchPart(provider);
+  const cleanName = normalizeProjectMatchPart(importedName);
+  return cleanImportId && cleanProvider && cleanName
+    ? `${cleanImportId}\u0000${cleanProvider}\u0000${cleanName}`
+    : "";
+}
+
+export function projectLineSelector(line) {
+  return {
+    kind: line?.kind,
+    provider: line?.provider || line?.catalog,
+    officialCode: line?.officialCode,
+    importId: line?.kind === "imported" ? line?.importId : "",
+    importedName: line?.kind === "imported" ? line?.snapshot?.name : "",
+  };
+}
+
+export function projectLineHasMatchIdentity(line) {
+  const selector = projectLineSelector(line);
+  return Boolean(
+    projectMatchKey(selector.provider, selector.officialCode)
+    || projectImportedMatchKey(selector),
+  );
+}
+
 export function projectLineMatches(line, selector) {
-  return projectMatchKey(line.provider || line.catalog, line.officialCode)
-    === projectMatchKey(selector.provider, selector.officialCode)
-    && projectMatchKey(selector.provider, selector.officialCode) !== "";
+  const selectorPrimaryKey = projectMatchKey(selector.provider, selector.officialCode);
+  if (selectorPrimaryKey) {
+    return projectMatchKey(line.provider || line.catalog, line.officialCode)
+      === selectorPrimaryKey;
+  }
+  const selectorImportedKey = projectImportedMatchKey(selector);
+  return selectorImportedKey !== ""
+    && projectImportedMatchKey({
+      kind: line?.kind,
+      importId: line?.importId,
+      provider: line?.provider || line?.catalog,
+      officialCode: line?.officialCode,
+      importedName: line?.snapshot?.name,
+    }) === selectorImportedKey;
 }
 
 export function projectComplements(lines, parentLineId) {
@@ -1277,9 +1319,7 @@ export function replaceAllProjectLines(lines, selector, target) {
       imported: matched.filter((line) => line.kind === "imported").length,
       sections: sectionIds.size,
       removedComplements: removed.length,
-      excludedUnlinked: lines.filter((line) => (
-        !projectMatchKey(line.provider || line.catalog, line.officialCode)
-      )).length,
+      excludedUnlinked: lines.filter((line) => !projectLineHasMatchIdentity(line)).length,
     },
   };
 }
