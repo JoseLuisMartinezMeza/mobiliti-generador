@@ -420,8 +420,15 @@ def _manifest_item(item: dict, import_id: str, filename: str) -> dict:
     official_code = _workbook_text(
         item.get("official_code"), "Codigo oficial", allow_empty=True, allow_none=True
     )
-    quantity = _quantity(item["cantidad"])
-    unit_price = _decimal(item["precio"], "Precio unitario invalido", minimum=Decimal(0))
+    quantity = _workbook_decimal(
+        item["cantidad"],
+        "Cantidad importada invalida",
+        minimum=Decimal("0.000001"),
+        maximum=MAX_QUANTITY,
+    )
+    unit_price = _workbook_decimal(
+        item["precio"], "Precio unitario invalido", minimum=Decimal(0)
+    )
     currency = _currency(item.get("moneda_original"), "Moneda de origen invalida", allow_none=True)
     row_data = {
         "key": f"import:{import_id}:{row}",
@@ -805,6 +812,21 @@ def _decimal(value: object, error: str, *, minimum: Decimal, maximum: Decimal = 
     if not number.is_finite() or number < minimum or number > maximum or max(-number.as_tuple().exponent, 0) > 6:
         raise ValueError(error)
     return number
+
+
+def _workbook_decimal(
+    value: object,
+    error: str,
+    *,
+    minimum: Decimal,
+    maximum: Decimal = MAX_MONEY,
+) -> Decimal:
+    if isinstance(value, float):
+        number = Decimal(str(value))
+        if not number.is_finite() or number < minimum or number > maximum:
+            raise ValueError(error)
+        value = f"{value:.6f}"
+    return _decimal(value, error, minimum=minimum, maximum=maximum)
 
 
 def _text(value: object, error: str, *, allow_empty: bool = False, maximum: int = MAX_TEXT_LENGTH) -> str:

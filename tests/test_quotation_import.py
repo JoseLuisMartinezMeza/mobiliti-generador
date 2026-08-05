@@ -67,6 +67,34 @@ def test_build_import_manifest_detects_explicit_currency(tmp_path):
     assert len({item["row_hash"] for item in manifest["items"]}) == 7
 
 
+def test_build_import_manifest_rounds_excel_float_noise_to_six_places(tmp_path):
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    workbook = load_workbook(source)
+    workbook["Quotation"]["J9"] = 92.39999999999999
+    workbook.save(source)
+    workbook.close()
+
+    manifest, _ = build_import_manifest(
+        source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+    )
+
+    assert manifest["items"][0]["unit_price"] == "92.4"
+
+
+def test_build_import_manifest_rounds_excel_quantity_float_noise_to_six_places(tmp_path):
+    source = write_import_fixture(tmp_path / "source.xlsx")
+    workbook = load_workbook(source)
+    workbook["Quotation"]["G9"] = 3.600000000000001
+    workbook.save(source)
+    workbook.close()
+
+    manifest, _ = build_import_manifest(
+        source.read_bytes(), import_id=IMPORT_ID, original_filename=source.name
+    )
+
+    assert manifest["items"][0]["quantity"] == "3.6"
+
+
 def test_build_import_manifest_normalizes_multiline_workbook_descriptions(tmp_path):
     source = write_import_fixture(tmp_path / "source.xlsx")
     workbook = load_workbook(source)
