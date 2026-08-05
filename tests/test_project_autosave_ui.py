@@ -151,6 +151,112 @@ def test_autosave_debounces_retries_with_same_id_and_uses_new_id_for_later_edit(
     }
 
 
+def test_autosave_serializes_overlapping_edits_and_uses_confirmed_revision():
+    result = run_js(f"""
+      const {{enqueueProjectSave, scheduleAutosave}} =
+        await import({json.dumps(AUTOSAVE_MODULE)});
+      const timers = [];
+      const setTimer = (callback, delay) => {{
+        timers.push({{callback, delay}});
+        return timers.length - 1;
+      }};
+      let serverRevision = 3;
+      let clientRevision = 3;
+      let queue = Promise.resolve();
+      let releaseFirst;
+      const requests = [];
+      const dispatches = [];
+      const serverSave = (snapshot, expectedRevision, operationId) => {{
+        requests.push({{snapshot: snapshot.name, expectedRevision, operationId}});
+        if (expectedRevision !== serverRevision) {{
+          return Promise.reject(Object.assign(new Error("revision conflict"), {{
+            status: 409,
+            project: {{id: "project-1", revision: serverRevision}},
+          }}));
+        }}
+        if (operationId === "op-1") {{
+          return new Promise((resolve) => {{
+            releaseFirst = () => {{
+              serverRevision += 1;
+              resolve({{revision: serverRevision}});
+            }};
+          }});
+        }}
+        serverRevision += 1;
+        return Promise.resolve({{revision: serverRevision}});
+      }};
+      const queuedSave = (snapshot, _capturedRevision, operationId) => {{
+        const pending = enqueueProjectSave({{
+          previous: queue,
+          snapshot,
+          operationId,
+          getExpectedRevision: () => clientRevision,
+          saveProject: serverSave,
+          onConfirmed: (saved) => {{ clientRevision = saved.revision; }},
+        }});
+        queue = pending.catch(() => undefined);
+        return pending;
+      }};
+
+      let currentOperation = "op-1";
+      const cleanupFirst = scheduleAutosave({{
+        snapshot: {{name: "primer cambio"}},
+        expectedRevision: 3,
+        operationId: "op-1",
+        dirtyVersion: 1,
+        saveProject: queuedSave,
+        dispatch: (action) => dispatches.push(action),
+        isCurrent: () => currentOperation === "op-1",
+        onConfirmed: () => {{}},
+        setTimer,
+        clearTimer: () => {{}},
+      }});
+      const firstAttempt = timers[0].callback();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      cleanupFirst();
+      currentOperation = "op-2";
+      scheduleAutosave({{
+        snapshot: {{name: "segundo cambio"}},
+        expectedRevision: 3,
+        operationId: "op-2",
+        dirtyVersion: 2,
+        saveProject: queuedSave,
+        dispatch: (action) => dispatches.push(action),
+        isCurrent: () => currentOperation === "op-2",
+        onConfirmed: () => {{}},
+        setTimer,
+        clearTimer: () => {{}},
+      }});
+      const secondAttempt = timers[1].callback();
+      await new Promise((resolve) => setImmediate(resolve));
+      const requestsWhileFirstIsInFlight = requests.length;
+
+      releaseFirst();
+      await Promise.all([firstAttempt, secondAttempt]);
+      await new Promise((resolve) => setImmediate(resolve));
+      console.log(JSON.stringify({{
+        requestsWhileFirstIsInFlight,
+        expectedRevisions: requests.map((request) => request.expectedRevision),
+        operationIds: requests.map((request) => request.operationId),
+        clientRevision,
+        serverRevision,
+        conflicts: dispatches.filter((action) => action.type === "conflict").length,
+        savedIds: dispatches.filter((action) => action.type === "saved")
+          .map((action) => action.operationId),
+      }}));
+    """)
+    assert result == {
+        "requestsWhileFirstIsInFlight": 1,
+        "expectedRevisions": [3, 4],
+        "operationIds": ["op-1", "op-2"],
+        "clientRevision": 5,
+        "serverRevision": 5,
+        "conflicts": 0,
+        "savedIds": ["op-2"],
+    }
+
+
 def test_autosave_409_dispatches_conflict_without_retry():
     result = run_js(f"""
       const {{scheduleAutosave}} = await import({json.dumps(AUTOSAVE_MODULE)});

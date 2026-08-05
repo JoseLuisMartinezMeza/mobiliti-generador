@@ -2,6 +2,7 @@ import {useEffect, useReducer, useRef} from "react";
 
 import {
   autosaveReducer,
+  enqueueProjectSave,
   initialAutosaveState,
   scheduleAutosave,
 } from "./projectAutosave.js";
@@ -35,6 +36,7 @@ export function useProjectAutosave({
   const dirtyVersionRef = useRef(0);
   const projectKeyRef = useRef(projectKey);
   const saveProjectRef = useRef(saveProject);
+  const saveQueueRef = useRef(Promise.resolve());
 
   saveProjectRef.current = saveProject;
 
@@ -67,6 +69,7 @@ export function useProjectAutosave({
     const snapshot = structuredClone(project);
     const operationId = crypto.randomUUID();
     const expectedRevision = revisionRef.current;
+    const scheduledProjectKey = projectKey;
     operationRef.current = operationId;
     dispatch({type: "changed"});
 
@@ -75,7 +78,22 @@ export function useProjectAutosave({
       expectedRevision,
       operationId,
       dirtyVersion,
-      saveProject: (...args) => saveProjectRef.current(...args),
+      saveProject: (queuedSnapshot, _capturedRevision, queuedOperationId) => {
+        const pending = enqueueProjectSave({
+          previous: saveQueueRef.current,
+          snapshot: queuedSnapshot,
+          operationId: queuedOperationId,
+          getExpectedRevision: () => revisionRef.current,
+          saveProject: (...args) => saveProjectRef.current(...args),
+          onConfirmed: (saved) => {
+            if (projectKeyRef.current === scheduledProjectKey) {
+              revisionRef.current = saved.revision;
+            }
+          },
+        });
+        saveQueueRef.current = pending.catch(() => undefined);
+        return pending;
+      },
       dispatch,
       isCurrent: () => operationRef.current === operationId,
       onConfirmed: (saved) => {

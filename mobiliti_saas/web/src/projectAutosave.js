@@ -72,6 +72,27 @@ export function autosaveReducer(state, action) {
   return state;
 }
 
+export function enqueueProjectSave({
+  previous,
+  snapshot,
+  operationId,
+  getExpectedRevision,
+  saveProject,
+  onConfirmed,
+}) {
+  return Promise.resolve(previous)
+    .catch(() => undefined)
+    .then(async () => {
+      const saved = await saveProject(
+        snapshot,
+        getExpectedRevision(),
+        operationId,
+      );
+      onConfirmed(saved);
+      return saved;
+    });
+}
+
 export function scheduleAutosave({
   snapshot,
   expectedRevision,
