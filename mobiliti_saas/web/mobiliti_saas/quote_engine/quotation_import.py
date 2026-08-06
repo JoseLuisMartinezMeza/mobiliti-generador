@@ -317,6 +317,17 @@ def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, st
             if (name is None or name == "") and (number is None or number == ""):
                 continue
             if isinstance(number, (int, float)) and not isinstance(number, bool):
+                volume = _optional_cell(sheet, row, columns, "m3")
+                if volume is not None and str(volume).strip():
+                    volume = _plain_decimal(
+                        _workbook_decimal(
+                            volume,
+                            "Volumen importado invalido",
+                            minimum=Decimal(0),
+                        )
+                    )
+                else:
+                    volume = None
                 items.append(
                     {
                         "tipo": "producto",
@@ -324,6 +335,7 @@ def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, st
                         "nombre": name,
                         "descripcion": sheet.cell(row=row, column=description_column).value,
                         "dimension": sheet.cell(row=row, column=dimension_column).value,
+                        "m3": volume,
                         "cantidad": sheet.cell(row=row, column=quantity_column).value,
                         "precio": sheet.cell(row=row, column=price_column).value,
                         "categoria": current_category,
@@ -635,8 +647,6 @@ def _detect_columns(sheet) -> dict[str, str]:
         found = _find_header_column(sheet, terms)
         if found:
             result[key] = found
-    if "m3" not in result:
-        result["m3"] = result.get("dimension", "E")
     if "unit_price" not in result and "list_price" not in result:
         for column in range(1, sheet.max_column + 1):
             if "price" in _normalize_header(sheet.cell(Q_HEADER_ROW, column).value):

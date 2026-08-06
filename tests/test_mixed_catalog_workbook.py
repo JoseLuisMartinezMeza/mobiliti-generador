@@ -379,7 +379,7 @@ def test_mixed_workbook_uses_manual_sections_and_interleaved_supplier_order(tmp_
     wb.close()
 
 
-def test_mixed_workbook_interleaves_catalog_and_imported_rows_with_original_image(
+def test_mixed_workbook_interleaves_catalog_and_imported_rows_with_original_image_and_volume(
     monkeypatch, tmp_path
 ):
     source = write_import_fixture(tmp_path / "imported-source.xlsx")
@@ -468,6 +468,12 @@ def test_mixed_workbook_interleaves_catalog_and_imported_rows_with_original_imag
     assert quotation["D10"].value.startswith("Silla operativa revisada")
     assert quotation["E10"].value == "630 x 565 x 1000 mm"
     assert quotation["G10"].value == 2
+    assert (quotation["H7"].value, quotation["I7"].value) == ("Vol.", "Tot.Vol.")
+    assert (quotation["H9"].value, quotation["I9"].value) == (None, None)
+    assert quotation["H10"].value == pytest.approx(0.25)
+    assert quotation["I10"].value == "=G10*H10"
+    assert quotation["H10"].number_format == '0.00" m³"'
+    assert quotation["I10"].number_format == '0.00" m³"'
     assert quotation["J10"].value == 1517
     assert quotation["K10"].value is None
     assert quotation["L10"].value == "Sunon"

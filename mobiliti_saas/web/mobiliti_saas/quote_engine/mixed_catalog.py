@@ -32,6 +32,7 @@ from .quotation_import import (
     XLSX_MAX_ROWS,
     build_import_manifest,
     normalize_imported_items,
+    read_items_from_bytes,
     validate_quote_size,
 )
 from .supplier_catalog import (
@@ -1271,6 +1272,7 @@ def create_mixed_catalog_quotation_workbook(
     payload = validate_mixed_catalog_payload(payload)
     imported_source = payload.get("imported_source")
     imported_images: dict[int, tuple[bytes, str]] = {}
+    imported_volumes: dict[int, str] = {}
     if imported_source is not None:
         if imported_source_path is None:
             raise ValueError("Fuente importada requerida")
@@ -1293,6 +1295,12 @@ def create_mixed_catalog_quotation_workbook(
         authoritative_rows = {
             item["source_row"]: item
             for item in authoritative_manifest["items"]
+        }
+        source_items, _source_columns = read_items_from_bytes(imported_source_bytes)
+        imported_volumes = {
+            item["row"]: item["m3"]
+            for item in source_items
+            if item["tipo"] == "producto" and item.get("m3") is not None
         }
         imported_lines = imported_source["items"]
         if {
@@ -1334,6 +1342,8 @@ def create_mixed_catalog_quotation_workbook(
         write_catalog_quotation_headers(
             ws,
             {
+                8: safe_excel_text("Vol."),
+                9: safe_excel_text("Tot.Vol."),
                 12: safe_excel_text("Supplier"),
                 13: safe_excel_text("Discount Percent"),
                 14: safe_excel_text("Original Currency"),
@@ -1412,6 +1422,13 @@ def create_mixed_catalog_quotation_workbook(
                         ),
                     ),
                 )
+                if imported and item["source_row"] in imported_volumes:
+                    ws.cell(row, 8).value = float(
+                        Decimal(imported_volumes[item["source_row"]])
+                    )
+                    ws.cell(row, 8).number_format = '0.00" m³"'
+                    ws.cell(row, 9).value = f"=G{row}*H{row}"
+                    ws.cell(row, 9).number_format = '0.00" m³"'
                 ws.cell(row, 12).value = safe_excel_text(
                     item["provider"] if imported else item["supplier"]
                 )
