@@ -858,6 +858,7 @@ def test_line_shape_is_exact_and_defensively_copies_visual_and_identity_data():
         quantity: line.quantity,
         rulesMax: line.quantityRules.max,
         snapshotKeys: Object.keys(line.snapshot).sort(),
+        snapshotDisplayKey: line.snapshot.displayKey,
         warnings: line.snapshot.warnings,
         configurationLength: line.snapshot.configuration.length
       }));
@@ -892,11 +893,13 @@ def test_line_shape_is_exact_and_defensively_copies_visual_and_identity_data():
             "availability",
             "code",
             "configuration",
+            "displayKey",
             "image_url",
             "name",
             "unit",
             "warnings",
         ],
+        "snapshotDisplayKey": "",
         "warnings": ["visual"],
         "configurationLength": 2000,
     }
@@ -1152,6 +1155,7 @@ def test_mixed_quote_serializer_sends_only_identity_configuration_and_quantity()
             "availability",
             "code",
             "configuration",
+            "displayKey",
             "image_url",
             "name",
             "unit",
@@ -1245,9 +1249,21 @@ def test_catalog_list_is_frozen_and_complete():
             "lumbro",
             "jome",
             "lauco",
+            "idelika",
+            "conceptos",
         ],
         "mutation": "TypeError",
     }
+
+
+def test_project_picker_keeps_idelika_and_conceptos_on_the_shared_selection_path():
+    picker = Path("mobiliti_saas/web/src/ProductPickerDialog.jsx").read_text(encoding="utf-8")
+
+    assert "CATALOG_OPTIONS.map" in picker
+    assert "productPriceLabel" in picker
+    assert "productBaseConfigurationLabel" in picker
+    assert 'catalog === "idelika"' not in picker
+    assert 'catalog === "conceptos"' not in picker
 
 
 def test_sparse_supplier_add_ons_are_rejected_before_key_or_payload_creation():

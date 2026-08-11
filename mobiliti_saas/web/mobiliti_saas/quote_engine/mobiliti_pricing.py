@@ -122,6 +122,20 @@ def build_mobiliti_pricing_writes(
         if canonical.section_id != binding.section_id:
             raise ValueError("Identidad de precio inconsistente: section_id canónico")
 
+        pending_values = (
+            canonical.original_cost,
+            canonical.frozen_rate,
+            canonical.converted_cost,
+        )
+        pending_price = all(value is None for value in pending_values)
+        if any(value is None for value in pending_values) and not pending_price:
+            raise ValueError("Estado de precio canónico inconsistente")
+        if pending_price:
+            writes.append(
+                MobilitiCellWrite(f"J{target_row}", "text", "Por confirmar")
+            )
+            continue
+
         original = _numeric_18_6(
             canonical.original_cost,
             "original_cost",

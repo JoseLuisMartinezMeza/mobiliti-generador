@@ -8,6 +8,7 @@ from .mixed_catalog import (
     MIXED_EXPECTED_BASE_CURRENCY,
     preflight_mixed_catalog_items,
 )
+from .supplier_catalog import has_pending_price_contract, is_supplier_item_quotable
 
 
 MAX_SEARCH_QUERY_LENGTH = 160
@@ -149,6 +150,35 @@ def _catalog_identity(catalog: str, raw: dict, base_choices: list[dict]) -> dict
     }
 
 
+def _legacy_item_quotable(
+    catalog: str,
+    raw: dict,
+    identity: dict,
+    official_code: str,
+) -> bool:
+    if catalog not in {"tarkett", "offiho"}:
+        return False
+    if (_text(raw.get("code_status")) or "verified") != "verified":
+        return False
+    if not official_code:
+        return False
+    identity_field = "code" if catalog == "tarkett" else "inventory_key"
+    if not _text(identity.get(identity_field)):
+        return False
+    price_net = _catalog_price(catalog, raw)
+    if (
+        not price_net
+        or _catalog_currency(catalog, raw, price_net)
+        != MIXED_EXPECTED_BASE_CURRENCY[catalog]
+    ):
+        return False
+    if catalog == "tarkett":
+        available_quantity = _positive_decimal(raw.get("available_quantity"))
+        if not available_quantity or Decimal(available_quantity) < Decimal("1"):
+            return False
+    return True
+
+
 def _non_positive(value: object) -> bool:
     if value is None or isinstance(value, bool):
         return False
@@ -176,6 +206,16 @@ def _availability_warnings(availability: str) -> list[str]:
         "Fabricación por confirmar": ["Fabricación por confirmar"],
         "Disponibilidad por confirmar": ["Disponibilidad por confirmar"],
     }.get(availability, [])
+
+
+def _catalog_warnings(raw: dict, availability: str) -> list[str]:
+    warnings: list[str] = []
+    if raw.get("code_status") == "needs_review" and not _text(raw.get("sku")):
+        warnings.append("Código por verificar")
+    if has_pending_price_contract(raw):
+        warnings.append("Precio por confirmar")
+    warnings.extend(_availability_warnings(availability))
+    return list(dict.fromkeys(warnings))
 
 
 def _page_value(value: object, field: str, minimum: int, maximum: int | None = None) -> int:
@@ -218,14 +258,27 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
         for key, value in preflight.items()
         if key not in {"catalog", "quantity"}
     }
-    official_code = _text(raw.get("code")) or _text(raw.get("sku")) or _text(raw.get("internal_id"))
-    if not official_code:
+    official_code = _text(raw.get("code")) or _text(raw.get("sku"))
+    display_key = (
+        _text(raw.get("internal_id"))
+        or _text(raw.get("inventory_key"))
+        or official_code
+    )
+    if not display_key:
         return None
-    name = _text(raw.get("name")) or official_code
+    name = _text(raw.get("name")) or official_code or display_key
     availability = _availability_label(raw)
     result = {
         "catalog": catalog,
         "official_code": official_code,
+        "display_key": display_key,
+        "code_status": _text(raw.get("code_status")) or "verified",
+        "quotable": (
+            _legacy_item_quotable(catalog, raw, identity, official_code)
+            if catalog in {"tarkett", "offiho"}
+            else is_supplier_item_quotable(raw, catalog)
+        ),
+        "price_pending": has_pending_price_contract(raw),
         "identity": identity,
         "snapshot": {
             "name": name,
@@ -234,7 +287,7 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
             "dimensions": _dimensions(raw),
             "availability": availability,
             "configuration": base_choices[0]["name"] if len(base_choices) == 1 else "",
-            "warnings": _availability_warnings(availability),
+            "warnings": _catalog_warnings(raw, availability),
         },
     }
     price_net = _catalog_price(catalog, raw)
@@ -273,7 +326,8 @@ def search_catalog_products(catalogs, *, query, supplier, offset, limit) -> dict
                 continue
             haystack = _fold(
                 f"{raw.get('code', '')} {raw.get('sku', '')} "
-                f"{raw.get('name', '')} {raw.get('description', '')}"
+                f"{raw.get('internal_id', '')} {raw.get('name', '')} "
+                f"{raw.get('description', '')}"
             )
             if needle and needle not in haystack:
                 continue
@@ -283,9 +337,9 @@ def search_catalog_products(catalogs, *, query, supplier, offset, limit) -> dict
         rows.extend(sorted(
             catalog_rows,
             key=lambda item: (
-                _fold(item["official_code"]),
+                _fold(item["official_code"] or item["display_key"]),
                 _fold(item["snapshot"]["name"]),
-                item["official_code"],
+                item["official_code"] or item["display_key"],
                 item["snapshot"]["name"],
             ),
         ))

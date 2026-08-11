@@ -1,6 +1,7 @@
 import {useEffect, useMemo, useRef, useState} from "react";
 import {
   buildCatalogSearchPath,
+  canConfirmProductSelection,
   CATALOG_OPTIONS,
   catalogLabel,
   createCanonicalProductSelection,
@@ -14,6 +15,8 @@ import {
   productDimensions,
   productOptionLabel,
   productPriceLabel,
+  productSelectionKey,
+  productTechnicalKey,
   productVariantConfiguration,
   shouldShowProductImage,
 } from "./productPicker";
@@ -112,8 +115,7 @@ export default function ProductPickerDialog({
         setTotal(Number(response?.total) || 0);
         setSelected((current) => (
           current && items.some((item) => (
-            item.catalog === current.catalog
-            && item.official_code === current.official_code
+            productSelectionKey(item) === productSelectionKey(current)
           )) ? current : null
         ));
       } catch (requestError) {
@@ -147,7 +149,7 @@ export default function ProductPickerDialog({
   const preview = selected?.snapshot || {};
   const previewSupplier = catalogLabel(selected?.catalog);
   const warnings = normalizeWarnings(preview.warnings);
-  const selectedKey = selected ? `${selected.catalog}:${selected.official_code}` : "";
+  const selectedKey = productSelectionKey(selected);
   const showImage = shouldShowProductImage(preview.image_url, failedImageKey === selectedKey);
   const baseOptions = productBaseOptions(selected);
   const baseConfigurationLabel = productBaseConfigurationLabel(selected);
@@ -155,7 +157,7 @@ export default function ProductPickerDialog({
   const selectedBaseOption = baseOptions.find((option) => option.id === selectedBaseOptionId);
   const addOnOptions = productAddOnOptions(selected, selectedBaseOptionId);
   const addOnFamilies = productAddOnFamilies(selected, selectedBaseOptionId);
-  const canConfirm = Boolean(selected) && (!baseOptions.length || Boolean(selectedBaseOption));
+  const canConfirm = canConfirmProductSelection(selected, selectedBaseOptionId);
   const canGoBack = offset > 0;
   const canGoForward = offset + results.length < total;
 
@@ -257,13 +259,14 @@ export default function ProductPickerDialog({
                 const itemVariantConfiguration = productVariantConfiguration(item);
                 const itemDimensions = productDimensions(item);
                 const itemPrice = productPriceLabel(item);
-                const isSelected = selectedKey === `${item.catalog}:${item.official_code}`;
+                const itemKey = productSelectionKey(item);
+                const isSelected = selectedKey === itemKey;
                 return (
                   <button
                     className={`project-picker-result${isSelected ? " selected" : ""}`}
                     type="button"
                     aria-pressed={isSelected}
-                    key={`${item.catalog}:${item.official_code}`}
+                    key={itemKey}
                     onClick={() => {
                       const next = {...item, snapshot: item.snapshot || {}};
                       const nextBaseId = initialBaseOptionId(next);
@@ -284,7 +287,10 @@ export default function ProductPickerDialog({
                       {itemVariantConfiguration ? (
                         <small>Acabado / material del aro: {itemVariantConfiguration}</small>
                       ) : null}
-                      <small>{item.official_code} · {item.catalog}</small>
+                      <small>{item.official_code || "Código por verificar"} · {item.catalog}</small>
+                      {!item.official_code ? (
+                        <small>Referencia técnica: {productTechnicalKey(item)}</small>
+                      ) : null}
                       {itemDimensions ? <small>Medidas: {itemDimensions}</small> : null}
                       <small>Precio: {itemPrice}</small>
                     </span>
@@ -319,7 +325,10 @@ export default function ProductPickerDialog({
                   : <span className="project-picker-no-image">Sin imagen</span>}
                 <strong>{preview.name}</strong>
                 <span>{previewSupplier || "Proveedor no disponible"}</span>
-                <span>Código: {selected.official_code}</span>
+                <span>Código: {selected.official_code || "Código por verificar"}</span>
+                {!selected.official_code ? (
+                  <span>Referencia técnica: {productTechnicalKey(selected)}</span>
+                ) : null}
                 {variantConfiguration ? (
                   <span>Acabado / material del aro: {variantConfiguration}</span>
                 ) : null}

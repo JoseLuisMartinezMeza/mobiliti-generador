@@ -3,7 +3,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEV_START_SCRIPT = PROJECT_ROOT / "scripts" / "dev-start.ps1"
-ALL_GENERIC_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco"
+ALL_GENERIC_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos"
 
 
 def test_dev_start_enables_every_generic_catalog_for_api_and_worker():
@@ -13,7 +13,7 @@ def test_dev_start_enables_every_generic_catalog_for_api_and_worker():
     assert script.count(assignment) == 2
 
 
-def test_dev_start_reloads_api_when_quote_sources_change():
+def test_dev_start_reloads_canonical_api_when_quote_sources_change():
     script = DEV_START_SCRIPT.read_text(encoding="utf-8")
     api_arguments = next(
         line for line in script.splitlines()
@@ -21,7 +21,9 @@ def test_dev_start_reloads_api_when_quote_sources_change():
     )
 
     assert "--reload" in api_arguments
-    assert r"--reload-dir vercel_deploy\api" in api_arguments
+    assert r"--app-dir mobiliti_saas\api" in api_arguments
+    assert r"--reload-dir mobiliti_saas\api" in api_arguments
+    assert r"--app-dir vercel_deploy\api" not in api_arguments
     assert r"--reload-dir mobiliti_saas\quote_engine" in api_arguments
 
 

@@ -1108,6 +1108,8 @@ def test_mixed_cart_preserves_per_line_discount_audit_by_price_mode(mixed_catalo
         "lumbro": "0.000000",
         "jome": "0.000000",
         "lauco": "0.000000",
+        "idelika": "0.000000",
+        "conceptos": "0.000000",
     }
 
 
@@ -1153,6 +1155,8 @@ def test_mixed_line_projection_has_exact_contract_for_each_family(frozen_mixed_p
     for additional_catalog, supplier_label in (
         ("jome", "JOME"),
         ("lauco", "Lauco"),
+        ("idelika", "IDÉLIKA"),
+        ("conceptos", "Conceptos"),
     ):
         expected = deepcopy(expected_by_catalog["lumbro"])
         expected.update({

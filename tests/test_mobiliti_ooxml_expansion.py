@@ -374,25 +374,23 @@ def test_unknown_formula_metadata_and_extension_nodes_survive_cloning():
 
 def test_shared_formula_follower_is_materialized_from_its_master_before_cloning():
     root = _official_root()
-    follower = root.find(f".//{{{MAIN}}}c[@r='W49']/{{{MAIN}}}f")
+    follower = root.find(f".//{{{MAIN}}}c[@r='G15']/{{{MAIN}}}f")
     assert follower is not None
-    follower.attrib.clear()
-    follower.set("t", "shared")
-    follower.set("si", "1")
-    follower.text = None
+    assert follower.attrib == {"t": "shared", "si": "1"}
+    assert follower.text is None
 
-    mutation = build_mobiliti_sheet(
-        ET.tostring(root, encoding="utf-8", xml_declaration=True),
-        [SectionNeed("one", "UNO", 1), SectionNeed("two", "DOS", 1)],
-        [],
+    editor = WorksheetEditor(root)
+    row_map = plan_mobiliti_layout([SectionNeed("one", "UNO", 1)])
+    editor.replace_table_row(
+        100,
+        editor.require_row(15),
+        15,
+        row_map,
     )
-    output = ET.fromstring(mutation.xml)
-    cloned = output.find(f".//{{{MAIN}}}c[@r='W49']/{{{MAIN}}}f")
+    cloned = editor.root.find(f".//{{{MAIN}}}c[@r='G100']/{{{MAIN}}}f")
 
     assert cloned is not None
-    assert cloned.text == Translator(
-        _official_formula("G14"), origin="G14"
-    ).translate_formula("W49")[1:]
+    assert cloned.text == 'IFERROR(VLOOKUP(F100,Tabla_Proveedores_1,2,0)," ")'
     assert not ({"t", "ref", "si"} & set(cloned.attrib))
 
 
@@ -1227,8 +1225,10 @@ def test_all_product_rows_keep_styles_and_used_unused_rows_match_official_formul
     )
     formula_check_rows = {used_row, unused_row}
 
-    for section_index, section in enumerate(mutation.row_map.sections):
-        source_row_number = 14 if section_index == 0 else 49
+    for section in mutation.row_map.sections:
+        # La fila 14 es la superficie canónica completa. Las filas posteriores
+        # aportan presentación, pero no un contrato alterno de fórmulas.
+        source_row_number = 14
         source_row = root.find(f".//{{{MAIN}}}row[@r='{source_row_number}']")
         assert source_row is not None
         source_cells = {
@@ -1270,9 +1270,14 @@ def test_all_product_rows_keep_styles_and_used_unused_rows_match_official_formul
             )
             if row_number in formula_check_rows:
                 for column in formula_columns:
+                    formula_source_row = (
+                        49
+                        if column == 3 and row_number != mutation.row_map.sections[0].product_start
+                        else source_row_number
+                    )
                     source_coordinate = (
                         f"{__import__('openpyxl').utils.get_column_letter(column)}"
-                        f"{source_row_number}"
+                        f"{formula_source_row}"
                     )
                     target_coordinate = (
                         f"{__import__('openpyxl').utils.get_column_letter(column)}"

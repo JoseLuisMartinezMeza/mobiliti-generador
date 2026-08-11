@@ -240,7 +240,10 @@ def write_catalog_quotation_item(
         else unit
     )
     ws.cell(row, 7).value = _excel_number(quantity)
-    ws.cell(row, 10).value = _excel_number(_decimal(item.get("unit_price", 0)))
+    if item.get("unit_price") is None and item.get("price_source") == "missing":
+        ws.cell(row, 10).value = "Por confirmar"
+    else:
+        ws.cell(row, 10).value = _excel_number(_decimal(item.get("unit_price", 0)))
     ws.cell(row, 11).value = text_transform(url)
     if warning:
         ws.cell(row, 4).fill = PatternFill("solid", fgColor=WARNING_FILL)

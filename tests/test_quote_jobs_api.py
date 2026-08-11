@@ -540,7 +540,7 @@ def test_init_upload_creates_signed_upload(monkeypatch):
     resp = _client().post(
         "/cotizaciones/init-upload",
         headers=_auth_headers(),
-        json={"filename": "quotation.xlsx", "size": 1024, "template": "Template.xlsx"},
+        json={"filename": "quotation.xlsx", "size": 1024, "template": "official_2026_gdl"},
     )
 
     assert resp.status_code == 200
@@ -577,7 +577,7 @@ def test_init_upload_accepts_r2_signed_upload_without_supabase_token(monkeypatch
     resp = _client().post(
         "/cotizaciones/init-upload",
         headers=_auth_headers(),
-        json={"filename": "quotation.xlsx", "size": 1024, "template": "Template.xlsx"},
+        json={"filename": "quotation.xlsx", "size": 1024, "template": "official_2026_gdl"},
     )
 
     assert resp.status_code == 200
@@ -611,7 +611,7 @@ def test_init_upload_accepts_pdf(monkeypatch):
     resp = _client().post(
         "/cotizaciones/init-upload",
         headers=_auth_headers(),
-        json={"filename": "supplier-quotation.pdf", "size": 2048, "template": "Template.xlsx"},
+        json={"filename": "supplier-quotation.pdf", "size": 2048, "template": "official_2026_gdl"},
     )
 
     assert resp.status_code == 200
@@ -682,7 +682,7 @@ def _valid_submit_body():
         "telefono": "555",
         "direccion": "Direccion",
         "razon_social": "Empresa SA",
-        "template": "Template.xlsx",
+        "template": "official_2026_gdl",
     }
 
 
@@ -3529,6 +3529,30 @@ def test_published_catalog_hydrates_approved_asset_without_changing_contract(mon
     assert catalog["items"][0]["attributes"]["price_evidence"] == [{"kind": "base"}]
 
 
+def test_dev_catalog_cache_observes_visual_updates_with_same_snapshot_identity(monkeypatch):
+    state = {"payload": _mock_supplier_catalog()}
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(
+        index,
+        "db_get_published_catalog_snapshot",
+        lambda supplier: {
+            "id": "snapshot-stable",
+            "supplier": supplier,
+            "source_hash": state["payload"]["source_hash"],
+            "payload": deepcopy(state["payload"]),
+        },
+    )
+    index._SUPPLIER_CATALOG_CACHE.clear()
+
+    first = index._load_supplier_catalog_cached("cr-global")
+    assert first["items"][0]["product_url"] == "https://example.test/chair"
+
+    state["payload"]["items"][0]["product_url"] = "https://example.test/chair-curated"
+    second = index._load_supplier_catalog_cached("cr-global")
+
+    assert second["items"][0]["product_url"] == "https://example.test/chair-curated"
+
+
 def test_catalog_asset_public_url_uses_local_dev_endpoint(monkeypatch):
     object_name = f"{'d' * 64}.png"
     monkeypatch.setattr(index, "DEV_MODE", True)
@@ -4783,7 +4807,7 @@ def test_submit_rejects_job_from_other_user(monkeypatch):
             "usuario_id": 99,
             "status": "draft",
             "metadata": {},
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 
@@ -4801,7 +4825,7 @@ def test_submit_moves_job_to_queued(monkeypatch):
             "usuario_id": 7,
             "status": "draft",
             "metadata": {"original_filename": "quotation.xlsx"},
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 
@@ -4824,7 +4848,7 @@ def test_submit_moves_job_to_queued(monkeypatch):
             "razon_social": "Empresa SA",
             "image_provider": "dezgo",
             "image_prompt": "Prompt personalizado para mobiliario en fondo blanco",
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 
@@ -4847,7 +4871,7 @@ def test_submit_assigns_locked_quote_number_for_known_user(monkeypatch):
             "usuario_id": 7,
             "status": "draft",
             "metadata": {"original_filename": "quotation.xlsx"},
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
     monkeypatch.setattr(
@@ -4878,7 +4902,7 @@ def test_submit_assigns_locked_quote_number_for_known_user(monkeypatch):
             "telefono": "555",
             "direccion": "Direccion",
             "razon_social": "Empresa SA",
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 
@@ -4896,7 +4920,7 @@ def test_submit_defaults_to_dezgo_for_missing_product_images(monkeypatch):
             "usuario_id": 7,
             "status": "draft",
             "metadata": {"original_filename": "quotation.xlsx"},
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 
@@ -4945,7 +4969,7 @@ def test_submit_failed_job_reuses_retry_preconditions_without_queue_or_lease_res
         "id": job_id, "usuario_id": 7, "status": "failed",
         "input_path": input_path, "error_message": error_message,
         "metadata": {"source_type": "mixed_catalog_cart"},
-        "template": "Template.xlsx", "attempt_token": "old-attempt",
+        "template": "official_2026_gdl", "attempt_token": "old-attempt",
         "lease_expires_at": "2026-07-19T00:00:00Z",
     })
     calls = []
@@ -4966,7 +4990,7 @@ def test_submit_failed_job_queues_when_central_retry_preconditions_pass(monkeypa
         "id": job_id, "usuario_id": 7, "status": "failed",
         "input_path": "users/7/jobs/job-1/input.json", "error_message": "generator failed",
         "metadata": {"source_type": "mixed_catalog_cart"},
-        "template": "Template.xlsx", "attempt_token": "old-attempt",
+        "template": "official_2026_gdl", "attempt_token": "old-attempt",
         "lease_expires_at": "2026-07-19T00:00:00Z",
     })
     seen = {}
@@ -5002,7 +5026,7 @@ def test_submit_accepts_sunon_web_image_provider(monkeypatch):
             "usuario_id": 7,
             "status": "draft",
             "metadata": {"original_filename": "quotation.xlsx"},
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 
@@ -5042,7 +5066,7 @@ def test_submit_accepts_sunon_catalog_image_provider(monkeypatch):
             "usuario_id": 7,
             "status": "draft",
             "metadata": {"original_filename": "quotation.xlsx"},
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 
@@ -5082,7 +5106,7 @@ def test_submit_rejects_invalid_image_provider(monkeypatch):
             "usuario_id": 7,
             "status": "draft",
             "metadata": {"original_filename": "quotation.xlsx"},
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 
@@ -5114,7 +5138,7 @@ def test_submit_rejects_discount_over_100(monkeypatch):
             "usuario_id": 7,
             "status": "draft",
             "metadata": {"original_filename": "quotation.xlsx"},
-            "template": "Template.xlsx",
+            "template": "official_2026_gdl",
         },
     )
 

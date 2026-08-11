@@ -30,6 +30,8 @@ from .importers import (
     build_lumbro_snapshot_with_assets,
     build_jome_snapshot_with_assets,
     build_lauco_snapshot_with_assets,
+    build_idelika_snapshot_with_assets,
+    build_conceptos_snapshot_with_assets,
     build_sonara_snapshot_with_assets,
     build_sunon_snapshot_with_assets,
 )
@@ -61,6 +63,7 @@ _REPOSITORY_METHODS = (
 _GRAPH_METHODS = ("iter_delta", "download_content")
 _SUPPLIERS = (
     "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
+    "idelika", "conceptos",
 )
 ADAPTERS = {
     "cr_global": build_cr_global_snapshot_with_assets,
@@ -70,6 +73,8 @@ ADAPTERS = {
     "lumbro": build_lumbro_snapshot_with_assets,
     "jome": build_jome_snapshot_with_assets,
     "lauco": build_lauco_snapshot_with_assets,
+    "idelika": build_idelika_snapshot_with_assets,
+    "conceptos": build_conceptos_snapshot_with_assets,
 }
 CATALOG_EXIT_WORKED = 0
 CATALOG_EXIT_FAILED = 1
@@ -609,7 +614,10 @@ def _catalog_metrics(candidate, diff):
         "generated_images": sum(row["image_kind"] == "generated_reference" for row in rows),
         "official_images": sum(row["image_kind"] == "official" and bool(row["image_url"]) for row in rows),
         "pending_removals": diff.pending_removal_count,
-        "priced_items": sum(Decimal(row["price_net"]) > 0 for row in rows),
+        "priced_items": sum(
+            row["price_net"] is not None and Decimal(row["price_net"]) > 0
+            for row in rows
+        ),
     }
 
 

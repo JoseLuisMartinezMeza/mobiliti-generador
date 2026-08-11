@@ -61,7 +61,7 @@ def test_dev_mode_full_quote_flow(tmp_path, monkeypatch):
     init = client.post(
         "/cotizaciones/init-upload",
         headers=headers,
-        json={"filename": "quotation.xlsx", "size": source.stat().st_size, "template": "online"},
+        json={"filename": "quotation.xlsx", "size": source.stat().st_size, "template": "official_2026_gdl"},
     )
     assert init.status_code == 200
     init_data = init.json()
@@ -85,7 +85,7 @@ def test_dev_mode_full_quote_flow(tmp_path, monkeypatch):
             "telefono": "555",
             "direccion": "Direccion",
             "razon_social": "Empresa Dev",
-            "template": "online",
+            "template": "official_2026_gdl",
             "image_provider": "pillow",
         },
     )
@@ -162,7 +162,7 @@ def test_dev_mode_import_preview_mixed_checkout_worker_and_xlsx(tmp_path, monkey
     init = client.post(
         "/cotizaciones/init-upload",
         headers=headers,
-        json={"filename": source.name, "size": source.stat().st_size, "template": "online"},
+        json={"filename": source.name, "size": source.stat().st_size, "template": "official_2026_gdl"},
     )
     assert init.status_code == 200, init.json()
     job_id = init.json()["job_id"]
@@ -233,7 +233,7 @@ def test_dev_mode_import_preview_mixed_checkout_worker_and_xlsx(tmp_path, monkey
             "razon_social": "Empresa Dev",
             "descuento": "40",
             "quote_currency": "MXN",
-            "template": "online",
+            "template": "official_2026_gdl",
             "image_provider": "pillow",
             "items": [*imported_items, offiho_item],
             "sections": sections,

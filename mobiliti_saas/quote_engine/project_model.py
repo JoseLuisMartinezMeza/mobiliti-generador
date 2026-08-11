@@ -206,6 +206,8 @@ def _normalize_catalog_line(item: dict, role: str, line_id: str) -> dict:
     line = _normalize_common_line(item, role, line_id)
     line["catalog"] = catalog
     line["identity"] = _normalize_catalog_identity(catalog, item.get("identity"))
+    if catalog in {"tarkett", "offiho"} and not line["official_code"]:
+        raise ValueError("official_code requerido")
     if "quantity_rules_cache" in item:
         if not isinstance(item["quantity_rules_cache"], dict):
             raise ValueError("Reglas de cantidad inválidas")
@@ -264,7 +266,7 @@ def _normalize_common_line(item: dict, role: str, line_id: str) -> dict:
         "official_code": text_normalizer(
             item.get("official_code"),
             "official_code",
-            required=item["source"] != "imported",
+            required=False,
             limit=500,
         ),
         "display_cache": _normalize_display_cache(item.get("display_cache")),

@@ -8,6 +8,8 @@ export const MIXED_CATALOGS = Object.freeze([
   "lumbro",
   "jome",
   "lauco",
+  "idelika",
+  "conceptos",
 ]);
 
 export const MAX_MIXED_CART_SECTIONS = 32;
@@ -480,6 +482,7 @@ function copySnapshot(snapshot) {
   return {
     name: String(snapshot.name || ""),
     code: String(snapshot.code || ""),
+    displayKey: String(snapshot.displayKey || ""),
     image_url: String(snapshot.image_url || ""),
     unit: String(snapshot.unit || ""),
     availability: String(snapshot.availability || ""),
@@ -1053,6 +1056,13 @@ export function projectMatchKey(provider, officialCode) {
   return cleanProvider && cleanCode ? `${cleanProvider}\u0000${cleanCode}` : "";
 }
 
+function projectTechnicalMatchKey(catalog, identity) {
+  const cleanCatalog = normalizeProjectMatchPart(catalog);
+  const rawIdentity = identity?.internal_id || identity?.inventory_key || identity?.code || "";
+  const cleanIdentity = normalizeProjectMatchPart(rawIdentity);
+  return cleanCatalog && cleanIdentity ? `${cleanCatalog}\u0000${cleanIdentity}` : "";
+}
+
 function projectImportedMatchKey({kind, importId, provider, officialCode, importedName}) {
   if (kind !== "imported" || projectMatchKey(provider, officialCode)) return "";
   const cleanImportId = normalizeProjectMatchPart(importId);
@@ -1066,6 +1076,8 @@ function projectImportedMatchKey({kind, importId, provider, officialCode, import
 export function projectLineSelector(line) {
   return {
     kind: line?.kind,
+    catalog: line?.catalog,
+    identity: line?.identity,
     provider: line?.provider || line?.catalog,
     officialCode: line?.officialCode,
     importId: line?.kind === "imported" ? line?.importId : "",
@@ -1077,6 +1089,7 @@ export function projectLineHasMatchIdentity(line) {
   const selector = projectLineSelector(line);
   return Boolean(
     projectMatchKey(selector.provider, selector.officialCode)
+    || projectTechnicalMatchKey(selector.catalog, selector.identity)
     || projectImportedMatchKey(selector),
   );
 }
@@ -1086,6 +1099,10 @@ export function projectLineMatches(line, selector) {
   if (selectorPrimaryKey) {
     return projectMatchKey(line.provider || line.catalog, line.officialCode)
       === selectorPrimaryKey;
+  }
+  const selectorTechnicalKey = projectTechnicalMatchKey(selector.catalog, selector.identity);
+  if (selectorTechnicalKey) {
+    return projectTechnicalMatchKey(line.catalog, line.identity) === selectorTechnicalKey;
   }
   const selectorImportedKey = projectImportedMatchKey(selector);
   return selectorImportedKey !== ""
@@ -1482,11 +1499,16 @@ function hydratePersistedCatalogLine(line, quantityRules, hasQuantityRulesCache)
     throw new Error("Complemento invalido");
   }
   const snapshot = copySnapshot(hydrateProjectDisplayCache(line.display_cache));
+  const identity = normalizedIdentity(
+    line.catalog,
+    hydrateProjectCatalogIdentity(line.catalog, line.identity),
+  );
+  snapshot.displayKey = identity.internal_id || identity.inventory_key || identity.code || "";
   return {
     key: normalizedProjectLineId(line.line_id),
     lineId: normalizedProjectLineId(line.line_id),
     catalog: line.catalog,
-    identity: normalizedIdentity(line.catalog, hydrateProjectCatalogIdentity(line.catalog, line.identity)),
+    identity,
     officialCode: normalizedOfficialCode(line.official_code, snapshot),
     provider: normalizedProvider(undefined, line.catalog),
     role,
@@ -1629,11 +1651,14 @@ function serializeProjectLine(line, sectionIds) {
     official_code: normalizedOfficialCode(line.edits?.officialCode || line.officialCode, line.snapshot),
     display_cache: displayCache,
   };
-  if (!common.official_code && common.source !== "imported") {
-    throw new Error("Codigo oficial requerido");
-  }
   if (relationship.role === "complement") common.quantity_mode = relationship.quantityMode;
   if (common.source === "catalog") {
+    if (
+      (line.catalog === "tarkett" || line.catalog === "offiho")
+      && !common.official_code
+    ) {
+      throw new Error("Codigo oficial requerido");
+    }
     if (line.projectQuantityFallback === true) {
       const result = {
         ...common,

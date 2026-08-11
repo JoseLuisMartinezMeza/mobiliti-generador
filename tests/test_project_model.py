@@ -66,7 +66,7 @@ def test_match_key_requires_both_provider_and_code():
     assert normalized_match_key("CR Global", "") is None
 
 
-def test_imported_official_code_is_optional_but_catalog_code_remains_required():
+def test_pending_supplier_code_is_allowed_but_legacy_catalog_code_remains_required():
     imported = valid_project_payload()
     imported["lines"][1]["official_code"] = ""
 
@@ -74,8 +74,19 @@ def test_imported_official_code_is_optional_but_catalog_code_remains_required():
 
     assert normalized["lines"][1]["official_code"] == ""
 
+    supplier = valid_project_payload()
+    supplier["lines"][0]["official_code"] = ""
+
+    normalized_supplier = normalize_project_payload(supplier)
+
+    assert normalized_supplier["lines"][0]["official_code"] == ""
+
     catalog = valid_project_payload()
-    catalog["lines"][0]["official_code"] = ""
+    catalog["lines"][0].update({
+        "catalog": "tarkett",
+        "official_code": "",
+        "identity": {"code": "TARK-1"},
+    })
     with pytest.raises(ValueError):
         normalize_project_payload(catalog)
 

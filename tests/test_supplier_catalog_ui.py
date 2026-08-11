@@ -18,6 +18,10 @@ CATALOG_TABS = (
     ("sunon", "Sunon"),
     ("alma", "ALMA"),
     ("lumbro", "Lumbro"),
+    ("jome", "JOME"),
+    ("lauco", "Lauco"),
+    ("idelika", "IDÉLIKA"),
+    ("conceptos", "Conceptos"),
 )
 SUPPLIER_VIEW_PROPS = (
     "supplier",
@@ -226,7 +230,13 @@ def test_kundesign_fallback_link_is_disclosed_as_general_catalog():
 
     for field in ("code_status", "availability_type", "image_kind", "reserved_by_others"):
         assert field in component
-    for badge in ("Codigo por verificar", "Sobre pedido", "Imagen de referencia", "Apartado"):
+    for badge in (
+        "Codigo por verificar",
+        "Sobre pedido",
+        "Imagen de referencia",
+        "Imagen por verificar",
+        "Apartado",
+    ):
         assert badge in visible_text
     assert re.search(r"className\s*=.*badge", component, re.IGNORECASE)
     assert _has_css_rule(styles, ("supplier", "badge"), "display:")
@@ -453,16 +463,29 @@ def test_supplier_cards_fail_closed_when_price_or_currency_is_pending():
     assert "cartBusy" in component
 
 
-def test_sonara_and_lumbro_review_items_can_be_added_with_valid_price_currency_and_tax():
+def test_alma_supplier_ui_invalidates_legacy_cache_and_names_both_configuration_axes():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    picker = Path("mobiliti_saas/web/src/productPicker.js").read_text(encoding="utf-8")
+    visible_text = _ascii_text(component)
+
+    assert 'SUPPLIER_CACHE_VERSION = "v2"' in component
+    assert "filterCatalogVariantGroups" in component
+    assert "productVariantConfiguration" in component
+    assert "productBaseConfigurationLabel" in component
+    assert "Acabado / material del aro" in visible_text
+    assert "Calidad de tela" in _ascii_text(picker)
+
+
+def test_review_items_use_generic_quotable_contract_without_supplier_allowlist():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
     helpers = "\n".join(
         _javascript_function(component, name)
-        for name in ("decimal", "canAddSupplierItem")
+        for name in ("decimal", "warningKey", "pendingPriceContract", "canAddSupplierItem")
     )
     result = _run_javascript(
         f"{helpers}\n"
         "const item = (code_status, price_net = '3253.00', base_currency = 'MXN', tax_rate = '0.16') => "
-        "({code_status, price_net, base_currency, tax_rate});"
+        "({code_status, price_net, base_currency, tax_rate, attributes: {quotable: true}, warnings: ['missing_code']});"
         "console.log(JSON.stringify(["
         "canAddSupplierItem(item('needs_review'), 'sonara', '3253.00'),"
         "canAddSupplierItem(item('needs_review'), 'lumbro', '3253.00'),"
@@ -474,14 +497,18 @@ def test_sonara_and_lumbro_review_items_can_be_added_with_valid_price_currency_a
         "]));"
     )
 
-    assert result == [True, True, False, True, False, False, False]
+    assert result == [True, True, True, True, False, False, False]
 
 
 def test_supplier_cart_snapshot_deduplicates_review_warning_and_names_configuration():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
     helpers = "\n".join(
         _javascript_function(component, name)
-        for name in ("warningKey", "cartWarnings", "visibleConfiguration")
+        for name in (
+            "decimal", "nullableDecimal", "configuredBasePrice",
+            "warningKey", "pendingPriceContract", "initialConfiguration",
+            "cartWarnings", "visibleConfiguration",
+        )
     )
     result = _run_javascript(
         f"{helpers}\n"
@@ -607,6 +634,17 @@ def test_catalog_admin_panel_static_contracts_are_present():
     assert "aria-busy" in panel
     assert re.search(r"disabled\s*=", panel)
     assert _has_css_rule(styles, ("catalog-admin",), "display: grid")
+
+
+def test_catalog_admin_exposes_idelika_and_conceptos_after_lauco():
+    panel = Path("mobiliti_saas/web/src/CatalogAdminPanel.jsx").read_text(encoding="utf-8")
+    suppliers = re.findall(r'\["([^"]+)", "([^"]+)"\]', panel)
+
+    assert suppliers[-3:] == [
+        ("lauco", "Lauco"),
+        ("idelika", "IDÉLIKA"),
+        ("conceptos", "Conceptos"),
+    ]
 
 
 def test_catalog_admin_panel_resets_curation_state_when_switching_runs(tmp_path):

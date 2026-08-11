@@ -49,12 +49,12 @@ from .tarkett_catalog import build_tarkett_cart_payload
 MIXED_CATALOG_CART_SOURCE_TYPE = "mixed_catalog_cart"
 MIXED_CATALOG_ORDER = (
     "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro",
-    "jome", "lauco",
+    "jome", "lauco", "idelika", "conceptos",
 )
 MIXED_CATALOG_LABELS = {
     "tarkett": "Tarkett", "offiho": "Offiho", "cr-global": "CR Global",
     "sonara": "Sonara", "sunon": "Sunon", "alma": "ALMA", "lumbro": "Lumbro",
-    "jome": "JOME", "lauco": "Lauco",
+    "jome": "JOME", "lauco": "Lauco", "idelika": "IDÉLIKA", "conceptos": "Conceptos",
 }
 MIXED_GROUP_SOURCE_TYPES = {
     "tarkett": "tarkett_cart",
@@ -66,11 +66,13 @@ MIXED_GROUP_SOURCE_TYPES = {
     "lumbro": "supplier_cart",
     "jome": "supplier_cart",
     "lauco": "supplier_cart",
+    "idelika": "supplier_cart",
+    "conceptos": "supplier_cart",
 }
 MIXED_EXPECTED_BASE_CURRENCY = {
     "tarkett": "MXN", "offiho": "MXN", "cr-global": "MXN", "sonara": "MXN",
     "sunon": "USD", "alma": "USD", "lumbro": "MXN", "jome": "MXN",
-    "lauco": "MXN",
+    "lauco": "MXN", "idelika": "MXN", "conceptos": "MXN",
 }
 MIXED_QUOTE_CURRENCIES = frozenset({"MXN", "USD", "EUR"})
 MAX_MIXED_CATALOG_LINES = XLSX_MAX_ROWS - MOBILITI_RESERVED_ROWS_AFTER_TOTAL
@@ -588,23 +590,20 @@ def _supplier_line(
     availability = str(raw["availability_type"])
     stock = _six(raw["stock"]) if availability == "stocked" else None
     quantity = _six(raw["quantity"])
+    price_pending = raw["unit_price_base"] is None
     line = {
         "line_id": browser["line_id"],
         "canonical_key": mixed_cart_key(browser), "catalog": catalog, "supplier": MIXED_CATALOG_LABELS[catalog],
         "code": str(raw.get("sku") or ""), "name": str(raw["name"]), "description": str(raw.get("description") or ""), "unit": str(raw["unit"]),
-        "quantity": quantity, "unit_price": str(raw["unit_price"]), "discount_percent": "0.000000",
-        "original_currency": str(raw["base_currency"]), "original_unit_price": str(raw["unit_price_base"]),
-        "frozen_exchange_rate": str(payload["exchange_rate"]), "source_reference": str(raw["source_reference"]),
-        "price_mode": "net", "auto_electrification": False, "tax_rate": str(raw["tax_rate"]),
+        "quantity": quantity, "unit_price": None if price_pending else str(raw["unit_price"]), "discount_percent": "0.000000",
+        "original_currency": str(raw["base_currency"]), "original_unit_price": None if price_pending else str(raw["unit_price_base"]),
+        "frozen_exchange_rate": None if price_pending else str(payload["exchange_rate"]), "source_reference": str(raw["source_reference"]),
+        "price_mode": "pending" if price_pending else "net", "auto_electrification": False, "tax_rate": str(raw["tax_rate"]),
         "image_url": str(raw.get("image_url") or ""), "product_url": str(raw.get("product_url") or ""),
         "code_status": str(raw["code_status"]), "configuration": str(raw.get("configuration") or ""),
         "attributes": deepcopy(raw.get("attributes") or {}), "variant": "", "availability_type": availability,
         "available_quantity": stock, "stock": stock, "lead_time": str(raw.get("lead_time") or ""),
-        "price_source": (
-            "missing"
-            if Decimal(str(raw["unit_price_base"])) <= 0
-            else "catalog"
-        ),
+        "price_source": "missing" if price_pending or Decimal(str(raw["unit_price_base"])) <= 0 else "catalog",
         "stock_status": "",
         "image_kind": str(raw.get("image_kind") or "placeholder"),
         "warnings": list(raw.get("warnings") or []),
@@ -1147,17 +1146,42 @@ def _validate_mixed_catalog_payload(payload: object) -> dict:
             if line["code_status"] == "needs_review":
                 _require_warning(line["warnings"], "Codigo por verificar", "warning")
             quantity = _decimal_text(line["quantity"], "Cantidad", positive=True, maximum=Decimal("1000000"))
-            original = _decimal_text(line["original_unit_price"], "Precio original", nonnegative=True, places=6)
-            unit = _decimal_text(line["unit_price"], "Precio", nonnegative=True, places=2)
-            frozen = _decimal_text(line["frozen_exchange_rate"], "Tasa congelada", positive=True, places=6)
-            if line["original_currency"] != group["base_currency"] or frozen != rate or _decimal_text(line["tax_rate"], "IVA", nonnegative=True, places=6) != Decimal("0.160000") or unit != (original * frozen).quantize(TWO_PLACES, rounding=ROUND_HALF_UP):
+            pending_fields = (
+                line["original_unit_price"],
+                line["unit_price"],
+                line["frozen_exchange_rate"],
+            )
+            pending_price = all(value is None for value in pending_fields)
+            if any(value is None for value in pending_fields) and not pending_price:
+                raise ValueError("Grupos mixtos invalidos")
+            if pending_price:
+                attributes = line["attributes"]
+                pending_status = _warning_key(attributes.get("price_status"))
+                if (
+                    line["price_source"] != "missing"
+                    or line["price_mode"] != "pending"
+                    or attributes.get("quotable") is not True
+                    or pending_status not in {
+                        "pending", "price pending", "price_pending",
+                        "por confirmar", "por_confirmar",
+                        "precio por confirmar", "precio_por_confirmar",
+                    }
+                ):
+                    raise ValueError("Grupos mixtos invalidos")
+            else:
+                original = _decimal_text(line["original_unit_price"], "Precio original", nonnegative=True, places=6)
+                unit = _decimal_text(line["unit_price"], "Precio", nonnegative=True, places=2)
+                frozen = _decimal_text(line["frozen_exchange_rate"], "Tasa congelada", positive=True, places=6)
+                if frozen != rate or unit != (original * frozen).quantize(TWO_PLACES, rounding=ROUND_HALF_UP):
+                    raise ValueError("Grupos mixtos invalidos")
+            if line["original_currency"] != group["base_currency"] or _decimal_text(line["tax_rate"], "IVA", nonnegative=True, places=6) != Decimal("0.160000"):
                 raise ValueError("Grupos mixtos invalidos")
             discount = _decimal_text(line["discount_percent"], "Descuento", nonnegative=True, places=6)
             is_legacy = catalog in {"tarkett", "offiho"}
             if is_legacy:
                 if line["price_mode"] != "list" or not 0 <= discount <= 100 or type(line["auto_electrification"]) is not bool or line["auto_electrification"] is not True:
                     raise ValueError("Grupos mixtos invalidos")
-            elif line["price_mode"] != "net" or discount != 0 or type(line["auto_electrification"]) is not bool or line["auto_electrification"] is not False:
+            elif line["price_mode"] not in ({"pending"} if pending_price else {"net"}) or discount != 0 or type(line["auto_electrification"]) is not bool or line["auto_electrification"] is not False:
                 raise ValueError("Grupos mixtos invalidos")
             _validate_reservation(line, catalog)
             _validate_mixed_excel_text_cells(
@@ -1326,10 +1350,8 @@ def create_mixed_catalog_quotation_workbook(
         raise ValueError("Fuente importada inesperada")
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    tmp_context = None
     if image_dir is None:
-        tmp_context = tempfile.TemporaryDirectory(prefix="mixed_catalog_images_")
-        images_root = Path(tmp_context.name)
+        images_root = Path(tempfile.mkdtemp(prefix="mixed_catalog_images_"))
     else:
         images_root = Path(image_dir)
         images_root.mkdir(parents=True, exist_ok=True)
@@ -1435,8 +1457,12 @@ def create_mixed_catalog_quotation_workbook(
                 ws.cell(row, 13).value = float(Decimal(item["discount_percent"]))
                 ws.cell(row, 13).number_format = "0.000000"
                 ws.cell(row, 14).value = safe_excel_text(item["original_currency"])
-                ws.cell(row, 15).value = float(Decimal(item["original_unit_price"]))
-                ws.cell(row, 16).value = float(Decimal(item["frozen_exchange_rate"]))
+                if item["original_unit_price"] is None:
+                    ws.cell(row, 15).value = None
+                    ws.cell(row, 16).value = None
+                else:
+                    ws.cell(row, 15).value = float(Decimal(item["original_unit_price"]))
+                    ws.cell(row, 16).value = float(Decimal(item["frozen_exchange_rate"]))
                 ws.cell(row, 17).value = safe_excel_text(item["source_reference"])
                 ws.cell(row, 18).value = safe_excel_text(
                     "imported" if imported else item["price_mode"]
@@ -1472,10 +1498,6 @@ def create_mixed_catalog_quotation_workbook(
             ws.column_dimensions[column].hidden = True
         wb.save(output)
     finally:
-        try:
-            if wb is not None:
-                wb.close()
-        finally:
-            if tmp_context is not None:
-                tmp_context.cleanup()
+        if wb is not None:
+            wb.close()
     return output

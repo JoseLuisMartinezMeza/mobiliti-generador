@@ -161,7 +161,7 @@ TARKETT_CATALOG_DB_ENABLED = _env_bool("TARKETT_CATALOG_DB_ENABLED", bool(os.env
 TARKETT_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("TARKETT_CATALOG_DB_TTL_SECONDS", "300")))
 OFFIHO_CATALOG_PATH = os.environ.get("OFFIHO_CATALOG_PATH")
 CATALOG_SUPPLIER_ORDER = (
-    "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
+    "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco", "idelika", "conceptos",
 )
 CATALOG_SUPPLIER_LABELS = {
     "cr-global": "CR Global",
@@ -171,6 +171,8 @@ CATALOG_SUPPLIER_LABELS = {
     "lumbro": "Lumbro",
     "jome": "JOME",
     "lauco": "Lauco",
+    "idelika": "IDÉLIKA",
+    "conceptos": "Conceptos",
 }
 
 
@@ -2985,6 +2987,16 @@ def _load_supplier_catalog_cached(supplier: str) -> dict:
     if not isinstance(payload, dict):
         raise RuntimeError("Catalogo publicado no disponible")
     cache_key = str(snapshot.get("id") or snapshot.get("source_hash") or payload.get("source_hash") or "")
+    if DEV_MODE:
+        payload_fingerprint = hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        cache_key = f"{cache_key}:{payload_fingerprint}"
     cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
     if cached and cached.get("cache_key") == cache_key:
         return cached["catalog"]

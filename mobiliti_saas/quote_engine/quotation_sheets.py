@@ -321,9 +321,9 @@ class QuotationDataRow:
     origin: str
     source_row: int | None
     original_currency: str
-    original_cost: Decimal
-    frozen_rate: Decimal
-    converted_cost: Decimal
+    original_cost: Decimal | None
+    frozen_rate: Decimal | None
+    converted_cost: Decimal | None
     quantity: Decimal
     provider: str
     region: str
@@ -448,6 +448,7 @@ def quotation_data_rows(payload: object) -> tuple[QuotationDataRow, ...]:
                 raise ValueError("Orden de Quotation_Data inconsistente")
             expected_keys.add(item_key)
             line, source_hash, origin, source_row, upstream_row_hash = checked.items[item_key]
+            original_cost, frozen_rate, converted_cost = _quotation_monetary_values(line)
             row = QuotationDataRow(
                 item_key=item_key,
                 section_id=section_id,
@@ -456,9 +457,9 @@ def quotation_data_rows(payload: object) -> tuple[QuotationDataRow, ...]:
                 origin=origin,
                 source_row=source_row,
                 original_currency=line.get("original_currency"),
-                original_cost=_decimal(line.get("original_unit_price"), "original_cost"),
-                frozen_rate=_decimal(line.get("frozen_exchange_rate"), "frozen_rate"),
-                converted_cost=_decimal(line.get("unit_price"), "converted_cost"),
+                original_cost=original_cost,
+                frozen_rate=frozen_rate,
+                converted_cost=converted_cost,
                 quantity=_decimal(line.get("quantity"), "quantity"),
                 provider=official_provider_name(
                     line.get("provider")
@@ -3012,17 +3013,77 @@ def _validate_row_values(row: QuotationDataRow) -> None:
         _validate_hash(row.upstream_row_hash, "upstream_row_hash")
     elif row.upstream_row_hash != "":
         raise ValueError("upstream_row_hash de Quotation_Data inválido")
+    monetary = (row.original_cost, row.frozen_rate, row.converted_cost)
+    pending_price = all(value is None for value in monetary)
+    if any(value is None for value in monetary) and not pending_price:
+        raise ValueError("Estado monetario de Quotation_Data inconsistente")
     for value, field_name, positive in (
         (row.original_cost, "original_cost", False),
         (row.frozen_rate, "frozen_rate", True),
         (row.converted_cost, "converted_cost", False),
         (row.quantity, "quantity", True),
     ):
+        if value is None and pending_price and field_name != "quantity":
+            continue
         if type(value) is not Decimal or not value.is_finite() or (positive and value <= 0) or (not positive and value < 0):
             raise ValueError(f"{field_name} de Quotation_Data inválido")
         _decimal_text(value, field_name)
-    if row.converted_cost != (row.original_cost * row.frozen_rate).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP):
+    if not pending_price and row.converted_cost != (row.original_cost * row.frozen_rate).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP):
         raise ValueError("Costo convertido de Quotation_Data inconsistente")
+
+
+def _quotation_monetary_values(
+    line: dict,
+) -> tuple[Decimal | None, Decimal | None, Decimal | None]:
+    values = (
+        line.get("original_unit_price"),
+        line.get("frozen_exchange_rate"),
+        line.get("unit_price"),
+    )
+    pending_price = all(value is None for value in values)
+    if any(value is None for value in values) and not pending_price:
+        raise ValueError("Estado monetario de Quotation_Data inconsistente")
+    if pending_price:
+        attributes = line.get("attributes")
+        warnings = line.get("warnings")
+        status = _normalized_pending_token(
+            attributes.get("price_status") if isinstance(attributes, dict) else ""
+        )
+        warning_tokens = {
+            _normalized_pending_token(value)
+            for value in warnings
+        } if isinstance(warnings, list) else set()
+        if (
+            line.get("price_mode") != "pending"
+            or line.get("price_source") != "missing"
+            or not isinstance(attributes, dict)
+            or attributes.get("quotable") is not True
+            or status not in {
+                "pending", "price pending", "price_pending",
+                "por confirmar", "por_confirmar",
+                "precio por confirmar", "precio_por_confirmar",
+            }
+            or not warning_tokens.intersection({
+                "price pending", "price_pending", "precio por confirmar",
+            })
+        ):
+            raise ValueError("Contrato de precio pendiente inválido")
+        return None, None, None
+    return (
+        _decimal(values[0], "original_cost"),
+        _decimal(values[1], "frozen_rate"),
+        _decimal(values[2], "converted_cost"),
+    )
+
+
+def _normalized_pending_token(value: object) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+    return " ".join(
+        "".join(
+            character for character in normalized
+            if not unicodedata.combining(character)
+        ).split()
+    )
 
 
 def _decimal(value: object, field_name: str) -> Decimal:

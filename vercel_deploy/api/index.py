@@ -16,6 +16,7 @@ import sys
 import hashlib
 import hmac
 import io
+import logging
 import mimetypes
 import re
 import threading
@@ -36,6 +37,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from mangum import Mangum
 from PIL import Image, UnidentifiedImageError
+
+
+PROJECT_QUOTE_LOGGER = logging.getLogger("mobiliti.project_quote")
 
 
 for _root in (Path(__file__).resolve().parents[2], Path(__file__).resolve().parents[3] if len(Path(__file__).resolve().parents) > 3 else None):
@@ -85,13 +89,18 @@ from mobiliti_saas.quote_engine.quotation_import import (  # noqa: E402
     build_import_manifest,
     validate_import_manifest,
 )
-from mobiliti_saas.quote_engine.engine import (  # noqa: E402
-    OFFICIAL_TEMPLATE_CONTRACT_PATH,
-    _fetch_latest_usd_mxn_row,
+from mobiliti_saas.quote_engine.engine import _fetch_latest_usd_mxn_row  # noqa: E402
+from mobiliti_saas.quote_engine.template_profiles import (  # noqa: E402
+    DEFAULT_TEMPLATE_PROFILE_ID,
+    lookup_template_profile,
 )
-from mobiliti_saas.quote_engine.official_template import (  # noqa: E402
-    load_template_contract,
-)
+
+
+def _canonical_template_id(value: object | None) -> str:
+    try:
+        return lookup_template_profile(value).id
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -152,7 +161,7 @@ TARKETT_CATALOG_DB_ENABLED = _env_bool("TARKETT_CATALOG_DB_ENABLED", bool(os.env
 TARKETT_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("TARKETT_CATALOG_DB_TTL_SECONDS", "300")))
 OFFIHO_CATALOG_PATH = os.environ.get("OFFIHO_CATALOG_PATH")
 CATALOG_SUPPLIER_ORDER = (
-    "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
+    "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco", "idelika", "conceptos",
 )
 CATALOG_SUPPLIER_LABELS = {
     "cr-global": "CR Global",
@@ -162,6 +171,8 @@ CATALOG_SUPPLIER_LABELS = {
     "lumbro": "Lumbro",
     "jome": "JOME",
     "lauco": "Lauco",
+    "idelika": "IDÉLIKA",
+    "conceptos": "Conceptos",
 }
 
 
@@ -2976,6 +2987,16 @@ def _load_supplier_catalog_cached(supplier: str) -> dict:
     if not isinstance(payload, dict):
         raise RuntimeError("Catalogo publicado no disponible")
     cache_key = str(snapshot.get("id") or snapshot.get("source_hash") or payload.get("source_hash") or "")
+    if DEV_MODE:
+        payload_fingerprint = hashlib.sha256(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        cache_key = f"{cache_key}:{payload_fingerprint}"
     cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
     if cached and cached.get("cache_key") == cache_key:
         return cached["catalog"]
@@ -4610,8 +4631,8 @@ def _validate_project_import_preview_png(content: object) -> bytes | None:
     return content
 
 
-_PROJECT_QUOTE_FIELDS = frozenset({"expected_revision"})
-_PROJECT_QUOTE_TEMPLATE = "Formato Cotizacion 2026 GDL (1).xlsx"
+_PROJECT_QUOTE_FIELDS = frozenset({"expected_revision", "template"})
+_PROJECT_QUOTE_TEMPLATE = DEFAULT_TEMPLATE_PROFILE_ID
 
 
 def _project_normalized_payload(value: dict) -> dict:
@@ -4738,6 +4759,71 @@ def _load_project_catalogs(browser_rows: list[dict]) -> tuple[dict, list[dict]]:
     return catalogs, db_list_exchange_rates()
 
 
+def _project_payload_hash(payload: dict) -> str:
+    checked = normalize_project_payload(deepcopy(payload))
+    canonical = json.dumps(
+        checked,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _project_quote_diagnostics(cart_payload: dict) -> dict[str, int]:
+    compositions = cart_payload["project_context"]["compositions"]
+    section_counts = [
+        len(section["line_ids"]) for section in cart_payload["sections"]
+    ]
+    principal_count = len(compositions)
+    complement_count = sum(
+        max(0, len(composition["component_line_ids"]) - 1)
+        for composition in compositions
+    )
+    return {
+        "project_section_count": len(section_counts),
+        "project_principal_count": principal_count,
+        "project_complement_count": complement_count,
+        "project_physical_line_count": sum(section_counts),
+        "project_max_section_lines": max(section_counts, default=0),
+    }
+
+
+def _log_project_quote_stage(
+    stage: str,
+    *,
+    started_at: float,
+    project_id: str,
+    project_revision: int,
+    project_payload_hash: str,
+    diagnostics: dict[str, int] | None = None,
+    error_code: str | None = None,
+) -> None:
+    event: dict[str, Any] = {
+        "event": "project_quote",
+        "stage": stage,
+        "duration_ms": max(
+            0,
+            int(round((time.perf_counter() - started_at) * 1000)),
+        ),
+        "project_id": project_id,
+        "project_revision": project_revision,
+        "project_payload_hash": project_payload_hash,
+    }
+    if diagnostics:
+        event.update(diagnostics)
+    if error_code:
+        event["error_code"] = error_code
+    PROJECT_QUOTE_LOGGER.info(
+        json.dumps(
+            event,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
 def _build_saved_project_quote_payload(
     project: dict,
     usuario_id: int,
@@ -4769,11 +4855,11 @@ def _build_saved_project_quote_payload(
         )
     sections = [
         {
-            "id": f"section-{index}",
+            "id": section["section_id"],
             "title": section["concept"],
             "line_ids": compositions_by_section.get(section["section_id"], []),
         }
-        for index, section in enumerate(checked["sections"], start=1)
+        for section in checked["sections"]
         if compositions_by_section.get(section["section_id"])
     ]
     context = project_context(checked, project["id"], project["revision"])
@@ -5015,6 +5101,7 @@ def projects_quote(
 ):
     _require_active_subscription(current_user["id"])
     _project_unexpected_fields(body, _PROJECT_QUOTE_FIELDS)
+    template = _canonical_template_id(body.get("template"))
     project_id = _project_uuid(project_id)
     project = _project_for_current_user(project_id, current_user["id"])
     expected_revision = _project_expected_revision(body.get("expected_revision"))
@@ -5026,6 +5113,8 @@ def projects_quote(
     if project["revision"] != expected_revision:
         _project_conflict(project)
 
+    preflight_started_at = time.perf_counter()
+    persisted_payload_hash = _project_payload_hash(project["payload"])
     try:
         cart_payload, import_source_bytes, import_manifest = (
             _build_saved_project_quote_payload(project, current_user["id"])
@@ -5045,8 +5134,30 @@ def projects_quote(
     except HTTPException:
         raise
     except (TypeError, ValueError, RuntimeError) as exc:
+        error_code = (
+            "project_section_mapping_invalid"
+            if "Contexto de Proyecto invalido" in str(exc)
+            else "project_quote_preflight_invalid"
+        )
+        _log_project_quote_stage(
+            "preflight_failed",
+            started_at=preflight_started_at,
+            project_id=project_id,
+            project_revision=expected_revision,
+            project_payload_hash=persisted_payload_hash,
+            error_code=error_code,
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
+    diagnostics = _project_quote_diagnostics(cart_payload)
+    _log_project_quote_stage(
+        "preflight_validated",
+        started_at=preflight_started_at,
+        project_id=project_id,
+        project_revision=expected_revision,
+        project_payload_hash=persisted_payload_hash,
+        diagnostics=diagnostics,
+    )
     quote_fields = cart_payload["project_context"][
         "normalized_project_payload"
     ]["quote_fields"]
@@ -5054,9 +5165,7 @@ def projects_quote(
         **quote_fields,
         "image_provider": "pillow",
     })
-    contract_hash = load_template_contract(
-        OFFICIAL_TEMPLATE_CONTRACT_PATH
-    ).sha256
+    contract_hash = lookup_template_profile(template).template_contract_sha256
     metadata.update({
         "source_type": "mixed_catalog_cart",
         "original_filename": f"project-{project_id}-r{expected_revision}.json",
@@ -5081,6 +5190,7 @@ def projects_quote(
         "project_payload_hash": cart_payload["project_context"][
             "project_payload_hash"
         ],
+        **diagnostics,
         "template_contract_hash": contract_hash,
         "estimated_duration_seconds": 120,
     })
@@ -5097,20 +5207,46 @@ def projects_quote(
         metadata["cotizacion"] = metadata["proyecto"]
 
     _enforce_active_quote_limit(current_user["id"])
+    enqueue_started_at = time.perf_counter()
+    _log_project_quote_stage(
+        "enqueue_started",
+        started_at=enqueue_started_at,
+        project_id=project_id,
+        project_revision=expected_revision,
+        project_payload_hash=persisted_payload_hash,
+        diagnostics=diagnostics,
+    )
     try:
         job = _enqueue_mixed_payload(
             current_user=current_user,
             cart_payload=cart_payload,
-            template=_PROJECT_QUOTE_TEMPLATE,
+            template=template,
             metadata=metadata,
             import_job=None,
             import_source_bytes=import_source_bytes,
         )
     except Exception as exc:
+        _log_project_quote_stage(
+            "enqueue_failed",
+            started_at=enqueue_started_at,
+            project_id=project_id,
+            project_revision=expected_revision,
+            project_payload_hash=persisted_payload_hash,
+            diagnostics=diagnostics,
+            error_code="project_quote_enqueue_failed",
+        )
         raise HTTPException(
             status_code=503,
             detail="No fue posible crear la cotizacion del Proyecto",
         ) from exc
+    _log_project_quote_stage(
+        "enqueued",
+        started_at=enqueue_started_at,
+        project_id=project_id,
+        project_revision=expected_revision,
+        project_payload_hash=persisted_payload_hash,
+        diagnostics=diagnostics,
+    )
     _wake_worker()
     return {"mensaje": "Cotizacion del Proyecto en cola", "job": job}
 
@@ -6166,9 +6302,7 @@ async def mixed_catalog_quote(
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
 
-    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
+    template = _canonical_template_id(body.get("template"))
     _enforce_active_quote_limit(
         current_user["id"],
         exclude_job_id=import_job["id"] if import_job is not None else None,
@@ -6266,9 +6400,7 @@ async def supplier_quote(
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
 
-    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
+    template = _canonical_template_id(body.get("template"))
     _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
     input_path = f"users/{current_user['id']}/jobs/{job_id}/input.json"
@@ -6468,9 +6600,7 @@ def tarkett_quote(body: dict, current_user: dict = Depends(get_current_user)):
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
 
-    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
+    template = _canonical_template_id(body.get("template"))
 
     _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
@@ -6548,9 +6678,7 @@ def offiho_quote(body: dict, current_user: dict = Depends(get_current_user)):
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
 
-    template = str(body.get("template") or "Formato Cotizacion 2026 GDL (1).xlsx").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
+    template = _canonical_template_id(body.get("template"))
 
     _enforce_active_quote_limit(current_user["id"])
     job_id = str(uuid.uuid4())
@@ -6692,6 +6820,7 @@ def quotation_import_preview(job_id: str, current_user: dict = Depends(get_curre
     except RuntimeError:
         raise HTTPException(status_code=503, detail="Servicio de cotizaciones no disponible") from None
 
+    template = _canonical_template_id(job.get("template"))
     input_path = str(job.get("input_path") or "").strip().lstrip("/")
     metadata = _quote_job_metadata(job)
     filename = metadata.get("original_filename")
@@ -6725,6 +6854,7 @@ def quotation_import_preview(job_id: str, current_user: dict = Depends(get_curre
         updated = db_update_quote_job(
             job_id,
             {
+                "template": template,
                 "metadata": {
                     **metadata,
                     "import_manifest_path": manifest_path,
@@ -6769,7 +6899,7 @@ def cotizaciones_init_upload(body: dict, current_user: dict = Depends(get_curren
 
     filename = str(body.get("filename", "input.xlsx")).strip()
     file_size = int(body.get("size", 0) or 0)
-    template = str(body.get("template", "Formato Cotizacion 2026 GDL (1).xlsx")).strip()
+    template = _canonical_template_id(body.get("template"))
 
     input_extension = _quote_input_extension(filename)
     if file_size <= 0:
@@ -6885,6 +7015,7 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
     if job["status"] not in {"draft", "failed"}:
         raise HTTPException(status_code=409, detail="La cotizacion ya fue enviada")
     _require_retryable_failed_quote(job)
+    template = _canonical_template_id(body.get("template") or job.get("template"))
 
     metadata = {**(job.get("metadata") or {}), **_validate_metadata(body)}
     assigned_quote_number = _next_quote_number_for_user(current_user)
@@ -6892,10 +7023,6 @@ def cotizaciones_submit(job_id: str, body: dict, current_user: dict = Depends(ge
         metadata["cotizacion"] = assigned_quote_number
     elif not metadata.get("cotizacion"):
         metadata["cotizacion"] = metadata["proyecto"]
-    template = str(body.get("template") or job.get("template") or "").strip()
-    if not template:
-        raise HTTPException(status_code=400, detail="Template requerido")
-
     _enforce_active_quote_limit(current_user["id"], exclude_job_id=job_id)
     try:
         updated = db_update_quote_job(
@@ -6930,6 +7057,7 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
     if job["status"] != "failed":
         raise HTTPException(status_code=409, detail="Solo se pueden reintentar cotizaciones fallidas")
     _require_retryable_failed_quote(job)
+    template = _canonical_template_id(job.get("template"))
 
     _enforce_active_quote_limit(current_user["id"], exclude_job_id=job_id)
     try:
@@ -6937,6 +7065,7 @@ def cotizaciones_retry(job_id: str, current_user: dict = Depends(get_current_use
             job_id,
             {
                 "status": "queued",
+                "template": template,
                 "error_message": None,
                 "output_path": None,
                 "completed_at": None,

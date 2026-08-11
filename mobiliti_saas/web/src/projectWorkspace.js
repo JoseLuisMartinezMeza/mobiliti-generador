@@ -45,7 +45,14 @@ export const SAFE_PICKER_QUANTITY_RULES = Object.freeze({
  * contract; it never inherits rules or quantity from the line being edited.
  */
 export function createProjectPickerTarget(selection) {
-  if (!selection?.catalog || !selection?.official_code || !selection?.identity) {
+  const technicalKey = String(
+    selection?.display_key
+    || selection?.identity?.internal_id
+    || selection?.identity?.inventory_key
+    || selection?.identity?.code
+    || "",
+  ).trim();
+  if (!selection?.catalog || !selection?.identity || !technicalKey) {
     throw new Error("SelecciÃ³n de catÃ¡logo invÃ¡lida");
   }
   const snapshot = selection.snapshot || {};
@@ -57,8 +64,9 @@ export function createProjectPickerTarget(selection) {
     quantity: "1",
     quantityRules: {...SAFE_PICKER_QUANTITY_RULES},
     snapshot: {
-      name: snapshot.name || selection.official_code,
-      code: selection.official_code,
+      name: snapshot.name || selection.official_code || technicalKey,
+      code: selection.official_code || "",
+      displayKey: technicalKey,
       image_url: snapshot.image_url || "",
       unit: "PZA",
       availability: snapshot.availability || "",

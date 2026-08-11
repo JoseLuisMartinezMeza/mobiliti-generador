@@ -164,6 +164,7 @@ def test_catalog_search_requires_authentication_subscription_and_valid_query(mon
         "name": "Olive II Chair",
         "code": "OLIVE-II",
         "image_url": "https://assets.example/olive.png",
+        "dimensions": "",
         "availability": "Fabricación por confirmar",
         "configuration": "",
         "warnings": ["Fabricación por confirmar"],

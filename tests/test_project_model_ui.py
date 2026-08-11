@@ -455,7 +455,7 @@ def test_imported_official_code_allows_empty_rejects_unsafe_text_and_unlinks_imm
     }
 
 
-def test_project_serialization_persists_empty_imported_code_but_rejects_empty_catalog_code():
+def test_project_serialization_allows_pending_supplier_code_but_rejects_empty_legacy_code():
     result = run_js(r"""
       const imported = model.createImportedCartBundle({
         import_id: "11111111-1111-4111-8111-111111111111",
@@ -489,10 +489,10 @@ def test_project_serialization_persists_empty_imported_code_but_rejects_empty_ca
       let catalogError = "";
       try {
         model.serializeProject({...base, lines: [model.createMixedCartLine({
-          catalog: "sunon",
-          identity: {internal_id: "sunon:chair", base_option_id: "", add_on_option_ids: []},
+          catalog: "tarkett",
+          identity: {code: "TARK-1"},
           officialCode: "",
-          provider: "Sunon",
+          provider: "Tarkett",
           quantity: "1",
           quantityRules: {min: "1", step: "1", maxDecimals: 0,
             max: "1000000", integer: true},

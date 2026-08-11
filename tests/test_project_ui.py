@@ -803,13 +803,14 @@ def test_product_picker_confirmation_is_a_deep_copied_canonical_allowlist():
         snapshotKeys: Object.keys(selection.snapshot).sort(),
       }));
     """)
-    assert result["keys"] == ["catalog", "identity", "official_code", "provider", "snapshot"]
-    assert result["snapshotKeys"] == ["availability", "configuration", "image_url", "name", "warnings"]
+    assert result["keys"] == ["catalog", "display_key", "identity", "official_code", "provider", "snapshot"]
+    assert result["snapshotKeys"] == ["availability", "code", "configuration", "displayKey", "image_url", "name", "warnings"]
     assert result["selection"]["catalog"] == "alma"
     assert result["selection"]["identity"] == {
         "internal_id": "alma-42", "base_option_id": "base", "add_on_option_ids": ["arm", "mutated"],
     }
     assert result["selection"]["official_code"] == "ALMA-42"
+    assert result["selection"]["display_key"] == "alma-42"
     assert result["selection"]["provider"] == "ALMA"
     assert result["selection"]["snapshot"]["warnings"] == ["Bajo pedido", "mutated"]
     assert result["rawIdentity"]["add_on_option_ids"] == ["arm"]
@@ -1061,6 +1062,8 @@ def test_product_picker_uses_catalog_contract_for_supplier_choices_and_image_fal
             "lumbro",
             "jome",
             "lauco",
+            "idelika",
+            "conceptos",
         ],
         "alma": "ALMA",
         "imageWhenLoaded": True,

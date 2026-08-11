@@ -134,7 +134,7 @@ MIXED_MONEY_FORMATS = {
 }
 MIXED_CATALOG_ORDER = (
     "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro",
-    "jome", "lauco",
+    "jome", "lauco", "idelika", "conceptos",
 )
 MIXED_CATALOG_LABELS = {
     "tarkett": "Tarkett",
@@ -146,6 +146,8 @@ MIXED_CATALOG_LABELS = {
     "lumbro": "Lumbro",
     "jome": "JOME",
     "lauco": "Lauco",
+    "idelika": "IDÉLIKA",
+    "conceptos": "Conceptos",
 }
 MIXED_CATALOG_BASE_CURRENCIES = {
     "tarkett": "MXN",
@@ -157,6 +159,8 @@ MIXED_CATALOG_BASE_CURRENCIES = {
     "lumbro": "MXN",
     "jome": "MXN",
     "lauco": "MXN",
+    "idelika": "MXN",
+    "conceptos": "MXN",
 }
 MIXED_RATE_FIELDS = {
     "catalog",
@@ -305,9 +309,9 @@ class _OfficialPresentationLine:
     provider: str
     region: str
     original_currency: str
-    original_cost: Decimal
-    frozen_rate: Decimal
-    converted_cost: Decimal
+    original_cost: Decimal | None
+    frozen_rate: Decimal | None
+    converted_cost: Decimal | None
     origin: str
     source_row: int | None
     upstream_row_hash: str
@@ -1243,12 +1247,12 @@ def _mixed_decimal(value: Any, message: str, *, positive: bool = False) -> Decim
 def _mixed_item_discount_fraction(item: QuoteItem) -> Decimal:
     mode = str(item.modo_precio or "").strip().lower()
     provider = str(item.proveedor or "").strip()
-    if mode not in {"list", "net", "imported"}:
+    if mode not in {"list", "net", "imported", "pending"}:
         raise ValueError("Modo de precio mixto invalido")
     value = _mixed_decimal(item.descuento, "Descuento mixto por linea invalido")
     if value > Decimal("100") or max(-value.as_tuple().exponent, 0) > 6:
         raise ValueError("Descuento mixto por linea invalido")
-    if mode == "net" and value != 0:
+    if mode in {"net", "pending"} and value != 0:
         raise ValueError("Precio neto mixto no admite descuento")
     if mode == "list" and provider not in {"Tarkett", "Offiho"}:
         raise ValueError("Precio de lista mixto solo admite Tarkett u Offiho")
@@ -1397,6 +1401,17 @@ def _validate_mixed_catalog_metadata(items: list[QuoteItem], metadata: dict[str,
             if snapshot is None:
                 raise ValueError("Proveedor mixto sin tasa congelada")
         original_currency = str(item.moneda_original or "").strip().upper()
+        if mode == "pending":
+            if (
+                provider in {"Tarkett", "Offiho"}
+                or original_currency != snapshot["base_currency"]
+                or item.precio_original not in {None, ""}
+                or item.tipo_cambio_congelado not in {None, ""}
+                or str(item.precio or "").strip() != "Por confirmar"
+                or not str(item.referencia_fuente or "").strip()
+            ):
+                raise ValueError("Auditoria de precio pendiente invalida")
+            continue
         frozen_rate = _mixed_decimal(
             item.tipo_cambio_congelado,
             "Auditoria de precio mixto invalida",
@@ -2227,11 +2242,20 @@ def _official_quote_currency(metadata: dict[str, Any]) -> str:
 def _official_item_cost(
     item: QuoteItem,
     metadata: dict[str, Any],
-) -> tuple[str, Decimal, Decimal, Decimal]:
+) -> tuple[str, Decimal | None, Decimal | None, Decimal | None]:
     if _uses_mixed_catalog_prices(metadata):
         currency = str(item.moneda_original or "").strip().upper()
         if currency not in {"MXN", "USD", "EUR"}:
             raise ValueError("Moneda original mixta invalida")
+        mode = str(item.modo_precio or "").strip().lower()
+        if mode == "pending":
+            if (
+                item.precio_original not in {None, ""}
+                or item.tipo_cambio_congelado not in {None, ""}
+                or str(item.precio or "").strip() != "Por confirmar"
+            ):
+                raise ValueError("Precio pendiente mixto inconsistente")
+            return currency, None, None, None
         original = _official_decimal(item.precio_original, "Precio original")
         rate = _official_decimal(
             item.tipo_cambio_congelado,
@@ -2930,6 +2954,7 @@ def _legacy_cotizacion_product(
         ),
         image_content=line.image_content,
         image_content_type=line.image_content_type,
+        price_pending=line.converted_cost is None,
     )
 
 
@@ -3177,6 +3202,9 @@ def _project_cotizacion_sections(
                 image_content_type=principal.image_content_type,
                 complement_images=complement_images,
                 price_terms=tuple(price_terms),
+                price_pending=any(
+                    component.converted_cost is None for component in components
+                ),
             )
         )
         consumed.update(component_ids)
@@ -4161,19 +4189,31 @@ def _augment_original_quotation(
                     f"*{columns.volume}{cursor}"
                 ),
             )
-            _set_number(
-                product,
-                f"{columns.unit_price}{cursor}",
-                line.converted_cost,
-            )
-            _set_formula(
-                product,
-                f"{columns.total_price}{cursor}",
-                (
-                    f"={columns.quantity}{cursor}"
-                    f"*{columns.unit_price}{cursor}"
-                ),
-            )
+            if line.converted_cost is None:
+                _set_inline_string(
+                    product,
+                    f"{columns.unit_price}{cursor}",
+                    "Por confirmar",
+                )
+                _set_inline_string(
+                    product,
+                    f"{columns.total_price}{cursor}",
+                    "",
+                )
+            else:
+                _set_number(
+                    product,
+                    f"{columns.unit_price}{cursor}",
+                    line.converted_cost,
+                )
+                _set_formula(
+                    product,
+                    f"{columns.total_price}{cursor}",
+                    (
+                        f"={columns.quantity}{cursor}"
+                        f"*{columns.unit_price}{cursor}"
+                    ),
+                )
             if source_product_row is None:
                 for column in ("C", columns.color, columns.remark):
                     _set_inline_string(product, f"{column}{cursor}", "")

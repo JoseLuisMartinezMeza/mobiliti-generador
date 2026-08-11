@@ -28,6 +28,8 @@ def test_supplier_contract_registers_jome_and_lauco_as_mxn():
         "lumbro",
         "jome",
         "lauco",
+        "idelika",
+        "conceptos",
     }
     assert SUPPLIER_LABELS["jome"] == "JOME"
     assert SUPPLIER_LABELS["lauco"] == "Lauco"
@@ -35,7 +37,7 @@ def test_supplier_contract_registers_jome_and_lauco_as_mxn():
     assert EXPECTED_SUPPLIER_BASE_CURRENCY["lauco"] == "MXN"
 
 
-def test_mixed_catalog_contract_has_nine_visible_catalogs():
+def test_mixed_catalog_contract_has_eleven_visible_catalogs():
     assert MIXED_CATALOG_ORDER == (
         "tarkett",
         "offiho",
@@ -46,6 +48,8 @@ def test_mixed_catalog_contract_has_nine_visible_catalogs():
         "lumbro",
         "jome",
         "lauco",
+        "idelika",
+        "conceptos",
     )
     for supplier, label in (("jome", "JOME"), ("lauco", "Lauco")):
         assert MIXED_CATALOG_LABELS[supplier] == label
@@ -68,6 +72,8 @@ def test_source_config_pins_all_three_official_documents():
         "lumbro",
         "jome",
         "lauco",
+        "idelika",
+        "conceptos",
     ]
     by_supplier = {source.supplier: source for source in sources}
     assert {

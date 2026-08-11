@@ -8,6 +8,8 @@ export const CATALOG_OPTIONS = Object.freeze([
   {value: "lumbro", label: "Lumbro"},
   {value: "jome", label: "JOME"},
   {value: "lauco", label: "Lauco"},
+  {value: "idelika", label: "IDÉLIKA"},
+  {value: "conceptos", label: "Conceptos"},
 ]);
 
 const CATALOG_LABELS = new Map(CATALOG_OPTIONS.map((option) => [option.value, option.label]));
@@ -204,6 +206,29 @@ export function initialBaseOptionId(item) {
   return options.length === 1 ? options[0].id : "";
 }
 
+export function productTechnicalKey(item) {
+  const identity = item?.identity;
+  return String(
+    item?.display_key
+    || identity?.internal_id
+    || identity?.inventory_key
+    || identity?.code
+    || "",
+  ).trim();
+}
+
+export function productSelectionKey(item) {
+  const catalog = String(item?.catalog || "").trim();
+  const technicalKey = productTechnicalKey(item);
+  return catalog && technicalKey ? `${catalog}:${technicalKey}` : "";
+}
+
+export function canConfirmProductSelection(item, selectedBaseOptionId = "") {
+  if (item?.quotable !== true || !item?.catalog || !item?.identity || !productTechnicalKey(item)) return false;
+  const baseOptions = productBaseOptions(item);
+  return !baseOptions.length || baseOptions.some((option) => option.id === selectedBaseOptionId);
+}
+
 export function productAddOnOptions(item, selectedBaseOptionId) {
   if (!Array.isArray(item?.add_on_options)) return [];
   const baseId = String(selectedBaseOptionId || "");
@@ -313,9 +338,12 @@ export function createCanonicalProductSelection(
     catalog: item?.catalog || "",
     identity,
     official_code: item?.official_code || "",
+    display_key: productTechnicalKey(item),
     provider: catalogLabel(item?.catalog),
     snapshot: {
       name: snapshot.name || "",
+      code: item?.official_code || "",
+      displayKey: productTechnicalKey(item),
       image_url: snapshot.image_url || "",
       configuration,
       availability: snapshot.availability || "",

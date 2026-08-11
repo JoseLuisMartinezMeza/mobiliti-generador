@@ -72,6 +72,8 @@ SUPPLIER_LABELS = {
     "lumbro": "Lumbro",
     "jome": "JOME",
     "lauco": "Lauco",
+    "idelika": "IDÉLIKA",
+    "conceptos": "Conceptos",
 }
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:

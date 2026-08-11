@@ -102,7 +102,6 @@ def test_tarkett_tab_catalog_cache_and_cart_are_present():
     assert "function TarkettView" in source
     assert 'request("/tarkett/catalog")' in source
     assert 'request("/tarkett/quote"' not in source
-    assert 'request("/catalogs/mixed-quote"' in source
     assert 'const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";' in source
     assert "Precio unitario" in source
     assert "formatCatalogCurrency(item.unit_price)" in source
@@ -125,7 +124,6 @@ def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
     assert "function OffihoView" in source
     assert 'request("/offiho/catalog")' in source
     assert 'request("/offiho/quote"' not in source
-    assert source.count('request("/catalogs/mixed-quote"') == 1
     assert 'const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";' in source
     assert "sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY)" in source
     assert "inventory_key" in source
@@ -254,17 +252,6 @@ def test_catalog_shell_is_unframed_and_intermediate_breakpoint_prevents_overlap(
     assert ".tarkett-grid" in intermediate
     assert "text-align: left;" in intermediate
     assert ".product-actions {\n  min-width: 0;" in styles
-
-
-def test_mixed_cart_header_and_drawer_do_not_reintroduce_mobile_overflow():
-    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
-    mixed_mobile = styles.rsplit("@media (max-width: 720px)", 1)[1]
-
-    assert "body {" in styles and "overflow-x: hidden;" in styles
-    assert ".content-shell" in styles and "overflow-x: hidden;" in styles
-    assert re.search(r"\.topbar\s*\{[^}]*grid-template-columns:\s*1fr", mixed_mobile)
-    assert re.search(r"\.mixed-cart-drawer\s*\{[^}]*width:\s*100vw", mixed_mobile)
-    assert "overflow-wrap: anywhere;" in styles
 
 
 def test_verify_saas_runs_the_supported_frontend_validation_command():

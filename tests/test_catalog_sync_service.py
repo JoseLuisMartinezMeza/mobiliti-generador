@@ -455,12 +455,16 @@ def test_due_runner_claims_at_most_one_run_and_uses_explicit_registry(monkeypatc
         "lumbro",
         "jome",
         "lauco",
+        "idelika",
+        "conceptos",
     }
     assert ADAPTERS["cr_global"].__name__ == "build_cr_global_snapshot_with_assets"
     assert ADAPTERS["sonara"].__name__ == "build_sonara_snapshot_with_assets"
     assert ADAPTERS["lumbro"].__name__ == "build_lumbro_snapshot_with_assets"
     assert ADAPTERS["jome"].__name__ == "build_jome_snapshot_with_assets"
     assert ADAPTERS["lauco"].__name__ == "build_lauco_snapshot_with_assets"
+    assert ADAPTERS["idelika"].__name__ == "build_idelika_snapshot_with_assets"
+    assert ADAPTERS["conceptos"].__name__ == "build_conceptos_snapshot_with_assets"
     assert run_due_once() == "no_changes"
     assert seen[0] == ("recover", ("alma", "sunon"))
     assert seen[1] == ("claim", ("alma", "sunon"))
@@ -469,11 +473,12 @@ def test_due_runner_claims_at_most_one_run_and_uses_explicit_registry(monkeypatc
     assert seen[2][4]["adapters"] is ADAPTERS
 
 
-def test_due_scheduler_accepts_lumbro_in_generic_supplier_allowlist(monkeypatch):
+@pytest.mark.parametrize("supplier", ["lumbro", "idelika", "conceptos"])
+def test_due_scheduler_accepts_generic_supplier_allowlist(monkeypatch, supplier):
     monkeypatch.setenv("CATALOG_SYNC_ENABLED", "true")
-    monkeypatch.setenv("CATALOG_ENABLED_SUPPLIERS", "lumbro")
+    monkeypatch.setenv("CATALOG_ENABLED_SUPPLIERS", supplier)
 
-    assert catalog_service._enabled_suppliers() == ("lumbro",)
+    assert catalog_service._enabled_suppliers() == (supplier,)
 
 
 def test_lumbro_task6_snapshot_metadata_is_valid_preserved_and_deterministic():

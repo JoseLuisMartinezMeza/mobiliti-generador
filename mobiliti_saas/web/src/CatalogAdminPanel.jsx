@@ -8,7 +8,9 @@ const SUPPLIERS = [
   ["alma", "ALMA"],
   ["lumbro", "Lumbro"],
   ["jome", "JOME"],
-  ["lauco", "Lauco"]
+  ["lauco", "Lauco"],
+  ["idelika", "IDÉLIKA"],
+  ["conceptos", "Conceptos"]
 ];
 
 function formatDate(value) {

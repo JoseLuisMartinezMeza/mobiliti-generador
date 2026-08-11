@@ -471,7 +471,9 @@ function Sidebar({ view, setView, isAdmin, onLogout }) {
     ["alma", "ALMA", PackageSearch],
     ["lumbro", "Lumbro", PackageSearch],
     ["jome", "JOME", PackageSearch],
-    ["lauco", "Lauco", PackageSearch]
+    ["lauco", "Lauco", PackageSearch],
+    ["idelika", "IDÉLIKA", PackageSearch],
+    ["conceptos", "Conceptos", PackageSearch]
   ];
   return (
     <aside className="sidebar">
@@ -2712,7 +2714,9 @@ function App() {
     alma: "ALMA",
     lumbro: "Lumbro",
     jome: "JOME",
-    lauco: "Lauco"
+    lauco: "Lauco",
+    idelika: "IDÉLIKA",
+    conceptos: "Conceptos"
   };
 
   function blockExternalProjectEntry(pendingDraft = null) {

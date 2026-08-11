@@ -22,6 +22,8 @@ ALLOWED_SUPPLIERS = {
     "lumbro",
     "jome",
     "lauco",
+    "idelika",
+    "conceptos",
 }
 SUPPLIER_LABELS = {
     "cr-global": "CR Global",
@@ -31,13 +33,15 @@ SUPPLIER_LABELS = {
     "lumbro": "Lumbro",
     "jome": "JOME",
     "lauco": "Lauco",
+    "idelika": "IDÉLIKA",
+    "conceptos": "Conceptos",
 }
 ALLOWED_CURRENCIES = {"USD", "MXN", "EUR"}
 UNKNOWN_BASE_CURRENCY = "XXX"
-REVIEW_QUOTABLE_SUPPLIERS = frozenset(SUPPLIER_LABELS)
 EXPECTED_SUPPLIER_BASE_CURRENCY = {
     "cr-global": "MXN", "sonara": "MXN", "sunon": "USD", "alma": "USD",
     "lumbro": "MXN", "jome": "MXN", "lauco": "MXN",
+    "idelika": "MXN", "conceptos": "MXN",
 }
 PUBLIC_ITEM_FIELDS = (
     "internal_id", "supplier", "product_key", "sku", "code_status",
@@ -78,6 +82,7 @@ BASE_OPTION_FIELDS = {"id", "name", "price_net", "available"}
 ADD_ON_REQUIRED_FIELDS = BASE_OPTION_FIELDS | {"family"}
 ADD_ON_OPTION_FIELDS = ADD_ON_REQUIRED_FIELDS | {"compatible_base_option_ids"}
 _NORMALIZED_CATALOG_TOKEN = object()
+_UNSELECTED_CONFIGURED_PRICE = object()
 
 
 @dataclass(frozen=True)
@@ -94,6 +99,115 @@ class _NormalizedSupplierCatalog(dict):
     def __init__(self, value: dict[str, Any]):
         super().__init__(value)
         self._normalization_token = _NORMALIZED_CATALOG_TOKEN
+
+
+_PENDING_PRICE_STATUSES = frozenset({
+    "pending",
+    "price pending",
+    "price_pending",
+    "por confirmar",
+    "por_confirmar",
+    "precio por confirmar",
+    "precio_por_confirmar",
+})
+_PENDING_PRICE_WARNINGS = frozenset({
+    "price pending",
+    "price_pending",
+    "precio por confirmar",
+})
+
+
+def has_pending_price_contract(item: object) -> bool:
+    """Reconoce un precio nulo sólo con evidencia explícita y cotizable."""
+
+    if not isinstance(item, dict) or item.get("price_net") is not None:
+        return False
+    attributes = item.get("attributes")
+    warnings = item.get("warnings")
+    if not isinstance(attributes, dict) or not isinstance(warnings, list):
+        return False
+    if attributes.get("quotable") is not True:
+        return False
+    status = _normalized_supplier_warning(attributes.get("price_status"))
+    if status not in _PENDING_PRICE_STATUSES:
+        return False
+    return any(
+        _normalized_supplier_warning(warning) in _PENDING_PRICE_WARNINGS
+        for warning in warnings
+    )
+
+
+def is_supplier_item_quotable(
+    item: object,
+    supplier: object,
+    *,
+    configured_price: object = _UNSELECTED_CONFIGURED_PRICE,
+) -> bool:
+    """Aplica el mismo contrato cotizable al buscador y al carrito."""
+
+    if not isinstance(item, dict) or not isinstance(supplier, str):
+        return False
+    supplier_key = supplier.strip().lower()
+    expected_currency = EXPECTED_SUPPLIER_BASE_CURRENCY.get(supplier_key)
+    if expected_currency is None:
+        return False
+    declared_supplier = str(item.get("supplier") or "").strip().lower()
+    if declared_supplier and declared_supplier != supplier_key:
+        return False
+    if str(item.get("base_currency") or "").strip().upper() != expected_currency:
+        return False
+
+    code_status = str(item.get("code_status") or "verified").strip().lower()
+    sku = str(item.get("sku") or "").strip()
+    if code_status == "verified":
+        if not sku:
+            return False
+    elif code_status == "needs_review":
+        if sku:
+            return False
+        try:
+            tax_rate = Decimal(str(item.get("tax_rate") or ""))
+        except (InvalidOperation, TypeError, ValueError):
+            return False
+        if not tax_rate.is_finite() or tax_rate != Decimal("0.16"):
+            return False
+    else:
+        return False
+
+    if configured_price is not _UNSELECTED_CONFIGURED_PRICE:
+        price_candidates = (configured_price,)
+    else:
+        price_candidates = []
+        base_options = item.get("base_price_options")
+        if isinstance(base_options, list):
+            price_candidates = [
+                option.get("price_net")
+                for option in base_options
+                if isinstance(option, dict) and option.get("available") is not False
+            ]
+        if not isinstance(base_options, list) or not base_options:
+            price_candidates = [item.get("price_net")]
+
+    for candidate in price_candidates:
+        if candidate is None:
+            if has_pending_price_contract(item):
+                return True
+            continue
+        if isinstance(candidate, bool):
+            continue
+        try:
+            amount = (
+                candidate
+                if isinstance(candidate, Decimal)
+                else Decimal(str(candidate).strip())
+            )
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if not amount.is_finite():
+            continue
+        if amount > 0 or (code_status == "needs_review" and amount == 0):
+            return True
+    return False
 
 
 def load_supplier_catalog_data(
@@ -209,8 +323,6 @@ def build_supplier_cart_payload(
         if item["base_currency"] != expected_currency:
             raise ValueError("moneda base por verificar; el producto no se puede cotizar")
         if item["code_status"] != "verified":
-            if loaded["supplier"] not in REVIEW_QUOTABLE_SUPPLIERS:
-                raise ValueError("codigo por verificar; el producto no se puede cotizar")
             if Decimal(item["tax_rate"]) != Decimal("0.160000"):
                 raise ValueError("IVA 16% requerido para codigo por verificar")
         quantity = _quantity(
@@ -222,11 +334,21 @@ def build_supplier_cart_payload(
             raise ValueError("base_option_id debe ser texto")
         base_option = _select_base_option(item, raw_base_option)
         add_ons = _select_add_ons(item, raw.get("add_on_option_ids", []), base_option)
-        configured_price = Decimal(base_option["price_net"] if base_option else item["price_net"]) + sum(
-            (Decimal(option["price_net"]) for option in add_ons),
-            Decimal(0),
+        configured_source = base_option["price_net"] if base_option else item["price_net"]
+        configured_price = None if configured_source is None else (
+            Decimal(configured_source)
+            + sum(
+                (Decimal(option["price_net"]) for option in add_ons),
+                Decimal(0),
+            )
         )
-        if configured_price <= 0 and item["code_status"] == "verified":
+        if not is_supplier_item_quotable(
+            item,
+            loaded["supplier"],
+            configured_price=configured_price,
+        ):
+            if configured_price is None:
+                raise ValueError("precio pendiente invalido")
             raise ValueError("precio por confirmar; el producto no se puede cotizar")
         configuration_key = (
             internal_id,
@@ -441,10 +563,18 @@ def _validate_item(raw: Any, supplier: str) -> dict[str, Any]:
         _bounded_string(warning, "warning", MAX_WARNING_LENGTH)
 
     base_currency = _base_currency(raw["base_currency"])
-    price_net = _decimal_string(raw["price_net"], "price_net", minimum=Decimal(0))
+    if raw["price_net"] is None:
+        if not has_pending_price_contract(raw):
+            raise ValueError(
+                "price_net nulo exige price_status pendiente, quotable y warning"
+            )
+        price_net = None
+    else:
+        price_net = _decimal_string(raw["price_net"], "price_net", minimum=Decimal(0))
     option_prices = [option["price_net"] for option in base_options + add_on_options]
     if base_currency == UNKNOWN_BASE_CURRENCY and (
-        Decimal(price_net) != 0 or any(Decimal(value) != 0 for value in option_prices)
+        (price_net is not None and Decimal(price_net) != 0)
+        or any(Decimal(value) != 0 for value in option_prices)
     ):
         raise ValueError("moneda base por verificar exige precios cero")
 
@@ -582,7 +712,45 @@ def _cart_line(
     add_ons: list[dict[str, Any]],
     exchange_rate: Decimal,
 ) -> dict[str, Any]:
-    base_price = Decimal(base_option["price_net"] if base_option else item["price_net"])
+    raw_base_price = base_option["price_net"] if base_option else item["price_net"]
+    if raw_base_price is None:
+        if not has_pending_price_contract(item):
+            raise ValueError("precio pendiente invalido")
+        names = ([base_option["name"]] if base_option else []) + [
+            option["name"] for option in add_ons
+        ]
+        return {
+            "internal_id": item["internal_id"],
+            "supplier": item["supplier"],
+            "product_key": item["product_key"],
+            "sku": item["attributes"].get("source_code") or item["sku"],
+            "code_status": item["code_status"],
+            "brand": item["brand"],
+            "collection": item["collection"],
+            "name": item["name"],
+            "description": item["description"],
+            "unit": item["unit"],
+            "availability_type": item["availability_type"],
+            "stock": item["stock"],
+            "lead_time": item["lead_time"],
+            "quantity": _plain_decimal(quantity),
+            "base_option_id": base_option["id"] if base_option else None,
+            "add_on_option_ids": [option["id"] for option in add_ons],
+            "configuration": "; ".join(names) or "Standard",
+            "base_currency": item["base_currency"],
+            "base_price": None,
+            "unit_price_base": None,
+            "unit_price": None,
+            "line_total": None,
+            "tax_rate": item["tax_rate"],
+            "attributes": deepcopy(item["attributes"]),
+            "image_url": item["image_url"],
+            "image_kind": item["image_kind"],
+            "product_url": item["product_url"],
+            "warnings": _supplier_line_warnings(item, price_missing=True),
+            "source_reference": item["source_reference"],
+        }
+    base_price = Decimal(raw_base_price)
     try:
         with localcontext(Context(prec=DERIVED_DECIMAL_PRECISION, rounding=ROUND_HALF_UP)):
             configured = base_price + sum(

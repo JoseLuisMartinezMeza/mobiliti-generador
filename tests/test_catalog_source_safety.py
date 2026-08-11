@@ -1325,6 +1325,22 @@ def test_errors_are_redacted_and_source_has_no_cleanup_or_network_calls(tmp_path
     assert MAX_IMAGE_BYTES == 8 * 1024 * 1024
 
 
+def test_source_registry_excludes_unapproved_idelika_document():
+    from mobiliti_saas.worker.catalog_sync import load_source_config
+
+    names = {
+        file.name
+        for source in load_source_config(Path("mobiliti_saas/worker/catalog_sync/sources.json"))
+        for file in source.files
+    }
+    assert "TEQUILA LOVE.pdf" not in names
+    assert {
+        "1 CATALOGO FABRICACION 2026B.pdf",
+        "2 CATALOGO STOCK 2026.pdf",
+        "4 SCHOOL SERIES 2026.pdf",
+    }.issubset(names)
+
+
 def test_public_records_are_frozen_and_contracts_are_typed():
     reference = CellRef("Sheet", "A1")
     with pytest.raises(FrozenInstanceError):

@@ -1,10 +1,16 @@
+import os
 import re
+import subprocess
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+import pytest
 
 
 SETUP = Path("mobiliti_saas/supabase_setup")
 CATALOG_MIGRATION = SETUP / "2026_07_multi_supplier_catalogs.sql"
 JOME_LAUCO_MIGRATION = SETUP / "2026_07_jome_lauco_catalogs.sql"
+IDELIKA_CONCEPTOS_MIGRATION = SETUP / "2026_08_idelika_conceptos_catalogs.sql"
 JOBS_RLS_MIGRATION = SETUP / "2026_07_jobs_rls.sql"
 BOOTSTRAP = SETUP / "create_tables.sql"
 MIXED_MIGRATION = SETUP / "2026_07_mixed_catalog_cart.sql"
@@ -19,8 +25,10 @@ PHYSICAL_QUOTE_LINE_LIMIT = 1_048_512
 SQL_FILES = (BOOTSTRAP,)
 EXPECTED_SUPPLIERS = (
     "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
+    "idelika", "conceptos",
 )
-MIXED_CATALOG_COUNT = 9
+MIXED_CATALOG_COUNT = 11
+MIXED_CATALOGS = ("tarkett", "offiho", *EXPECTED_SUPPLIERS)
 SUPPLIER_ALLOWLIST_CONTEXTS = (
     ("catalog sources", "CREATE TABLE IF NOT EXISTS saas_catalog_sources"),
     ("catalog snapshots", "CREATE TABLE IF NOT EXISTS saas_catalog_snapshot_versions"),
@@ -79,7 +87,7 @@ def test_jome_lauco_migration_replaces_both_reservation_rpcs_safely():
     assert "RETURN NEXT" in catalog
 
     mixed = _function_definition(bootstrap, "saas_reserve_mixed_cart")
-    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 9" in mixed
+    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 11" in mixed
     assert "'jome','lauco'" in mixed
     assert "jsonb_array_length(v_group -> 'items') = 0" in mixed
     assert "IF v_total_lines = 0 THEN RETURN '[]'::JSONB; END IF;" in mixed
@@ -272,7 +280,7 @@ def _supplier_cardinality_guards(sql):
     ]
 
 
-def test_final_supplier_sql_allowlists_include_jome_and_lauco():
+def test_final_supplier_sql_allowlists_include_idelika_and_conceptos():
     for sql_path in SQL_FILES:
         sql = sql_path.read_text(encoding="utf-8")
         contexts = _supplier_allowlist_context_sql(sql)
@@ -285,14 +293,19 @@ def test_final_supplier_sql_allowlists_include_jome_and_lauco():
         for label, context_sql in contexts.items():
             assert _supplier_allowlists(context_sql) == [EXPECTED_SUPPLIERS], label
 
+        mixed = _function_definition(sql, "saas_reserve_mixed_cart")
+        expected_catalogs = ",".join(f"'{catalog}'" for catalog in MIXED_CATALOGS)
+        assert f"v_catalog NOT IN ({expected_catalogs})" in mixed
+        assert len(MIXED_CATALOGS) == MIXED_CATALOG_COUNT
+
 
 def test_supplier_allowlist_helper_handles_supplier_operands_and_ignores_false_positives():
     sql = """
         -- p_supplier IN ('cr-global', 'sonara', 'sunon', 'alma')
         /* p_supplier = ANY(ARRAY['cr-global','sonara','sunon','alma']::TEXT[]) */
-        category IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco')
-        OR other_supplier IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco')
-        OR 'supplier IN (''cr-global'', ''sonara'', ''sunon'', ''alma'', ''lumbro'', ''jome'', ''lauco'')' = 'example'
+        category IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos')
+        OR other_supplier IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos')
+        OR 'supplier IN (''cr-global'', ''sonara'', ''sunon'', ''alma'', ''lumbro'', ''jome'', ''lauco'', ''idelika'', ''conceptos'')' = 'example'
         p_supplier IN (
             'cr-global'::TEXT,
             'sonara',
@@ -300,14 +313,16 @@ def test_supplier_allowlist_helper_handles_supplier_operands_and_ignores_false_p
             'alma',
             'lumbro',
             'jome',
-            'lauco'
+            'lauco',
+            'idelika',
+            'conceptos'
         )
         OR enabled_supplier.value NOT IN (
             'cr-global'::public.supplier_code,
-            'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco'
+            'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos'
         )
         OR p_supplier = ANY(ARRAY[
-            'cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco'
+            'cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos'
         ]::public.supplier_code[])
     """
 
@@ -327,24 +342,60 @@ def test_no_stale_four_supplier_sequences_remain_after_normalizing_sql():
         assert not stale_allowlist.search(_normalized_sql(sql_path.read_text(encoding="utf-8")))
 
 
-def test_supplier_array_cardinality_guards_allow_seven_and_reject_invalid_inputs():
+def test_supplier_array_cardinality_guards_allow_nine_and_reject_invalid_inputs():
     for sql_path in SQL_FILES:
         sql = sql_path.read_text(encoding="utf-8")
         guards = _supplier_cardinality_guards(sql)
 
         assert len(guards) == 2
-        assert guards == [(1, 7), (1, 7)]
+        assert guards == [(1, 9), (1, 9)]
         for function_name in (
             "saas_recover_stale_catalog_sync_runs",
             "saas_claim_next_catalog_sync",
         ):
             function_sql = _function_sql(sql, function_name)
-            assert _supplier_cardinality_guards(function_sql) == [(1, 7)]
+            assert _supplier_cardinality_guards(function_sql) == [(1, 9)]
             assert "COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers)" in function_sql
             assert _supplier_allowlists(function_sql) == [EXPECTED_SUPPLIERS]
 
         assert all(minimum <= len(EXPECTED_SUPPLIERS) <= maximum for minimum, maximum in guards)
-        assert all(8 > maximum for _, maximum in guards)
+        assert all(10 > maximum for _, maximum in guards)
+
+
+def test_forward_idelika_conceptos_migration_widens_contracts_without_destructive_table_work():
+    migration = IDELIKA_CONCEPTOS_MIGRATION.read_text(encoding="utf-8")
+    constraints = (
+        ("saas_catalog_sources", "saas_catalog_sources_supplier_check"),
+        ("saas_catalog_snapshot_versions", "saas_catalog_snapshot_versions_supplier_check"),
+        ("saas_catalog_reservations", "saas_catalog_reservations_supplier_check"),
+    )
+
+    for table, constraint in constraints:
+        assert f"ALTER TABLE {table}\n    DROP CONSTRAINT IF EXISTS {constraint};" in migration
+        assert (
+            f"ALTER TABLE {table}\n    ADD CONSTRAINT {constraint}\n"
+            "    CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos'));"
+        ) in migration
+
+    for function_name in (
+        "saas_recover_stale_catalog_sync_runs",
+        "saas_claim_next_catalog_sync",
+        "saas_catalog_reservation_summary",
+        "saas_reserve_catalog_items",
+        "saas_reserve_mixed_cart",
+    ):
+        assert f"public.{function_name}" in migration
+
+    assert "CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 9" in migration
+    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 11" in migration
+    assert "INSERT INTO saas_catalog_sources" in migration
+    assert "('idelika', 'IDÉLIKA', 'idelika')" in migration
+    assert "('conceptos', 'Conceptos', 'conceptos')" in migration
+    assert "ON CONFLICT (supplier) DO NOTHING" in migration
+    assert "WHERE supplier = 'cr-global'" in migration
+    assert "DROP TABLE" not in migration.upper()
+    assert "TRUNCATE" not in migration.upper()
+    assert "DELETE FROM" not in migration.upper()
 
 
 def test_forward_jome_lauco_migration_widens_constraints_without_destructive_table_work():
@@ -1022,7 +1073,7 @@ def test_jobs_rls_is_guarded_idempotent_and_non_destructive():
         assert destructive not in upper_sql
 
 
-def test_bootstrap_builds_historic_catalog_schema_with_final_jome_lauco_state():
+def test_bootstrap_builds_historic_catalog_schema_with_final_idelika_conceptos_state():
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
     jobs_migration = JOBS_RLS_MIGRATION.read_text(encoding="utf-8")
 
@@ -1034,4 +1085,297 @@ def test_bootstrap_builds_historic_catalog_schema_with_final_jome_lauco_state():
     assert "supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett'))" in legacy_snapshots
     assert "CREATE TABLE IF NOT EXISTS saas_catalog_sources" in bootstrap
     assert "CREATE OR REPLACE FUNCTION saas_reserve_mixed_cart" in bootstrap
-    assert "'cr-global','sonara','sunon','alma','lumbro','jome','lauco'" in bootstrap
+    assert "'cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos'" in bootstrap
+
+
+def _local_postgres_test_context():
+    dsn = os.environ.get("TASK6_LOCAL_POSTGRES_URL", "").strip()
+    container = os.environ.get("TASK6_LOCAL_POSTGRES_CONTAINER", "").strip()
+    if not dsn or not container:
+        pytest.skip("Task 6 PostgreSQL validation is opt-in")
+    parsed = urlsplit(dsn)
+    if (
+        parsed.scheme not in {"postgres", "postgresql"}
+        or parsed.hostname != "127.0.0.1"
+        or not parsed.username
+        or not parsed.password
+        or not parsed.path.removeprefix("/").startswith("test_")
+        or not container.startswith("codex-task6-idelika-conceptos-pg-")
+    ):
+        raise AssertionError("Task 6 PostgreSQL target must be a local disposable container")
+    return container, unquote(parsed.username), unquote(parsed.password), parsed.path.removeprefix("/")
+
+
+def _container_psql(container, user, password, database, sql):
+    result = subprocess.run(
+        [
+            "docker", "exec", "-i", "-e", f"PGPASSWORD={password}", container,
+            "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1",
+            "-U", user, "-d", database,
+            "-At", "-F", "|",
+        ],
+        input=sql.encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    return result.stdout.decode("utf-8")
+
+
+_LOCAL_SUPABASE_STORAGE_SHIM = """
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE SCHEMA IF NOT EXISTS storage;
+CREATE TABLE IF NOT EXISTS storage.buckets (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    public BOOLEAN NOT NULL DEFAULT FALSE,
+    file_size_limit BIGINT,
+    allowed_mime_types TEXT[]
+);
+CREATE TABLE IF NOT EXISTS storage.objects (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bucket_id TEXT NOT NULL,
+    name TEXT NOT NULL
+);
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+"""
+
+_HISTORICAL_GENERIC_SUPPLIERS = (
+    "'cr-global','sonara','sunon','alma','lumbro','jome','lauco'"
+)
+_FINAL_GENERIC_SUPPLIERS = (
+    "'cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos'"
+)
+_HISTORICAL_MIXED_CATALOGS = (
+    "'tarkett','offiho','cr-global','sonara','sunon','alma','lumbro','jome','lauco'"
+)
+_FINAL_MIXED_CATALOGS = (
+    "'tarkett','offiho','cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos'"
+)
+
+
+def _historical_task6_bootstrap(bootstrap):
+    assert bootstrap.count(_FINAL_MIXED_CATALOGS) == 2
+    assert bootstrap.count(_FINAL_GENERIC_SUPPLIERS) == 10
+    assert bootstrap.count("CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 9") == 2
+    assert bootstrap.count("jsonb_array_length(p_groups) NOT BETWEEN 0 AND 11") == 2
+
+    historical = bootstrap.replace(_FINAL_MIXED_CATALOGS, _HISTORICAL_MIXED_CATALOGS)
+    assert historical.count(_FINAL_GENERIC_SUPPLIERS) == 8
+    historical = historical.replace(_FINAL_GENERIC_SUPPLIERS, _HISTORICAL_GENERIC_SUPPLIERS)
+    historical = historical.replace(
+        "CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 9",
+        "CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 7",
+    )
+    historical = historical.replace(
+        "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 11",
+        "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 9",
+    )
+
+    assert historical.count(_FINAL_GENERIC_SUPPLIERS) == 0
+    assert historical.count(_FINAL_MIXED_CATALOGS) == 0
+    assert historical.count(_HISTORICAL_GENERIC_SUPPLIERS) == 10
+    assert historical.count(_HISTORICAL_MIXED_CATALOGS) == 2
+    assert historical.count("CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 7") == 2
+    assert historical.count("jsonb_array_length(p_groups) NOT BETWEEN 0 AND 9") == 2
+    return historical
+
+
+def test_local_postgres_applies_task6_bootstrap_and_forward_migration():
+    container, user, password, database = _local_postgres_test_context()
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    historical_bootstrap = _historical_task6_bootstrap(bootstrap)
+    migration = IDELIKA_CONCEPTOS_MIGRATION.read_text(encoding="utf-8")
+
+    _container_psql(container, user, password, database, _LOCAL_SUPABASE_STORAGE_SHIM)
+    _container_psql(container, user, password, database, historical_bootstrap)
+
+    historical_constraints = _container_psql(
+        container,
+        user,
+        password,
+        database,
+        """
+        SELECT conrelid::regclass::text || ':' || pg_get_constraintdef(oid)
+        FROM pg_constraint
+        WHERE conname IN (
+            'saas_catalog_sources_supplier_check',
+            'saas_catalog_snapshot_versions_supplier_check',
+            'saas_catalog_reservations_supplier_check'
+        )
+        ORDER BY conrelid::regclass::text;
+        """,
+    )
+    assert historical_constraints.count("'idelika'::text") == 0
+    assert historical_constraints.count("'conceptos'::text") == 0
+
+    historical_definitions = _container_psql(
+        container,
+        user,
+        password,
+        database,
+        """
+        SELECT oid::regprocedure::text || ':' || pg_get_functiondef(oid)
+        FROM pg_proc
+        WHERE oid = ANY (ARRAY[
+            'public.saas_recover_stale_catalog_sync_runs(text[])'::regprocedure,
+            'public.saas_claim_next_catalog_sync(text[])'::regprocedure,
+            'public.saas_catalog_reservation_summary(text,integer)'::regprocedure,
+            'public.saas_reserve_catalog_items(integer,uuid,text,jsonb)'::regprocedure,
+            'public.saas_reserve_mixed_cart(integer,uuid,jsonb)'::regprocedure
+        ])
+        ORDER BY oid::regprocedure::text;
+        """,
+    )
+    assert historical_definitions.count("CREATE OR REPLACE FUNCTION") == 5
+    assert historical_definitions.count("'idelika'") == 0
+    assert historical_definitions.count("'conceptos'") == 0
+    assert historical_definitions.count("NOT BETWEEN 1 AND 7") == 2
+    assert historical_definitions.count("NOT BETWEEN 0 AND 9") == 1
+
+    _container_psql(
+        container,
+        user,
+        password,
+        database,
+        """
+        INSERT INTO saas_catalog_sources (
+            supplier, label, adapter, graph_drive_id, graph_root_item_id
+        ) VALUES (
+            'cr-global', 'CR Global', 'cr_global', 'task6-drive', 'task6-root'
+        );
+        """,
+    )
+    _container_psql(container, user, password, database, migration)
+
+    constraints = _container_psql(
+        container,
+        user,
+        password,
+        database,
+        """
+        SELECT conrelid::regclass::text || ':' || pg_get_constraintdef(oid)
+        FROM pg_constraint
+        WHERE conname IN (
+            'saas_catalog_sources_supplier_check',
+            'saas_catalog_snapshot_versions_supplier_check',
+            'saas_catalog_reservations_supplier_check'
+        )
+        ORDER BY conrelid::regclass::text;
+        """,
+    )
+    assert constraints.count("'idelika'::text") == 3
+    assert constraints.count("'conceptos'::text") == 3
+
+    definitions = _container_psql(
+        container,
+        user,
+        password,
+        database,
+        """
+        SELECT oid::regprocedure::text || ':' || pg_get_functiondef(oid)
+        FROM pg_proc
+        WHERE oid = ANY (ARRAY[
+            'public.saas_recover_stale_catalog_sync_runs(text[])'::regprocedure,
+            'public.saas_claim_next_catalog_sync(text[])'::regprocedure,
+            'public.saas_catalog_reservation_summary(text,integer)'::regprocedure,
+            'public.saas_reserve_catalog_items(integer,uuid,text,jsonb)'::regprocedure,
+            'public.saas_reserve_mixed_cart(integer,uuid,jsonb)'::regprocedure
+        ])
+        ORDER BY oid::regprocedure::text;
+        """,
+    )
+    assert definitions.count("CREATE OR REPLACE FUNCTION") == 5
+    assert definitions.count("'idelika'") >= 5
+    assert definitions.count("'conceptos'") >= 5
+    assert definitions.count("NOT BETWEEN 1 AND 9") == 2
+    assert definitions.count("NOT BETWEEN 0 AND 11") == 1
+
+    provisioned_sources = _container_psql(
+        container,
+        user,
+        password,
+        database,
+        """
+        SELECT supplier || ':' || label || ':' || adapter || ':' ||
+               graph_drive_id || ':' || graph_root_item_id
+        FROM saas_catalog_sources
+        WHERE supplier IN ('idelika', 'conceptos')
+        ORDER BY supplier;
+        """,
+    )
+    assert provisioned_sources.splitlines() == [
+        "conceptos:Conceptos:conceptos:task6-drive:task6-root",
+        "idelika:IDÉLIKA:idelika:task6-drive:task6-root",
+    ]
+
+    accepted = _container_psql(
+        container,
+        user,
+        password,
+        database,
+        """
+        SELECT 'sync:' || saas_recover_stale_catalog_sync_runs(
+            ARRAY['cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos']
+        );
+        SELECT 'claim:' || COUNT(*) FROM saas_claim_next_catalog_sync(
+            ARRAY['cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos']
+        );
+        SELECT 'summary-empty:' || COUNT(*) FROM saas_catalog_reservation_summary('idelika', 1);
+
+        INSERT INTO saas_usuarios (id, email, hashed_password)
+        VALUES (1, 'task6-local@example.test', 'not-a-real-password');
+        INSERT INTO saas_quote_jobs (id, usuario_id, status, input_path, template)
+        VALUES
+            ('11111111-1111-4111-8111-111111111111', 1, 'draft', 'task6/input-1', 'task6'),
+            ('22222222-2222-4222-8222-222222222222', 1, 'draft', 'task6/input-2', 'task6');
+
+        SELECT 'reserve:' || COUNT(*)
+        FROM saas_reserve_catalog_items(
+            1,
+            '11111111-1111-4111-8111-111111111111'::uuid,
+            'idelika',
+            '[{"internal_id":"idelika:local","sku":"IDE-LOCAL","quantity":"1","stock":"2"}]'::jsonb
+        );
+        SELECT 'summary-idelika:' || COUNT(*) FROM saas_catalog_reservation_summary('idelika', 1);
+        SELECT 'mixed:' || jsonb_array_length(saas_reserve_mixed_cart(
+            1,
+            '22222222-2222-4222-8222-222222222222'::uuid,
+            (
+                SELECT jsonb_agg(jsonb_build_object(
+                    'catalog', catalog,
+                    'items', jsonb_build_array(jsonb_build_object(
+                        'identity', catalog || ':local',
+                        'sku', 'LOCAL',
+                        'quantity', '1',
+                        'stock', '2'
+                    ))
+                ))
+                FROM unnest(ARRAY[
+                    'tarkett','offiho','cr-global','sonara','sunon','alma',
+                    'lumbro','jome','lauco','idelika','conceptos'
+                ]) AS catalogs(catalog)
+            )
+        ));
+        """,
+    )
+    assert accepted.splitlines() == [
+        "sync:0",
+        "claim:0",
+        "summary-empty:0",
+        "reserve:1",
+        "summary-idelika:1",
+        "mixed:11",
+    ]
+
+    rejected = subprocess.run(
+        [
+            "docker", "exec", "-i", "-e", f"PGPASSWORD={password}", container,
+            "psql", "-X", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1",
+            "-U", user, "-d", database,
+        ],
+        input=b"SELECT saas_recover_stale_catalog_sync_runs(ARRAY['idelika','conceptos']);",
+        capture_output=True,
+        check=False,
+    )
+    assert rejected.returncode == 0, rejected.stderr.decode("utf-8", errors="replace")

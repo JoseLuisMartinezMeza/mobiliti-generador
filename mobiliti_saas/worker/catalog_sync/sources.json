@@ -75,5 +75,25 @@
     "files": [
       {"path": "SPEC GUIDES 2026/LAUCO/Spec Guide Lauco-2026.xlsb", "kind": "spec_guide", "brand": "Lauco", "drive_item_id": "01DHXXN73QZOUEEWNH4BE2NO5YPBUJ5HNK"}
     ]
+  },
+  {
+    "supplier": "idelika",
+    "label": "IDÉLIKA",
+    "adapter": "idelika",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "IDELIKA/1 CATALOGO FABRICACION 2026B.pdf", "kind": "catalog", "mime_type": "application/pdf", "drive_item_id": "01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"},
+      {"path": "IDELIKA/2 CATALOGO STOCK 2026.pdf", "kind": "inventory", "mime_type": "application/pdf", "drive_item_id": "01DHXXN7YASXKBZPOLSBHIX2N2T3PB4G2R"},
+      {"path": "IDELIKA/4 SCHOOL SERIES 2026.pdf", "kind": "catalog", "mime_type": "application/pdf", "drive_item_id": "01DHXXN7YTQLPUZXRUN5E3J62UE2JQUWNC"}
+    ]
+  },
+  {
+    "supplier": "conceptos",
+    "label": "Conceptos",
+    "adapter": "conceptos",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC GUIDES 2026/CONCEPTOS/Spec guide - Conceptos - Sofas - CdMx - Gdl - Qro - 2021.xlsx", "kind": "spec_guide", "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "drive_item_id": "01DHXXN76XWGQOWSKX2RDL5YG6GTS355BO"}
+    ]
   }
 ]

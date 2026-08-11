@@ -43,6 +43,19 @@ from .lauco import (
     build_lauco_snapshot_with_assets,
     import_lauco_catalog,
 )
+from .idelika import (
+    IdelikaEvidenceRow,
+    IdelikaSpecValidationError,
+    build_idelika_snapshot,
+    build_idelika_snapshot_with_assets,
+    extract_idelika_rows,
+    load_validated_idelika_spec,
+)
+from .conceptos import (
+    build_conceptos_snapshot,
+    build_conceptos_snapshot_with_assets,
+    parse_conceptos_rows,
+)
 
 __all__ = (
     "CellRef",
@@ -80,4 +93,13 @@ __all__ = (
     "build_lauco_snapshot",
     "build_lauco_snapshot_with_assets",
     "import_lauco_catalog",
+    "IdelikaEvidenceRow",
+    "IdelikaSpecValidationError",
+    "build_idelika_snapshot",
+    "build_idelika_snapshot_with_assets",
+    "extract_idelika_rows",
+    "load_validated_idelika_spec",
+    "build_conceptos_snapshot",
+    "build_conceptos_snapshot_with_assets",
+    "parse_conceptos_rows",
 )

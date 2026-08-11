@@ -386,6 +386,7 @@ class CotizacionProduct:
     image_content_type: str | None = None
     complement_images: tuple[CotizacionImageSource, ...] = ()
     price_terms: tuple[CotizacionPriceTerm, ...] = ()
+    price_pending: bool = False
 
     def __post_init__(self) -> None:
         _validate_text(self.item_key)
@@ -404,6 +405,8 @@ class CotizacionProduct:
             isinstance(term, CotizacionPriceTerm) for term in self.price_terms
         ):
             raise TypeError("Términos de precio Cotizacion inválidos")
+        if type(self.price_pending) is not bool:
+            raise TypeError("Estado de precio Cotizacion inválido")
         if not isinstance(self.complement_images, tuple) or not all(
             isinstance(image, CotizacionImageSource)
             for image in self.complement_images
@@ -724,11 +727,15 @@ class CotizacionSheetEditor:
                         f"E{target_row}",
                         f"=Mobiliti!H{product.mobiliti_row}",
                     )
-                contract_formulas = formula_contract.product_formulas(
-                    price_terms=product.price_terms,
-                    target_row=target_row,
-                )
-                _set_formula(row, f"F{target_row}", contract_formulas["F"])
+                contract_formulas = None
+                if product.price_pending:
+                    _set_inline_string(row, f"F{target_row}", "Por confirmar")
+                else:
+                    contract_formulas = formula_contract.product_formulas(
+                        price_terms=product.price_terms,
+                        target_row=target_row,
+                    )
+                    _set_formula(row, f"F{target_row}", contract_formulas["F"])
                 if target_row == first_discount_row:
                     _set_number(row, f"G{target_row}", product.discount)
                 else:
@@ -737,27 +744,33 @@ class CotizacionSheetEditor:
                         f"G{target_row}",
                         f"=$G${first_discount_row}",
                     )
-                _set_formula(
-                    row,
-                    f"H{target_row}",
-                    translate_formula(
-                        product_h_formula,
-                        origin="H17",
-                        target=f"H{target_row}",
-                        sheet="Cotizacion",
-                    ),
-                )
-                _set_formula(row, f"I{target_row}", contract_formulas["I"])
-                _set_formula(
-                    row,
-                    f"J{target_row}",
-                    translate_formula(
-                        product_j_formula,
-                        origin="J17",
-                        target=f"J{target_row}",
-                        sheet="Cotizacion",
-                    ),
-                )
+                if product.price_pending:
+                    _set_inline_string(row, f"H{target_row}", "")
+                    _set_inline_string(row, f"I{target_row}", "Por confirmar")
+                    _set_inline_string(row, f"J{target_row}", "")
+                else:
+                    _set_formula(
+                        row,
+                        f"H{target_row}",
+                        translate_formula(
+                            product_h_formula,
+                            origin="H17",
+                            target=f"H{target_row}",
+                            sheet="Cotizacion",
+                        ),
+                    )
+                    assert contract_formulas is not None
+                    _set_formula(row, f"I{target_row}", contract_formulas["I"])
+                    _set_formula(
+                        row,
+                        f"J{target_row}",
+                        translate_formula(
+                            product_j_formula,
+                            origin="J17",
+                            target=f"J{target_row}",
+                            sheet="Cotizacion",
+                        ),
+                    )
                 dynamic_rows.append(row)
                 product_rows.append(target_row)
                 image_sources: list[CotizacionImageSource] = []
@@ -1668,7 +1681,7 @@ def _validate_exact_mobiliti_surface(
         "E": ("text",),
         "F": ("text",),
         "H": ("number", "formula"),
-        "J": ("number", "formula"),
+        "J": ("number", "formula", "text"),
         "K": ("text", "number", "formula"),
         "P": ("text",),
     }
@@ -1684,6 +1697,8 @@ def _validate_exact_mobiliti_surface(
                 allowed_kinds,
                 allow_blank=True,
             )
+            if column == "J" and kind == "text" and value != "Por confirmar":
+                raise ValueError("Texto de precio Mobiliti inválido")
             if kind is not None:
                 writes.append(MobilitiCellWrite(coordinate, kind, value))
 
@@ -1907,15 +1922,41 @@ def _validate_exact_cotizacion_surface(
                 "number",
                 allow_blank=False,
             )
-        formula = _exact_formula_text(
-            _require_root_cell(candidate, f"F{worksheet_row}"),
-            f"F{worksheet_row}",
-        )
-        match = re.fullmatch(r"Mobiliti!X([1-9][0-9]*)", formula)
-        if match is None:
-            price_terms = _cotizacion_price_terms_from_formula(formula)
-        else:
+        price_cell = _require_root_cell(candidate, f"F{worksheet_row}")
+        price_pending = price_cell.attrib.get("t") == "inlineStr"
+        if price_pending:
+            if (
+                _exact_inline_text(price_cell, f"F{worksheet_row}")
+                != "Por confirmar"
+                or _exact_inline_text(
+                    _require_root_cell(candidate, f"H{worksheet_row}"),
+                    f"H{worksheet_row}",
+                ) != ""
+                or _exact_inline_text(
+                    _require_root_cell(candidate, f"I{worksheet_row}"),
+                    f"I{worksheet_row}",
+                ) != "Por confirmar"
+                or _exact_inline_text(
+                    _require_root_cell(candidate, f"J{worksheet_row}"),
+                    f"J{worksheet_row}",
+                ) != ""
+            ):
+                raise ValueError("Estado de precio Cotizacion inválido")
+            name_formula = _exact_formula_text(
+                _require_root_cell(candidate, f"A{worksheet_row}"),
+                f"A{worksheet_row}",
+            )
+            match = re.fullmatch(r"Mobiliti!D([1-9][0-9]*)", name_formula)
+            if match is None:
+                raise ValueError("Referencia pendiente Cotizacion inválida")
             price_terms = (CotizacionPriceTerm(int(match.group(1))),)
+        else:
+            formula = _exact_formula_text(price_cell, f"F{worksheet_row}")
+            match = re.fullmatch(r"Mobiliti!X([1-9][0-9]*)", formula)
+            if match is None:
+                price_terms = _cotizacion_price_terms_from_formula(formula)
+            else:
+                price_terms = (CotizacionPriceTerm(int(match.group(1))),)
         mobiliti_row = price_terms[0].mobiliti_row
         mobiliti_rows.extend(term.mobiliti_row for term in price_terms)
         description_cell = _require_root_cell(candidate, f"C{worksheet_row}")
@@ -1988,6 +2029,7 @@ def _validate_exact_cotizacion_surface(
                 discount=first_discount,
                 description_formula=description_formula,
                 price_terms=price_terms,
+                price_pending=price_pending,
             )
         )
         current_product_rows.append(worksheet_row)

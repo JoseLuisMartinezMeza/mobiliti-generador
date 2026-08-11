@@ -148,6 +148,7 @@ def test_workbook_writes_occurrence_line_ids_for_duplicate_catalog_products(
             "title": "Recepción",
             "line_ids": line_ids,
         }],
+        today=date(2026, 7, 19),
     )
 
     output = create_mixed_catalog_quotation_workbook(

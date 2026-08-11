@@ -35,6 +35,10 @@ def test_search_returns_safe_display_price_and_dimensions_without_private_source
     assert item == {
         "catalog": "sunon",
         "official_code": "OLIVE-II",
+        "display_key": "sunon:OLIVE-II",
+        "code_status": "verified",
+        "quotable": True,
+        "price_pending": False,
         "price_net": "100",
         "base_currency": "USD",
         "identity": {
@@ -58,6 +62,163 @@ def test_search_returns_safe_display_price_and_dimensions_without_private_source
         "private.example", "Existencia: 7",
     ):
         assert forbidden not in serialized
+
+
+def test_search_quotable_uses_the_cart_contract_for_pending_numeric_and_review_items():
+    pending = {
+        "internal_id": "idelika:school:mesa-sin-sku",
+        "sku": "",
+        "code_status": "needs_review",
+        "name": "Mesa escolar IDÉLIKA",
+        "price_net": None,
+        "base_currency": "MXN",
+        "tax_rate": "0.160000",
+        "attributes": {"quotable": True, "price_status": "precio_por_confirmar"},
+        "warnings": ["Precio por confirmar"],
+    }
+    pending_without_exact_marker = {
+        **pending,
+        "internal_id": "idelika:school:mesa-sin-marcador",
+        "warnings": ["Precio pendiente de captura"],
+    }
+    sunon = _supplier_item("sunon", "Silla Sunon", "SUN-1")
+    alma = _supplier_item("alma", "Silla ALMA", "ALMA-1")
+    review = {
+        "internal_id": "sonara:review-1",
+        "sku": "",
+        "code_status": "needs_review",
+        "name": "Producto Sonara por revisar",
+        "price_net": "250",
+        "base_currency": "MXN",
+        "tax_rate": "0.160000",
+        "attributes": {},
+        "warnings": ["Código por verificar"],
+    }
+
+    catalogs = {
+        "idelika": {"items": [pending, pending_without_exact_marker]},
+        "sunon": {"items": [sunon]},
+        "alma": {"items": [alma]},
+        "sonara": {"items": [review]},
+    }
+    result = search_catalog_products(
+        catalogs,
+        query="",
+        supplier=None,
+        offset=0,
+        limit=20,
+    )
+    by_key = {item["display_key"]: item for item in result["items"]}
+
+    assert by_key[pending["internal_id"]]["quotable"] is True
+    assert by_key[pending["internal_id"]]["price_pending"] is True
+    assert by_key[pending_without_exact_marker["internal_id"]]["quotable"] is False
+    assert by_key[pending_without_exact_marker["internal_id"]]["price_pending"] is False
+    assert by_key[sunon["internal_id"]]["quotable"] is True
+    assert by_key[alma["internal_id"]]["quotable"] is True
+    assert by_key[review["internal_id"]]["quotable"] is True
+
+
+@pytest.mark.parametrize(
+    ("catalog", "raw", "expected"),
+    [
+        (
+            "tarkett",
+            {"code": "T-OK", "name": "Piso Tarkett", "unit_price": "10", "available_quantity": 2},
+            True,
+        ),
+        (
+            "tarkett",
+            {
+                "code": "T-REVIEW",
+                "code_status": "needs_review",
+                "name": "Piso Tarkett revisión",
+                "unit_price": "10",
+                "available_quantity": 2,
+            },
+            False,
+        ),
+        (
+            "tarkett",
+            {"code": "T-SIN-PRECIO", "name": "Piso Tarkett sin precio", "available_quantity": 2},
+            False,
+        ),
+        (
+            "tarkett",
+            {
+                "code": "T-SIN-STOCK",
+                "name": "Piso Tarkett sin stock",
+                "unit_price": "10",
+                "available_quantity": 0,
+            },
+            False,
+        ),
+        (
+            "tarkett",
+            {
+                "code": "T-STOCK-INSUFICIENTE",
+                "name": "Piso Tarkett con stock insuficiente",
+                "unit_price": "10",
+                "available_quantity": "0.5",
+            },
+            False,
+        ),
+        (
+            "offiho",
+            {
+                "inventory_key": "offiho:ok",
+                "code": "O-OK",
+                "name": "Silla Offiho",
+                "unit_price": "10",
+                "available_quantity": 1,
+            },
+            True,
+        ),
+        (
+            "offiho",
+            {
+                "inventory_key": "offiho:sin-codigo",
+                "name": "Silla Offiho sin código",
+                "unit_price": "10",
+                "available_quantity": 1,
+            },
+            False,
+        ),
+        (
+            "offiho",
+            {
+                "inventory_key": "offiho:sin-precio",
+                "code": "O-SIN-PRECIO",
+                "name": "Silla Offiho sin precio",
+                "available_quantity": 1,
+            },
+            False,
+        ),
+        (
+            "offiho",
+            {
+                "inventory_key": "offiho:moneda-invalida",
+                "code": "O-MONEDA",
+                "name": "Silla Offiho moneda inválida",
+                "unit_price": "10",
+                "base_currency": "USD",
+                "available_quantity": 1,
+            },
+            False,
+        ),
+    ],
+)
+def test_search_legacy_quotable_preserves_verified_identity_and_official_code(catalog, raw, expected):
+    item = search_catalog_products(
+        {catalog: {"items": [raw]}},
+        query="",
+        supplier=catalog,
+        offset=0,
+        limit=20,
+    )["items"][0]
+
+    assert item["quotable"] is expected
+    assert item["official_code"] == str(raw.get("code") or "")
 
 
 @pytest.mark.parametrize(
@@ -230,11 +391,13 @@ def test_search_uses_all_seven_catalogs_and_stable_pagination():
             "inventory_key": "offiho:O-2",
             "code": "O-2",
             "name": "Silla Alfa",
+            "unit_price": "10",
             "available_quantity": 0,
         }]},
         "tarkett": {"items": [{
             "code": "T-2",
             "name": "Silla Alfa",
+            "unit_price": "10",
             "available_quantity": 2,
         }]},
     }
@@ -251,7 +414,9 @@ def test_search_uses_all_seven_catalogs_and_stable_pagination():
     assert second["next_offset"] == 6
     assert last["next_offset"] is None
     assert first["items"][1]["snapshot"]["availability"] == "Agotado"
+    assert first["items"][1]["quotable"] is True
     assert first["items"][0]["snapshot"]["availability"] == "Disponible"
+    assert first["items"][0]["quotable"] is True
 
 
 def test_search_omits_identity_that_fails_mixed_catalog_preflight():

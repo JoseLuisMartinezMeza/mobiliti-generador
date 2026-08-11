@@ -595,7 +595,10 @@ class ApiStub:
             ):
                 assert self.saved_project is not None
                 body = deepcopy(request.post_data_json)
-                assert body == {"expected_revision": self.project_revision}
+                assert body == {
+                    "expected_revision": self.project_revision,
+                    "template": "official_2026_gdl",
+                }
                 self.mixed_post_bodies.append(project_quote_snapshot())
                 if not self.mixed_responses:
                     self.unexpected_requests.append(
@@ -613,6 +616,7 @@ class ApiStub:
             ):
                 products = [{
                     "catalog": "sunon",
+                    "quotable": True,
                     "official_code": "OLIVE-II",
                     "identity": {
                         "internal_id": "sunon:olive-ii",
@@ -629,6 +633,7 @@ class ApiStub:
                     },
                 }, {
                     "catalog": "alma",
+                    "quotable": True,
                     "official_code": "HEAD-1",
                     "identity": {
                         "internal_id": "alma:head-1",

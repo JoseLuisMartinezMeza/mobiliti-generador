@@ -229,7 +229,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
 
 CREATE TABLE IF NOT EXISTS saas_catalog_sources (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    supplier TEXT NOT NULL UNIQUE CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco')),
+    supplier TEXT NOT NULL UNIQUE CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos')),
     label TEXT NOT NULL,
     adapter TEXT NOT NULL,
     graph_drive_id TEXT NOT NULL,
@@ -311,7 +311,7 @@ CREATE TABLE IF NOT EXISTS saas_catalog_source_files (
 
 CREATE TABLE IF NOT EXISTS saas_catalog_snapshot_versions (
     id UUID PRIMARY KEY,
-    supplier TEXT NOT NULL CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco')),
+    supplier TEXT NOT NULL CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos')),
     source_hash TEXT NOT NULL,
     generated_at TIMESTAMPTZ NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('candidate','published','superseded','rejected')),
@@ -354,7 +354,7 @@ $$;
 
 CREATE TABLE IF NOT EXISTS saas_catalog_reservations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    supplier TEXT NOT NULL CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco')),
+    supplier TEXT NOT NULL CHECK (supplier IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos')),
     internal_id TEXT NOT NULL,
     sku TEXT NOT NULL,
     quantity NUMERIC NOT NULL CHECK (quantity > 0),
@@ -721,12 +721,12 @@ DECLARE
     v_recovered INTEGER;
 BEGIN
     IF p_enabled_suppliers IS NULL
-       OR CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 7
+       OR CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 9
        OR (SELECT COUNT(*) FROM UNNEST(p_enabled_suppliers))
           <> (SELECT COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value))
        OR EXISTS (
            SELECT 1 FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value)
-           WHERE value NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco')
+           WHERE value NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos')
        ) THEN
         RAISE EXCEPTION 'invalid catalog sync supplier whitelist';
     END IF;
@@ -768,12 +768,12 @@ DECLARE
     v_requested_by INTEGER;
 BEGIN
     IF p_enabled_suppliers IS NULL
-       OR CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 7
+       OR CARDINALITY(p_enabled_suppliers) NOT BETWEEN 1 AND 9
        OR (SELECT COUNT(*) FROM UNNEST(p_enabled_suppliers))
           <> (SELECT COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value))
        OR EXISTS (
            SELECT 1 FROM UNNEST(p_enabled_suppliers) AS enabled_supplier(value)
-           WHERE value NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco')
+           WHERE value NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos')
        ) THEN
         RAISE EXCEPTION 'invalid catalog sync supplier whitelist';
     END IF;
@@ -1827,7 +1827,7 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
     IF p_supplier IS NULL
-       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco') THEN
+       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos') THEN
         RAISE EXCEPTION 'invalid catalog supplier';
     END IF;
     IF p_usuario_id IS NULL OR p_usuario_id <= 0 THEN
@@ -1880,7 +1880,7 @@ BEGIN
         RAISE EXCEPTION 'invalid quote job';
     END IF;
     IF p_supplier IS NULL
-       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco') THEN
+       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos') THEN
         RAISE EXCEPTION 'invalid catalog supplier';
     END IF;
     IF p_lines IS NULL
@@ -2156,7 +2156,7 @@ BEGIN
     END IF;
 
     IF p_groups IS NULL OR jsonb_typeof(p_groups) <> 'array'
-       OR jsonb_array_length(p_groups) NOT BETWEEN 0 AND 9 THEN
+       OR jsonb_array_length(p_groups) NOT BETWEEN 0 AND 11 THEN
         RAISE EXCEPTION 'mixed groups must be a bounded array';
     END IF;
 
@@ -2183,7 +2183,7 @@ BEGIN
         END IF;
 
         v_catalog := btrim(v_group ->> 'catalog');
-        IF v_catalog NOT IN ('tarkett','offiho','cr-global','sonara','sunon','alma','lumbro','jome','lauco') THEN
+        IF v_catalog NOT IN ('tarkett','offiho','cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos') THEN
             RAISE EXCEPTION 'mixed catalog is invalid';
         END IF;
         IF v_catalog = ANY(v_seen_catalogs) THEN
@@ -2510,7 +2510,7 @@ BEGIN
         RAISE EXCEPTION 'invalid quote job';
     END IF;
     IF p_supplier IS NULL
-       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco') THEN
+       OR p_supplier NOT IN ('cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos') THEN
         RAISE EXCEPTION 'invalid catalog supplier';
     END IF;
     IF p_lines IS NULL
@@ -2686,7 +2686,7 @@ BEGIN
     END IF;
 
     IF p_groups IS NULL OR jsonb_typeof(p_groups) <> 'array'
-       OR jsonb_array_length(p_groups) NOT BETWEEN 0 AND 9 THEN
+       OR jsonb_array_length(p_groups) NOT BETWEEN 0 AND 11 THEN
         RAISE EXCEPTION 'mixed groups must be a bounded array';
     END IF;
 
@@ -2713,7 +2713,7 @@ BEGIN
         END IF;
 
         v_catalog := btrim(v_group ->> 'catalog');
-        IF v_catalog NOT IN ('tarkett','offiho','cr-global','sonara','sunon','alma','lumbro','jome','lauco') THEN
+        IF v_catalog NOT IN ('tarkett','offiho','cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos') THEN
             RAISE EXCEPTION 'mixed catalog is invalid';
         END IF;
         IF v_catalog = ANY(v_seen_catalogs) THEN

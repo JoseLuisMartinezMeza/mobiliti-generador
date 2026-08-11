@@ -12,8 +12,14 @@ import {
   Search,
 } from "lucide-react";
 import { createMixedCartLine } from "./mixedCart.js";
+import {
+  filterCatalogVariantGroups,
+  productBaseConfigurationLabel,
+  productPriceLabel,
+  productVariantConfiguration,
+} from "./productPicker.js";
 
-const SUPPLIER_CACHE_VERSION = "v1";
+const SUPPLIER_CACHE_VERSION = "v2";
 const SUPPLIER_PAGE_SIZE = 24;
 const QUANTITY_SCALE = 1000000;
 const QUANTITY_LIMIT_MICROUNITS = 1000000 * QUANTITY_SCALE;
@@ -80,6 +86,14 @@ function sourceCode(item) {
 function decimal(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function nullableDecimal(value) {
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatNumber(value, maximumFractionDigits = 6) {
@@ -177,20 +191,43 @@ function groupCatalogItems(items) {
 function configuredBasePrice(item, configuration) {
   const baseOptions = item.base_price_options || [];
   const selectedBase = baseOptions.find((option) => option.id === configuration.base_option_id);
-  const basePrice = baseOptions.length ? decimal(selectedBase?.price_net) : decimal(item.price_net);
+  const basePrice = nullableDecimal(baseOptions.length ? selectedBase?.price_net : item.price_net);
+  if (basePrice === null) return null;
   const selectedAddOns = new Set(configuration.add_on_option_ids || []);
-  const addOnPrice = (item.add_on_options || [])
-    .filter((option) => selectedAddOns.has(option.id))
-    .reduce((sum, option) => sum + decimal(option.price_net), 0);
+  const selectedOptions = (item.add_on_options || [])
+    .filter((option) => selectedAddOns.has(option.id));
+  if (selectedOptions.some((option) => nullableDecimal(option.price_net) === null)) return null;
+  const addOnPrice = selectedOptions.reduce((sum, option) => sum + decimal(option.price_net), 0);
   return basePrice + addOnPrice;
 }
 
-function canAddSupplierItem(item, supplier, configuredPrice) {
-  const reviewAllowed = Boolean(supplier)
-    && item.code_status === "needs_review"
-    && decimal(item.tax_rate) === 0.16;
+function pendingPriceContract(item, configuredPrice) {
+  const status = warningKey(item.attributes?.price_status).replace(/_/g, " ");
+  const pendingStatus = new Set([
+    "pending", "price pending", "por confirmar", "precio por confirmar",
+  ]).has(status);
+  const pendingWarning = (item.warnings || []).some((warning) => {
+    const key = warningKey(warning).replace(/_/g, " ");
+    return key === "price pending" || key === "precio por confirmar";
+  });
+  return configuredPrice === null
+    && item.attributes?.quotable === true
+    && pendingStatus
+    && pendingWarning;
+}
+
+function canAddSupplierItem(item, _supplier, configuredPrice) {
+  const reviewAllowed = item.code_status === "needs_review"
+    && decimal(item.tax_rate) === 0.16
+    && (
+      item.attributes?.quotable === true
+      || (item.warnings || []).some((warning) => (
+        warningKey(warning).replace(/_/g, " ") === "missing code"
+        || warningKey(warning) === "codigo por verificar"
+      ))
+    );
   const codeAllowed = item.code_status === "verified" || reviewAllowed;
-  const priceAllowed = decimal(configuredPrice) > 0 || reviewAllowed;
+  const priceAllowed = decimal(configuredPrice) > 0 || pendingPriceContract(item, configuredPrice);
   return codeAllowed && priceAllowed && item.base_currency !== "XXX";
 }
 
@@ -201,12 +238,12 @@ function warningKey(value) {
 }
 
 function cartWarnings(item) {
-  const result = [...(item.warnings || [])].map((value) => String(value));
-  if (
-    item.code_status === "needs_review"
-    && !result.some((value) => warningKey(value) === "codigo por verificar")
-  ) {
-    result.push("Codigo por verificar");
+  const result = [...(item.warnings || [])]
+    .map((value) => String(value))
+    .filter((value) => !["missing_code", "price_pending"].includes(value.trim().toLowerCase()));
+  if (item.code_status === "needs_review") result.push("Código por verificar");
+  if (pendingPriceContract(item, configuredBasePrice(item, initialConfiguration(item)))) {
+    result.push("Precio por confirmar");
   }
   const seen = new Set();
   return result.filter((value) => {
@@ -336,30 +373,12 @@ export default function SupplierCatalogView({
   );
 
   const filteredGroups = useMemo(() => {
-    const normalizedQuery = normalizeText(query);
-    return groups.map((group) => {
-      const matchingVariants = group.variants.filter((item) => {
-        const searchable = normalizeText([
-          sourceCode(item),
-          item.name,
-          item.description,
-          item.brand,
-          item.collection,
-          JSON.stringify(item.attributes || {})
-        ].join(" "));
-        const matchesAvailability = !availability
-          || (availability === "out"
-            ? item.is_out_of_stock
-            : availability === "stocked"
-              ? item.availability_type === "stocked" && !item.is_out_of_stock
-              : item.availability_type === availability);
-        return (!normalizedQuery || searchable.includes(normalizedQuery))
-          && (!brand || item.brand === brand)
-          && (!collection || item.collection === collection)
-          && matchesAvailability;
-      });
-      return { ...group, matchingVariants };
-    }).filter((group) => group.matchingVariants.length > 0);
+    return filterCatalogVariantGroups(groups, {
+      query,
+      brand,
+      collection,
+      availability,
+    });
   }, [availability, brand, collection, groups, query]);
 
   const pageCount = Math.max(1, Math.ceil(filteredGroups.length / SUPPLIER_PAGE_SIZE));
@@ -417,7 +436,7 @@ export default function SupplierCatalogView({
     setSubmitError("");
     const configuration = configurationFor(item);
     if ((item.base_price_options || []).length && !configuration.base_option_id) {
-      setSubmitError(`Selecciona una materialidad para ${item.name}.`);
+      setSubmitError(`Selecciona ${productBaseConfigurationLabel(item).toLowerCase()} para ${item.name}.`);
       return;
     }
     const quantity = String(quantityByItem[item.internal_id] ?? "1").trim();
@@ -438,13 +457,15 @@ export default function SupplierCatalogView({
         quantityRules: quantityRules(item),
         snapshot: {
           name: item.name,
-          code: sourceCode(item) || "Codigo por verificar",
+          code: sourceCode(item),
+          displayKey: item.internal_id,
           image_url: item.image_url || "",
           unit: item.unit,
           availability: availabilityLabel(item),
           configuration: visibleConfiguration(item, configuration),
           warnings: cartWarnings(item)
-        }
+        },
+        officialCode: sourceCode(item),
       }));
       if (added) onOpenCart();
     } catch (cartFailure) {
@@ -540,6 +561,8 @@ export default function SupplierCatalogView({
               const families = optionFamilies(item);
               const selectedBaseId = configuration.base_option_id;
               const configuredPrice = configuredBasePrice(item, configuration);
+              const variantConfiguration = productVariantConfiguration(item);
+              const baseConfigurationLabel = productBaseConfigurationLabel(item);
               const linkText = productLinkLabel(item, supplier);
               const productQuantity = quantityRules(item);
               const availabilityBuckets = availabilityByLeadTime(item);
@@ -559,7 +582,7 @@ export default function SupplierCatalogView({
                     </div>
                     <div className="supplier-product-copy">
                       <div className="supplier-product-code">
-                        <strong>{sourceCode(item) || "Sin codigo"}</strong>
+                        <strong>{sourceCode(item) || "Código por verificar"}</strong>
                         {item.product_url ? (
                           <a className="supplier-product-link" href={item.product_url} target="_blank" rel="noreferrer" title={linkText} aria-label={`${linkText} oficial de ${item.name}; abre en una pestaña nueva`}>
                             <ExternalLink size={17} />
@@ -570,10 +593,11 @@ export default function SupplierCatalogView({
                       <h3>{item.name}</h3>
                       <p>{item.description}</p>
                       <div className="supplier-badges">
-                        {item.code_status === "needs_review" ? <span className="supplier-badge warning">Codigo por verificar</span> : null}
+                        {item.code_status === "needs_review" ? <span className="supplier-badge warning">Código por verificar</span> : null}
                         {decimal(configuredPrice) <= 0 || item.base_currency === "XXX" ? <span className="supplier-badge warning">Precio por confirmar</span> : null}
                         {item.availability_type === "made_to_order" ? <span className="supplier-badge order">Sobre pedido</span> : null}
                         {item.image_kind === "generated_reference" ? <span className="supplier-badge reference">Imagen de referencia</span> : null}
+                        {item.image_kind === "placeholder" ? <span className="supplier-badge warning">Imagen por verificar</span> : null}
                         {item.attributes?.product_url_match?.status === "catalog_fallback" ? (
                           <span className="supplier-badge general" aria-label="Enlace al catálogo general">Catálogo general</span>
                         ) : null}
@@ -586,6 +610,9 @@ export default function SupplierCatalogView({
                         <div><dt>Apartado</dt><dd>{formatNumber(item.reserved_quantity)}</dd></div>
                         {item.attributes?.dimensions ? (
                           <div className="supplier-product-dimensions"><dt>Dimensiones</dt><dd>{item.attributes.dimensions}</dd></div>
+                        ) : null}
+                        {variantConfiguration ? (
+                          <div><dt>Acabado / material del aro</dt><dd>{variantConfiguration}</dd></div>
                         ) : null}
                         {decimal(configuredPrice) <= 0 && item.attributes?.source_price_printed ? (
                           <div><dt>Precio fuente (moneda por confirmar)</dt><dd>{item.attributes.source_price_printed}</dd></div>
@@ -620,11 +647,11 @@ export default function SupplierCatalogView({
 
                   {matchingVariants.length > 1 ? (
                     <label className="supplier-config-field">
-                      <span>Variante</span>
+                      <span>{supplier === "alma" ? "Acabado / material del aro" : "Variante"}</span>
                       <select disabled={cartBusy} value={item.internal_id} onChange={(event) => selectVariant(group.product_key, event.target.value)}>
                         {matchingVariants.map((variant) => (
                           <option value={variant.internal_id} key={variant.internal_id}>
-                            {sourceCode(variant) || variant.internal_id} - {variant.attributes?.color || variant.name}
+                            {sourceCode(variant) || variant.internal_id} - {productVariantConfiguration(variant) || variant.attributes?.color || variant.name}
                           </option>
                         ))}
                       </select>
@@ -633,8 +660,8 @@ export default function SupplierCatalogView({
 
                   {(item.base_price_options || []).length ? (
                     <fieldset className="supplier-config-field supplier-option-field">
-                      <legend>Materialidad base *</legend>
-                      <div className="supplier-option-buttons" role="group" aria-label={`Materialidad base de ${item.name}`}>
+                      <legend>{baseConfigurationLabel} *</legend>
+                      <div className="supplier-option-buttons" role="group" aria-label={`${baseConfigurationLabel} de ${item.name}`}>
                         {item.base_price_options.filter((option) => option.available).map((option) => {
                           const active = configuration.base_option_id === option.id;
                           return (
@@ -715,7 +742,11 @@ export default function SupplierCatalogView({
                   <div className="supplier-card-footer">
                     <div>
                       <span>Precio neto</span>
-                      <strong>{formatConfiguredPrice(item, configuredPrice)}</strong>
+                      <strong>{productPriceLabel(
+                        item,
+                        configuration.base_option_id,
+                        configuration.add_on_option_ids,
+                      )}</strong>
                       <small>mas IVA</small>
                     </div>
                     <label>
