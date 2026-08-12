@@ -958,6 +958,23 @@ def test_atomic_candidate_and_publication_rpcs_use_exact_payloads():
     assert manual == {"p_candidate_id": SNAPSHOT_ID, "p_reviewed_by": 7, "p_review_note": "approved"}
 
 
+def test_stage_candidate_allows_an_absent_cursor_but_no_changes_does_not():
+    generated = datetime(2026, 7, 16, 12, 0, tzinfo=timezone.utc)
+    snapshot = {
+        "supplier": "sunon", "source_hash": "a" * 64,
+        "generated_at": generated, "items": [],
+    }
+    repo, opener = repository([response(200, SNAPSHOT_ID)])
+
+    assert repo.stage_candidate(UUID(RUN_ID), snapshot, {"files": 2}, None) == UUID(SNAPSHOT_ID)
+    assert json.loads(request_parts(opener, 0)[0].data)["p_delta_link"] is None
+
+    with pytest.raises(CatalogRepositoryError, match="delta token"):
+        repo.stage_candidate(UUID(RUN_ID), snapshot, {"files": 2}, "")
+    with pytest.raises(CatalogRepositoryError, match="delta token"):
+        repo.finish_no_changes(UUID(RUN_ID), {"files": 0}, None)
+
+
 def test_no_changes_and_failed_are_conditional_and_never_write_published_pointer():
     repo, opener = repository([
         response(200, RUN_ID),

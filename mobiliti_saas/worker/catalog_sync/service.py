@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import tempfile
 import warnings
@@ -20,7 +21,7 @@ from mobiliti_saas.quote_engine.supplier_catalog import (
 )
 
 from . import SupplierSourceConfig, load_source_config
-from .graph import DeltaResult, DownloadedFile, GraphCatalogClient, GraphItem
+from .graph import DeltaExpiredError, DeltaResult, DownloadedFile, GraphCatalogClient, GraphItem
 from .importers import (
     AlmaSnapshotBuild,
     SunonSnapshotBuild,
@@ -253,12 +254,43 @@ def _run_supplier_sync(
         working = _working_state(active_rows, source.id, set(allowed_paths))
 
         error_code = "graph_failed"
-        delta = graph_client.iter_delta(
-            source.graph_drive_id, source.graph_root_item_id, source.delta_link
-        )
+        delta_link = source.delta_link
+        if (
+            isinstance(delta_link, str)
+            and re.fullmatch(
+                rf"manual://validated-local-snapshot/{re.escape(source.supplier)}/[0-9a-f]{{64}}",
+                delta_link,
+            )
+        ):
+            delta_link = None
+        full_crawl = delta_link is None
+        try:
+            delta = graph_client.iter_delta(
+                source.graph_drive_id, source.graph_root_item_id, delta_link
+            )
+        except DeltaExpiredError:
+            full_crawl = True
+            delta = graph_client.iter_delta(
+                source.graph_drive_id, source.graph_root_item_id, None
+            )
         error_code = "graph_invalid"
         changes = _delta_changes(delta, config, working, source.graph_drive_id)
         counters["delta_items"] = len(delta.items)
+        if full_crawl:
+            live_items = {
+                path: graph_row.id
+                for path, graph_row in changes
+                if graph_row.deleted is None
+            }
+            for previous_file in tuple(working.values()):
+                if live_items.get(previous_file.path) == previous_file.drive_item_id:
+                    continue
+                if not dry_run:
+                    repository.mark_file_deleted(
+                        source.id, previous_file.drive_item_id, run_id
+                    )
+                working.pop(previous_file.drive_item_id, None)
+                counters["tombstones"] += 1
         local_paths = {}
         for path, graph_row in changes:
             if graph_row.deleted is not None:
@@ -381,7 +413,9 @@ def _run_supplier_sync(
         if previous is not None and not isinstance(previous, SnapshotRecord):
             raise ValueError
         error_code = "snapshot_invalid"
-        previous_payload = None if previous is None else previous.payload
+        previous_payload = None if previous is None else _validate_snapshot(previous.payload)
+        candidate = _preserve_sunon_generated_references(previous_payload, candidate)
+        candidate = _validate_snapshot(candidate, expected_supplier=supplier)
         diff = classify_snapshot_diff(previous_payload, candidate)
         counters.update(_catalog_metrics(candidate, diff))
         public_metrics = _metrics(counters)
@@ -492,6 +526,56 @@ def _validate_snapshot(raw, expected_supplier=None):
     if "metadata" in loaded:
         snapshot["metadata"] = loaded["metadata"]
     return snapshot
+
+
+def _preserve_sunon_generated_references(previous, candidate):
+    if (
+        previous is None
+        or candidate.get("supplier") != "sunon"
+        or previous.get("supplier") != "sunon"
+    ):
+        return candidate
+    previous_by_id = {row["internal_id"]: row for row in previous["items"]}
+    for row in candidate["items"]:
+        prior = previous_by_id.get(row["internal_id"])
+        if not _can_preserve_sunon_generated_reference(prior, row):
+            continue
+        asset = prior["attributes"]["approved_asset"]
+        row["image_kind"] = "generated_reference"
+        row["attributes"] = {
+            **row["attributes"],
+            "approved_asset": {
+                "bucket": "catalog-assets",
+                "path": asset["path"],
+                "image_kind": "generated_reference",
+                "label": "Imagen de referencia",
+                "approved": True,
+            },
+        }
+    return candidate
+
+
+def _can_preserve_sunon_generated_reference(previous, candidate):
+    if (
+        not isinstance(previous, dict)
+        or candidate.get("supplier") != "sunon"
+        or previous.get("supplier") != "sunon"
+        or previous.get("product_key") != candidate.get("product_key")
+        or candidate.get("image_kind") != "placeholder"
+        or candidate.get("image_url") != ""
+        or previous.get("image_kind") != "generated_reference"
+    ):
+        return False
+    attributes = previous.get("attributes")
+    asset = attributes.get("approved_asset") if isinstance(attributes, dict) else None
+    return (
+        isinstance(asset, dict)
+        and asset.get("bucket") == "catalog-assets"
+        and isinstance(asset.get("path"), str)
+        and re.fullmatch(r"[0-9a-f]{64}\.png", asset["path"]) is not None
+        and asset.get("approved") is True
+        and asset.get("image_kind") in {None, "generated_reference"}
+    )
 
 
 def _identity(snapshot):

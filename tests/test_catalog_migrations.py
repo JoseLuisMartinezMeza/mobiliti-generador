@@ -728,6 +728,18 @@ def test_stage_catalog_candidate_replay_is_idempotent_only_for_identical_commit(
     assert "Catalog candidate replay conflict" in stage
 
 
+def test_cursor_bootstrap_keeps_local_promotion_cursor_optional_and_matches_bootstrap():
+    migration = SETUP / "2026_08_catalog_sync_cursor_bootstrap.sql"
+    stage = _function_definition(migration.read_text("utf-8"), "saas_stage_catalog_candidate")
+    bootstrap = _function_definition(BOOTSTRAP.read_text("utf-8"), "saas_stage_catalog_candidate")
+
+    assert "p_delta_link TEXT" in stage
+    assert "p_delta_link IS NOT NULL AND (" in stage
+    assert "COALESCE(p_delta_link, delta_link)" in stage
+    assert "p_delta_link IS NOT NULL AND v_source.delta_link IS DISTINCT FROM p_delta_link" in stage
+    assert stage == bootstrap
+
+
 def test_stage_catalog_candidate_requires_finite_iso_generated_at_and_stores_utc():
     sql = CATALOG_MIGRATION.read_text("utf-8")
     stage = _function_sql(sql, "saas_stage_catalog_candidate")

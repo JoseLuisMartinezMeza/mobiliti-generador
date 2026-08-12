@@ -26,7 +26,13 @@ from mobiliti_saas.worker.catalog_sync.importers.common import (
     CatalogSnapshotBuild,
     ImageAsset,
 )
-from mobiliti_saas.worker.catalog_sync.graph import DeltaResult, DownloadedFile, GraphItem
+from mobiliti_saas.worker.catalog_sync.graph import (
+    DeltaExpiredError,
+    DeltaResult,
+    DownloadedFile,
+    GraphError,
+    GraphItem,
+)
 from mobiliti_saas.worker.catalog_sync.repository import (
     RunRecord,
     SnapshotRecord,
@@ -95,6 +101,28 @@ def snapshot(*, source_hash="a" * 64, generated_at="2026-07-16T12:00:00Z", items
         "source_hash": source_hash,
         "generated_at": generated_at,
         "items": deepcopy(items if items is not None else [item()]),
+    }
+
+
+def sunon_item(**changes):
+    row = item(
+        internal_id="sunon:office:chair-1",
+        supplier="sunon",
+        product_key="chair-1",
+        sku="SUNON-CHAIR-1",
+        image_url="",
+        image_kind="placeholder",
+    )
+    row.update(changes)
+    return row
+
+
+def sunon_snapshot(*, source_hash="a" * 64, items=None):
+    return {
+        "supplier": "sunon",
+        "source_hash": source_hash,
+        "generated_at": "2026-07-16T12:00:00Z",
+        "items": deepcopy(items if items is not None else [sunon_item()]),
     }
 
 
@@ -238,6 +266,19 @@ class FakeGraph:
         return DownloadedFile(Path(destination), 3, self.sha256)
 
 
+class SequenceDeltaGraph(FakeGraph):
+    def __init__(self, responses):
+        super().__init__()
+        self.responses = iter(responses)
+
+    def iter_delta(self, drive_id, root_id, delta_link=None):
+        self.calls.append(("iter_delta", drive_id, root_id, delta_link))
+        response = next(self.responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
 def call(repo, graph, adapter, *, dry_run=False):
     return run_supplier_sync(
         "alma", "manual", 7, dry_run,
@@ -245,8 +286,130 @@ def call(repo, graph, adapter, *, dry_run=False):
     )
 
 
+def call_sunon(repo, graph, adapter):
+    return run_supplier_sync(
+        "sunon", "manual", 7, False,
+        repository=repo, graph_client=graph, adapters={"sunon": adapter},
+    )
+
+
 def call_names(repo):
     return [entry[0] for entry in repo.calls]
+
+
+def test_exact_legacy_local_cursor_starts_a_full_crawl():
+    repo = FakeRepository(published_snapshot=published())
+    legacy = f"manual://validated-local-snapshot/alma/{'a' * 64}"
+    repo.source = SourceRecord(
+        SOURCE_ID, "alma", "ALMA", "alma", "drive-1", "root-1", legacy, True, SNAPSHOT_ID
+    )
+    graph = SequenceDeltaGraph((DeltaResult((), DELTA),))
+
+    result = call(repo, graph, lambda files: snapshot())
+
+    assert result.status == "no_changes"
+    assert graph.calls == [("iter_delta", "drive-1", "root-1", None)]
+
+
+def test_malformed_legacy_cursor_is_passed_to_graph_and_fails_closed():
+    repo = FakeRepository()
+    malformed = f"manual://validated-local-snapshot/alma/{'A' * 64}"
+    repo.source = SourceRecord(
+        SOURCE_ID, "alma", "ALMA", "alma", "drive-1", "root-1", malformed, True, SNAPSHOT_ID
+    )
+    graph = SequenceDeltaGraph((GraphError("invalid cursor"),))
+
+    result = call(repo, graph, lambda files: snapshot())
+
+    assert result.status == "failed" and result.error_code == "graph_failed"
+    assert graph.calls == [("iter_delta", "drive-1", "root-1", malformed)]
+
+
+def test_expired_delta_retries_once_without_a_cursor():
+    repo = FakeRepository(published_snapshot=published())
+    graph = SequenceDeltaGraph((DeltaExpiredError("expired"), DeltaResult((), DELTA)))
+
+    result = call(repo, graph, lambda files: snapshot())
+
+    assert result.status == "no_changes"
+    assert graph.calls == [
+        ("iter_delta", "drive-1", "root-1", DELTA),
+        ("iter_delta", "drive-1", "root-1", None),
+    ]
+
+
+def test_second_expired_delta_finishes_as_graph_failed():
+    repo = FakeRepository()
+    graph = SequenceDeltaGraph((DeltaExpiredError("expired"), DeltaExpiredError("expired again")))
+
+    result = call(repo, graph, lambda files: snapshot())
+
+    assert result.status == "failed" and result.error_code == "graph_failed"
+    assert graph.calls == [
+        ("iter_delta", "drive-1", "root-1", DELTA),
+        ("iter_delta", "drive-1", "root-1", None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    (None, f"manual://validated-local-snapshot/alma/{'a' * 64}"),
+    ids=("initial-none", "legacy-marker"),
+)
+def test_full_crawl_deletes_active_file_missing_from_live_enumeration(cursor):
+    old = source_file(drive_item_id="old-graph-1")
+    repo = FakeRepository(active=(old,))
+    repo.source = SourceRecord(
+        SOURCE_ID,
+        "alma",
+        "ALMA",
+        "alma",
+        "drive-1",
+        "root-1",
+        cursor,
+        True,
+        SNAPSHOT_ID,
+    )
+    graph = SequenceDeltaGraph((DeltaResult((), DELTA),))
+    captured = []
+
+    result = call(repo, graph, lambda files: captured.append(files) or snapshot())
+
+    assert result.status == "awaiting_approval"
+    assert ("mark_file_deleted", SOURCE_ID, "old-graph-1", RUN_ID) in repo.calls
+    assert metrics(result)["tombstones"] == 1
+    assert captured == [()]
+    assert not any(
+        call[0] == "materialize_raw_if_present" and call[1] == old.id
+        for call in repo.calls
+    )
+
+
+def test_expired_delta_full_crawl_replaces_old_id_before_staging_candidate():
+    old = source_file(drive_item_id="old-graph-1", sha256="b" * 64)
+    repo = FakeRepository(active=(old,))
+    graph = SequenceDeltaGraph((
+        DeltaExpiredError("expired"),
+        DeltaResult((graph_item(item_id="new-graph-1"),), DELTA),
+    ))
+    captured = []
+
+    result = call(repo, graph, lambda files: captured.append(files) or snapshot())
+
+    assert result.status == "awaiting_approval"
+    assert graph.calls[:2] == [
+        ("iter_delta", "drive-1", "root-1", DELTA),
+        ("iter_delta", "drive-1", "root-1", None),
+    ]
+    assert ("mark_file_deleted", SOURCE_ID, "old-graph-1", RUN_ID) in repo.calls
+    assert captured[0][0].path == ALMA_ONE
+    assert captured[0][0].sha256 == "c" * 64
+    assert len(captured[0]) == 1
+    assert any(call[0] == "stage_candidate" for call in repo.calls)
+    assert not any(
+        call[0] == "materialize_raw_if_present" and call[1] == old.id
+        for call in repo.calls
+    )
 
 
 def _track_run_directories(monkeypatch, tmp_path):
@@ -657,6 +820,144 @@ def test_diff_stock_and_lead_time_only_is_auto_publishable():
     assert result.material_count == 0
     assert result.changed_fields == ("lead_time", "stock")
     assert result.auto_publishable is True
+
+
+def _approved_sunon_reference(**changes):
+    asset = {
+        "bucket": "catalog-assets",
+        "path": f"{'f' * 64}.png",
+        "image_kind": "generated_reference",
+        "label": "Imagen de referencia",
+        "approved": True,
+    }
+    asset.update(changes)
+    return asset
+
+
+def test_sunon_preserves_valid_approved_generated_reference_canonically():
+    previous = sunon_snapshot(items=[sunon_item(
+        image_kind="generated_reference",
+        attributes={
+            "color": "black",
+            "approved_asset": _approved_sunon_reference(label="Referencia anterior no confiable"),
+        },
+    )])
+    candidate = sunon_snapshot(items=[sunon_item(attributes={"color": "blue"})])
+
+    result = catalog_service._preserve_sunon_generated_references(previous, candidate)
+
+    row = result["items"][0]
+    assert row["image_kind"] == "generated_reference"
+    assert row["image_url"] == ""
+    assert row["attributes"] == {
+        "color": "blue",
+        "approved_asset": {
+            "bucket": "catalog-assets",
+            "path": f"{'f' * 64}.png",
+            "image_kind": "generated_reference",
+            "label": "Imagen de referencia",
+            "approved": True,
+        },
+    }
+
+
+def test_sunon_preserves_legacy_approved_reference_without_nested_kind():
+    previous = sunon_snapshot(items=[sunon_item(
+        image_kind="generated_reference",
+        attributes={"approved_asset": _approved_sunon_reference(image_kind=None)},
+    )])
+    del previous["items"][0]["attributes"]["approved_asset"]["image_kind"]
+    candidate = sunon_snapshot()
+
+    result = catalog_service._preserve_sunon_generated_references(previous, candidate)
+
+    assert result["items"][0]["attributes"]["approved_asset"]["image_kind"] == "generated_reference"
+
+
+@pytest.mark.parametrize(
+    "asset_changes,previous_changes,candidate_changes",
+    [
+        ({"bucket": "untrusted-assets"}, {}, {}),
+        ({"path": "F" * 64 + ".png"}, {}, {}),
+        ({"approved": False}, {}, {}),
+        ({"image_kind": "official"}, {}, {}),
+        ({}, {"supplier": "alma"}, {}),
+        ({}, {"product_key": "other-chair"}, {}),
+        ({}, {}, {"supplier": "alma"}),
+        ({}, {}, {"product_key": "other-chair"}),
+    ],
+    ids=(
+        "bucket", "path", "approved", "nested-kind", "previous-supplier",
+        "previous-product-key", "candidate-supplier", "candidate-product-key",
+    ),
+)
+def test_sunon_does_not_inherit_invalid_or_mismatched_reference(
+    asset_changes, previous_changes, candidate_changes,
+):
+    previous_row = sunon_item(
+        image_kind="generated_reference",
+        attributes={"approved_asset": _approved_sunon_reference(**asset_changes)},
+    )
+    previous_row.update(previous_changes)
+    candidate_row = sunon_item(attributes={"color": "blue"})
+    candidate_row.update(candidate_changes)
+    previous = sunon_snapshot(items=[previous_row])
+    candidate = sunon_snapshot(items=[candidate_row])
+
+    result = catalog_service._preserve_sunon_generated_references(previous, candidate)
+
+    row = result["items"][0]
+    assert row["image_kind"] == "placeholder"
+    assert row["image_url"] == ""
+    assert row["attributes"] == {"color": "blue"}
+
+
+def test_sunon_never_replaces_candidate_official_image():
+    previous = sunon_snapshot(items=[sunon_item(
+        image_kind="generated_reference",
+        attributes={"approved_asset": _approved_sunon_reference()},
+    )])
+    candidate = sunon_snapshot(items=[sunon_item(
+        image_kind="official",
+        image_url="https://example.test/live-sunon.png",
+        attributes={"image_match": {"status": "exact_xlsx"}},
+    )])
+
+    result = catalog_service._preserve_sunon_generated_references(previous, candidate)
+
+    assert result["items"][0]["image_kind"] == "official"
+    assert result["items"][0]["image_url"] == "https://example.test/live-sunon.png"
+    assert result["items"][0]["attributes"] == {"image_match": {"status": "exact_xlsx"}}
+
+
+def test_sunon_sync_stages_preserved_reference_without_image_regression():
+    previous_payload = sunon_snapshot(items=[sunon_item(
+        image_kind="generated_reference",
+        attributes={"approved_asset": _approved_sunon_reference()},
+    )])
+    candidate = sunon_snapshot(
+        source_hash="c" * 64,
+        items=[sunon_item(price_net="101.000000", attributes={})],
+    )
+    repo = FakeRepository(published_snapshot=published(previous_payload))
+    repo.source = SourceRecord(
+        SOURCE_ID, "sunon", "Sunon", "sunon", "drive-1", "root-1", DELTA,
+        True, SNAPSHOT_ID,
+    )
+
+    result = call_sunon(repo, FakeGraph(), lambda files: candidate)
+
+    assert result.status == "awaiting_approval"
+    assert result.diff.changed_fields == ("price_net",)
+    staged = next(entry[2] for entry in repo.calls if entry[0] == "stage_candidate")
+    assert staged["items"][0]["image_kind"] == "generated_reference"
+    assert staged["items"][0]["attributes"]["approved_asset"] == {
+        "bucket": "catalog-assets",
+        "path": f"{'f' * 64}.png",
+        "image_kind": "generated_reference",
+        "label": "Imagen de referencia",
+        "approved": True,
+    }
 
 
 @pytest.mark.parametrize(

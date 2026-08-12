@@ -7,6 +7,11 @@ services:
     container_name: mobiliti-worker
     command: ["python", "mobiliti_saas/worker/render_web_worker.py"]
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - /etc/mobiliti-worker/worker.env
     environment:
@@ -17,6 +22,7 @@ services:
       - "127.0.0.1:10000:10000"
     volumes:
       - mobiliti-worker-tmp:/tmp
+      - /etc/mobiliti-worker/graph:/run/secrets/mobiliti-graph:ro
     healthcheck:
       test:
         [

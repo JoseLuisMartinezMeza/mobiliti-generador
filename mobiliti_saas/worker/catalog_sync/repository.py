@@ -930,7 +930,7 @@ class CatalogRepository:
         payload = dict(snapshot)
         payload["generated_at"] = generated_at
         payload = _object(payload, maximum=_MAX_SNAPSHOT_PAYLOAD_BYTES)
-        delta_link = _input_delta_link(delta_link)
+        delta_link = _input_optional_delta_link(delta_link)
         return self._rpc_uuid("saas_stage_catalog_candidate", {
             "p_run_id": str(run_id), "p_source_hash": digest,
             "p_generated_at": generated_at, "p_payload": payload,
@@ -1071,6 +1071,12 @@ def _input_delta_link(value):
     if not value.strip():
         raise CatalogRepositoryError("Invalid catalog delta token")
     return value
+
+
+def _input_optional_delta_link(value):
+    if value is None:
+        return None
+    return _input_delta_link(value)
 
 
 def _input_path(value):

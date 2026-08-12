@@ -6,6 +6,8 @@ RELEASES_DIR="${RELEASES_DIR:-/opt/mobiliti-worker/releases}"
 ENV_FILE="${ENV_FILE:-/etc/mobiliti-worker/worker.env}"
 GIT_REF="${GIT_REF:-master}"
 ACTIVE_CONTAINER="${ACTIVE_CONTAINER:-mobiliti-worker}"
+GRAPH_HOST_DIR="/etc/mobiliti-worker/graph"
+GRAPH_HOST_CERT="${GRAPH_HOST_DIR}/client-cert.pem"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root: sudo mobiliti-worker-deploy" >&2
@@ -37,6 +39,19 @@ git -C "${APP_DIR}" fetch origin "${GIT_REF}"
 TARGET_COMMIT="$(git -C "${APP_DIR}" rev-parse FETCH_HEAD)"
 RELEASE_DIR="${RELEASES_DIR}/${TARGET_COMMIT}"
 COMPOSE_FILE="${RELEASE_DIR}/deploy/hetzner/docker-compose.yml"
+
+if [[ -L "${GRAPH_HOST_DIR}" ]] ||
+  [[ -e "${GRAPH_HOST_DIR}" && ! -d "${GRAPH_HOST_DIR}" ]]; then
+  echo "Invalid catalog credential directory at ${GRAPH_HOST_DIR}." >&2
+  exit 1
+fi
+install -d -o root -g 10001 -m 0750 "${GRAPH_HOST_DIR}"
+
+git -C "${APP_DIR}" show "${TARGET_COMMIT}:deploy/hetzner/preflight.py" |
+  python3 - \
+    --env-file "${ENV_FILE}" \
+    --host-directory "${GRAPH_HOST_DIR}" \
+    --certificate "${GRAPH_HOST_CERT}"
 
 install -d -m 0755 "${RELEASES_DIR}"
 if [[ ! -d "${RELEASE_DIR}/.git" && ! -f "${RELEASE_DIR}/.git" ]]; then

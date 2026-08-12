@@ -65,6 +65,7 @@ else
 fi
 
 install -d -m 0700 "${ENV_DIR}"
+install -d -o root -g 10001 -m 0750 "${ENV_DIR}/graph"
 if [[ ! -f "${ENV_DIR}/worker.env" ]]; then
   install -m 0600 "${APP_DIR}/deploy/hetzner/worker.env.example" "${ENV_DIR}/worker.env"
   echo "Created ${ENV_DIR}/worker.env. Fill SUPABASE_ANON_KEY and MOBILITI_REST_SECRET before deploy."

@@ -880,8 +880,12 @@ BEGIN
        OR p_metrics IS NULL
        OR jsonb_typeof(p_metrics) <> 'object'
        OR pg_column_size(p_metrics) > 1048576
-       OR NULLIF(BTRIM(p_delta_link), '') IS NULL
-       OR LENGTH(p_delta_link) > 8192 THEN
+       OR (
+           p_delta_link IS NOT NULL AND (
+               NULLIF(BTRIM(p_delta_link), '') IS NULL
+               OR LENGTH(p_delta_link) > 8192
+           )
+       ) THEN
         RAISE EXCEPTION 'invalid catalog candidate input';
     END IF;
 
@@ -939,7 +943,10 @@ BEGIN
            OR v_candidate.payload IS DISTINCT FROM v_canonical_payload
            OR v_candidate.base_published_version_id IS DISTINCT FROM v_source.published_version_id
            OR v_run.metrics IS DISTINCT FROM p_metrics
-           OR v_source.delta_link IS DISTINCT FROM p_delta_link THEN
+           OR (
+               p_delta_link IS NOT NULL
+               AND v_source.delta_link IS DISTINCT FROM p_delta_link
+           ) THEN
             RAISE EXCEPTION 'Catalog candidate replay conflict';
         END IF;
         RETURN v_candidate.id;
@@ -959,7 +966,7 @@ BEGIN
     );
 
     UPDATE saas_catalog_sources
-    SET delta_link = p_delta_link,
+    SET delta_link = COALESCE(p_delta_link, delta_link),
         updated_at = NOW()
     WHERE id = v_source.id;
 

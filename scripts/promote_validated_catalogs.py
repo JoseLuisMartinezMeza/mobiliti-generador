@@ -188,10 +188,7 @@ def _promote(
                 "items": len(payload["items"]),
                 "incident": "catalogs_unavailable_2026_07_27",
             },
-            (
-                "manual://validated-local-snapshot/"
-                f"{supplier}/{payload['source_hash']}"
-            ),
+            None,
         )
         repository.publish_candidate(
             candidate_id,
