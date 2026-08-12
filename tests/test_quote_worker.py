@@ -1,3 +1,4 @@
+import io
 import os
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from openpyxl import Workbook
@@ -89,9 +91,162 @@ def test_tarkett_catalog_sync_publishes_changed_snapshot_and_respects_interval(m
     assert client.upserts == [("tarkett", enriched)]
 
 
-def test_tarkett_snapshot_uses_internal_api_without_service_key(monkeypatch):
+def test_offiho_catalog_sync_downloads_once_publishes_changed_snapshot_and_respects_interval(
+    monkeypatch,
+):
+    base = {
+        "source_hash": "old-hash",
+        "generated_at": "2026-07-08T00:00:00+00:00",
+        "items": [{"inventory_key": "OHE-1 NEGRO", "available_quantity": 10}],
+    }
+    refreshed = {
+        **base,
+        "source_hash": "new-hash",
+        "generated_at": "2026-08-11T20:00:00+00:00",
+    }
+    downloads = []
+    refreshes = []
+
+    class CatalogClient:
+        def __init__(self):
+            self.upserts = []
+
+        def catalog_snapshot_get(self, supplier):
+            assert supplier == "offiho"
+            return {"supplier": supplier, "source_hash": "old-hash", "payload": base}
+
+        def catalog_snapshot_upsert(self, supplier, payload):
+            self.upserts.append((supplier, payload))
+            return {"supplier": supplier, "source_hash": payload["source_hash"]}
+
+    def fake_download(path):
+        downloads.append(Path(path))
+        return SimpleNamespace(
+            path=Path(path),
+            sha256="f" * 64,
+            size_bytes=321,
+            last_modified="Tue, 11 Aug 2026 14:46:00 GMT",
+        )
+
+    def fake_refresh(base_payload, path, **metadata):
+        refreshes.append((base_payload, Path(path), metadata))
+        return refreshed
+
+    client = CatalogClient()
+    monkeypatch.setattr(quote_worker, "OFFIHO_SYNC_ENABLED", True, raising=False)
+    monkeypatch.setattr(quote_worker, "OFFIHO_SYNC_INTERVAL_SECONDS", 3600, raising=False)
+    monkeypatch.setattr(quote_worker, "_OFFIHO_LAST_SYNC_ATTEMPT", 0.0, raising=False)
+    monkeypatch.setattr(quote_worker.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(quote_worker, "download_offiho_inventory", fake_download, raising=False)
+    monkeypatch.setattr(
+        quote_worker,
+        "refresh_offiho_catalog_from_file",
+        fake_refresh,
+        raising=False,
+    )
+
+    assert quote_worker.sync_offiho_catalog_if_due(client) is True
+    assert len(downloads) == 1
+    assert len(refreshes) == 1
+    assert refreshes[0][0] is base
+    assert refreshes[0][1] == downloads[0]
+    assert refreshes[0][2]["inventory_sha256"] == "f" * 64
+    assert refreshes[0][2]["inventory_size_bytes"] == 321
+    assert refreshes[0][2]["inventory_last_modified"] == "Tue, 11 Aug 2026 14:46:00 GMT"
+    assert refreshes[0][2]["synchronized_at"].endswith("+00:00")
+    assert client.upserts == [("offiho", refreshed)]
+
+    assert quote_worker.sync_offiho_catalog_if_due(client) is False
+    assert len(downloads) == 1
+    assert client.upserts == [("offiho", refreshed)]
+
+
+def test_offiho_catalog_sync_skips_upsert_when_inventory_hash_is_unchanged(monkeypatch):
+    base = {
+        "source_hash": "same-hash",
+        "generated_at": "2026-07-08T00:00:00+00:00",
+        "items": [{"inventory_key": "OHE-1 NEGRO", "available_quantity": 10}],
+    }
+
+    class CatalogClient:
+        def catalog_snapshot_get(self, supplier):
+            return {"supplier": supplier, "source_hash": "same-hash", "payload": base}
+
+        def catalog_snapshot_upsert(self, _supplier, _payload):
+            pytest.fail("an unchanged Offiho snapshot must not be published")
+
+    monkeypatch.setattr(quote_worker, "OFFIHO_SYNC_ENABLED", True, raising=False)
+    monkeypatch.setattr(quote_worker, "_OFFIHO_LAST_SYNC_ATTEMPT", 0.0, raising=False)
+    monkeypatch.setattr(
+        quote_worker,
+        "download_offiho_inventory",
+        lambda path: SimpleNamespace(
+            path=Path(path), sha256="f" * 64, size_bytes=321, last_modified=""
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        quote_worker,
+        "refresh_offiho_catalog_from_file",
+        lambda *_args, **_kwargs: base,
+        raising=False,
+    )
+
+    assert quote_worker.sync_offiho_catalog_if_due(CatalogClient(), force=True) is False
+
+
+def test_offiho_catalog_sync_failure_keeps_fallback_and_throttles_retry(monkeypatch):
+    fallback = {
+        "source_hash": "fallback-hash",
+        "generated_at": "2026-07-08T00:00:00+00:00",
+        "items": [{"inventory_key": "OHE-1 NEGRO", "available_quantity": 10}],
+    }
+    downloads = []
+
+    class CatalogClient:
+        def catalog_snapshot_get(self, supplier):
+            assert supplier == "offiho"
+            return None
+
+        def catalog_snapshot_upsert(self, _supplier, _payload):
+            pytest.fail("a failed refresh must preserve the previous snapshot")
+
+    def fake_download(path):
+        downloads.append(Path(path))
+        return SimpleNamespace(
+            path=Path(path), sha256="f" * 64, size_bytes=321, last_modified=""
+        )
+
+    def fail_refresh(base_payload, *_args, **_kwargs):
+        assert base_payload is fallback
+        raise ValueError("inventario invalido")
+
+    client = CatalogClient()
+    monkeypatch.setattr(quote_worker, "OFFIHO_SYNC_ENABLED", True, raising=False)
+    monkeypatch.setattr(quote_worker, "OFFIHO_SYNC_INTERVAL_SECONDS", 3600, raising=False)
+    monkeypatch.setattr(quote_worker, "_OFFIHO_LAST_SYNC_ATTEMPT", 0.0, raising=False)
+    monkeypatch.setattr(quote_worker.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(quote_worker, "_fallback_offiho_catalog_payload", lambda: fallback)
+    monkeypatch.setattr(quote_worker, "download_offiho_inventory", fake_download, raising=False)
+    monkeypatch.setattr(
+        quote_worker,
+        "refresh_offiho_catalog_from_file",
+        fail_refresh,
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="inventario invalido"):
+        quote_worker.sync_offiho_catalog_if_due(client)
+    assert len(downloads) == 1
+
+    assert quote_worker.sync_offiho_catalog_if_due(client) is False
+    assert len(downloads) == 1
+
+
+@pytest.mark.parametrize("supplier", ["tarkett", "offiho"])
+def test_catalog_snapshot_uses_explicit_internal_api_without_service_key(monkeypatch, supplier):
     response_payload = {
-        "supplier": "tarkett",
+        "supplier": supplier,
         "source_hash": "hash-1",
         "payload": {"source_hash": "hash-1", "generated_at": "2026-07-15T00:00:00+00:00", "items": []},
     }
@@ -126,20 +281,100 @@ def test_tarkett_snapshot_uses_internal_api_without_service_key(monkeypatch):
     monkeypatch.setattr(quote_worker.urllib.request, "urlopen", fake_urlopen)
     client = quote_worker.SupabaseClient.__new__(quote_worker.SupabaseClient)
 
-    result = client.catalog_snapshot_get("tarkett")
+    result = client.catalog_snapshot_get(supplier)
 
     assert result == response_payload
     assert seen == {
-        "url": "https://web-lemon-one-45.vercel.app/internal/catalogs/tarkett",
+        "url": f"https://web-lemon-one-45.vercel.app/internal/catalogs/{supplier}",
         "method": "GET",
         "secret": "worker-secret",
         "timeout": 60,
     }
 
 
-@pytest.mark.parametrize("tarkett_did_work", [True, False])
+def test_catalog_snapshot_get_treats_missing_bootstrap_row_as_none(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise quote_worker.urllib.error.HTTPError(
+            request.full_url,
+            404,
+            "not found",
+            {},
+            io.BytesIO(b'{"detail":"Catalogo Offiho no disponible"}'),
+        )
+
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.setattr(quote_worker, "MOBILITI_REST_SECRET", "worker-secret")
+    monkeypatch.setattr(quote_worker, "MOBILITI_API_URL", "https://web-lemon-one-45.vercel.app")
+    monkeypatch.setattr(quote_worker.urllib.request, "urlopen", fake_urlopen)
+    client = quote_worker.SupabaseClient.__new__(quote_worker.SupabaseClient)
+
+    assert client.catalog_snapshot_get("offiho") is None
+
+
+def test_catalog_snapshot_client_rejects_supplier_outside_explicit_allowlist(monkeypatch):
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.setattr(quote_worker, "MOBILITI_REST_SECRET", "worker-secret")
+    client = quote_worker.SupabaseClient.__new__(quote_worker.SupabaseClient)
+
+    with pytest.raises(ValueError, match="Proveedor de snapshot no permitido"):
+        client.catalog_snapshot_get("cr-global")
+
+
+def test_offiho_snapshot_upsert_uses_explicit_internal_api(monkeypatch):
+    payload = {
+        "source_hash": "hash-2",
+        "generated_at": "2026-08-11T20:00:00+00:00",
+        "items": [],
+    }
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"supplier": "offiho", "payload": payload}).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        seen.update(
+            {
+                "url": request.full_url,
+                "method": request.get_method(),
+                "body": json.loads(request.data.decode("utf-8")),
+                "timeout": timeout,
+            }
+        )
+        return FakeResponse()
+
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.setattr(quote_worker, "MOBILITI_REST_SECRET", "worker-secret")
+    monkeypatch.setattr(quote_worker, "MOBILITI_API_URL", "https://web-lemon-one-45.vercel.app")
+    monkeypatch.setattr(quote_worker.urllib.request, "urlopen", fake_urlopen)
+    client = quote_worker.SupabaseClient.__new__(quote_worker.SupabaseClient)
+
+    client.catalog_snapshot_upsert("offiho", payload)
+
+    assert seen == {
+        "url": "https://web-lemon-one-45.vercel.app/internal/catalogs/offiho",
+        "method": "PUT",
+        "body": {"payload": payload},
+        "timeout": 60,
+    }
+
+
+@pytest.mark.parametrize(
+    ("tarkett_did_work", "offiho_did_work", "expected_calls", "expected_result"),
+    [
+        (True, False, ["tarkett"], True),
+        (False, True, ["tarkett", "offiho"], True),
+        (False, False, ["tarkett", "offiho", "rates", "catalog"], False),
+    ],
+)
 def test_isolated_worker_runs_at_most_one_catalog_sync_during_idle_poll(
-    monkeypatch, tarkett_did_work,
+    monkeypatch, tarkett_did_work, offiho_did_work, expected_calls, expected_result,
 ):
     client = object()
     synced = []
@@ -149,6 +384,12 @@ def test_isolated_worker_runs_at_most_one_catalog_sync_during_idle_poll(
         render_web_worker.quote_worker,
         "sync_tarkett_catalog_if_due",
         lambda current: (synced.append("tarkett"), tarkett_did_work)[1],
+    )
+    monkeypatch.setattr(
+        render_web_worker.quote_worker,
+        "sync_offiho_catalog_if_due",
+        lambda current: (synced.append("offiho"), offiho_did_work)[1],
+        raising=False,
     )
     monkeypatch.setattr(
         render_web_worker,
@@ -161,8 +402,30 @@ def test_isolated_worker_runs_at_most_one_catalog_sync_during_idle_poll(
         lambda: (synced.append("catalog"), False)[1],
     )
 
-    assert render_web_worker._run_once_isolated() is tarkett_did_work
-    assert synced == (["tarkett"] if tarkett_did_work else ["tarkett", "rates", "catalog"])
+    assert render_web_worker._run_once_isolated() is expected_result
+    assert synced == expected_calls
+
+
+def test_nonisolated_worker_runs_offiho_after_tarkett_during_idle_poll(monkeypatch):
+    client = object()
+    synced = []
+    monkeypatch.setattr(quote_worker, "DEV_MODE", True)
+    monkeypatch.setattr(quote_worker, "LocalDevClient", lambda: client)
+    monkeypatch.setattr(quote_worker, "recover_stale_jobs", lambda current: None)
+    monkeypatch.setattr(quote_worker, "fetch_next_job", lambda current: None)
+    monkeypatch.setattr(
+        quote_worker,
+        "sync_tarkett_catalog_if_due",
+        lambda current: (synced.append(("tarkett", current)), False)[1],
+    )
+    monkeypatch.setattr(
+        quote_worker,
+        "sync_offiho_catalog_if_due",
+        lambda current: (synced.append(("offiho", current)), True)[1],
+    )
+
+    assert quote_worker.run_once() is True
+    assert synced == [("tarkett", client), ("offiho", client)]
 
 
 def test_isolated_worker_prioritizes_quote_and_skips_all_catalog_sync(monkeypatch):
@@ -187,6 +450,12 @@ def test_isolated_worker_prioritizes_quote_and_skips_all_catalog_sync(monkeypatc
         render_web_worker.quote_worker,
         "sync_tarkett_catalog_if_due",
         lambda _client: pytest.fail("Tarkett sync must wait"),
+    )
+    monkeypatch.setattr(
+        render_web_worker.quote_worker,
+        "sync_offiho_catalog_if_due",
+        lambda _client: pytest.fail("Offiho sync must wait"),
+        raising=False,
     )
 
     assert render_web_worker._run_once_isolated() is True

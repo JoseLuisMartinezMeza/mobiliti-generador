@@ -27,3 +27,9 @@ Copia `mobiliti_saas/supabase_setup/create_tables.sql` en Supabase SQL Editor.
 Ejecuta `2026_07_projects.sql` después de `2026_06_quote_jobs.sql`. La
 migración crea `saas_projects` con revisión, versión de esquema y controles de
 acceso exclusivos para `service_role`.
+
+Para habilitar el snapshot dinámico de Offiho en una instalación existente,
+ejecuta `2026_08_offiho_stock_snapshot.sql` después de
+`2026_07_supplier_catalog_snapshots.sql`. La migración solo amplía el `CHECK`
+de proveedores permitidos de `tarkett` a `tarkett` y `offiho`; no reescribe
+filas existentes.

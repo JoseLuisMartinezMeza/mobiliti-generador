@@ -1298,7 +1298,9 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
       setLoading(true);
       setError("");
       try {
-        const data = await request("/offiho/catalog");
+        const data = reloadKey
+          ? await request("/offiho/catalog?fresh=1", { cache: "no-store" })
+          : await request("/offiho/catalog");
         if (cancelled) return;
         setCatalog(data);
         sessionStorage.setItem(OFFIHO_CATALOG_CACHE_KEY, JSON.stringify({ ...data, user_id: userId }));
@@ -1398,12 +1400,26 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
     }
   }
 
+  const catalogTimestamp = catalog.catalog_built_at || catalog.generated_at;
+
   return (
     <section className="tarkett-shell offiho-shell">
       <div className="card-head tarkett-head">
-        <div><h2>Offiho</h2><p>{catalog.total || catalog.items.length} productos indexados{catalog.generated_at ? ` - ${formatDate(catalog.generated_at)}` : ""}</p></div>
+        <div><h2>Offiho</h2><p>{catalog.total || catalog.items.length} productos indexados{catalogTimestamp ? ` - ${formatDate(catalogTimestamp)}` : ""}</p></div>
         <div className="catalog-head-actions">
-          <button className="ghost-action" type="button" onClick={() => { sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY); setReloadKey((value) => value + 1); }}><RefreshCw size={16} />Refrescar</button>
+          <button
+            className="ghost-action"
+            type="button"
+            disabled={loading}
+            aria-busy={loading}
+            onClick={() => {
+              sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY);
+              setReloadKey((value) => value + 1);
+            }}
+          >
+            <RefreshCw size={16} aria-hidden="true" />
+            {loading && reloadKey ? "Refrescando..." : "Refrescar"}
+          </button>
           <button className="ghost-action" type="button" onClick={onOpenCart}><FolderKanban size={17} /> Proyecto ({cartLines.length})</button>
         </div>
       </div>
@@ -1414,7 +1430,7 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
             <label className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar clave, modelo, variante o producto" aria-label="Buscar catalogo Offiho" /></label>
             <select value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)} aria-label="Filtrar por unidad"><option value="all">Todas las unidades</option>{unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select>
             <select value={availabilityFilter} onChange={(event) => setAvailabilityFilter(event.target.value)} aria-label="Filtrar por disponibilidad"><option value="all">Toda disponibilidad</option><option value="available">Con existencia</option><option value="out">Agotados</option></select>
-            <span>{loading ? "Cargando..." : `${filteredItems.length} visibles`}</span>
+            <span role="status" aria-live="polite">{loading ? (reloadKey ? "Refrescando..." : "Cargando...") : `${filteredItems.length} visibles`}</span>
           </div>
           {error ? <div className="error-line">{error}</div> : null}
           {quantityError ? <div className="error-line" role="alert">{quantityError}</div> : null}

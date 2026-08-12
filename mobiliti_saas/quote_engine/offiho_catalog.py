@@ -13,9 +13,6 @@ from .catalog_cart import OFFICIAL_IMAGE_HOSTS, parse_commercial_quantity
 
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "offiho_catalog.json"
 OFFIHO_CART_SOURCE_TYPE = "offiho_cart"
-EXPECTED_UNIQUE_ITEM_COUNT = 1207
-EXPECTED_SOURCE_ROW_COUNT = 1287
-EXPECTED_DUPLICATE_ROW_COUNT = 80
 MAX_CART_LINES = 200
 MAX_CATALOG_DECIMAL_PLACES = 6
 MAX_CATALOG_DECIMAL_TEXT_LENGTH = 64
@@ -109,6 +106,10 @@ class OffihoCatalogItem:
 def load_offiho_catalog(path: str | Path | None = None) -> dict[str, Any]:
     catalog_path = Path(path or CATALOG_PATH)
     raw = json.loads(catalog_path.read_text(encoding="utf-8"))
+    return load_offiho_catalog_data(raw)
+
+
+def load_offiho_catalog_data(raw: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("Catalogo Offiho invalido: raiz no es un objeto")
     for field in ("source_hash", "generated_at"):
@@ -126,26 +127,42 @@ def load_offiho_catalog(path: str | Path | None = None) -> dict[str, Any]:
             raise ValueError(f"Catalogo Offiho invalido en item {index}: {exc}") from exc
     keys = [item.inventory_key for item in items]
     audit = {
-        "source_row_count": raw.get("source_row_count"),
-        "duplicate_row_count": raw.get("duplicate_row_count"),
-        "unique_item_count": raw.get("unique_item_count", raw.get("total")),
+        "source_row_count": _audit_count(raw, "source_row_count"),
+        "duplicate_row_count": _audit_count(raw, "duplicate_row_count"),
+        "unique_item_count": _audit_count(raw, "unique_item_count", fallback="total"),
     }
-    expected_audit = {
-        "source_row_count": EXPECTED_SOURCE_ROW_COUNT,
-        "duplicate_row_count": EXPECTED_DUPLICATE_ROW_COUNT,
-        "unique_item_count": EXPECTED_UNIQUE_ITEM_COUNT,
-    }
-    if audit != expected_audit:
-        raise ValueError("Catalogo Offiho invalido: indice unico esperado de 1207")
-    if len(items) != EXPECTED_UNIQUE_ITEM_COUNT or len(set(keys)) != EXPECTED_UNIQUE_ITEM_COUNT or not all(keys):
+    if (
+        not items
+        or audit["unique_item_count"] != len(items)
+        or audit["source_row_count"] != len(items) + audit["duplicate_row_count"]
+    ):
+        raise ValueError("Catalogo Offiho invalido: conteos de auditoria inconsistentes")
+    if len(set(keys)) != len(items) or not all(keys):
         raise ValueError("Catalogo Offiho invalido: claves de inventario no unicas")
-    return {
+    total = raw.get("total", len(items))
+    if isinstance(total, bool) or not isinstance(total, int) or total != len(items):
+        raise ValueError("Catalogo Offiho invalido: conteos de auditoria inconsistentes")
+    result = {
         "source_hash": str(raw.get("source_hash", "")),
         "generated_at": str(raw.get("generated_at", "")),
         **audit,
+        "total": total,
         "items": items,
         "by_inventory_key": {item.inventory_key: item for item in items},
     }
+    for field in (
+        "catalog_built_at",
+        "inventory_fetched_at",
+        "inventory_last_modified",
+        "workbook_generated_at",
+        "stock_snapshot_hash",
+        "enrichment_source_hash",
+        "sync_audit",
+        "sources",
+    ):
+        if field in raw:
+            result[field] = raw[field]
+    return result
 
 
 def stock_status(quantity: Decimal, available: Decimal) -> str:
@@ -239,6 +256,13 @@ def _required_text(raw: dict[str, Any], field: str) -> str:
     value = str(raw.get(field, "") or "").strip()
     if not value:
         raise ValueError(f"Campo obligatorio Offiho invalido: {field}")
+    return value
+
+
+def _audit_count(raw: dict[str, Any], field: str, *, fallback: str | None = None) -> int:
+    value = raw.get(field, raw.get(fallback) if fallback else None)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Catalogo Offiho invalido: conteos de auditoria inconsistentes ({field})")
     return value
 
 

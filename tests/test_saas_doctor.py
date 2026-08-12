@@ -88,6 +88,7 @@ def test_worker_dockerfile_installs_image_segmentation_in_pinned_glibc_runtime()
     assert "USER 10001:10001" in dockerfile
     assert "rembg==2.0.75" in locked_requirements
     assert "onnxruntime==1.26.0" in locked_requirements
+    assert "xlrd==2.0.2" in locked_requirements
     assert lock.exists()
     assert all(
         not line or line.startswith("#") or "==" in line

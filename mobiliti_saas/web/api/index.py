@@ -56,6 +56,7 @@ from mobiliti_saas.quote_engine.offiho_catalog import (  # noqa: E402
     CATALOG_PATH as OFFIHO_DEFAULT_CATALOG_PATH,
     build_offiho_cart_payload,
     load_offiho_catalog,
+    load_offiho_catalog_data,
 )
 from mobiliti_saas.quote_engine.supplier_catalog import (  # noqa: E402
     ALLOWED_CURRENCIES,
@@ -160,6 +161,8 @@ TARKETT_CATALOG_PATH = os.environ.get("TARKETT_CATALOG_PATH")
 TARKETT_CATALOG_DB_ENABLED = _env_bool("TARKETT_CATALOG_DB_ENABLED", bool(os.environ.get("VERCEL")))
 TARKETT_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("TARKETT_CATALOG_DB_TTL_SECONDS", "300")))
 OFFIHO_CATALOG_PATH = os.environ.get("OFFIHO_CATALOG_PATH")
+OFFIHO_CATALOG_DB_ENABLED = _env_bool("OFFIHO_CATALOG_DB_ENABLED", bool(os.environ.get("VERCEL")))
+OFFIHO_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("OFFIHO_CATALOG_DB_TTL_SECONDS", "300")))
 CATALOG_SUPPLIER_ORDER = (
     "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco", "idelika", "conceptos",
 )
@@ -3360,7 +3363,7 @@ _TARKETT_CATALOG_CACHE = {
 
 def db_get_supplier_catalog_snapshot(supplier: str) -> dict | None:
     clean_supplier = str(supplier or "").strip().lower()
-    if clean_supplier not in {"tarkett"}:
+    if clean_supplier not in {"tarkett", "offiho"}:
         raise RuntimeError("Proveedor de catalogo no permitido")
     if DEV_MODE:
         return _dev_load().get("supplier_catalog_snapshots", {}).get(clean_supplier)
@@ -3388,9 +3391,13 @@ def db_get_supplier_catalog_snapshot(supplier: str) -> dict | None:
 
 def db_upsert_supplier_catalog_snapshot(supplier: str, payload: dict) -> dict:
     clean_supplier = str(supplier or "").strip().lower()
-    if clean_supplier not in {"tarkett"}:
+    if clean_supplier not in {"tarkett", "offiho"}:
         raise RuntimeError("Proveedor de catalogo no permitido")
-    catalog = load_tarkett_catalog_data(payload)
+    catalog = (
+        load_tarkett_catalog_data(payload)
+        if clean_supplier == "tarkett"
+        else load_offiho_catalog_data(payload)
+    )
     row = {
         "supplier": clean_supplier,
         "source_hash": catalog["source_hash"],
@@ -3532,16 +3539,57 @@ def _tarkett_catalog_response(usuario_id: int) -> dict:
     }
 
 
-_OFFIHO_CATALOG_CACHE = {"path": None, "fingerprint": None, "source_hash": None, "catalog": None}
+_OFFIHO_CATALOG_CACHE = {
+    "path": None,
+    "fingerprint": None,
+    "source_hash": None,
+    "catalog": None,
+    "db_checked_at": 0.0,
+}
 
 
-def _load_offiho_catalog_cached() -> dict:
+def _load_offiho_catalog_cached(*, force_refresh: bool = False) -> dict:
+    now = time.monotonic()
+    if OFFIHO_CATALOG_DB_ENABLED:
+        checked_at = float(_OFFIHO_CATALOG_CACHE.get("db_checked_at") or 0)
+        if (
+            not force_refresh
+            and _OFFIHO_CATALOG_CACHE.get("catalog") is not None
+            and now - checked_at < OFFIHO_CATALOG_DB_TTL_SECONDS
+        ):
+            return _OFFIHO_CATALOG_CACHE["catalog"]
+        try:
+            snapshot = db_get_supplier_catalog_snapshot("offiho")
+            payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
+            if isinstance(payload, dict):
+                catalog = load_offiho_catalog_data(payload)
+                _OFFIHO_CATALOG_CACHE.clear()
+                _OFFIHO_CATALOG_CACHE.update(
+                    {
+                        "path": "supabase:saas_supplier_catalog_snapshots/offiho",
+                        "fingerprint": {"source_hash": catalog.get("source_hash")},
+                        "source_hash": catalog.get("source_hash"),
+                        "catalog": catalog,
+                        "db_checked_at": now,
+                    }
+                )
+                return catalog
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError):
+            if _OFFIHO_CATALOG_CACHE.get("catalog") is not None:
+                _OFFIHO_CATALOG_CACHE["db_checked_at"] = now
+                return _OFFIHO_CATALOG_CACHE["catalog"]
     catalog_path = Path(OFFIHO_CATALOG_PATH).resolve() if OFFIHO_CATALOG_PATH else OFFIHO_DEFAULT_CATALOG_PATH.resolve()
-    return _load_catalog_cached(_OFFIHO_CATALOG_CACHE, catalog_path, load_offiho_catalog, "Offiho")
+    catalog = _load_catalog_cached(_OFFIHO_CATALOG_CACHE, catalog_path, load_offiho_catalog, "Offiho")
+    _OFFIHO_CATALOG_CACHE["db_checked_at"] = now
+    return catalog
 
 
-def _offiho_catalog_response(usuario_id: int) -> dict:
-    catalog = _load_offiho_catalog_cached()
+def _offiho_catalog_response(usuario_id: int, *, force_refresh: bool = False) -> dict:
+    catalog = (
+        _load_offiho_catalog_cached(force_refresh=True)
+        if force_refresh
+        else _load_offiho_catalog_cached()
+    )
     reservations = db_list_offiho_reservations("active")
     totals: dict[str, float] = {}
     reserved_by_others: set[str] = set()
@@ -3564,7 +3612,7 @@ def _offiho_catalog_response(usuario_id: int) -> dict:
             }
         )
         items.append(payload)
-    return {
+    response = {
         "source_hash": catalog["source_hash"],
         "generated_at": catalog["generated_at"],
         "source_row_count": catalog["source_row_count"],
@@ -3573,6 +3621,18 @@ def _offiho_catalog_response(usuario_id: int) -> dict:
         "total": len(items),
         "items": items,
     }
+    for field in (
+        "catalog_built_at",
+        "inventory_fetched_at",
+        "inventory_last_modified",
+        "workbook_generated_at",
+        "stock_snapshot_hash",
+        "enrichment_source_hash",
+        "sync_audit",
+    ):
+        if field in catalog:
+            response[field] = catalog[field]
+    return response
 
 
 def _require_queued_quote_job(updated: dict) -> dict:
@@ -6633,10 +6693,15 @@ def tarkett_quote(body: dict, current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/offiho/catalog")
-def offiho_catalog(current_user: dict = Depends(get_current_user)):
+def offiho_catalog(
+    response: Response,
+    fresh: bool = False,
+    current_user: dict = Depends(get_current_user),
+):
+    response.headers["Cache-Control"] = "private, no-store"
     try:
         _require_active_subscription(current_user["id"])
-        return _offiho_catalog_response(current_user["id"])
+        return _offiho_catalog_response(current_user["id"], force_refresh=fresh)
     except RuntimeError:
         raise HTTPException(status_code=503, detail="Error leyendo catalogo Offiho")
 
@@ -6964,6 +7029,27 @@ def internal_put_tarkett_catalog(body: dict, _authorized: bool = Depends(require
         raise HTTPException(status_code=400, detail="Payload de catalogo requerido")
     try:
         return db_upsert_supplier_catalog_snapshot("tarkett", payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/internal/catalogs/offiho")
+def internal_get_offiho_catalog(_authorized: bool = Depends(require_worker_secret)):
+    snapshot = db_get_supplier_catalog_snapshot("offiho")
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Catalogo Offiho no disponible")
+    return snapshot
+
+
+@app.put("/internal/catalogs/offiho")
+def internal_put_offiho_catalog(body: dict, _authorized: bool = Depends(require_worker_secret)):
+    payload = body.get("payload") if isinstance(body, dict) else None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload de catalogo requerido")
+    try:
+        return db_upsert_supplier_catalog_snapshot("offiho", payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

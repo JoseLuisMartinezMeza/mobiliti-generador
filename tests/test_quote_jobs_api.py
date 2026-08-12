@@ -2415,6 +2415,135 @@ def test_internal_tarkett_catalog_reads_and_updates_snapshot(monkeypatch):
     assert saved == [("tarkett", payload)]
 
 
+def _dynamic_offiho_snapshot_payload():
+    return {
+        "source_hash": "d" * 64,
+        "generated_at": "2026-08-11T20:00:00+00:00",
+        "catalog_built_at": "2026-08-11T20:00:00+00:00",
+        "inventory_last_modified": "2026-08-11T14:46:00+00:00",
+        "source_row_count": 1,
+        "duplicate_row_count": 0,
+        "unique_item_count": 1,
+        "total": 1,
+        "items": [{
+            "inventory_key": "OHE-1 NEGRO MODELO",
+            "code": "OHE-1",
+            "name": "MODELO",
+            "variant": "NEGRO",
+            "unit": "PZA",
+            "pieces_per_box": 1,
+            "available_quantity": 42,
+            "unit_price": 100,
+            "price_source": "inventory",
+            "product_url": "",
+            "image_url": "",
+            "description": "Producto Offiho MODELO.",
+            "description_source": "inventory_label",
+            "match_status": "unmatched",
+            "source_updated_at": "",
+        }],
+    }
+
+
+def test_internal_offiho_catalog_reads_and_updates_snapshot(monkeypatch):
+    payload = _dynamic_offiho_snapshot_payload()
+    saved = []
+    monkeypatch.setattr(index, "MOBILITI_REST_SECRET", "worker-secret")
+    monkeypatch.setattr(
+        index,
+        "db_get_supplier_catalog_snapshot",
+        lambda supplier: {"supplier": supplier, "source_hash": payload["source_hash"], "payload": payload},
+    )
+    monkeypatch.setattr(
+        index,
+        "db_upsert_supplier_catalog_snapshot",
+        lambda supplier, current: saved.append((supplier, current)) or {"supplier": supplier, "payload": current},
+    )
+    headers = {"x-mobiliti-rest-secret": "worker-secret"}
+
+    get_response = _client().get("/internal/catalogs/offiho", headers=headers)
+    put_response = _client().put(
+        "/internal/catalogs/offiho", headers=headers, json={"payload": payload}
+    )
+
+    assert get_response.status_code == 200
+    assert get_response.json()["source_hash"] == "d" * 64
+    assert put_response.status_code == 200
+    assert saved == [("offiho", payload)]
+
+
+def test_offiho_catalog_prefers_dynamic_database_snapshot(monkeypatch):
+    payload = _dynamic_offiho_snapshot_payload()
+    monkeypatch.setattr(index, "OFFIHO_CATALOG_DB_ENABLED", True, raising=False)
+    monkeypatch.setattr(index, "OFFIHO_CATALOG_DB_TTL_SECONDS", 300, raising=False)
+    monkeypatch.setattr(
+        index,
+        "_OFFIHO_CATALOG_CACHE",
+        {"path": None, "fingerprint": None, "source_hash": None, "catalog": None, "db_checked_at": 0.0},
+    )
+    monkeypatch.setattr(
+        index,
+        "db_get_supplier_catalog_snapshot",
+        lambda supplier: {"supplier": supplier, "source_hash": payload["source_hash"], "payload": payload},
+    )
+
+    catalog = index._load_offiho_catalog_cached()
+
+    assert catalog["source_hash"] == "d" * 64
+    assert catalog["unique_item_count"] == 1
+    assert catalog["by_inventory_key"]["OHE-1 NEGRO MODELO"].available_quantity == Decimal("42")
+    assert index._OFFIHO_CATALOG_CACHE["path"].startswith("supabase:")
+
+
+def test_offiho_catalog_rejects_invalid_database_snapshot_and_uses_static_fallback(monkeypatch):
+    invalid_payload = _dynamic_offiho_snapshot_payload()
+    invalid_payload["unique_item_count"] = 2
+    monkeypatch.setattr(index, "OFFIHO_CATALOG_DB_ENABLED", True, raising=False)
+    monkeypatch.setattr(index, "OFFIHO_CATALOG_DB_TTL_SECONDS", 300, raising=False)
+    monkeypatch.setattr(
+        index,
+        "_OFFIHO_CATALOG_CACHE",
+        {"path": None, "fingerprint": None, "source_hash": None, "catalog": None, "db_checked_at": 0.0},
+    )
+    monkeypatch.setattr(
+        index,
+        "db_get_supplier_catalog_snapshot",
+        lambda supplier: {"supplier": supplier, "payload": invalid_payload},
+    )
+
+    catalog = index._load_offiho_catalog_cached()
+
+    assert catalog["unique_item_count"] == 1207
+    assert not index._OFFIHO_CATALOG_CACHE["path"].startswith("supabase:")
+
+
+def test_offiho_catalog_fresh_query_bypasses_server_cache(monkeypatch):
+    _mock_user(monkeypatch)
+    seen = []
+
+    def response_for_user(user_id, *, force_refresh=False):
+        seen.append((user_id, force_refresh))
+        return {
+            "source_hash": "f" * 64,
+            "generated_at": "2026-08-11T20:00:00Z",
+            "catalog_built_at": "2026-08-11T20:00:00Z",
+            "inventory_last_modified": "2026-08-11T14:46:00Z",
+            "source_row_count": 0,
+            "duplicate_row_count": 0,
+            "unique_item_count": 0,
+            "total": 0,
+            "items": [],
+        }
+
+    monkeypatch.setattr(index, "_offiho_catalog_response", response_for_user)
+
+    response = _client().get("/offiho/catalog?fresh=1", headers=_auth_headers())
+
+    assert response.status_code == 200
+    assert seen == [(7, True)]
+    assert response.headers["cache-control"] == "private, no-store"
+
+
 def test_offiho_quote_creates_json_job_with_catalog_owned_values_and_reservations(monkeypatch):
     _mock_user(monkeypatch)
     uploaded = {}
@@ -4312,7 +4441,7 @@ def test_catalog_reservation_aggregation_keeps_decimal_quantity(monkeypatch):
     assert captured[0][4] == "0.3"
 
 
-def test_generic_internal_catalog_put_route_is_absent_and_tarkett_remains():
+def test_generic_internal_catalog_put_route_is_absent_and_explicit_routes_remain():
     put_paths = [
         route.path
         for route in index.app.routes
@@ -4321,6 +4450,7 @@ def test_generic_internal_catalog_put_route_is_absent_and_tarkett_remains():
     ]
 
     assert "/internal/catalogs/tarkett" in put_paths
+    assert "/internal/catalogs/offiho" in put_paths
     assert all("{" not in path for path in put_paths)
 
 

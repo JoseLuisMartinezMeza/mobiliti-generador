@@ -498,7 +498,7 @@ def test_download_rejects_truncated_body_and_redacts_stream_failure(tmp_path):
     assert "SECRET" not in str(caught.value)
 
 
-def test_worker_requirements_include_graph_xlsb_and_local_image_segmentation():
+def test_worker_requirements_include_graph_xls_xlsb_and_local_image_segmentation():
     lines = Path("mobiliti_saas/worker/requirements.txt").read_text(encoding="utf-8").splitlines()
     assert lines.count("msal>=1.31,<2") == 1
     assert lines == [
@@ -509,6 +509,7 @@ def test_worker_requirements_include_graph_xlsb_and_local_image_segmentation():
         "boto3>=1.36.0",
         "msal>=1.31,<2",
         "pyxlsb==1.0.10",
+        "xlrd>=2.0.2",
         "rembg==2.0.75",
         "onnxruntime==1.26.0",
     ]

@@ -189,7 +189,10 @@ def _run_rate_sync_isolated() -> bool:
 
 def _run_once_isolated() -> bool:
     if not _has_pending_job():
-        if quote_worker.sync_tarkett_catalog_if_due(_build_client()):
+        client = _build_client()
+        if quote_worker.sync_tarkett_catalog_if_due(client):
+            return True
+        if quote_worker.sync_offiho_catalog_if_due(client):
             return True
         if _run_rate_sync_isolated():
             return True

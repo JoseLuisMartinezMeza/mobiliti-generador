@@ -205,7 +205,7 @@ REVOKE ALL ON TABLE saas_offiho_reservations FROM anon, authenticated;
 GRANT ALL ON TABLE saas_offiho_reservations TO service_role;
 
 CREATE TABLE IF NOT EXISTS saas_supplier_catalog_snapshots (
-    supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett')),
+    supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett', 'offiho')),
     source_hash TEXT NOT NULL,
     generated_at TIMESTAMPTZ NOT NULL,
     payload JSONB NOT NULL CHECK (jsonb_typeof(payload) = 'object'),

@@ -47,7 +47,17 @@ $env:MAX_QUOTE_OUTPUT_MB="100"
 $env:TEMPLATE_PATH="C:\ruta\Formato Cotizacion 2026 Oficial.xlsx"
 $env:WORKER_POLL_SECONDS="10"
 $env:WORKER_STALE_MINUTES="30"
+$env:OFFIHO_SYNC_ENABLED="true"
+$env:OFFIHO_SYNC_INTERVAL_SECONDS="3600"
 ```
+
+Con `OFFIHO_SYNC_ENABLED=true`, cuando no hay cotizaciones pendientes el
+worker descarga directamente `https://www.offiho.com/existencias.xls`, valida
+el inventario y publica un snapshot nuevo solo si cambia su hash. El intervalo
+minimo admitido es de 900 segundos y el valor predeterminado es 3600. Un fallo
+conserva el ultimo snapshot valido y no recurre a SharePoint.
+Activa la bandera solo despues de aplicar `2026_08_offiho_stock_snapshot.sql`
+y desplegar las rutas internas Offiho de la API.
 
 Para guardar inputs/outputs en Cloudflare R2 en lugar de Supabase Storage,
 usa credenciales S3 de R2, no el API token general de Cloudflare:

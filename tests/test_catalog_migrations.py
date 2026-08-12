@@ -11,6 +11,7 @@ SETUP = Path("mobiliti_saas/supabase_setup")
 CATALOG_MIGRATION = SETUP / "2026_07_multi_supplier_catalogs.sql"
 JOME_LAUCO_MIGRATION = SETUP / "2026_07_jome_lauco_catalogs.sql"
 IDELIKA_CONCEPTOS_MIGRATION = SETUP / "2026_08_idelika_conceptos_catalogs.sql"
+OFFIHO_SNAPSHOT_MIGRATION = SETUP / "2026_08_offiho_stock_snapshot.sql"
 JOBS_RLS_MIGRATION = SETUP / "2026_07_jobs_rls.sql"
 BOOTSTRAP = SETUP / "create_tables.sql"
 MIXED_MIGRATION = SETUP / "2026_07_mixed_catalog_cart.sql"
@@ -458,6 +459,22 @@ def test_catalog_migration_is_additive_and_enables_rls():
     assert "saas_publish_catalog_snapshot" in sql
     assert "saas_reject_catalog_snapshot" in sql
     assert "saas_clone_catalog_candidate_with_asset" in sql
+
+
+def test_offiho_snapshot_migration_only_widens_the_supplier_constraint():
+    sql = OFFIHO_SNAPSHOT_MIGRATION.read_text(encoding="utf-8")
+    normalized = re.sub(r"\s+", " ", sql.lower())
+
+    assert (
+        "alter table saas_supplier_catalog_snapshots "
+        "drop constraint if exists saas_supplier_catalog_snapshots_supplier_check"
+    ) in normalized
+    assert (
+        "add constraint saas_supplier_catalog_snapshots_supplier_check "
+        "check (supplier in ('tarkett', 'offiho'))"
+    ) in normalized
+    for destructive in ("drop table", "truncate", "delete from", " update "):
+        assert destructive not in normalized
 
 
 def test_catalog_migration_keeps_sources_private_and_assets_public():
@@ -1094,7 +1111,7 @@ def test_bootstrap_builds_historic_catalog_schema_with_final_idelika_conceptos_s
         bootstrap,
         "CREATE TABLE IF NOT EXISTS saas_supplier_catalog_snapshots",
     )
-    assert "supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett'))" in legacy_snapshots
+    assert "supplier TEXT PRIMARY KEY CHECK (supplier IN ('tarkett', 'offiho'))" in legacy_snapshots
     assert "CREATE TABLE IF NOT EXISTS saas_catalog_sources" in bootstrap
     assert "CREATE OR REPLACE FUNCTION saas_reserve_mixed_cart" in bootstrap
     assert "'cr-global','sonara','sunon','alma','lumbro','jome','lauco','idelika','conceptos'" in bootstrap

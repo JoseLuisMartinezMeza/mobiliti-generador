@@ -362,9 +362,11 @@ def test_project_survives_reload_and_supports_replacements_and_complements(
 
 
 class ApiStub:
-    def __init__(self, mixed_responses, import_preview=None):
+    def __init__(self, mixed_responses, import_preview=None, offiho_catalogs=None):
         self.mixed_responses = list(mixed_responses)
         self.import_preview = import_preview
+        self.offiho_catalogs = list(offiho_catalogs or [OFFIHO_CATALOG])
+        self.offiho_get_queries = []
         self.mixed_post_bodies = []
         self.upload_count = 0
         self.unexpected_requests = []
@@ -493,7 +495,10 @@ class ApiStub:
                 fulfill_json(route, TARKETT_CATALOG)
                 return
             if request.method == "GET" and path == "/offiho/catalog":
-                fulfill_json(route, OFFIHO_CATALOG)
+                self.offiho_get_queries.append(parsed.query)
+                fresh = parse_qs(parsed.query).get("fresh") == ["1"]
+                catalog_index = 1 if fresh and len(self.offiho_catalogs) > 1 else 0
+                fulfill_json(route, self.offiho_catalogs[catalog_index])
                 return
             if request.method == "GET" and path == "/catalogs":
                 fulfill_json(route, CATALOG_REGISTRY)
@@ -977,6 +982,30 @@ def import_preview_into_active_project(
             + " | ".join(visible_error.all_inner_texts())
         )
     return panel
+
+
+def test_offiho_refresh_requests_fresh_snapshot_and_replaces_visible_stock(vite_url, browser):
+    refreshed = deepcopy(OFFIHO_CATALOG)
+    refreshed["source_hash"] = "offiho-e2e-refreshed"
+    refreshed["generated_at"] = "2026-08-11T20:00:00Z"
+    refreshed["catalog_built_at"] = "2026-08-11T20:00:00Z"
+    refreshed["inventory_last_modified"] = "2026-08-11T14:46:00Z"
+    refreshed["items"][0]["available_quantity"] = "3"
+    stub = ApiStub([], offiho_catalogs=[OFFIHO_CATALOG, refreshed])
+    context, page = new_page(browser, {"width": 1280, "height": 900}, stub, vite_url)
+    try:
+        page.goto(vite_url)
+        page.get_by_role("button", name=re.compile(r"^Offiho")).click()
+        page.get_by_text("Existencia 1", exact=True).wait_for()
+
+        page.get_by_role("button", name="Refrescar", exact=True).click()
+
+        page.get_by_text("Existencia 3", exact=True).wait_for()
+        assert stub.offiho_get_queries == ["", "fresh=1"]
+        assert page.get_by_text(re.compile(r"11 ago 2026"), exact=False).count() > 0
+        assert stub.unexpected_requests == []
+    finally:
+        context.close()
 
 
 def test_four_catalog_checkout_retains_422_state_then_retries_once(vite_url, browser):

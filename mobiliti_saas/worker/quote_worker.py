@@ -85,7 +85,19 @@ TARKETTNET_EMAIL = os.environ.get("TARKETTNET_EMAIL", "").strip()
 TARKETTNET_PASSWORD = os.environ.get("TARKETTNET_PASSWORD", "")
 TARKETT_CATALOG_FALLBACK_PATH = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" / "data" / "tarkett_catalog.json"
 _TARKETT_LAST_SYNC_ATTEMPT = 0.0
+OFFIHO_SYNC_ENABLED = os.environ.get("OFFIHO_SYNC_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+OFFIHO_SYNC_INTERVAL_SECONDS = max(900, int(os.environ.get("OFFIHO_SYNC_INTERVAL_SECONDS", "3600")))
+OFFIHO_CATALOG_FALLBACK_PATH = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" / "data" / "offiho_catalog.json"
+_OFFIHO_LAST_SYNC_ATTEMPT = 0.0
+CATALOG_SNAPSHOT_INTERNAL_PATHS = {
+    "tarkett": "/internal/catalogs/tarkett",
+    "offiho": "/internal/catalogs/offiho",
+}
 
+from mobiliti_saas.quote_engine.offiho_inventory import (  # noqa: E402
+    download_offiho_inventory,
+    refresh_offiho_catalog_from_file,
+)
 from mobiliti_saas.quote_engine.tarkettnet_catalog import sync_catalog_from_tarkettnet  # noqa: E402
 from mobiliti_saas.quote_engine.quotation_sheets import (  # noqa: E402
     QuotationDataRow,
@@ -195,6 +207,13 @@ def _quote_object_content_type(path: str) -> str:
     )
 
 
+def _catalog_snapshot_supplier(supplier: str) -> str:
+    normalized = str(supplier or "").strip().lower()
+    if normalized not in CATALOG_SNAPSHOT_INTERNAL_PATHS:
+        raise ValueError("Proveedor de snapshot no permitido")
+    return normalized
+
+
 class SupabaseClient:
     def __init__(self) -> None:
         self.base_url = _required_env("SUPABASE_URL").rstrip("/")
@@ -229,8 +248,9 @@ class SupabaseClient:
             raise RuntimeError(f"Supabase REST {exc.code}: {body}") from exc
 
     def catalog_snapshot_get(self, supplier: str) -> dict | None:
+        supplier = _catalog_snapshot_supplier(supplier)
         if not os.environ.get("SUPABASE_SERVICE_KEY") and MOBILITI_REST_SECRET:
-            return self._catalog_api_request("GET")
+            return self._catalog_api_request(supplier, "GET")
         rows = self.rest(
             "GET",
             "/saas_supplier_catalog_snapshots",
@@ -243,8 +263,9 @@ class SupabaseClient:
         return rows[0] if rows else None
 
     def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
+        supplier = _catalog_snapshot_supplier(supplier)
         if not os.environ.get("SUPABASE_SERVICE_KEY") and MOBILITI_REST_SECRET:
-            return self._catalog_api_request("PUT", {"payload": payload})
+            return self._catalog_api_request(supplier, "PUT", {"payload": payload})
         url = f"{self.base_url}/rest/v1/saas_supplier_catalog_snapshots?on_conflict=supplier"
         row = {
             "supplier": supplier,
@@ -266,11 +287,17 @@ class SupabaseClient:
             body = exc.read().decode("utf-8")
             raise RuntimeError(f"Supabase catalog snapshot {exc.code}: {body}") from exc
 
-    def _catalog_api_request(self, method: str, payload: dict | None = None) -> dict | None:
+    def _catalog_api_request(
+        self,
+        supplier: str,
+        method: str,
+        payload: dict | None = None,
+    ) -> dict | None:
+        supplier = _catalog_snapshot_supplier(supplier)
         parsed = urllib.parse.urlparse(MOBILITI_API_URL)
         if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
             raise RuntimeError("MOBILITI_API_URL invalida")
-        url = f"{MOBILITI_API_URL}/internal/catalogs/tarkett"
+        url = f"{MOBILITI_API_URL}{CATALOG_SNAPSHOT_INTERNAL_PATHS[supplier]}"
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(url, data=body, method=method)
         req.add_header("Content-Type", "application/json")
@@ -281,6 +308,8 @@ class SupabaseClient:
                 return json.loads(content) if content else None
         except urllib.error.HTTPError as exc:
             exc.read()
+            if method == "GET" and exc.code == 404:
+                return None
             raise RuntimeError(f"Mobiliti catalog API {exc.code}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Mobiliti catalog API connection error: {exc.reason}") from exc
@@ -450,6 +479,7 @@ class PostgresClient(SupabaseClient):
         raise RuntimeError(f"Operacion Postgres no soportada: {method} {path}")
 
     def catalog_snapshot_get(self, supplier: str) -> dict | None:
+        supplier = _catalog_snapshot_supplier(supplier)
         rows = self._rows(
             """
             SELECT supplier, source_hash, generated_at, payload, updated_at
@@ -462,6 +492,7 @@ class PostgresClient(SupabaseClient):
         return rows[0] if rows else None
 
     def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
+        supplier = _catalog_snapshot_supplier(supplier)
         rows = self._write(
             """
             INSERT INTO saas_supplier_catalog_snapshots
@@ -625,9 +656,11 @@ class LocalDevClient:
         raise RuntimeError(f"Operacion dev no soportada: {method} {path}")
 
     def catalog_snapshot_get(self, supplier: str) -> dict | None:
+        supplier = _catalog_snapshot_supplier(supplier)
         return self._load().get("supplier_catalog_snapshots", {}).get(supplier)
 
     def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
+        supplier = _catalog_snapshot_supplier(supplier)
         store = self._load()
         row = {
             "supplier": supplier,
@@ -1902,6 +1935,16 @@ def _fallback_tarkett_catalog_payload() -> dict:
     return payload
 
 
+def _fallback_offiho_catalog_payload() -> dict:
+    try:
+        payload = json.loads(OFFIHO_CATALOG_FALLBACK_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Catalogo Offiho de respaldo no disponible") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list) or not payload["items"]:
+        raise RuntimeError("Catalogo Offiho de respaldo invalido")
+    return payload
+
+
 def sync_tarkett_catalog_if_due(client, *, force: bool = False) -> bool:
     global _TARKETT_LAST_SYNC_ATTEMPT
     if not TARKETT_SYNC_ENABLED:
@@ -1935,14 +1978,54 @@ def sync_tarkett_catalog_if_due(client, *, force: bool = False) -> bool:
     return True
 
 
+def sync_offiho_catalog_if_due(client, *, force: bool = False) -> bool:
+    global _OFFIHO_LAST_SYNC_ATTEMPT
+    if not OFFIHO_SYNC_ENABLED:
+        return False
+    now = time.monotonic()
+    if (
+        not force
+        and _OFFIHO_LAST_SYNC_ATTEMPT > 0
+        and now - _OFFIHO_LAST_SYNC_ATTEMPT < OFFIHO_SYNC_INTERVAL_SECONDS
+    ):
+        return False
+    _OFFIHO_LAST_SYNC_ATTEMPT = now
+
+    snapshot = client.catalog_snapshot_get("offiho")
+    base_payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
+    if not isinstance(base_payload, dict):
+        base_payload = _fallback_offiho_catalog_payload()
+
+    with tempfile.TemporaryDirectory(prefix="mobiliti-offiho-") as temp_dir:
+        inventory_path = Path(temp_dir) / "existencias.xls"
+        downloaded = download_offiho_inventory(inventory_path)
+        refreshed = refresh_offiho_catalog_from_file(
+            base_payload,
+            downloaded.path,
+            inventory_sha256=downloaded.sha256,
+            inventory_size_bytes=downloaded.size_bytes,
+            synchronized_at=_utc_now(),
+            inventory_last_modified=downloaded.last_modified,
+        )
+
+    if str(refreshed.get("source_hash")) == str((snapshot or {}).get("source_hash")):
+        print("Catalogo Offiho sin cambios.")
+        return False
+    client.catalog_snapshot_upsert("offiho", refreshed)
+    print(f"Catalogo Offiho actualizado: {len(refreshed.get('items') or [])} productos.")
+    return True
+
+
 def run_once() -> bool:
     client = LocalDevClient() if DEV_MODE else (PostgresClient() if DATABASE_URL else SupabaseClient())
     recover_stale_jobs(client)
     job = fetch_next_job(client)
     if not job:
-        sync_tarkett_catalog_if_due(client)
+        did_work = sync_tarkett_catalog_if_due(client)
+        if not did_work:
+            did_work = sync_offiho_catalog_if_due(client)
         print("Sin jobs pendientes.")
-        return False
+        return did_work
     print(f"Procesando job {job['id']}...")
     process_job(client, job)
     print(f"Job {job['id']} completado.")
