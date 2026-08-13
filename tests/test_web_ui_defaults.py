@@ -191,7 +191,7 @@ def test_vercel_keeps_static_catalog_assets_out_of_python_function_bundle():
         Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
     )
 
-    assert config["functions"]["api/index.py"]["excludeFiles"] == (
+    assert config["functions"]["api/**/*.py"]["excludeFiles"] == (
         "public/catalog-assets/**"
     )
 
