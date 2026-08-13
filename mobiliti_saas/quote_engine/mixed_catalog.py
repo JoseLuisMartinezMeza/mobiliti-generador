@@ -570,7 +570,11 @@ def _common_line(
         "availability_type": "stocked", "available_quantity": stock, "stock": stock, "lead_time": "",
         "price_source": str(raw.get("price_source") or "missing"),
         "stock_status": "available" if catalog == "tarkett" else str(raw.get("stock_status") or "available"),
-        "image_kind": "official" if image_url else "placeholder",
+        "image_kind": (
+            str(raw.get("image_kind"))
+            if catalog == "offiho" and raw.get("image_kind") in {"official", "generated_reference", "placeholder"}
+            else "official" if image_url else "placeholder"
+        ),
     }
     original = Decimal(line["original_unit_price"])
     line["unit_price"] = f"{(original * Decimal(rate['exchange_rate'])).quantize(TWO_PLACES, rounding=ROUND_HALF_UP):.2f}"

@@ -1,0 +1,563 @@
+{
+  "schema_version": 1,
+  "source_manifest": "offiho_spec_visual_exact_images.json",
+  "source_manifest_sha256": "cce815ea02c83c97d4e5b0a69fc6ef04417ef583e66ddfd270656ef681426bf6",
+  "independent_review": "artifacts/offiho-visual-audit-20260811/spec-code-only-visual-review/generated/independent-exact-review.json",
+  "independent_review_sha256": "c665d753f8d847f74ce5e63090ddfdca925159c280ba175e6b3ee20dad5a5877",
+  "excluded_review_ids": [
+    "R0027",
+    "R0078",
+    "R0079",
+    "R0239",
+    "R0325",
+    "R0332"
+  ],
+  "items": [
+    {
+      "inventory_key": "BRAZO-06 NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/437277710716cf2a8c9bdafde51e5b0975c128ebde6b0409c39d939d6fc7b0b4.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "BRAZO-40 NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/9afc6a0655d827127db0e03ab2372e02e55dbcdba7225edc1f73c48de1e32ab1.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "BRAZO-53 NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/cbc692134e8dc922172213e376ea6c7ef4d8fda7ff9e5355e8cbc08a64bc6e86.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "BRAZO-55 NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/7c8a6c175eff37ce064cd2a283c423ee54fd7ec50f3cab609a98a4e16f0e52db.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "BRAZO-90 NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/ab0e0ea3be242a701916cac5a75fa90dd1f2987a1c4d3f914c774961b2bd5296.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "BRAZOS 86 AL NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/3a8a732fa39e9c45e5b1f10c25ebf9519ac9ed877de9eacd59a5a12e2089e58a.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "BRAZOS 86 NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/8009a39562426cdc20327951733518f6d9136fbef8a97ccc3973f2a72bb77d30.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "CONECTOR ALPHA NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/f94d3d56ac5e5edb38d6f112bc97f65aa525bd70d897565b8ed038052dd2bda8.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "CUBIERTA BLANCO ARA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/450da8ec0586c54636d73e66238cb1fa3c3468bd2d6c4f7f7baa04bfdc8a3087.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "DAILY 1 NATURAL/NEGRA NATURAL/NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/94363dd4d3cae519d997f7baf269c122501f00e71343282665518e564558209f.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "ECOCHAIR NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B4DEB2C33-FE0A-4AEF-8CE5-431188ED2C7E%7D&file=Spec%20guide-Offiho-Econosillas-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/58664bcca0fe95a7e65cf8249fd96e30dbc969e792404ebf3454370b633a8f45.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "ECOVISITA VISITA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B4DEB2C33-FE0A-4AEF-8CE5-431188ED2C7E%7D&file=Spec%20guide-Offiho-Econosillas-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/8929fd29694bf16c8709178eb22d83431e494eb023cfd9e8d562dd03c31db2ee.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "MOMO 2 N NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/20cacb68d05485ad66d70e732cf06bae78b9cb45400f4b40163693b24cc6759e.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "NOVAISO CON BRAZOS NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B4DEB2C33-FE0A-4AEF-8CE5-431188ED2C7E%7D&file=Spec%20guide-Offiho-Econosillas-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/1bfce1059e263bcccd38b581239077d2684b1bc1a6c0fe2bb2439519731fb306.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-100 BLANCO WHALE",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/6e973c2d49c86f35e079fd61425c6ee4e19d3fb18702c990b7521acb5109efd5.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-135 PLUS GRIS YODO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/2e5ee606c32fd06f7ae0b4661b8d3c9217271629794a3027ba4502c5a1994044.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-143 ALUMINIO AZUL ENEAS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/dd4259166bdd1717a21736b86fe7287075003e8c629b650e1943250c6ded59c8.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-143 NEGRO GRIS ENEAS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/c85d07571fef4dbe91638dc7830a98c612b20d2280519f9258b1113f84e928e7.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-2005 NEGRO/OXFORD TRIPOLI",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/0b4614b8f0cf35ae3ba21bc32095b837a05ab0953ecf4950726517f2c2fe8f27.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-204 ALTO CAFÉ GOETZ",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/5e448ad7ea3a93cb5d2e77caf029bc2247ef4659afa49a3659eac213877d6f46.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-204 CAFÉ GOETZ",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/893fd2610a0ee726cf4af68f4a3e02ea8988064ffec366d792be50ae2b7d7886.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-23 NEGRO BLAZE",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/da043566c1fa391b9b2feb4a2dac2ef968d1e5c774aa346fbe345f2d5aac220d.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-75 NEGRO VANTO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/11a5c58d39399a6b8abf80f83ba24d984d0cf5df30c68fd41727a338ee47ab7a.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-99 NEGRO/NEGRO EVOLUTION",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/1f053dbfff05443dc6696ec3cb7a25fb8b751445f24c64b693de8b354f67dc98.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHI-46 NEGRO HEAVY DUTY",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/4a5608aa7ef187a454e1729364a494d5a060d3047bd7b02ebceac0b62953e9f3.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHI-48 NEGRO HEAVY DUTY",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/3be6f18f3d14894fa2dc43caf106d42be64d8dc8c14e023652affe6f5353f66f.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHI-49 NEGRO HEAVY DUTY",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/59bb57408cc729b69655fc6d27881a6ca1916547f88b0ac8454d751c6545cf53.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHM-31003 GRIS FABRIZIA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/3005975c28fd0880537ea174fa9580a77e36bd9cddb8d5fc79d7491e5d093c0a.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHM-41003 GRIS AMELIA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/468927e8fd6e944397e2e5b990bad131ae50eec968c02a0dfaa28a257407bbc5.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHM-51001 GRIS ISABELA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/13689098df03ac8afa818d35caf850e5cccb4382b1694a1a54f214af05ed01aa.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHM-51003 GRIS ISABELA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/fcad32c5b6722e9c69d9b03579bed54eca448ce0c254bb7550552f86e63026c1.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHP-323 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B011FBE43-ACEA-4642-AAB9-F08A756C7786%7D&file=Spec%20guide-Offiho-Educacio%CC%81n-20261.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/aa405a5d9225b2186ce2ed131345d8594a87b6be8ff0e3775746fa4f8c37cb52.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHP-324 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B011FBE43-ACEA-4642-AAB9-F08A756C7786%7D&file=Spec%20guide-Offiho-Educacio%CC%81n-20261.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/24f5cc9f7403cfe10d7a3e8ba814b99e9b68ba45733e9bd92d87d4b94bb72762.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHP-341 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B011FBE43-ACEA-4642-AAB9-F08A756C7786%7D&file=Spec%20guide-Offiho-Educacio%CC%81n-20261.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/88ffc6b2cb4f47125e10e543aff660608948d8f64394cd5fa467c846dfc4fbc2.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHP-342 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B011FBE43-ACEA-4642-AAB9-F08A756C7786%7D&file=Spec%20guide-Offiho-Educacio%CC%81n-20261.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/a08493597cb6028868ae9fafce6da666390015dc779c7a1a6dc1386bc0c35d9d.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHP-359 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B011FBE43-ACEA-4642-AAB9-F08A756C7786%7D&file=Spec%20guide-Offiho-Educacio%CC%81n-20261.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/4511d1c0476c9fd9b2d6c3da76565fe739603b88134cc6f39d2f4b4cceddd2b0.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHP-360 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B011FBE43-ACEA-4642-AAB9-F08A756C7786%7D&file=Spec%20guide-Offiho-Educacio%CC%81n-20261.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/2533d9570c87e293323341d4076614553c29398c66ab3314b946c00b29304aa6.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHP-377 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B011FBE43-ACEA-4642-AAB9-F08A756C7786%7D&file=Spec%20guide-Offiho-Educacio%CC%81n-20261.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/082b86f66310d831d934f55a8b46bf39c44f972a57e2956b897e806986af598f.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHP-378 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B011FBE43-ACEA-4642-AAB9-F08A756C7786%7D&file=Spec%20guide-Offiho-Educacio%CC%81n-20261.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/5263d1934208e43731f0f5b6c5bceee126db62b818329b72f8ad43cc4b9e8ce8.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHT-356 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/0718e769d9c6a4fdd347a021b99ee56dbd40d455a9dfb5615517038563b640b3.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHT-357CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/63ccc3cec5e3d97ad5d957192cda0577ebd2a21382cbd1e9df1cc228a19e8c44.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHT-358CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/1e66ff6f1da0fb09a7258e1edd3ab813529265dc6bdfdbdecd28a05f7682e7ac.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHT-375CR CROMADA KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/0db6393dac2ce4dfd91817b80d0a6973ac7efadb09dc3bd18576471aa2ad1db2.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHT-376CR CROMADA KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/26cc316c5dbc168104be193d5df93b1145967d2192810dd8c987b3730317f68a.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-142 CAFÉ SILOHUETT *",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/cb45582e128146c2eb5ab8ac0cd6cd3ff6507e69af9e4246a7cc30f9ef584653.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-2005 NEGRO/OXFORD TRIPOLI",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/a6221d123514c04f292012f0f5b0ff5c46a15e2158d8f09c0861d1a967df4533.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-209 CAFÉ GOETZ",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/918b5077fa364876040ce76efc4fb918c80106a9fefa5603dce3783da3828a12.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-2200 NEGRO ELLITICO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/ab01ad21c0147a1a2bcc0d6137e743a23f7062689d68a7842f698ab4e25da548.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-3000 NG NEGRO INNOVA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/658d8323828e379287ffd7d92cbaf0b97505921b8ada6f6bc84b366df13185f7.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-3000-NR CR BERENJENA INNOVA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/e2e422c590749d0b318e1e0b32175fa602a4b6f4e7d3bdb68700200891a99ab2.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-329 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/744cfe502c1afaa2f10c82e0a0e9b949e7d709194bd0647c9ba3b4390c9296ab.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-330 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/106e84fba418b3327fc43bfb6d1ba6196b39fb629a68821ebf3b2b3d347a2075.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-331 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/d3c20dd7508856e0d005ff525dabff92b1b9aafcfea4a0b77331958e5b204fce.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-332 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/ac0de263837760058eea6f7fcfb6d2ec18ace7fa3d7e5eedab592831915c377e.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-333CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/35548f5470eda3b25e729e0e423a056da238b99091a9c827e7fcd046bec6ad75.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-334CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/0e1122b3bdf0bfce562bed9aac768e595a2058a73d6caff3e101d9b1c1f5de6d.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-335CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/639481eb1bb5494196963548fdfd79fbc60e2fa3093ade9cbe8437537d447310.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-336CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/f549f7ebcfc51855cfd46f4b3a9bb53deba8d1f7c8453df3f0650afca39f3a3a.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-347 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/aea947b32a43372c55b44a2c8ca52e0cc424df5263966587cf076d80b43bb5c8.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-348 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/dd4e146dcb19578cc8d41c8c078943ac7709c7a4c6cb04937ba2fb5b9b881ec5.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-349 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/03c0e832206d0a1a61282d8459063568eaced96a90585dde402cb1cb903e9739.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-350 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/c1f874199fb0fb6d25d24786a63cb70e1d029c9e8782ba00d75dbb71a97f81ca.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-351CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/6dee2194e176c632db3b327f7600ba19e7090cecbcec7e209e043f42028e8d55.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-352CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/989021477e49d0729c958363992c5d18186ab8c4e0de263ae54400155f096085.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-353CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/9a03844af8f8c5b81360018599d30a45c0a89b94c466f1166e3cee719985684c.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-354CR NEGRO KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/1c26735ebdd5139fecc2377746c69b19320af59dd122473e30f9a4c9149c9219.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-365 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/96f87200961e45deb955a38cbeef777a148d4176b29b85c2d5898dd5b273cf6b.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-366 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/ccc83ad10d549e8ac5d1bb4b62fee7adad9ade2794db523c47b35fe112415c89.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-367 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/8feb5ca25b140c48833a647bb1912fd1ed93c21118d12345cb649aa464e5183c.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-368 GRIS KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/87b678a5e150b24a3cd08e98356acbec6065d5fa7b96186ce7350eaa9bcbe060.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-369CR CROMADA KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/89f03cf849e983bc68c198f857362e8b841e6be43e91ac1d97add76fb10e1b96.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-370CR CROMADA KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/5598ae9fa3793c40bf0d07c695068b85ecd86ad67933926f94aaccd11aaee36a.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-371CR CROMADA KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/22d14858025cc5c2e33add1b1982eb15a4710a17f453fe8604f9321763c9b59e.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-372CR CROMADA KYOS",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BFAFE6AAE-15A9-4485-888F-7FD23CBF9CD4%7D&file=Spec%20guide-Offiho-INT-EXT-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/505d7d8011e5a2dda89f565f7448cc08c4d1173038670700f28d3d3c815e7e5e.jpeg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-78 NEGRO VANTO *",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/474b732baa618cbe0f0beff206f3b9141b8565d5a6f7fb85ba416047d39c66ee.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "REGATÓN NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/999da9236d17b7dcecfb6a645a90bead7b370ec9bd2625ad6651bfad294b70f9.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "RODAJA NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7B337EB328-A64E-42C4-B013-86C596D56FD0%7D&file=Spec%20guide-Offiho-DIR-EJE-OP-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/7fb692406a414b9402bf1c18472a8114eac7724468b2d926f8917a2ff4cdc45c.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    },
+    {
+      "inventory_key": "STATO A/T-600 N NEGRA",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/_layouts/15/Doc.aspx?sourcedoc=%7BB8E83002-9DE2-4150-B8A7-BB005E66A5CD%7D&file=Spec%20guide-Offiho-Black-2026.xlsx&action=default&mobileredirect=true",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/spec-visual-exact/05e3d2771ea87a499a63db1760d516bc2d45a742b7466cc4d3629ee12948766a.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_sharepoint_spec_guide_embedded_image_visual_exact"
+    }
+  ]
+}

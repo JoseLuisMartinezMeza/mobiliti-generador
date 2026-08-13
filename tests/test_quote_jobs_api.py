@@ -4465,6 +4465,28 @@ def test_deployable_api_copies_have_identical_sha256():
     assert len(hashes) == 1
 
 
+def test_dev_offiho_managed_image_uses_local_vite_without_changing_production(
+    monkeypatch,
+):
+    managed = (
+        "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/"
+        "residual-visual-exact/example.jpg?v=1"
+    )
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(index, "DEV_WEB_BASE_URL", "http://127.0.0.1:5174")
+
+    assert index._dev_offiho_image_url(managed) == (
+        "http://127.0.0.1:5174/catalog-assets/offiho/"
+        "residual-visual-exact/example.jpg?v=1"
+    )
+    assert index._dev_offiho_image_url("https://www.offiho.com/product.jpg") == (
+        "https://www.offiho.com/product.jpg"
+    )
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    assert index._dev_offiho_image_url(managed) == managed
+
+
 @pytest.mark.parametrize(
     "object_path",
     [

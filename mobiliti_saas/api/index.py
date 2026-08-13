@@ -153,6 +153,7 @@ DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes
 DEV_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEV_STORE_DIR = Path(os.environ.get("MOBILITI_DEV_STORE_DIR", DEV_PROJECT_ROOT / ".mobiliti_dev_store")).resolve()
 DEV_PUBLIC_BASE_URL = os.environ.get("MOBILITI_DEV_PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+DEV_WEB_BASE_URL = os.environ.get("MOBILITI_DEV_WEB_BASE_URL", "").rstrip("/")
 DEV_USER_EMAIL = os.environ.get("MOBILITI_DEV_USER_EMAIL", "dev@mobiliti.local")
 DEV_USER_PASSWORD = os.environ.get("MOBILITI_DEV_USER_PASSWORD", "dev12345")
 _DEV_CATALOG_RESERVATION_LOCK = threading.RLock()
@@ -3604,6 +3605,7 @@ def _offiho_catalog_response(usuario_id: int, *, force_refresh: bool = False) ->
     items = []
     for item in catalog["items"]:
         payload = item.to_public_dict()
+        payload["image_url"] = _dev_offiho_image_url(payload.get("image_url"))
         payload.update(
             {
                 "is_out_of_stock": item.available_quantity <= 0,
@@ -3633,6 +3635,44 @@ def _offiho_catalog_response(usuario_id: int, *, force_refresh: bool = False) ->
         if field in catalog:
             response[field] = catalog[field]
     return response
+
+
+def _dev_offiho_image_url(value: Any) -> str:
+    """Sirve assets administrados desde Vite durante una revisiÃ³n local."""
+
+    original = str(value or "")
+    if not DEV_MODE or not DEV_WEB_BASE_URL:
+        return original
+    try:
+        source = urlparse(original)
+        local = urlparse(DEV_WEB_BASE_URL)
+        source_port = source.port
+        local_port = local.port
+    except ValueError:
+        return original
+    if (
+        source.scheme != "https"
+        or source.hostname != "web-lemon-one-45.vercel.app"
+        or source_port not in {None, 443}
+        or not source.path.startswith("/catalog-assets/offiho/")
+        or local.scheme not in {"http", "https"}
+        or local.hostname not in {"127.0.0.1", "localhost"}
+        or local_port is None
+        or local.username
+        or local.password
+        or local.path not in {"", "/"}
+        or local.params
+        or local.query
+        or local.fragment
+    ):
+        return original
+    rewritten = local._replace(
+        path=source.path,
+        params="",
+        query=source.query,
+        fragment="",
+    )
+    return rewritten.geturl()
 
 
 def _require_queued_quote_job(updated: dict) -> dict:

@@ -13,6 +13,12 @@ def test_dev_start_enables_every_generic_catalog_for_api_and_worker():
     assert script.count(assignment) == 2
 
 
+def test_dev_start_points_catalog_assets_at_local_vite_server():
+    script = DEV_START_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'MOBILITI_DEV_WEB_BASE_URL = "http://127.0.0.1:$WebPort"' in script
+
+
 def test_dev_start_reloads_canonical_api_when_quote_sources_change():
     script = DEV_START_SCRIPT.read_text(encoding="utf-8")
     api_arguments = next(

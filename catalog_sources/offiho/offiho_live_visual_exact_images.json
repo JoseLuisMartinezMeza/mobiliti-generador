@@ -1,0 +1,667 @@
+{
+  "schema_version": 1,
+  "source_audit": "artifacts/offiho-visual-audit-20260811/official-code-live-audit-v43/official-code-live-audit-decisions.json",
+  "source_capture_sha256": "b03a7e4607ccce6b0f9d36b61ba82b343b849efa80ca84261efdb36ace0d910e",
+  "items": [
+    {
+      "inventory_key": "OHS-85AL BLANCO REVOLUTION",
+      "product_url": "https://www.offiho.com/operativos/revolution/operativos-revolution-modelo-OHS-85al",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/187797bc97c6411f5d39a08ec5bc3ea5d4d80342b4c60c740279b94eee6e59fe.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/operativos/revolution/OHS-85al/zoom/OHS-85alBlanco.jpg",
+      "source_sha256": "187797bc97c6411f5d39a08ec5bc3ea5d4d80342b4c60c740279b94eee6e59fe",
+      "review_id": "L0001"
+    },
+    {
+      "inventory_key": "OHS-88AL BLANCO REVOLUTION",
+      "product_url": "https://www.offiho.com/operativos/revolution/operativos-revolution-modelo-OHS-88al",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/849e26550209976b97e794a0522bae0be11d2b8ccf2deaad6671107e33706fc3.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/operativos/revolution/OHS-88al/zoom/OHS-88alBlanco.jpg",
+      "source_sha256": "849e26550209976b97e794a0522bae0be11d2b8ccf2deaad6671107e33706fc3",
+      "review_id": "L0002"
+    },
+    {
+      "inventory_key": "OHV-340CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-340cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/3d5cb22efd610f892c5fd76bb9411bfc319a03bf51d69410b39aed432b0a3200.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHT-340cr/zoom/OHT-340crBlanco.jpg",
+      "source_sha256": "3d5cb22efd610f892c5fd76bb9411bfc319a03bf51d69410b39aed432b0a3200",
+      "review_id": "L0004"
+    },
+    {
+      "inventory_key": "OHV-340CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-340cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/cbc7e8c68bad5c99729e8ae0f69c2d1394c4a566410a7fc14561424d521ec86c.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHT-340cr/zoom/OHT-340crGris.jpg",
+      "source_sha256": "cbc7e8c68bad5c99729e8ae0f69c2d1394c4a566410a7fc14561424d521ec86c",
+      "review_id": "L0005"
+    },
+    {
+      "inventory_key": "OHV-338 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-338",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/df96db68988cd0d55b83d6ad1524d21fbeac653effc9b6e241956e583a578aab.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHT-338/zoom/OHT-338Gris.jpg",
+      "source_sha256": "df96db68988cd0d55b83d6ad1524d21fbeac653effc9b6e241956e583a578aab",
+      "review_id": "L0008"
+    },
+    {
+      "inventory_key": "OHV-338 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-338",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/34c6e9e93067e32afd6f27b88137c2095e276b1f9a897835818d60c936a6da01.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHT-338/zoom/OHT-338Blanco.jpg",
+      "source_sha256": "34c6e9e93067e32afd6f27b88137c2095e276b1f9a897835818d60c936a6da01",
+      "review_id": "L0009"
+    },
+    {
+      "inventory_key": "OHV-336CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-336cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/0d58132b76c985abe350c0dec2d76da548b457dcf087774f30b3076574e56508.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-336cr/zoom/OHV-336crBlanco.jpg",
+      "source_sha256": "0d58132b76c985abe350c0dec2d76da548b457dcf087774f30b3076574e56508",
+      "review_id": "L0010"
+    },
+    {
+      "inventory_key": "OHV-336CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-336cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/8a57d6a21192f1020008fc47af0bda5cb43db6e9e920b798811c4b20ea8d44be.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-336cr/zoom/OHV-336crGris.jpg",
+      "source_sha256": "8a57d6a21192f1020008fc47af0bda5cb43db6e9e920b798811c4b20ea8d44be",
+      "review_id": "L0011"
+    },
+    {
+      "inventory_key": "OHV-332 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-332",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/65f37f37bfc54e695371bf16f43bd32fbf1c2b1e7112d5392ea4f0677f47e76e.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-332/zoom/OHV-332Blanco.jpg",
+      "source_sha256": "65f37f37bfc54e695371bf16f43bd32fbf1c2b1e7112d5392ea4f0677f47e76e",
+      "review_id": "L0012"
+    },
+    {
+      "inventory_key": "OHV-339CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-339cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/6cefe21d30a612ba08630d73e745121c182e75a7c8c08b1a4604272a83607c73.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHT-339cr/zoom/OHT-339crBlanco.jpg",
+      "source_sha256": "6cefe21d30a612ba08630d73e745121c182e75a7c8c08b1a4604272a83607c73",
+      "review_id": "L0014"
+    },
+    {
+      "inventory_key": "OHV-339CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-339cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/b37266b940de6acd4c2b024865c9c271134bfd7d687f52b08e1061f5bce350dd.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHT-339cr/zoom/OHT-339crGris.jpg",
+      "source_sha256": "b37266b940de6acd4c2b024865c9c271134bfd7d687f52b08e1061f5bce350dd",
+      "review_id": "L0015"
+    },
+    {
+      "inventory_key": "OHV-337 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-337",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/2cfae73695a9ef57fe5b32d03159943127954fa864ceccb3860590b00377d4a7.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHT-337/zoom/OHT-337Blanco.jpg",
+      "source_sha256": "2cfae73695a9ef57fe5b32d03159943127954fa864ceccb3860590b00377d4a7",
+      "review_id": "L0017"
+    },
+    {
+      "inventory_key": "OHV-337 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHT-337",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/bee96a4e6e85c5a903d987af1c79c208b3658fa329213fbf308691f976cbe5bb.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHT-337/zoom/OHT-337Gris.jpg",
+      "source_sha256": "bee96a4e6e85c5a903d987af1c79c208b3658fa329213fbf308691f976cbe5bb",
+      "review_id": "L0018"
+    },
+    {
+      "inventory_key": "OHV-335CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-335cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/c22ecca3fbebb8ad482c6086c79d11ade38e99ce53cc717e712add23f767272a.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-335cr/zoom/OHV-335crBlanco.jpg",
+      "source_sha256": "c22ecca3fbebb8ad482c6086c79d11ade38e99ce53cc717e712add23f767272a",
+      "review_id": "L0020"
+    },
+    {
+      "inventory_key": "OHV-335CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-335cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/78ea39ad418a5ad324e0d9a101d50d0d614d1435955ba6203179e7b7756ccc60.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-335cr/zoom/OHV-335crGris.jpg",
+      "source_sha256": "78ea39ad418a5ad324e0d9a101d50d0d614d1435955ba6203179e7b7756ccc60",
+      "review_id": "L0021"
+    },
+    {
+      "inventory_key": "OHV-331 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-331",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/af9eef0c61a52da493999e4012900e0f3b8997f89a77a9e0e4fb3b38820e0c77.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-331/zoom/OHV-331Blanco.jpg",
+      "source_sha256": "af9eef0c61a52da493999e4012900e0f3b8997f89a77a9e0e4fb3b38820e0c77",
+      "review_id": "L0022"
+    },
+    {
+      "inventory_key": "OHV-334CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-334cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/32ef7f371ede2bd331417b4b4b77b392cc8e4e2cbb2c855665352c7fbd9bb86d.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-334cr/zoom/OHV-334crBlanco.jpg",
+      "source_sha256": "32ef7f371ede2bd331417b4b4b77b392cc8e4e2cbb2c855665352c7fbd9bb86d",
+      "review_id": "L0024"
+    },
+    {
+      "inventory_key": "OHV-334CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-334cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/e925f9dd9da75225f7fd5babba7046531af8d324cf2cdb9e2edeb2af2408d587.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-334cr/zoom/OHV-334crGris.jpg",
+      "source_sha256": "e925f9dd9da75225f7fd5babba7046531af8d324cf2cdb9e2edeb2af2408d587",
+      "review_id": "L0025"
+    },
+    {
+      "inventory_key": "OHV-330 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-330",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/b48a4bbbcaf1987cab99cc374e482f903fdbd8167a9d1679f8861e5250b4e0fc.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-330/zoom/OHV-330Blanco.jpg",
+      "source_sha256": "b48a4bbbcaf1987cab99cc374e482f903fdbd8167a9d1679f8861e5250b4e0fc",
+      "review_id": "L0026"
+    },
+    {
+      "inventory_key": "OHV-333CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-333cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/ef8b50e9ba6128a5ddbac42690c0f5621dbeb45f8a9567f6cfeaea67a98a6151.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-333cr/zoom/OHV-333crBlanco.jpg",
+      "source_sha256": "ef8b50e9ba6128a5ddbac42690c0f5621dbeb45f8a9567f6cfeaea67a98a6151",
+      "review_id": "L0028"
+    },
+    {
+      "inventory_key": "OHV-333CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-333cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/085de622ab8c7b6c083a5cab640e9048981b1835aef97e1b207aae607ff11774.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-333cr/zoom/OHV-333crGris.jpg",
+      "source_sha256": "085de622ab8c7b6c083a5cab640e9048981b1835aef97e1b207aae607ff11774",
+      "review_id": "L0029"
+    },
+    {
+      "inventory_key": "OHV-329 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-329",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/737bb4f9804b42fd38c407f6351db56e2a2c2739759cd95d621ed1e3fd54ec22.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/OHV-329/zoom/OHV-329Blanco.jpg",
+      "source_sha256": "737bb4f9804b42fd38c407f6351db56e2a2c2739759cd95d621ed1e3fd54ec22",
+      "review_id": "L0030"
+    },
+    {
+      "inventory_key": "OHT-358CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-358cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/8ce618139ea13d8f813976fe2294c7b177ec0a92e8218be7b9a2e9a2b6390397.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHT-358cr/zoom/OHT-358crBlanco.jpg",
+      "source_sha256": "8ce618139ea13d8f813976fe2294c7b177ec0a92e8218be7b9a2e9a2b6390397",
+      "review_id": "L0032"
+    },
+    {
+      "inventory_key": "OHT-358CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-358cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/f40fe6b0724acb160adb40020da1e55789be0a7542319b45f5edf68d1419cae9.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHT-358cr/zoom/OHT-358crGris.jpg",
+      "source_sha256": "f40fe6b0724acb160adb40020da1e55789be0a7542319b45f5edf68d1419cae9",
+      "review_id": "L0033"
+    },
+    {
+      "inventory_key": "OHT-356 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-356",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/8741ffabeda6054aae9d267ee55f6c7bfd8484bcd696df3c3dda81795e91bbea.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHT-356/zoom/OHT-356Blanco.jpg",
+      "source_sha256": "8741ffabeda6054aae9d267ee55f6c7bfd8484bcd696df3c3dda81795e91bbea",
+      "review_id": "L0034"
+    },
+    {
+      "inventory_key": "OHT-356 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-356",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/67bea52abe69b7dd06f14547ffb498aabfe8b0e3063dbef1e784def87d8d7034.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHT-356/zoom/OHT-356Gris.jpg",
+      "source_sha256": "67bea52abe69b7dd06f14547ffb498aabfe8b0e3063dbef1e784def87d8d7034",
+      "review_id": "L0035"
+    },
+    {
+      "inventory_key": "OHV-354CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-354cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/0ffc8ed05dc0ab9643053da831fe8fef70b7099d6a134e4e74e4cc1c0abcd1b3.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-354cr/zoom/OHV-354crBlanco.jpg",
+      "source_sha256": "0ffc8ed05dc0ab9643053da831fe8fef70b7099d6a134e4e74e4cc1c0abcd1b3",
+      "review_id": "L0036"
+    },
+    {
+      "inventory_key": "OHV-354CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-354cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/6fef37fa87e2272d0a12d065a74346991ec4935d7ac81b05408995d8fa523433.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-354cr/zoom/OHV-354crGris.jpg",
+      "source_sha256": "6fef37fa87e2272d0a12d065a74346991ec4935d7ac81b05408995d8fa523433",
+      "review_id": "L0037"
+    },
+    {
+      "inventory_key": "OHT-357CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-357cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/e6a2cd18c262ae90ac763bbe07b04651b75521ca4ceaa1a432fbc6384eb93fa7.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHT-357cr/zoom/OHT-357crBlanco.jpg",
+      "source_sha256": "e6a2cd18c262ae90ac763bbe07b04651b75521ca4ceaa1a432fbc6384eb93fa7",
+      "review_id": "L0038"
+    },
+    {
+      "inventory_key": "OHT-357CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-357cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/3a4e688a78a04d8c13546ac37cdafd8da971e3a773ab150fcbb66327319ca701.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHT-357cr/zoom/OHT-357crGris.jpg",
+      "source_sha256": "3a4e688a78a04d8c13546ac37cdafd8da971e3a773ab150fcbb66327319ca701",
+      "review_id": "L0039"
+    },
+    {
+      "inventory_key": "OHV-350 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-350",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/d0cd44b263e119902a31e63c77c0cd601c1adb2082a262c5e1ec3c3afe014ff5.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-350/zoom/OHV-350Blanco.jpg",
+      "source_sha256": "d0cd44b263e119902a31e63c77c0cd601c1adb2082a262c5e1ec3c3afe014ff5",
+      "review_id": "L0040"
+    },
+    {
+      "inventory_key": "OHT-355 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-355",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/fbee5493280765d53be5a63b7caeaa42f045f6b060887611950932b377a9e29b.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHT-355/zoom/OHT-355Blanco.jpg",
+      "source_sha256": "fbee5493280765d53be5a63b7caeaa42f045f6b060887611950932b377a9e29b",
+      "review_id": "L0042"
+    },
+    {
+      "inventory_key": "OHT-355 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-355",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/fb10e45d494cec40ca93803b533a501389c7e61449a898b4e042677d967fc899.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHT-355/zoom/OHT-355Gris.jpg",
+      "source_sha256": "fb10e45d494cec40ca93803b533a501389c7e61449a898b4e042677d967fc899",
+      "review_id": "L0043"
+    },
+    {
+      "inventory_key": "OHV-353CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-353cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/e85775997939e105946af4842b72e239c0da7d705d5916ff15624bbcca493160.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-353cr/zoom/OHV-353crBlanco.jpg",
+      "source_sha256": "e85775997939e105946af4842b72e239c0da7d705d5916ff15624bbcca493160",
+      "review_id": "L0044"
+    },
+    {
+      "inventory_key": "OHV-353CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-353cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/135da497b541a57f5aaea0299102f080848c649cb265ea0d6c3de46afceccdcb.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-353cr/zoom/OHV-353crGris.jpg",
+      "source_sha256": "135da497b541a57f5aaea0299102f080848c649cb265ea0d6c3de46afceccdcb",
+      "review_id": "L0045"
+    },
+    {
+      "inventory_key": "OHV-349 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-349",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/0d4dd5c8c8cd0107a4371bdb6aac46b7469e20ca5b543aa70526adfb0ad6974f.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-349/zoom/OHV-349Blanco.jpg",
+      "source_sha256": "0d4dd5c8c8cd0107a4371bdb6aac46b7469e20ca5b543aa70526adfb0ad6974f",
+      "review_id": "L0046"
+    },
+    {
+      "inventory_key": "OHV-352CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-352cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/11587db4a13a6e3bf205114f341df6975c74883029fb42f1fa7e3462558650d9.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-352cr/zoom/OHV-352crBlanco.jpg",
+      "source_sha256": "11587db4a13a6e3bf205114f341df6975c74883029fb42f1fa7e3462558650d9",
+      "review_id": "L0048"
+    },
+    {
+      "inventory_key": "OHV-352CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-352cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/4dfd1fe8f42c1a0e49e02f3ad85610c41724af310622038f4e8d5fe3fe4f0aa8.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-352cr/zoom/OHV-352crGris.jpg",
+      "source_sha256": "4dfd1fe8f42c1a0e49e02f3ad85610c41724af310622038f4e8d5fe3fe4f0aa8",
+      "review_id": "L0049"
+    },
+    {
+      "inventory_key": "OHV-348 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-348",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/dfe79d1cca46909c8dbc4ce9bd136057427e79b77b3517d06dc831f641963bb7.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-348/zoom/OHV-348Blanco.jpg",
+      "source_sha256": "dfe79d1cca46909c8dbc4ce9bd136057427e79b77b3517d06dc831f641963bb7",
+      "review_id": "L0050"
+    },
+    {
+      "inventory_key": "OHV-351CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-351cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/00a1730f170417a9148c64d7c86a3dadd6e1c43dcc652ff6a78ef99d644c0078.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-351cr/zoom/OHV-351crBlanco.jpg",
+      "source_sha256": "00a1730f170417a9148c64d7c86a3dadd6e1c43dcc652ff6a78ef99d644c0078",
+      "review_id": "L0052"
+    },
+    {
+      "inventory_key": "OHV-351CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-351cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/d7ad7a289124e72169cfe460f96c830cf08734c08fa9cea85435328c6e3c8825.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-351cr/zoom/OHV-351crGris.jpg",
+      "source_sha256": "d7ad7a289124e72169cfe460f96c830cf08734c08fa9cea85435328c6e3c8825",
+      "review_id": "L0053"
+    },
+    {
+      "inventory_key": "OHV-347 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-347",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/f7e770b1bd387d69552edb92531fb3b0f41dc2d574943ac9e9730086ee564321.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/OHV-347/zoom/OHV-347Blanco.jpg",
+      "source_sha256": "f7e770b1bd387d69552edb92531fb3b0f41dc2d574943ac9e9730086ee564321",
+      "review_id": "L0054"
+    },
+    {
+      "inventory_key": "OHV-102ALTA ARENA ALPHA",
+      "product_url": "https://www.offiho.com/visitantes-interior/alpha/visitantes-interior-alpha-modelo-OHV-102alta",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/8c5851d47a2a27aff683bc64ee4ce498da914d030b99d8bdc747155f1932caa3.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/alpha/OHV-102alta/zoom/OHV-102altaArena.jpg",
+      "source_sha256": "8c5851d47a2a27aff683bc64ee4ce498da914d030b99d8bdc747155f1932caa3",
+      "review_id": "L0058"
+    },
+    {
+      "inventory_key": "OHV-88CR BLANCO REVOLUTION",
+      "product_url": "https://www.offiho.com/visitantes-interior/revolution/visitantes-interior-revolution-modelo-OHV-88cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/f695c6018f1ce922c52d0d191f49c015f8703f7e3fee2d6a6642bb838261c819.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/revolution/OHV-88cr/zoom/OHV-88crBlanco.jpg",
+      "source_sha256": "f695c6018f1ce922c52d0d191f49c015f8703f7e3fee2d6a6642bb838261c819",
+      "review_id": "L0063"
+    },
+    {
+      "inventory_key": "OHV-88 BLANCO REVOLUTION",
+      "product_url": "https://www.offiho.com/visitantes-interior/revolution/visitantes-interior-revolution-modelo-OHV-88",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/8df4947361ac57826dfc83913b4654c1c4d671588903ad76d3696903c1d9b682.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/revolution/OHV-88/zoom/OHV-88Blanco.jpg",
+      "source_sha256": "8df4947361ac57826dfc83913b4654c1c4d671588903ad76d3696903c1d9b682",
+      "review_id": "L0065"
+    },
+    {
+      "inventory_key": "OHV-11 C/B AZUL/OCEANO CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11CB",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/e4948813b43fee7288347ff5d6f91950e8028771f62407a3046f2297bd050f30.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/ciao/OHV-11CB/zoom/OHV-11B-Azul.jpg",
+      "source_sha256": "e4948813b43fee7288347ff5d6f91950e8028771f62407a3046f2297bd050f30",
+      "review_id": "L0069"
+    },
+    {
+      "inventory_key": "OHV-11 C/B NEGRO/NEGRO CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11CB",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/4382173c9c114fcb04e14c0cb5200f509c65bb5f9004d924ab371dfa945bbd6a.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/ciao/OHV-11CB/zoom/OHV-11B-Negro.jpg",
+      "source_sha256": "4382173c9c114fcb04e14c0cb5200f509c65bb5f9004d924ab371dfa945bbd6a",
+      "review_id": "L0070"
+    },
+    {
+      "inventory_key": "OHV-11 C/B GRIS CÁLIDO/TABACO CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11CB",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/89ff64d03e39c2b42972e3c573a31f245b0e4cfac9a731d507c9a52968a6875c.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/ciao/OHV-11CB/zoom/OHV-11B-Tabaco.jpg",
+      "source_sha256": "89ff64d03e39c2b42972e3c573a31f245b0e4cfac9a731d507c9a52968a6875c",
+      "review_id": "L0071"
+    },
+    {
+      "inventory_key": "OHV-11 AZUL/OCENAO CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/46c8dc3956731215aab7a6a77cf611230667e940f060923950ce673625449f62.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/ciao/OHV-11/zoom/OHV-11-Azul.jpg",
+      "source_sha256": "46c8dc3956731215aab7a6a77cf611230667e940f060923950ce673625449f62",
+      "review_id": "L0073"
+    },
+    {
+      "inventory_key": "OHV-11 NEGRO/NEGRO CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/42ea35dce158ef529896b1491d2139226b90cf4abe595a5ed5cb308187cac650.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/ciao/OHV-11/zoom/OHV-11-Negro.jpg",
+      "source_sha256": "42ea35dce158ef529896b1491d2139226b90cf4abe595a5ed5cb308187cac650",
+      "review_id": "L0074"
+    },
+    {
+      "inventory_key": "OHV-11 TORRENTE/TORRETE OSCURO CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/dfc83ca102f91767cabaf604e2cd0466c8c776f9c9fc5bc41002f8567697a506.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/ciao/OHV-11/zoom/OHV-11-Torrento.jpg",
+      "source_sha256": "dfc83ca102f91767cabaf604e2cd0466c8c776f9c9fc5bc41002f8567697a506",
+      "review_id": "L0075"
+    },
+    {
+      "inventory_key": "OHV-11 BLANCO/GRIS CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/be33664fa05ffdd1179de431bce80fb96ef10b6a8fe6c907fd30787118862ff8.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/ciao/OHV-11/zoom/OHV-11-Blanco.jpg",
+      "source_sha256": "be33664fa05ffdd1179de431bce80fb96ef10b6a8fe6c907fd30787118862ff8",
+      "review_id": "L0076"
+    },
+    {
+      "inventory_key": "OHV-3000-N CR NEGRO INNOVA",
+      "product_url": "https://www.offiho.com/visitantes-interior/innova/visitantes-interior-innovacroma-modelo-OHV-3000cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/ab0fb6512ca028c966e035747bfbe5babd9144a8e637e8281bde4306ee545e0f.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/innova/OHV-3000cr/zoom/OHV-3000crPerla.jpg",
+      "source_sha256": "ab0fb6512ca028c966e035747bfbe5babd9144a8e637e8281bde4306ee545e0f",
+      "review_id": "L0080"
+    },
+    {
+      "inventory_key": "OHV-3000 NG NEGRO INNOVA",
+      "product_url": "https://www.offiho.com/visitantes-interior/innova/visitantes-interior-innova-modelo-OHV-3000",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/a89c6c4194e4001ae0cf471102955e84bfa3f7cfd13ebffa08aed1d76007cfc2.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/innova/OHV-3000/zoom/OHV-3000Gris.jpg",
+      "source_sha256": "a89c6c4194e4001ae0cf471102955e84bfa3f7cfd13ebffa08aed1d76007cfc2",
+      "review_id": "L0087"
+    },
+    {
+      "inventory_key": "OHV-66 AZUL PROFUNDO MILK",
+      "product_url": "https://www.offiho.com/visitantes-interior/milk/visitantes-interior-milk-modelo-OHV-66",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/252b6937911c1bff0f5efda73e3259c2a3c301330970afcd07b0b4e35de76d41.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/visitantes-interior/milk/OHV-66/zoom/OHV-66azul.jpg",
+      "source_sha256": "252b6937911c1bff0f5efda73e3259c2a3c301330970afcd07b0b4e35de76d41",
+      "review_id": "L0091"
+    },
+    {
+      "inventory_key": "OHP-380CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-380cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/4174a86abfb8e3d51daad88015b097f1b2fba8822416326f3af5db52b608c830.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-380cr/zoom/OHP-380crGris.jpg",
+      "source_sha256": "4174a86abfb8e3d51daad88015b097f1b2fba8822416326f3af5db52b608c830",
+      "review_id": "L0097"
+    },
+    {
+      "inventory_key": "OHP-378 GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-378",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/cb09c7e1e58107725bbd7ec420a19df31e7fc1c1e24058000b6d60edfba64da4.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-378/zoom/OHP-378Gris.jpg",
+      "source_sha256": "cb09c7e1e58107725bbd7ec420a19df31e7fc1c1e24058000b6d60edfba64da4",
+      "review_id": "L0098"
+    },
+    {
+      "inventory_key": "OHP-379CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-379cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/94a0643dcec7320946939a908727668bc6cf0d9c49f17db22d5acde938f6fda0.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-379cr/zoom/OHP-379crGris.jpg",
+      "source_sha256": "94a0643dcec7320946939a908727668bc6cf0d9c49f17db22d5acde938f6fda0",
+      "review_id": "L0099"
+    },
+    {
+      "inventory_key": "OHP-377 GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-377",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/9e901b2f60b544a22f1ecf9d0c2356bcfbf62f76f95488c75db7c1cf5ffb1f84.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-377/zoom/OHP-377Gris.jpg",
+      "source_sha256": "9e901b2f60b544a22f1ecf9d0c2356bcfbf62f76f95488c75db7c1cf5ffb1f84",
+      "review_id": "L0100"
+    },
+    {
+      "inventory_key": "OHP-344CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-344cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/65398b1568ad880c31c5ffe849ab50203ff647a4bca2b5520341e0ea7a8c3bd8.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-344cr/zoom/OHP-344crGris.jpg",
+      "source_sha256": "65398b1568ad880c31c5ffe849ab50203ff647a4bca2b5520341e0ea7a8c3bd8",
+      "review_id": "L0101"
+    },
+    {
+      "inventory_key": "OHP-342 GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-342",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/41611abc2797e0f3845d074d41483920bf573dce00665f07fffd492755fde237.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-342/zoom/OHP-342Gris.jpg",
+      "source_sha256": "41611abc2797e0f3845d074d41483920bf573dce00665f07fffd492755fde237",
+      "review_id": "L0103"
+    },
+    {
+      "inventory_key": "OHP-343CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-343cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/f8e0a193a2e2877df01c6cc7eb31a299cf51e23af6844e7a8227c7d08401c3a0.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-343cr/zoom/OHP-343crGris.jpg",
+      "source_sha256": "f8e0a193a2e2877df01c6cc7eb31a299cf51e23af6844e7a8227c7d08401c3a0",
+      "review_id": "L0105"
+    },
+    {
+      "inventory_key": "OHP-341 GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-341",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/c8e249e6fdad3fc20c3071359b35e1ffcfac53ae235c3f149e72b803404dec92.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-341/zoom/OHP-341Gris.jpg",
+      "source_sha256": "c8e249e6fdad3fc20c3071359b35e1ffcfac53ae235c3f149e72b803404dec92",
+      "review_id": "L0107"
+    },
+    {
+      "inventory_key": "OHP-362CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-362cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/0cf5460fd8ca28903642183cad0062d6dc5768f45af966b2c7b08beb8dffabb8.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-362cr/zoom/OHP-362crGris.jpg",
+      "source_sha256": "0cf5460fd8ca28903642183cad0062d6dc5768f45af966b2c7b08beb8dffabb8",
+      "review_id": "L0109"
+    },
+    {
+      "inventory_key": "OHP-361CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-361cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/a82b3a3456217f1e88438b1c307894206d0f01cc5b48c4e57ca7d5fb1c49c9d5.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-361cr/zoom/OHP-361crGris.jpg",
+      "source_sha256": "a82b3a3456217f1e88438b1c307894206d0f01cc5b48c4e57ca7d5fb1c49c9d5",
+      "review_id": "L0111"
+    },
+    {
+      "inventory_key": "OHP-324 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-324",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/live-visual-exact/311a597f91f0e39d072f37365f4ec8a841dca55ca104e2a4dd89d717c1c6d974.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_live_page_visual_exact",
+      "source_image_url": "https://www.offiho.com/escolar/kyos-collection/OHP-324/zoom/OHP-324negro.jpg",
+      "source_sha256": "311a597f91f0e39d072f37365f4ec8a841dca55ca104e2a4dd89d717c1c6d974",
+      "review_id": "L0115"
+    }
+  ]
+}

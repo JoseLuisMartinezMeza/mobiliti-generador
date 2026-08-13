@@ -1369,6 +1369,7 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
     const warnings = [
       ...(warning ? [warning] : []),
       ...(hasMissingPrice(item) ? ["Precio por confirmar"] : []),
+      ...(item.image_kind === "generated_reference" ? ["Imagen de referencia"] : []),
     ];
     try {
       const added = onAddCartLine(createMixedCartLine({
@@ -1388,6 +1389,7 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
           name: item.name,
           code: item.code || item.inventory_key,
           image_url: item.image_url || "",
+          image_kind: item.image_kind || (item.image_url ? "official" : "placeholder"),
           unit: item.unit,
           availability: String(item.available_quantity),
           configuration: String(item.variant || ""),
@@ -1451,6 +1453,7 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
                   <div className="product-info">
                     <div className="product-title-row"><span>{item.code}</span>{item.product_url ? <a href={item.product_url} target="_blank" rel="noreferrer noopener" aria-label={`Abrir sitio oficial de ${item.name || item.code}`} title="Abrir sitio oficial"><ExternalLink size={15} /></a> : null}</div>
                     <strong>{item.name || item.inventory_key}</strong>
+                    {item.image_kind === "generated_reference" ? <span className="supplier-badge reference offiho-generated-badge" title={item.image_label || "Referencia visual generada; no es una fotografía oficial"}>Imagen generada</span> : null}
                     <small>{item.variant || "Sin variante"} - {item.unit}</small>
                     {item.description ? <p className="offiho-description" title={item.description}>{item.description}</p> : null}
                     <div className="offiho-meta"><span>{item.unit} - {formatOffihoQuantity(item.pieces_per_box)} pzas/caja</span><strong>{hasMissingPrice(item) ? "Precio por confirmar" : formatOffihoCurrency(item.unit_price)}</strong></div>

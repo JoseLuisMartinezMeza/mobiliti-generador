@@ -1421,6 +1421,45 @@ def test_mixed_cart_preserves_review_missing_price_and_generated_reference_warni
     assert "Precio por confirmar" in lines["offiho"]["warnings"]
 
 
+def test_mixed_cart_preserves_generated_offiho_reference_warning(mixed_catalogs, rate_rows):
+    original = mixed_catalogs["offiho"]["items"][0]
+    generated = OffihoCatalogItem(
+        original.inventory_key,
+        original.code,
+        original.name,
+        original.variant,
+        original.unit,
+        original.pieces_per_box,
+        original.available_quantity,
+        original.unit_price,
+        price_source=original.price_source,
+        product_url="https://www.offiho.com/modelo/ohe-1",
+        image_url=(
+            "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/"
+            "generated-reference/ohe-1-negro.jpg"
+        ),
+        match_status="generated_visual_reference",
+        image_kind="generated_reference",
+        image_label="Imagen generada; no es fotografía oficial",
+        image_references=("OHE-1 GRIS",),
+    )
+    mixed_catalogs["offiho"]["items"] = [generated]
+    mixed_catalogs["offiho"]["by_inventory_key"] = {generated.inventory_key: generated}
+
+    payload = build_mixed_catalog_cart_payload(
+        [{"catalog": "offiho", "inventory_key": generated.inventory_key, "quantity": "1"}],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+
+    line = payload["groups"][0]["items"][0]
+    assert line["image_kind"] == "generated_reference"
+    assert "Imagen de referencia" in line["warnings"]
+
+
 def test_mixed_cart_accepts_alma_review_code_with_pending_price(mixed_catalogs, rate_rows):
     alma = mixed_catalogs["alma"]["items"][0]
     alma.update(

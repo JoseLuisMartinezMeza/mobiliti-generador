@@ -73,6 +73,7 @@ $processes += Start-HiddenProcess `
     JWT_SECRET_KEY = "dev-secret-change-me-32-chars"
     CORS_ORIGINS = "http://127.0.0.1:$WebPort"
     MOBILITI_DEV_PUBLIC_BASE_URL = "http://127.0.0.1:$ApiPort"
+    MOBILITI_DEV_WEB_BASE_URL = "http://127.0.0.1:$WebPort"
     CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos"
   }
 

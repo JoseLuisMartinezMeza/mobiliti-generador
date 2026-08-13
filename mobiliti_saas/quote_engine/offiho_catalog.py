@@ -28,6 +28,8 @@ CATALOG_SIGNIFICANT_DIGIT_LIMITS = {
 }
 MAX_JSON_NUMBER = Decimal("1000000000")
 MAX_DESCRIPTION_LENGTH = 2000
+MAX_IMAGE_METADATA_LENGTH = 4000
+OFFIHO_IMAGE_KINDS = frozenset({"official", "generated_reference", "placeholder"})
 
 
 @dataclass(frozen=True)
@@ -47,8 +49,16 @@ class OffihoCatalogItem:
     description_source: str = "inventory_label"
     match_status: str = "unmatched"
     source_updated_at: str = ""
+    image_kind: str = ""
+    image_label: str = ""
+    image_references: tuple[str, ...] = ()
+    generation_prompt: str = ""
+    generation_model: str = ""
+    image_source_sha256: str = ""
 
     def __post_init__(self) -> None:
+        if not self.image_kind:
+            object.__setattr__(self, "image_kind", "official" if self.image_url else "placeholder")
         for field in ("inventory_key", "code", "unit", "price_source", "match_status"):
             value = getattr(self, field)
             if not isinstance(value, str) or not value.strip():
@@ -60,11 +70,41 @@ class OffihoCatalogItem:
         _validate_optional_official_url("image_url", self.image_url)
         if len(self.description) > MAX_DESCRIPTION_LENGTH:
             raise ValueError("Campo Offiho demasiado largo: description")
+        if self.image_kind not in OFFIHO_IMAGE_KINDS:
+            raise ValueError("Campo Offiho invalido: image_kind")
+        for field in ("image_label", "generation_prompt", "generation_model"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or len(value) > MAX_IMAGE_METADATA_LENGTH:
+                raise ValueError(f"Campo Offiho invalido: {field}")
+        if not isinstance(self.image_references, tuple) or any(
+            not isinstance(value, str) or not value.strip() or len(value) > MAX_IMAGE_METADATA_LENGTH
+            for value in self.image_references
+        ):
+            raise ValueError("Campo Offiho invalido: image_references")
+        if self.image_source_sha256 and (
+            len(self.image_source_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.image_source_sha256)
+        ):
+            raise ValueError("Campo Offiho invalido: image_source_sha256")
+        if self.image_kind == "generated_reference" and (
+            not self.image_url or not self.image_label.strip() or not self.image_references
+        ):
+            missing = "image_label" if not self.image_label.strip() else "image_references"
+            raise ValueError(f"Campo Offiho obligatorio para imagen generada: {missing}")
+        if self.image_kind == "official" and not self.image_url:
+            raise ValueError("Imagen oficial Offiho sin image_url")
+        if self.image_kind == "placeholder" and self.image_url:
+            raise ValueError("Placeholder Offiho no puede tener image_url")
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "OffihoCatalogItem":
         if not isinstance(raw, dict):
             raise ValueError("Item Offiho invalido: se esperaba un objeto")
+        image_url = str(raw.get("image_url", "") or "").strip()
+        image_kind = str(raw.get("image_kind") or ("official" if image_url else "placeholder")).strip()
+        raw_references = raw.get("image_references", ())
+        if not isinstance(raw_references, (list, tuple)):
+            raise ValueError("Campo Offiho invalido: image_references")
         return cls(
             inventory_key=_required_text(raw, "inventory_key"),
             code=_required_text(raw, "code"),
@@ -76,11 +116,17 @@ class OffihoCatalogItem:
             unit_price=_strict_catalog_decimal(raw, "unit_price"),
             price_source=_required_text(raw, "price_source"),
             product_url=str(raw.get("product_url", "") or "").strip(),
-            image_url=str(raw.get("image_url", "") or "").strip(),
+            image_url=image_url,
             description=str(raw.get("description", "") or "").strip(),
             description_source=str(raw.get("description_source", "inventory_label") or "inventory_label").strip(),
             match_status=_required_text(raw, "match_status"),
             source_updated_at=str(raw.get("source_updated_at", "") or "").strip(),
+            image_kind=image_kind,
+            image_label=str(raw.get("image_label", "") or "").strip(),
+            image_references=tuple(str(value).strip() for value in raw_references),
+            generation_prompt=str(raw.get("generation_prompt", "") or "").strip(),
+            generation_model=str(raw.get("generation_model", "") or "").strip(),
+            image_source_sha256=str(raw.get("image_source_sha256", "") or "").strip(),
         )
 
     def to_public_dict(self) -> dict[str, Any]:
@@ -100,6 +146,12 @@ class OffihoCatalogItem:
             "description_source": self.description_source,
             "match_status": self.match_status,
             "source_updated_at": self.source_updated_at,
+            "image_kind": self.image_kind,
+            "image_label": self.image_label,
+            "image_references": list(self.image_references),
+            "generation_prompt": self.generation_prompt,
+            "generation_model": self.generation_model,
+            "image_source_sha256": self.image_source_sha256,
         }
 
 
@@ -216,6 +268,10 @@ def build_offiho_cart_payload(
                 "product_url": item.product_url,
                 "image_url": item.image_url,
                 "description": item.description,
+                "image_kind": item.image_kind,
+                "image_label": item.image_label,
+                "image_references": list(item.image_references),
+                "warnings": ["Imagen de referencia"] if item.image_kind == "generated_reference" else [],
             }
         )
 
@@ -309,12 +365,18 @@ def _validate_optional_official_url(field: str, value: Any) -> None:
         host == "web-lemon-one-45.vercel.app"
         and parsed.path.startswith("/catalog-assets/offiho/")
     )
+    is_catalog_source = (
+        field == "product_url" and host == "mobiliti11-my.sharepoint.com"
+    )
     if (
         parsed.scheme.lower() != "https"
         or parsed.username
         or parsed.password
         or port not in (None, 443)
-        or host not in OFFICIAL_IMAGE_HOSTS[OFFIHO_CART_SOURCE_TYPE]
+        or (
+            host not in OFFICIAL_IMAGE_HOSTS[OFFIHO_CART_SOURCE_TYPE]
+            and not is_catalog_source
+        )
         or (host == "web-lemon-one-45.vercel.app" and not is_catalog_asset)
     ):
         raise ValueError(f"URL Offiho no oficial: {field}")

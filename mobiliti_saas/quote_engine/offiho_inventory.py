@@ -31,34 +31,105 @@ NON_QUANTITATIVE_STOCK_STATUSES = frozenset({"CONSULTAR EXISTENCIAS", "SOBRE PED
 CODE_RE = re.compile(r"\b[A-Z]{2,}(?:-\d+[A-Z0-9]*)+", re.ASCII | re.IGNORECASE)
 VARIANT_WORDS = frozenset(
     {
+        "ABEDUL",
+        "ACEITUNA",
+        "AGAVE",
         "ALUMINIO",
+        "AMARILLA",
+        "AMARILLO",
+        "AQUA",
         "ARENA",
+        "ARENILLA",
+        "AZABACHE",
         "AZUL",
+        "AVOCADO",
         "BAJA",
         "BEIGE",
+        "BERENJENA",
         "BLANCA",
         "BLANCO",
+        "BOSQUE",
         "CAFE",
         "CALIDO",
+        "CAMEL",
+        "CAPUCCINO",
+        "CELESTE",
+        "CEREZA",
         "CEREZO",
         "CHOCOLATE",
         "CLARO",
         "CORAL",
+        "CROMADA",
+        "CROMADO",
         "CROMO",
+        "CREMA",
+        "FANGO",
+        "FUCSIA",
         "GRIS",
+        "GRISVERDE",
+        "HIELO",
+        "LADRILLO",
+        "LILA",
         "MADERA",
+        "MAMEY",
         "MARINO",
+        "MARRON",
         "MATE",
+        "MEDIO",
+        "MORADO",
+        "MOSTAZA",
         "NARANJA",
+        "NARANANJA",
         "NEGRA",
         "NEGRO",
+        "OBSCURO",
+        "OCEANO",
+        "OCENAO",
+        "OLIVO",
+        "ORO",
         "OXFORD",
+        "PANTIKAN",
+        "PERLA",
+        "PLATA",
         "PLUS",
+        "PROFUNDO",
         "ROBLE",
         "ROJA",
         "ROJO",
+        "ROSA",
+        "SALMON",
+        "TABACO",
+        "TERRACOTA",
+        "TORRENTE",
+        "TRAVERTINO",
+        "TURQUESA",
         "VERDE",
         "VINO",
+        "ZAFIRO",
+    }
+)
+CONFIGURATION_PREFIX_WORDS = frozenset(
+    {
+        "ALTA",
+        "ALTO",
+        "BAJA",
+        "B",
+        "C",
+        "CB",
+        "CR",
+        "G",
+        "GC",
+        "GL",
+        "KIDS",
+        "LOUNGE",
+        "MZ",
+        "N",
+        "NG",
+        "NR",
+        "O",
+        "R",
+        "V",
+        "W",
     }
 )
 ENRICHMENT_FIELDS = (
@@ -68,6 +139,12 @@ ENRICHMENT_FIELDS = (
     "description_source",
     "match_status",
     "source_updated_at",
+    "image_kind",
+    "image_label",
+    "image_references",
+    "generation_prompt",
+    "generation_model",
+    "image_source_sha256",
 )
 
 
@@ -396,6 +473,12 @@ def _inventory_item(raw: dict[str, Any]) -> dict[str, Any]:
         "description_source": "inventory_label",
         "match_status": "unmatched",
         "source_updated_at": "",
+        "image_kind": "placeholder",
+        "image_label": "",
+        "image_references": [],
+        "generation_prompt": "",
+        "generation_model": "",
+        "image_source_sha256": "",
     }
     item["description"] = _inventory_description(item)
     OffihoCatalogItem.from_dict(item)
@@ -491,6 +574,28 @@ def _normalize_space(value: Any) -> str:
     return " ".join(str("" if value is None else value).split())
 
 
+def _variant_word_key(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKD", _normalize_space(value).upper())
+    return re.sub(
+        r"[^A-Z0-9]",
+        "",
+        "".join(char for char in normalized if not unicodedata.combining(char)),
+    )
+
+
+_VARIANT_WORD_KEYS = frozenset(_variant_word_key(word) for word in VARIANT_WORDS)
+
+
+def _is_variant_token(value: str) -> bool:
+    parts = [part for part in re.split(r"/+", value) if part]
+    return bool(parts) and all(_variant_word_key(part) in _VARIANT_WORD_KEYS for part in parts)
+
+
+def _normalize_variant(value: str) -> str:
+    text = _normalize_space(value).upper()
+    return re.sub(r"\s*/\s*", " ", text)
+
+
 def _decimal_value(value: Any) -> Decimal | None:
     if value is None or str(value).strip() == "":
         return None
@@ -538,17 +643,43 @@ def _extract_identity(inventory_key: str) -> _OffihoIdentity:
         code = parts[0] if parts else ""
         before = ""
         after = parts[1] if len(parts) == 2 else ""
-    after_tokens = after.replace("/", " / ").split()
+    after_tokens = after.split()
+    original_after_tokens = list(after_tokens)
+    variant_start = next(
+        (
+            index
+            for index, token in enumerate(after_tokens)
+            if _is_variant_token(token)
+            and _variant_word_key(token) not in CONFIGURATION_PREFIX_WORDS
+        ),
+        len(after_tokens),
+    )
+    configuration_tokens = after_tokens[:variant_start]
+    after_tokens = after_tokens[variant_start:]
     variant_tokens: list[str] = []
     while after_tokens:
         token = after_tokens[0]
-        normalized_token = token.strip("/")
-        if normalized_token not in VARIANT_WORDS and token != "/":
+        if not _is_variant_token(token):
             break
         variant_tokens.append(after_tokens.pop(0))
-    variant = re.sub(r"\s*/\s*", " ", _normalize_space(" ".join(variant_tokens)).upper())
+    if "PLUS" in {_variant_word_key(token) for token in variant_tokens}:
+        for token in original_after_tokens:
+            token_key = _variant_word_key(token)
+            if (
+                token_key in CONFIGURATION_PREFIX_WORDS
+                or not _is_variant_token(token)
+                or token in variant_tokens
+            ):
+                continue
+            variant_tokens.append(token)
+    variant = _normalize_variant(" ".join(variant_tokens))
+    after_tokens = [token for token in after_tokens if token not in variant_tokens]
     name = _normalize_space(
-        " ".join(part for part in (before, " ".join(after_tokens)) if part)
+        " ".join(
+            part
+            for part in (before, " ".join(configuration_tokens), " ".join(after_tokens))
+            if part
+        )
     )
     return _OffihoIdentity(code=code, name=name, variant=variant)
 

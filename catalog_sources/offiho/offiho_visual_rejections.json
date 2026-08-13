@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "audit_as_of": "2026-08-12",
+  "policy": "Cada rechazo aplica unicamente al URL inspeccionado; una imagen futura distinta no queda bloqueada.",
+  "items": [
+    {
+      "inventory_key": "OHV-3000-V CR VERDE INNOVA",
+      "rejected_image_url": "https://offiho.com/visitantes-interior/innova/OHV-3000cr/colores/OHV-3000crVerde.jpg",
+      "evidence_as_of": "2026-08-12",
+      "reason": "La imagen mantiene el respaldo negro y solo cambia el tapiz del asiento a verde; el SKU exige respaldo verde.",
+      "review": "visual-v46-provisional #0418"
+    },
+    {
+      "inventory_key": "OHV-3000-R CR ROJA INNOVA",
+      "rejected_image_url": "https://offiho.com/visitantes-interior/innova/OHV-3000cr/colores/OHV-3000crRojo.jpg",
+      "evidence_as_of": "2026-08-12",
+      "reason": "La imagen mantiene el respaldo negro y solo cambia el tapiz del asiento a rojo; el SKU exige respaldo rojo.",
+      "review": "visual-v46-provisional #0421"
+    },
+    {
+      "inventory_key": "OHV-3000 W BLANCO INNOVA",
+      "rejected_image_url": "https://www.offiho.com/visitantes-interior/innova/OHV-3000/zoom/OHV-3000Blanco.jpg",
+      "evidence_as_of": "2026-08-12",
+      "reason": "La imagen mantiene respaldo y estructura negros y solo cambia el tapiz del asiento a blanco; el SKU exige respaldo blanco.",
+      "review": "visual-v46-provisional #0423"
+    },
+    {
+      "inventory_key": "OHV-3000 G GRIS INNOVA",
+      "rejected_image_url": "https://www.offiho.com/visitantes-interior/innova/OHV-3000/zoom/OHV-3000Gris.jpg",
+      "evidence_as_of": "2026-08-12",
+      "reason": "La imagen mantiene respaldo y estructura negros y solo cambia el tapiz del asiento a gris; el SKU exige respaldo gris.",
+      "review": "visual-v46-provisional #0424"
+    },
+    {
+      "inventory_key": "OHV-3000 V VERDE INNOVA",
+      "rejected_image_url": "https://offiho.com/visitantes-interior/innova/OHV-3000/colores/OHV-3000Verde.jpg",
+      "evidence_as_of": "2026-08-12",
+      "reason": "La imagen mantiene el respaldo negro y solo cambia el tapiz del asiento a verde; el SKU exige respaldo verde.",
+      "review": "visual-v46-provisional #0427"
+    },
+    {
+      "inventory_key": "OHV-3000 R ROJA INNOVA",
+      "rejected_image_url": "https://offiho.com/visitantes-interior/innova/OHV-3000/colores/OHV-3000Rojo.jpg",
+      "evidence_as_of": "2026-08-12",
+      "reason": "La imagen mantiene el respaldo negro y solo cambia el tapiz del asiento a rojo; el SKU exige respaldo rojo.",
+      "review": "visual-v46-provisional #0430"
+    },
+    {
+      "inventory_key": "VESPER/03W BLANCA",
+      "rejected_image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/0917-vesper-03w-blanca.png",
+      "evidence_as_of": "2026-08-12",
+      "reason": "El recorte esta rotulado Vesper 3A, mientras el item VESPER/03W corresponde a la configuracion Vesper 3B.",
+      "review": "visual-v46-provisional #0917"
+    }
+  ]
+}

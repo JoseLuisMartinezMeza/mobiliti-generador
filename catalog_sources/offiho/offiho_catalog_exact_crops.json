@@ -1,0 +1,1106 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "inventory_key": "ARO CROMADO CROMADO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/Documents/PROYECTOS%20CET%20-%202026/LISTAS%20DE%20PRECIOS%20PROVEEDORES/OFFIHO/CATALOGOS/COMPANY%20OFFIHO%C2%AE%EF%B8%8F+ECONOSILLAS%C2%AE%EF%B8%8F.pdf",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/aro-cromado-cromado-dd6d8849.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        42
+      ],
+      "image_sha256": "011877dcfd7680efea90fa647f9e9e5da16f0855b17235d1198361d7c4522278"
+    },
+    {
+      "inventory_key": "BRAZO-06 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-fijos-operativas/brazos-fijos-operativas-06e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazo-06-negro-0116e4bc.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "705d73a3660c31b922b39c67824c2e4718eb86234e778509643e3b3841fff2eb",
+      "image_sha256": "ec51a453eaad3059acd5ed77de7f1b524ed6c0e5390e55f91fcaa48dedb71873"
+    },
+    {
+      "inventory_key": "BRAZO-40 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-ajustables-operativas-40e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazo-40-negro-28038ab2.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "1d7e4dd63f9fc056b65f70de8db70265b037000cef13ab00f0c778aa86804d5a",
+      "image_sha256": "6840df5e2d9eb5e64b648f90642c7af57397e46d4668f0dda8846f1babbc1adb"
+    },
+    {
+      "inventory_key": "BRAZO-53 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-fijos-operativas/brazos-fijos-operativas-53e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazo-53-negro-0d1d729c.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "d3f8f5bba25709e70455b0b861901bc3ada6390815121af54980232f6cd639d6",
+      "image_sha256": "7ffef893e39e506da7d870d9f33ed9d9497e05a2c82f09a93596c36a797b96ef"
+    },
+    {
+      "inventory_key": "BRAZO-55 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-fijos-operativas/brazos-fijos-operativas-55e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazo-55-negro-233aa5ab.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "2bddacf78c789d392ddb378abc72555df1bb443ca05d2e92e828bffbd060b214",
+      "image_sha256": "929a22357b902f68adc91dc7be501d23f7674dce115bfe44858471276791b7e9"
+    },
+    {
+      "inventory_key": "BRAZO-90 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-fijos-operativas/brazos-fijos-operativas-90e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazo-90-negro-98223966.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "e93240bd63a98e5896f8b1033a0495063dd15787778d08140875cc7fa08bb92d",
+      "image_sha256": "4eaafd7175352d748ce4dfc173bbd181c165188252ed14eda971721bef4a000c"
+    },
+    {
+      "inventory_key": "BRAZOS 06 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-fijos-operativas/brazos-fijos-operativas-06e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazos-06-negro-70bbf3bc.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "705d73a3660c31b922b39c67824c2e4718eb86234e778509643e3b3841fff2eb",
+      "image_sha256": "ec51a453eaad3059acd5ed77de7f1b524ed6c0e5390e55f91fcaa48dedb71873"
+    },
+    {
+      "inventory_key": "BRAZOS 40 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-ajustables-operativas-40e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazos-40-negro-24988982.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "1d7e4dd63f9fc056b65f70de8db70265b037000cef13ab00f0c778aa86804d5a",
+      "image_sha256": "6840df5e2d9eb5e64b648f90642c7af57397e46d4668f0dda8846f1babbc1adb"
+    },
+    {
+      "inventory_key": "BRAZOS 53 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-fijos-operativas/brazos-fijos-operativas-53e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazos-53-negro-b7fc1c6d.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "d3f8f5bba25709e70455b0b861901bc3ada6390815121af54980232f6cd639d6",
+      "image_sha256": "7ffef893e39e506da7d870d9f33ed9d9497e05a2c82f09a93596c36a797b96ef"
+    },
+    {
+      "inventory_key": "BRAZOS 55 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-fijos-operativas/brazos-fijos-operativas-55e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazos-55-negro-c2e992ad.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "2bddacf78c789d392ddb378abc72555df1bb443ca05d2e92e828bffbd060b214",
+      "image_sha256": "929a22357b902f68adc91dc7be501d23f7674dce115bfe44858471276791b7e9"
+    },
+    {
+      "inventory_key": "BRAZOS 90 NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/brazos-fijos-operativas/brazos-fijos-operativas-90e",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/brazos-90-negro-94a795f1.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "e93240bd63a98e5896f8b1033a0495063dd15787778d08140875cc7fa08bb92d",
+      "image_sha256": "4eaafd7175352d748ce4dfc173bbd181c165188252ed14eda971721bef4a000c"
+    },
+    {
+      "inventory_key": "CABECERA OHE-112 GRIS",
+      "product_url": "https://www.offiho.com/ejecutivos/crew/ejecutivos-crew-modelo-OHE-112griscabecera",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/cabecera-ohe-112-gris-10d1cc2a.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        17
+      ],
+      "image_sha256": "8dfbc59b80a737b36180f4e1dbc954c002347b1766eb9c11b45decd06071bdfc"
+    },
+    {
+      "inventory_key": "CABECERA OHE-112 NEGRO",
+      "product_url": "https://www.offiho.com/ejecutivos/crew/ejecutivos-crew-modelo-OHE-112negrocabecera",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/cabecera-ohe-112-negro-538b59df.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        17
+      ],
+      "image_sha256": "901ea90ad97abb7494d64038910a57cbcb39a4dd0475a9f41c480b8800a9e187"
+    },
+    {
+      "inventory_key": "CONECTOR ALPHA NEGRO",
+      "product_url": "https://www.offiho.com/visitantes-interior/alpha/visitantes-interior-conector-alpha",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/conector-alpha-negro-d3c79148.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        57
+      ],
+      "image_sha256": "9ff44956fe71ee95ca7bd8bdad39dfad9f1f94fdca84adc676596fae115dc67e"
+    },
+    {
+      "inventory_key": "CONECTOR ISO 26 NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/Documents/PROYECTOS%20CET%20-%202026/LISTAS%20DE%20PRECIOS%20PROVEEDORES/OFFIHO/CATALOGOS/COMPANY%20OFFIHO%C2%AE%EF%B8%8F+ECONOSILLAS%C2%AE%EF%B8%8F.pdf",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/conector-iso-26-negro-046b721c.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        61
+      ],
+      "image_sha256": "68846e01ee7ceaab9a0d4f6d6a992fabf08fe3cbe65ac82d1c7d15e4c5e9d248"
+    },
+    {
+      "inventory_key": "ECONOMALLA BLANCO",
+      "product_url": "https://www.offiho.com/econosillas/econo-malla/",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/economalla-blanco-fb13cbcf.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        113
+      ],
+      "image_sha256": "304c6f161ebabd61b35096f7cf33e68177612cf427ace296c8275089805b4bb2"
+    },
+    {
+      "inventory_key": "ECONOMALLA NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/econo-malla/",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/economalla-negro-e8fdee1c.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        113
+      ],
+      "image_sha256": "f8ac4acfb35f2df89b6ccc7303eb6314bedb10dd5ef4d39c9adabd7ae0e63648"
+    },
+    {
+      "inventory_key": "ECOVISITA VISITA",
+      "product_url": "https://www.offiho.com/econosillas/eco-visita",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ecovisita-visita-21940902.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        127
+      ],
+      "image_sha256": "94c67c142871c7800cd172c197a5678e31131edbaab99977ad60554efef3f6c8"
+    },
+    {
+      "inventory_key": "GAMER-001 NEGRO DRAGON",
+      "product_url": "https://www.offihoblack.com/products/dragon",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/gamer-001-negro-dragon-dbb4695b.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        10
+      ],
+      "image_sha256": "8cdb08b8d92f58d8ded3fe246bc40a9ffe9d2543705a63c05e1eabc346eee58e"
+    },
+    {
+      "inventory_key": "ISO CON BRAZOS BRAZOS",
+      "product_url": "https://www.offiho.com/econosillas/iso-con-brazos",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/iso-con-brazos-brazos-f352278c.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        127
+      ],
+      "image_sha256": "fd0be1663956a134433f8d41e1080422a1a6f6e31e0264fd2afc94fcd4803fab"
+    },
+    {
+      "inventory_key": "ISO SIN BRAZOS BRAZOS",
+      "product_url": "https://www.offiho.com/econosillas/iso-sin-brazos",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/iso-sin-brazos-brazos-10e22609.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        127
+      ],
+      "image_sha256": "62438688043f9150c7148ced506b75d47ea4967db830f6c7902d7b2fcf193394"
+    },
+    {
+      "inventory_key": "NOVAISO CON BRAZOS NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/novaiso-con-brazos",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/novaiso-con-brazos-negro-2f706599.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        127
+      ],
+      "image_sha256": "a6495071ae156adc4b2e319c680a799e64ffe6e25a46f2e876b0cb7ff1c78db4"
+    },
+    {
+      "inventory_key": "OHE-135 PLUS GRIS YODO",
+      "product_url": "https://www.offihoblack.com/products/yodo-ohe-135plus",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-135-plus-gris-yodo-ec183b87.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        30
+      ],
+      "image_sha256": "5b83de2b75f725275d2f58deb86e799e821225dbd0d8cb098f868a8c1dff9902"
+    },
+    {
+      "inventory_key": "OHE-143 ALUMINIO AZUL ENEAS",
+      "product_url": "https://www.offihoblack.com/products/eneas-ohe-143-aluminio",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-143-aluminio-azul-eneas-61866f00.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        32
+      ],
+      "image_sha256": "de313f10e14c6538a89f2752e58d9467603251b8d9f5e92b9e29c3d7c41969d6"
+    },
+    {
+      "inventory_key": "OHE-143 NEGRO GRIS ENEAS",
+      "product_url": "https://www.offihoblack.com/products/eneas-ohe-143-negro",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-143-negro-gris-eneas-d75f5008.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        32
+      ],
+      "image_sha256": "87b5edd3e922b9390ec2b2ebe8338b025fa274ee86811b08b1dabe95fed861eb"
+    },
+    {
+      "inventory_key": "OHE-183 GRIS EQUA",
+      "product_url": "https://www.offiho.com/ejecutivos/equa/ejecutivos-equa-modelo-OHE-183gris",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-183-gris-equa-f7720717.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        16
+      ],
+      "image_sha256": "9c0e65105fa29735cb5bb9518903d464d4d0a3ba324f7c84cba7b5009565139d"
+    },
+    {
+      "inventory_key": "OHE-185 GRIS EQUA",
+      "product_url": "https://www.offiho.com/ejecutivos/equa/ejecutivos-equa-modelo-OHE-185gris",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-185-gris-equa-572b6f40.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        16
+      ],
+      "image_sha256": "076f6b011ab332d8ac9c63ccb6f424660fc907b7d72b8d6cccaf370d27fae397"
+    },
+    {
+      "inventory_key": "OHE-2005 NEGRO/OXFORD TRIPOLI",
+      "product_url": "https://www.offiho.com/ejecutivos/tripoli/ejecutivos-tripoli-modelo-OHE-2005negro-oxford",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-2005-negro-oxford-tripoli-91a11028.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "d0992d37ac2f2bab7b07a7441df938442327f9737aa58799347df71e68008dba",
+      "image_sha256": "e43211adcd5ffac3d56f084941af2787fb1abc70bedc757566b5978576cbc49b"
+    },
+    {
+      "inventory_key": "OHE-204 ALTO CAFÉ GOETZ",
+      "product_url": "https://www.offihoblack.com/products/goetz-ohe-204-alto",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-204-alto-cafe-goetz-c4f8ff67.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        36
+      ],
+      "image_sha256": "430569d1c4806c577619b5029de41cd307211908c6e0fe650e145678f31a31a1"
+    },
+    {
+      "inventory_key": "OHE-204 CAFÉ GOETZ",
+      "product_url": "https://www.offihoblack.com/products/copia-de-goetz-ohe-204",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-204-cafe-goetz-71ca9998.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        36
+      ],
+      "image_sha256": "778976e9acc73e1c5cb6ed606253875460cac2f2127e0811472a53a07e73dbb2"
+    },
+    {
+      "inventory_key": "OHE-23 AZUL PROFUNDO BLAZE",
+      "product_url": "https://www.offihoblack.com/products/blaze-ohe-23",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-23-azul-profundo-blaze-9854d865.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        23
+      ],
+      "image_sha256": "2a13d5b63343d58d76ff7c739c2be74ac1a514b5c3cb8bf80cf80a553a3f3ae2"
+    },
+    {
+      "inventory_key": "OHE-23 BLANCO BLAZE",
+      "product_url": "https://www.offihoblack.com/products/blaze-ohe-23",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-23-blanco-blaze-994385eb.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        23
+      ],
+      "image_sha256": "d2d3475afd5bb3797b1c8f2f10f32133292e67ce41b17cce12ef51d2770940dd"
+    },
+    {
+      "inventory_key": "OHE-23 NEGRO BLAZE",
+      "product_url": "https://www.offihoblack.com/products/blaze-ohe-23",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-23-negro-blaze-b220c575.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        23
+      ],
+      "image_sha256": "9687295a9b9e6ee1cc6da613e6a994a8b65b885a990a6d010d66ac37e8d6198f"
+    },
+    {
+      "inventory_key": "OHE-23 ROJO LADRILLO BLAZE",
+      "product_url": "https://www.offihoblack.com/products/blaze-ohe-23",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-23-rojo-ladrillo-blaze-84141c9f.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        23
+      ],
+      "image_sha256": "33e6cbb674a5b007e58397874dfdf0a8c8a649e7568503ef21c262e16ab80b0a"
+    },
+    {
+      "inventory_key": "OHE-505 N NEGRO GLOVE",
+      "product_url": "https://www.offihoblack.com/products/glove-ohe-505",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-505-n-negro-glove-9634aa5d.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        8
+      ],
+      "image_sha256": "ddbb1b8a1655496121639dfc981fc336a901945185c4928a852e4ec721c24441"
+    },
+    {
+      "inventory_key": "OHE-75 NEGRO VANTO",
+      "product_url": "https://www.offihoblack.com/products/vanto-ohe-75",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-75-negro-vanto-1142179b.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        34
+      ],
+      "image_sha256": "6e6cac65e2964da3a5b26d4fbd87372be4737a7eaab1cf6939f584afb21c50b9"
+    },
+    {
+      "inventory_key": "OHE-99 NEGRO/NEGRO EVOLUTION",
+      "product_url": "https://www.offiho.com/operativos/evolution/operativos-evolution-modelo-OHE-99negro",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohe-99-negro-negro-evolution-35d5f4a2.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        23
+      ],
+      "image_sha256": "8383ecc2c5fb7df2034b291b1c22afb538be815468d77a03e07241586d609b10"
+    },
+    {
+      "inventory_key": "OHI-46 NEGRO HEAVY DUTY",
+      "product_url": "https://www.offiho.com/industrial/industrial-heavydutyline-modelo-OHI-46",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohi-46-negro-heavy-duty-14924921.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        42
+      ],
+      "image_sha256": "cb74f497aa47e51838c0bc578e3b4719d570743fc40e0f0c90fff99d776164e6"
+    },
+    {
+      "inventory_key": "OHI-48 NEGRO HEAVY DUTY",
+      "product_url": "https://www.offiho.com/industrial/industrial-heavydutyline-modelo-OHI-48",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohi-48-negro-heavy-duty-d8917bce.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        43
+      ],
+      "image_sha256": "985b1eae15236aae942d7f08da6cc78250c14c804bf3d59fbc7e178035579bee"
+    },
+    {
+      "inventory_key": "OHI-49 NEGRO HEAVY DUTY",
+      "product_url": "https://www.offiho.com/industrial/industrial-heavydutyline-modelo-OHI-49",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohi-49-negro-heavy-duty-882f8291.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        44
+      ],
+      "image_sha256": "d6d6e41c1272bee7a12e0b3e8cbf98218eea9eec80c75217df49223207019bf2"
+    },
+    {
+      "inventory_key": "OHM-17 BLANCO ARA",
+      "product_url": "https://www.offihoblack.com/products/ara-desk-ohm-17-blanco",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohm-17-blanco-ara-303c8b3b.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "e476ef57c91cd88c469a5aa0d19cb9d04b2ff378d1020047aa690954730fc21c",
+      "image_sha256": "5a669375ddb305962a260cb5a33e4d45043156440981c1b1c8b22b718ef61b0b"
+    },
+    {
+      "inventory_key": "OHM-31003 GRIS FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohm-31003",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohm-31003-gris-fabrizia-4e4e777e.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        52
+      ],
+      "image_sha256": "cb0882bab97d1d4e0ec1a5a7f79358aa4c3c2965fffb44a029f36c7a4ded14bf"
+    },
+    {
+      "inventory_key": "OHM-41003 GRIS AMELIA",
+      "product_url": "https://www.offihoblack.com/products/amelia-ohm-41003",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohm-41003-gris-amelia-7ab6a874.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        54
+      ],
+      "image_sha256": "0da8590ec1d16a670e43f9c7363b766f65b6c1d2cddf0fbe617b4cd742a1985a"
+    },
+    {
+      "inventory_key": "OHM-51001 GRIS ISABELA",
+      "product_url": "https://www.offihoblack.com/products/isabela-ohm-51001",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohm-51001-gris-isabela-460fa64f.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "2a97ea76c82dfc12849a36c41f017d5955f4783d9184469a96707080461c40d0",
+      "image_sha256": "a0282e8b770092048166920abcc39662ad47edf2d883d8e37c597d7b21001c25"
+    },
+    {
+      "inventory_key": "OHM-51003 GRIS ISABELA",
+      "product_url": "https://www.offihoblack.com/products/isabela-ohm-51003",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohm-51003-gris-isabela-c2dc85be.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "1210036e79dafc6a9caf6ae4bc7d609001a3e98a87236d2004b56438d2f7ab4d",
+      "image_sha256": "0b5da08dfcf0f73d44a9874228e9fd24121455b6961875aab9805c43cf92d592"
+    },
+    {
+      "inventory_key": "OHM-60 TRAVERTINO MARBEL",
+      "product_url": "https://www.offiho.com/mesas/marbel/mesas-marbel-modelo-OHM-60",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohm-60-travertino-marbel-be702143.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "f4787bfd998daabd9773b8e48c2bc5130094b2bbfeb34862895ae69ae7652bcf",
+      "image_sha256": "884e30c9b31f653ced3129dbe59696a66932ba227f4dd465d74445904c46e3f3"
+    },
+    {
+      "inventory_key": "OHM-70 TRAVERTINO MARBEL",
+      "product_url": "https://www.offiho.com/mesas/marbel/mesas-marbel-modelo-OHM-70",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohm-70-travertino-marbel-b2de5e93.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "5d4ceae5414ff06ac1f7cc68d19a420331276c40bc67bba992cbe99918b96f00",
+      "image_sha256": "deb8d01e26745137f6bf21a4f2765e23662f829f704e83105886f2cd1d5992f1"
+    },
+    {
+      "inventory_key": "OHP-359 GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-359",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohp-359-gris-kyos-997e931b.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "95ef31ab469f4f4e2eda7448ee250156c11d2b2a74c02a96f9747f5f9bc25a14",
+      "image_sha256": "b7910ebfce8b07e30ed78fd5a7d6cac2a207422ae0a3c0be600466d0ad24ad1c"
+    },
+    {
+      "inventory_key": "OHP-360 GRIS KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-360",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohp-360-gris-kyos-f680989e.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "14bdac4cdeed5a9b6d185d7048df169e8cbb1e90dbfb0b619c6d98f80d5af0df",
+      "image_sha256": "e069f823327940ee7f3746b8240b4eea19f4c44573d3b92c9daf81145b6d6252"
+    },
+    {
+      "inventory_key": "OHP-361CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-361cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohp-361cr-negro-kyos-3c479010.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "8791e39e97cbf6dd01b958643a94df893779cb84aa9774256f0aacf368658c06",
+      "image_sha256": "732d63b8b9957cb4d9cb65dc60ece26c66b018ff25ebf9e9cbd6515b7204f03b"
+    },
+    {
+      "inventory_key": "OHP-362CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-362cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohp-362cr-negro-kyos-8e83b70e.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "b80eed6e924cafab2c46ff819e43c6b638b52f6c1bef41485e4e5c1fa7cb9ed3",
+      "image_sha256": "b9718f403dac9e8de334c0d9923afbe8c531366c30ff7e700b68a3f6b7407804"
+    },
+    {
+      "inventory_key": "OHP-377 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-377",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohp-377-negro-kyos-8f20e54d.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "f1befe89f792d5930f26e0f848b4f6088a063779815a6e969e00f7802edc1901",
+      "image_sha256": "e66797821e2514c6094004163ce26ab4dea894094ba8bbe10533e68523a38895"
+    },
+    {
+      "inventory_key": "OHP-378 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-378",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohp-378-negro-kyos-d464bd03.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "e394c7a94110d52b70fea8986d220dbd8e099bead431aa2edff9e4e4307c031e",
+      "image_sha256": "e069f823327940ee7f3746b8240b4eea19f4c44573d3b92c9daf81145b6d6252"
+    },
+    {
+      "inventory_key": "OHP-380CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/escolar/kyos-collection/escolar-kyoscollection-modelo-OHP-380cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohp-380cr-negro-kyos-b4b5de36.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "e6b7c89e5c43049a62a146bb6c23080d6af4b2adf3134cfa3757c7ee6595a71a",
+      "image_sha256": "7490532d21d93e96c0e26f296da5e6d547bf328bb623536518511b1fe32a1179"
+    },
+    {
+      "inventory_key": "OHS-42 KITCR NEGRO PROCHAIR",
+      "product_url": "https://www.offiho.com/operativos/operativos-prochair-modelo-OHS-42",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohs-42-kitcr-negro-prochair-2ed7576e.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        37
+      ],
+      "image_sha256": "68c37a3dd899cc38290e6bfad72d029fafe3385015fe7a76ba40548edffc254d"
+    },
+    {
+      "inventory_key": "OHS-42 NEGRO PROCHAIR",
+      "product_url": "https://www.offiho.com/operativos/operativos-prochair-modelo-OHS-42",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohs-42-negro-prochair-3e657c1d.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        37
+      ],
+      "image_sha256": "60d1c2e321c74f3bef6e9e3720732beb90859c9375fe0e03c31f0017e07e030d"
+    },
+    {
+      "inventory_key": "OHS-43 PLUS NEGRO PROCHAIR",
+      "product_url": "https://www.offiho.com/operativos/operativos-prochair-modelo-OHS-43",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohs-43-plus-negro-prochair-e2418f21.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        36
+      ],
+      "image_sha256": "6dbab8b5655727e0ebce24f289e29f209564b7b9f7a13d1630ab91547d602995"
+    },
+    {
+      "inventory_key": "OHT-276CR NEGRO STEP",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/Documents/PROYECTOS%20CET%20-%202026/LISTAS%20DE%20PRECIOS%20PROVEEDORES/OFFIHO/CATALOGOS/OFFIHOBLACK%C2%AE%EF%B8%8F2025.pdf",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-276cr-negro-step-48a518ab.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        58
+      ],
+      "image_sha256": "9329ac20a0bd516ced9320b1b88a1845f0ff16cafab00eff671a6a4c6e3508a5"
+    },
+    {
+      "inventory_key": "OHT-355 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-355",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-355-negro-kyos-3601f920.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "989486c7a8deb9dc03a49f0522e4f9efdc56680f59e6053c1005de2781f8463f",
+      "image_sha256": "1d05ba3d15ebd510adf7e479591c3e5386188686318a2e981e28b756456a3cc7"
+    },
+    {
+      "inventory_key": "OHT-356 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-356",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-356-negro-kyos-8484aa76.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "17b3d0ce564068457552988f5c2d1b96e34f0c2c39e682064ef2171609520048",
+      "image_sha256": "3d3cba0fd06dcfe0e27a6967933904d01778c05c5a5773f378235c79da5fdbfa"
+    },
+    {
+      "inventory_key": "OHT-357CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-357cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-357cr-negro-kyos-4f7df141.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "aa26e00643f38101756c8b9bc5f57913c2aef040dd64dcf876536d07c67f4d1f",
+      "image_sha256": "6fcd048adcf72cb5c5cc3b5152bfb56a4669e44992931ab2ab3489dfd4c09a0c"
+    },
+    {
+      "inventory_key": "OHT-358CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHT-358cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-358cr-negro-kyos-c8df03ab.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "602b2eaa68c0120ba9acb5e388cd34d47190040f711a36cf610a4beb8ee90f09",
+      "image_sha256": "4b23cc22cf3fed446799eef7a30a4b9e3dff2749048974b4a4d0a1c0b6cce3d0"
+    },
+    {
+      "inventory_key": "OHT-373 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHT-373",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-373-negro-kyos-bdeb3230.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "f87451e49327468ec5dbf7afc341ecf6a2192836908dcc40a2aacebebc7b3c6d",
+      "image_sha256": "3c0dbd6b8af0f430b035f43a47b817fb286f3c3ee69c79412cd3763250b32db1"
+    },
+    {
+      "inventory_key": "OHT-374 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHT-374",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-374-negro-kyos-0d5ce2a8.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "aeea2ba168af584aa86186ff8b06deede017783391d52541cacaed394634141a",
+      "image_sha256": "b020df9b14f3898ee8ca5135a5fac3e013c34ed34aeaae2a520f6f72ca3e346d"
+    },
+    {
+      "inventory_key": "OHT-375CR CROMADA KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHT-375cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-375cr-cromada-kyos-ed089654.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "4a30c1790fd1b4bbaeae275106df7f910fdc734bad834be3b60d23d75f4d01b6",
+      "image_sha256": "b6a511ccfabeb43adafbfca52585b49d4280dd9bdc9468dff7805b08be58d319"
+    },
+    {
+      "inventory_key": "OHT-376CR CROMADA KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHT-376cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/oht-376cr-cromada-kyos-0f58c8c9.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "372990f68830a16ca5339b1447bb3f398afd18467c863cb7f5976cea8f0efbfe",
+      "image_sha256": "7da80bf2c8f5b0aafa5f6ac7210ddf56a4a9a41635e87f1e69b65644ecf686dd"
+    },
+    {
+      "inventory_key": "OHV-11 C/B TORRENTE/TORRENTE OSCURO CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11CB",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-11-c-b-torrente-torrente-oscuro-ciao-c06cfe31.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        55
+      ],
+      "image_sha256": "d9ff73f6ed2f677b1bec7e3766157c9e1049b94a4afe39b9e60f6ce508ddfc37"
+    },
+    {
+      "inventory_key": "OHV-11 GRIS CÁLIDO/TABACO CIAO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ciao/visitantes-interior-ciao-modelo-OHV-11",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-11-gris-calido-tabaco-ciao-697ba8bb.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        55
+      ],
+      "image_sha256": "7b548b02b1682b7a8cbde0b72354a941a654789d2b7c33ce5849ddd54752450a"
+    },
+    {
+      "inventory_key": "OHV-119 CHOCOLATE BISTROT",
+      "product_url": "https://www.offiho.com/econosillas/bistrot-modelo-OHV-119",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-119-chocolate-bistrot-c46a31df.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "63ade7166279ef644437de5b7d8a2e9c428a4afa1cdabc3b804fc2a3782de58c",
+      "source_pages": [
+        91
+      ],
+      "image_sha256": "e44a2eb227d7866cd0c6c393061fb20900ebba96cc1aee0885211a69c109061a"
+    },
+    {
+      "inventory_key": "OHV-127 AZUL FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-127",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-127-azul-fabrizia-a7bd6fad.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        40
+      ],
+      "image_sha256": "61f67bb26eaf539ab90c4ecd17f1316c0943af7851915d40312961a079d618ff"
+    },
+    {
+      "inventory_key": "OHV-142 CAFÉ SILOHUETT *",
+      "product_url": "https://www.offihoblack.com/products/silhouette-ohv-142",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-142-cafe-silohuett-da043dc2.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        48
+      ],
+      "image_sha256": "2aa18ac74c777b187567304c5faa59fda47fcc965c23b8b26544da6d45a891f3"
+    },
+    {
+      "inventory_key": "OHV-144 ALUMINIO AZUL ENEAS",
+      "product_url": "https://www.offihoblack.com/products/eneas-ohv-144-aluminio",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-144-aluminio-azul-eneas-e02a12dc.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        32
+      ],
+      "image_sha256": "9f8eb3ee8a6835738a6b960727c555f736da8804a5d146e224c8e4bff68ca6c2"
+    },
+    {
+      "inventory_key": "OHV-144 NEGRO GRIS ENEAS",
+      "product_url": "https://www.offihoblack.com/products/eneas-ohv-144-negro",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-144-negro-gris-eneas-48b301e2.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        32
+      ],
+      "image_sha256": "cfafe7946df733cfac0347d0c0c8ed195b10a69f541b07df3d684fd8d3c760b5"
+    },
+    {
+      "inventory_key": "OHV-188 GRIS EQUA *",
+      "product_url": "https://www.offiho.com/ejecutivos/equa/ejecutivos-equa-modelo-OHV-188gris",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-188-gris-equa-7b9c3c01.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        16
+      ],
+      "image_sha256": "a3b976e05cca7a04c335ded88fd3c8a834edd7bc8e1948736bb1c879220dbcc7"
+    },
+    {
+      "inventory_key": "OHV-2005 NEGRO/OXFORD TRIPOLI",
+      "product_url": "https://www.offiho.com/ejecutivos/tripoli/ejecutivos-tripoli-modelo-OHV-2005negro-oxford",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-2005-negro-oxford-tripoli-35204f24.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "d294bf852a15ae73d4333acdfcdd5c64223638d6f20c3aa8a81d28ee04bed31a",
+      "image_sha256": "50b114b06de501f0767f3e87ec5df7bcc666775dd56b28fc7fb5cbc677e867e1"
+    },
+    {
+      "inventory_key": "OHV-209 CAFÉ GOETZ",
+      "product_url": "https://www.offihoblack.com/products/goetz-ohv-209",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-209-cafe-goetz-fb3f0ff8.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        36
+      ],
+      "image_sha256": "47721a7df61f1460e6755bc36fb2a7248fbf5b840a61219e21680aed59bcdfdc"
+    },
+    {
+      "inventory_key": "OHV-2200 CR CROMADA ELLITICO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ellitico-collection/visitantes-interior-elliticocollection-modelo-OHV-2200cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-2200-cr-cromada-ellitico-f14e8f36.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        61
+      ],
+      "image_sha256": "1715527a454a6d5db91471bd61efb58e94a0b0b4b910d0c5866ad9dd4b0eecc2"
+    },
+    {
+      "inventory_key": "OHV-2200 NEGRO ELLITICO",
+      "product_url": "https://www.offiho.com/visitantes-interior/ellitico-collection/visitantes-interior-elliticocollection-modelo-OHV-2200",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-2200-negro-ellitico-f5b0eee9.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        61
+      ],
+      "image_sha256": "36d3498cade4bade4970ed5ea914665f142c4d50e0f6a055331e10740c1fd51a"
+    },
+    {
+      "inventory_key": "OHV-267 GRIS STEP",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/Documents/PROYECTOS%20CET%20-%202026/LISTAS%20DE%20PRECIOS%20PROVEEDORES/OFFIHO/CATALOGOS/OFFIHOBLACK%C2%AE%EF%B8%8F2025.pdf",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-267-gris-step-430483f3.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "118fa86c3929c551a58f0c09978d65e6a1325dcc0b86decf19c0156632b984b6",
+      "source_pages": [
+        58
+      ],
+      "image_sha256": "d17255b0c1e51e20cc77085f2706248e19766c43f97ed93102e932c0503d75e9"
+    },
+    {
+      "inventory_key": "OHV-329 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-329",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-329-gris-kyos-22800ef4.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "c0d0c7f80855cbdcc53717c84e08f2bd3ee3ff56b707b9c4e71d2b038d8749a2",
+      "image_sha256": "06150c4af11d5ae9dc457decf1a57b1427879f359cd0cd4998d35a792242d1ce"
+    },
+    {
+      "inventory_key": "OHV-330 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-330",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-330-gris-kyos-084d5bed.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "4c63332066255de38f362b6909102fea3a2a0e39c319d80ba8280ca39f2a8d6c",
+      "image_sha256": "8fc600dda3337d7fbbaa90026f89ae1f93012df40ab3f37cb88ca7879d69fd51"
+    },
+    {
+      "inventory_key": "OHV-331 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-331",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-331-gris-kyos-43158c2f.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "79f8fa04dcd7d6ea369ea041395a5f5c890189415a63ed490e1c576d4fff2a1a",
+      "image_sha256": "7d3be29500bd2c3ea8d0f861a8b2aeeb6e052e02bdc8e8b45f59f7e5d188876f"
+    },
+    {
+      "inventory_key": "OHV-332 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-332",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-332-gris-kyos-a55723da.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "06d944b433a3bd055557978a9c078e3cd206774ddbf1786b9b60f00fccdc6b32",
+      "image_sha256": "e05e0dd6080d382b40251a4fd179f3a8a528080738c2f352219cc6cf32dbb857"
+    },
+    {
+      "inventory_key": "OHV-333CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-333cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-333cr-negro-kyos-4cba1ab8.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "2b4c2d51b885a2f572564436da57be10879485beea80e1287de1a19629538dce",
+      "image_sha256": "1eea7beb13852e0b490685104ee578dfffaa7759295c8017d98dc391ecc1870c"
+    },
+    {
+      "inventory_key": "OHV-334CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-334cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-334cr-negro-kyos-bb5e83fb.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "62089e05fbdad948e16cf0a73259a9043865bd44d77bee67c974a9672187ae98",
+      "image_sha256": "2bf4e43741e7614e8f8ee319bc6a3bf23041433945e841089e617da9f4426dc4"
+    },
+    {
+      "inventory_key": "OHV-335CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-335cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-335cr-negro-kyos-cb7fe4d2.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "252f1b0b4b88381eaae0fc06be9115c373be8ae77763f0debf3088d269c7c867",
+      "image_sha256": "156eeb1cbead4b9270472d4a7477b1f8fec84e94d136f2d09a77451c0785c384"
+    },
+    {
+      "inventory_key": "OHV-336CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/visitantes-interior-kyoscollection-modelo-OHV-336cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-336cr-negro-kyos-2095c870.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "25d36c4b189d000251c8617c7c5f97b310683170601a66b1d86ab7b4b44e32e3",
+      "image_sha256": "5b6878ef82b0597da841d39a4d5ba55ceabc6e57da1e1ca88c0a528a5901d0db"
+    },
+    {
+      "inventory_key": "OHV-347 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-347",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-347-gris-kyos-966667ae.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "a7e0fb2d529c08e4ebcd6e967857081caa53658d66e35446c5e6b36cc6d45ed8",
+      "image_sha256": "ea064196a1b06f9b22b737369dbe771adbc6774a42c3fe2ae73936622be4fb25"
+    },
+    {
+      "inventory_key": "OHV-348 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-348",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-348-gris-kyos-75272999.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "7eab6a2404c928edc862099eb48978da9a07f28f819ff943a730d347ab550308",
+      "image_sha256": "3a0b4e72393bbb8285b5e2ff6a47d0b67fb3dd24646d79fe401f693e4ab4b1e9"
+    },
+    {
+      "inventory_key": "OHV-349 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-349",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-349-gris-kyos-daeae690.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "ec0ffb4e3f353fcc04b391c6926bda12dee647ff52e422de781245fd136ed6cc",
+      "image_sha256": "f97bfc87a3090b22d4ee807e50cfa65c3d0c3f0f1b856e07e70e1f0741894179"
+    },
+    {
+      "inventory_key": "OHV-350 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-350",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-350-gris-kyos-db5e683a.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "a75161415134b06617ed35b7d943829895e4a1f9d9d61aa449f8f0120cb491f6",
+      "image_sha256": "715d6c41d1f95571a48e34deac74a804d585741a1f3451ca00eec52ec528d214"
+    },
+    {
+      "inventory_key": "OHV-351CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-351cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-351cr-negro-kyos-e643859b.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "d1e0420c5815b6c0fcf9450a4d398e3349a4bbcd54efa21e387a7a03d571d471",
+      "image_sha256": "a24d9c9a38ca749af1e311a8cc4bf0356daaeb205259d70f49f35a08b18c1128"
+    },
+    {
+      "inventory_key": "OHV-352CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-352cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-352cr-negro-kyos-8cee16e4.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "915998eaa1204fe9a14907f09a1c13abd86771ecc3a06c9837950bd3ccce9ef9",
+      "image_sha256": "81e14fad74ba3de70d7523a23b0664ac34a154a346a7a2fdff09f35bd348c5e1"
+    },
+    {
+      "inventory_key": "OHV-353CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-353cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-353cr-negro-kyos-6a5cb6be.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "71564c700bdd100418099b31a3d27a81bf6944dee8c0490365d839ddf42b421b",
+      "image_sha256": "ad2c876e79c704b658badc7b2014963911b0840b3aa8224c9057ef8179bb4b93"
+    },
+    {
+      "inventory_key": "OHV-354CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/visitantes-interior-kyoscollection-modelo-OHV-354cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-354cr-negro-kyos-a1f47325.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "c33753e0bac21c09431f76a74df60148dc61747c6999c7c5b1b2f3367ec3def8",
+      "image_sha256": "b43d1d666745e70cb4cf60df74df40afa3efddea745df8bdeb70dbe584f30dce"
+    },
+    {
+      "inventory_key": "OHV-365 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHV-365",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-365-gris-kyos-4b647824.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "a1650e772b0ba40867659b2af8ca4274f50ccf38726570e1f7ffae0f8e32ac3b",
+      "image_sha256": "6be0fda5046ae72293028570de7dfee6749a2d845c18db72a24fddec7ebeb460"
+    },
+    {
+      "inventory_key": "OHV-366 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHV-366",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-366-gris-kyos-47550ba7.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "197fda2df47669b0afea5f514af2d20846a354c072008443746567d43cb35262",
+      "image_sha256": "1c3fcb734fcf293139100acf0e9bbd41bd9447a242570ba409e6c0226f62e5d7"
+    },
+    {
+      "inventory_key": "OHV-367 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHV-367",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-367-gris-kyos-c8670375.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "96024dbb7daf42c2df407ec0ae2bd29a4c1b9153770c2f7502038a38aa0e380f",
+      "image_sha256": "20128efd84275138ae36511eb4ad24abcbc4df04acd6d904e01d3d4ca94524c8"
+    },
+    {
+      "inventory_key": "OHV-368 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHV-368",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-368-gris-kyos-810effbd.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "de62475cc138887517c9f24b058f613fba77cb446ffb2c539150bb989323551d",
+      "image_sha256": "62317332e97c851f3bcbc5de0ef1bbf26486ae15a586413ea772369067d1ba41"
+    },
+    {
+      "inventory_key": "OHV-369CR CROMADA KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHV-369cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-369cr-cromada-kyos-430f94dd.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "3d9a610c233eb7d1a90dfcb03ed2dd8c82b8fdf7d53596a031cac37823d9c872",
+      "image_sha256": "7ca4c886132b47c19e1b0c9c94cc7dce1e6d8cf3ca810f3db2b2698b9c6844c7"
+    },
+    {
+      "inventory_key": "OHV-370CR CROMADA KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHV-370cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-370cr-cromada-kyos-5e26aeba.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "5f41d7f375281fcb5447094af1526eb82276c2750a8024e9ed7a1526561715db",
+      "image_sha256": "86800a15013ce3f3980f2269556b2488fa225b06727588e5e2cdaf63eaaf3881"
+    },
+    {
+      "inventory_key": "OHV-371CR CROMADA KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHV-371cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-371cr-cromada-kyos-2f7ae1e7.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "afb0b450baaacdf824215ae2bd76f4630eb1e91044fd14f010357a616362f874",
+      "image_sha256": "12a26f0cb6199f0d01c3d16730231b2ea0bdaec1ac0ca23c2c25830e8aa766c5"
+    },
+    {
+      "inventory_key": "OHV-372CR CROMADA KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/visitantes-interior-kyoscollection-modelo-OHV-372cr",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-372cr-cromada-kyos-60ea27b5.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "ed4ae7e6b86911556fa101fac80da9fb7a894e83604a09295cae0af1b8026844",
+      "image_sha256": "f4b9cba4959e90747d485dcd3cbc0ea2386019100685b60ac1f1407dc32b727a"
+    },
+    {
+      "inventory_key": "OHV-78 NEGRO VANTO *",
+      "product_url": "https://www.offiho.com/directivos/directivos-vanto-modelo-OHV-78",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-78-negro-vanto-325388f8.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        9
+      ],
+      "image_sha256": "918121d773a1612f1ec33a3cad34a735baf1945ba6ac1512df77ff1495b6d882"
+    },
+    {
+      "inventory_key": "OHV-80 GRIS SHINE",
+      "product_url": "https://www.offihoblack.com/products/shine-ohv-80-alto-gris",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/ohv-80-gris-shine-f1d93616.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_web_exact_crop",
+      "source_image_sha256": "9de299e6b6eff50fff758763c33ac6cef0346b4a4bd75e80896868f1895ef158",
+      "image_sha256": "a2e08c4511b16c093678582e03ceac68e08ddf7e69bb9a64bc589bcdadd78603"
+    },
+    {
+      "inventory_key": "REGATÓN NEGRO",
+      "product_url": "https://mobiliti11-my.sharepoint.com/personal/joel_meza_mobiliti_mx/Documents/PROYECTOS%20CET%20-%202026/LISTAS%20DE%20PRECIOS%20PROVEEDORES/OFFIHO/CATALOGOS/COMPANY%20OFFIHO%C2%AE%EF%B8%8F+ECONOSILLAS%C2%AE%EF%B8%8F.pdf",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/offiho/regaton-negro-56ca5568.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_catalog_pdf_exact_crop",
+      "source_pdf_sha256": "55a48c411c09f0b0960f0c12e907a9be68e8771369af63071d3937dd8bbc264f",
+      "source_pages": [
+        42
+      ],
+      "image_sha256": "120c4a37bb03a14077b8cd2188e8f83021ef3def7ca4caa942cff2e828dc3620"
+    }
+  ]
+}

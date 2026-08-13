@@ -89,6 +89,34 @@ def test_runtime_parser_matches_legacy_inventory_values_on_checked_in_workbook()
     }
 
 
+@pytest.mark.parametrize(
+    ("inventory_key", "expected_name", "expected_variant"),
+    [
+        ("OHV-94 PLUS CR NEGRO SLING *", "CR SLING *", "PLUS NEGRO"),
+        ("OHV-20 GRIS OBSCURO CORE", "CORE", "GRIS OBSCURO"),
+        ("OHV-81 YB AMARILLO JOYOUS", "YB JOYOUS", "AMARILLO"),
+    ],
+)
+def test_runtime_identity_parser_matches_builder_for_compound_offiho_variants(
+    inventory_key,
+    expected_name,
+    expected_variant,
+):
+    from mobiliti_saas.quote_engine.offiho_inventory import _extract_identity
+    from scripts.build_offiho_catalog import extract_offiho_identity
+
+    runtime = _extract_identity(inventory_key)
+    builder = extract_offiho_identity(inventory_key)
+
+    assert (runtime.code, runtime.name, runtime.variant) == (
+        builder.code,
+        builder.name,
+        builder.variant,
+    )
+    assert runtime.name == expected_name
+    assert runtime.variant == expected_variant
+
+
 def test_runtime_identity_keeps_terminal_star_as_source_product_name(tmp_path):
     from mobiliti_saas.quote_engine.offiho_inventory import parse_offiho_inventory
 

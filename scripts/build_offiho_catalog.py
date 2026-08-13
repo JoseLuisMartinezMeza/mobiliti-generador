@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 import argparse
 import concurrent.futures
 import hashlib
@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -26,13 +27,75 @@ from pypdf import PdfReader
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from mobiliti_saas.quote_engine.offiho_inventory import (  # noqa: E402
+    parse_offiho_inventory as _parse_shared_offiho_inventory,
+)
+from mobiliti_saas.quote_engine.offiho_spec_images import (  # noqa: E402
+    extract_offiho_spec_images,
+)
+
 DEFAULT_INVENTORY_URL = "https://www.offiho.com/existencias.xls"
 DEFAULT_INVENTORY_PATH = PROJECT_ROOT / ".cache" / "offiho-existencias.xls"
 DEFAULT_CACHE_PATH = PROJECT_ROOT / ".cache" / "offiho-products.json"
 DEFAULT_OUTPUT = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" / "data" / "offiho_catalog.json"
 DEFAULT_ASSETS_DIR = PROJECT_ROOT / "mobiliti_saas" / "web" / "public" / "catalog-assets" / "offiho"
 DEFAULT_ASSET_BASE_URL = "https://web-lemon-one-45.vercel.app/catalog-assets/offiho"
-OFFICIAL_HOSTS = frozenset({"offiho.com", "www.offiho.com", "offihoblack.com", "www.offihoblack.com"})
+DEFAULT_COLOS_EXACT_MANIFEST_PATH = (
+    PROJECT_ROOT / "catalog_sources" / "offiho" / "colos_exact_images.json"
+)
+DEFAULT_OFFIHO_EXACT_MANIFEST_PATH = (
+    PROJECT_ROOT / "catalog_sources" / "offiho" / "offiho_exact_variant_images.json"
+)
+DEFAULT_OFFICIAL_WEB_VISUAL_EXACT_MANIFEST_PATHS = (
+    PROJECT_ROOT
+    / "catalog_sources"
+    / "offiho"
+    / "offiho_official_web_visual_exact_images.json",
+    PROJECT_ROOT
+    / "catalog_sources"
+    / "offiho"
+    / "offiho_live_visual_exact_images.json",
+    PROJECT_ROOT
+    / "catalog_sources"
+    / "offiho"
+    / "offiho_residual_visual_exact_images.json",
+    PROJECT_ROOT
+    / "catalog_sources"
+    / "offiho"
+    / "offiho_hidden_variant_exact_images.json",
+)
+DEFAULT_CATALOG_EXACT_CROP_MANIFEST_PATHS = (
+    PROJECT_ROOT / "catalog_sources" / "offiho" / "colos_pdf_exact_images.json",
+    PROJECT_ROOT / "catalog_sources" / "offiho" / "offiho_catalog_exact_crops.json",
+    PROJECT_ROOT / "catalog_sources" / "offiho" / "offiho_internet_exact_images.json",
+)
+DEFAULT_SPEC_VISUAL_EXACT_MANIFEST_PATHS = (
+    PROJECT_ROOT
+    / "catalog_sources"
+    / "offiho"
+    / "offiho_spec_visual_independent_exact_images.json",
+    PROJECT_ROOT
+    / "catalog_sources"
+    / "offiho"
+    / "offiho_spec_auto_audited_exact_images.json",
+)
+DEFAULT_VISUAL_REJECTION_MANIFEST_PATH = (
+    PROJECT_ROOT / "catalog_sources" / "offiho" / "offiho_visual_rejections.json"
+)
+DEFAULT_GENERATED_IMAGE_MANIFEST_PATH = (
+    PROJECT_ROOT / "catalog_sources" / "offiho" / "offiho_generated_visual_references.json"
+)
+OFFIHO_HOSTS = frozenset(
+    {"offiho.com", "www.offiho.com", "offihoblack.com", "www.offihoblack.com"}
+)
+COLOS_HOSTS = frozenset({"colos.it", "www.colos.it"})
+MANAGED_ASSET_HOSTS = frozenset({"web-lemon-one-45.vercel.app"})
+OFFICIAL_HOSTS = OFFIHO_HOSTS | COLOS_HOSTS
+SHAREPOINT_CATALOG_HOSTS = frozenset({"mobiliti11-my.sharepoint.com"})
+CATALOG_SOURCE_HOSTS = OFFICIAL_HOSTS | SHAREPOINT_CATALOG_HOSTS
 OFFIHO_CATALOG_SECTIONS = (
     "directivos",
     "ejecutivos",
@@ -48,22 +111,42 @@ OFFIHO_CATALOG_SECTIONS = (
     "escolar",
     "nuevos-productos",
 )
-SITE_SEEDS = (
+DEFAULT_SITE_SEEDS = (
     "https://www.offiho.com/",
     *(f"https://www.offiho.com/{section}/" for section in OFFIHO_CATALOG_SECTIONS),
     "https://www.offiho.com/econosillas/",
     "https://www.offihoblack.com/",
     "https://www.offiho.com/econosillas/penguin-modelo-OHV-7067F",
+    "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-malla/",
+    "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/",
+    "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-semitapizadas/",
+    "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-tapizadas/",
+)
+SITE_SEEDS = DEFAULT_SITE_SEEDS
+OFFIHO_SEARCH_TERMS = (
+    "OHE",
+    "OHV",
+    "OHS",
+    "OHI",
+    "OHT",
+    "OHR",
+    "OHM",
+    "OHP",
+    "BRAZO",
+    "GAMER",
+    "PANELO",
+    "QU",
+    "RE",
 )
 USER_AGENT = "Mobiliti Offiho Catalog Builder/1.0"
-CACHE_VERSION = 19
+CACHE_VERSION = 28
 CACHE_TTL_SECONDS = 24 * 60 * 60
 LEGACY_CACHE_TIMESTAMP = "1970-01-01T00:00:00+00:00"
-SOURCE_MANIFEST_VERSION = 4
+SOURCE_MANIFEST_VERSION = 8
 MAX_INVENTORY_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_VALIDATION_TIMEOUT = 10
-MAX_DISCOVERED_PAGES = 800
+MAX_DISCOVERED_PAGES = 2000
 FIRST_LEVEL_DISCOVERY_LIMIT = 250
 CODE_RE = re.compile(r"\b[A-Z]{2,}(?:-\d+[A-Z0-9]*)+", re.ASCII | re.IGNORECASE)
 OFFICIAL_CODE_ALIASES = {
@@ -143,44 +226,200 @@ PAGE_NAME_STOP_WORDS = frozenset(
         "VISITANTES",
     }
 )
-NON_QUANTITATIVE_STOCK_STATUSES = frozenset({"CONSULTAR EXISTENCIAS", "SOBRE PEDIDO"})
+REQUIRED_FEATURE_WORDS = frozenset(
+    {
+        "ARO",
+        "BRAZO",
+        "BRAZOS",
+        "CABECERA",
+        "CONECTOR",
+        "CUBIERTA",
+        "ESTRUCTURA",
+        "KIT",
+        "PEDESTAL",
+        "PISTON",
+    }
+)
+EXCLUSIVE_ACCESSORY_FEATURE_WORDS = frozenset(
+    {"ARO", "CABECERA", "CONECTOR", "CUBIERTA", "ESTRUCTURA", "KIT", "PEDESTAL", "PISTON"}
+)
 VARIANT_WORDS = frozenset(
     {
+        "ABEDUL",
+        "ACEITUNA",
+        "AGAVE",
         "ALUMINIO",
+        "AMARILLA",
+        "AMARILLO",
+        "AQUA",
         "ARENA",
+        "ARENILLA",
+        "AZABACHE",
         "AZUL",
+        "AVOCADO",
         "BAJA",
         "BEIGE",
+        "BERENJENA",
         "BLANCA",
         "BLANCO",
+        "BOSQUE",
         "CAFE",
         "CALIDO",
+        "CAMEL",
+        "CAPUCCINO",
+        "CELESTE",
+        "CEREZA",
         "CEREZO",
         "CHOCOLATE",
         "CLARO",
         "CORAL",
+        "CROMADA",
+        "CROMADO",
         "CROMO",
+        "CREMA",
+        "FANGO",
+        "FUCSIA",
         "GRIS",
+        "GRISVERDE",
+        "HIELO",
+        "LADRILLO",
+        "LILA",
         "MADERA",
         "MARINO",
+        "MARRON",
+        "MAMEY",
         "MATE",
+        "MEDIO",
+        "MORADO",
+        "MOSTAZA",
         "NARANJA",
+        "NARANANJA",
         "NEGRA",
         "NEGRO",
         "OXFORD",
+        "OBSCURO",
+        "OCEANO",
+        "OCENAO",
+        "OLIVO",
+        "ORO",
+        "OSCURO",
+        "PANTIKAN",
+        "PERLA",
+        "PLATA",
         "PLUS",
+        "PROFUNDO",
         "ROBLE",
         "ROJA",
         "ROJO",
+        "ROSA",
+        "SALMON",
+        "TABACO",
+        "TERRACOTA",
+        "TORRENTE",
+        "TRAVERTINO",
+        "TURQUESA",
         "VERDE",
         "VINO",
+        "ZAFIRO",
     }
 )
 VARIANT_CANONICAL_WORDS = {
+    "AZABACHE": "NEGRO",
+    "AMARILLA": "AMARILLO",
     "BLANCA": "BLANCO",
+    "CEREZA": "CEREZO",
+    "CROMADA": "CROMO",
+    "CROMADO": "CROMO",
+    "GRISVERDE": "GRIS VERDE",
+    "NARANANJA": "NARANJA",
     "NEGRA": "NEGRO",
+    "OBSCURO": "OSCURO",
+    "OCENAO": "OCEANO",
     "ROJA": "ROJO",
 }
+CONFIGURATION_PREFIX_WORDS = frozenset(
+    {
+        "ALTA",
+        "ALTO",
+        "BAJA",
+        "B",
+        "C",
+        "CB",
+        "CR",
+        "G",
+        "GC",
+        "GL",
+        "KIDS",
+        "LOUNGE",
+        "MZ",
+        "N",
+        "NG",
+        "NR",
+        "O",
+        "R",
+        "V",
+        "W",
+    }
+)
+CONFIGURATION_CODE_SUFFIX_ALIASES = {
+    "ALTA": "ALTA",
+    "ALTO": "ALTO",
+    "BAJA": "BAJA",
+    "BAJO": "BAJO",
+    "CB": "CB",
+    "CR": "CR",
+}
+
+FINISH_CODE_WORDS = frozenset({"BD", "BF", "VB", "VD", "YB", "YF"})
+FINISH_CODE_RE = re.compile(r"[A-Z]{1,2}\d+")
+
+COLOS_COLOR_ALIASES = {
+    "AUBERGINE": "BERENJENA",
+    "BLACK": "NEGRO",
+    "BLUE": "AZUL",
+    "CREAM": "CREMA",
+    "DARK BLUE": "AZUL OSCURO",
+    "DARK GREEN": "VERDE OSCURO",
+    "DARK GREY": "GRIS OSCURO",
+    "DARK GRAY": "GRIS OSCURO",
+    "FOREST GREEN": "VERDE BOSQUE",
+    "GREEN": "VERDE",
+    "GREY": "GRIS",
+    "GRAY": "GRIS",
+    "GRIGIO CALDO ECO": "GRIS CALIDO",
+    "ICE BLUE": "AZUL HIELO",
+    "LIGHT BLUE": "AZUL CLARO",
+    "MUD": "FANGO",
+    "MUSTARD": "MOSTAZA",
+    "PALE BLUE": "AZUL CLARO",
+    "RED": "ROJO",
+    "SAND": "ARENA",
+    "SENF": "MOSTAZA",
+    "TERRACOTTA": "TERRACOTA",
+    "TOBACCO": "TABACO",
+    "WHITE": "BLANCO",
+}
+COLOS_FINISH_CODE_TOKENS = frozenset(
+    {
+        "B",
+        "C",
+        "F",
+        "G",
+        "L",
+        "M",
+        "MZ",
+        "N",
+        "P",
+        "R",
+        "S",
+        "TE",
+        "TO",
+        "TR",
+        "V",
+        "W",
+        "Y",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -194,6 +433,23 @@ def normalize_space(value: Any) -> str:
     return " ".join(str("" if value is None else value).split())
 
 
+def _variant_word_key(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKD", normalize_space(value).upper())
+    return re.sub(
+        r"[^A-Z0-9]",
+        "",
+        "".join(char for char in normalized if not unicodedata.combining(char)),
+    )
+
+
+def _is_variant_token(value: str) -> bool:
+    parts = [part for part in re.split(r"/+", value) if part]
+    return bool(parts) and all(
+        _variant_word_key(part) in {_variant_word_key(word) for word in VARIANT_WORDS}
+        for part in parts
+    )
+
+
 def decimal_value(value: Any) -> Decimal | None:
     if value is None or str(value).strip() == "":
         return None
@@ -203,28 +459,6 @@ def decimal_value(value: Any) -> Decimal | None:
     except InvalidOperation:
         return None
     return parsed if parsed.is_finite() else None
-
-
-def _inventory_decimal(
-    value: Any,
-    *,
-    row_number: int,
-    column_name: str,
-    field: str,
-    required: bool,
-) -> Decimal | None:
-    if normalize_space(value) == "":
-        if not required:
-            return None
-        raise RuntimeError(
-            f"Fila {row_number}, columna {column_name}, campo {field}: valor numerico requerido"
-        )
-    parsed = decimal_value(value)
-    if parsed is None:
-        raise RuntimeError(
-            f"Fila {row_number}, columna {column_name}, campo {field}: valor numerico invalido {value!r}"
-        )
-    return parsed
 
 
 def json_number(value: Decimal) -> int | float:
@@ -244,16 +478,44 @@ def extract_offiho_identity(inventory_key: str) -> OffihoIdentity:
         before = ""
         after = parts[1] if len(parts) == 2 else ""
 
-    after_tokens = after.replace("/", " / ").split()
+    after_tokens = after.split()
+    original_after_tokens = list(after_tokens)
+    variant_start = next(
+        (
+            index
+            for index, token in enumerate(after_tokens)
+            if _is_variant_token(token)
+            and _variant_word_key(token) not in CONFIGURATION_PREFIX_WORDS
+        ),
+        len(after_tokens),
+    )
+    configuration_tokens = after_tokens[:variant_start]
+    after_tokens = after_tokens[variant_start:]
     variant_tokens: list[str] = []
     while after_tokens:
         token = after_tokens[0]
-        normalized_token = token.strip("/")
-        if normalized_token not in VARIANT_WORDS and token != "/":
+        if not _is_variant_token(token):
             break
         variant_tokens.append(after_tokens.pop(0))
+    if "PLUS" in {_variant_word_key(token) for token in variant_tokens}:
+        for token in original_after_tokens:
+            token_key = _variant_word_key(token)
+            if (
+                token_key in CONFIGURATION_PREFIX_WORDS
+                or not _is_variant_token(token)
+                or token in variant_tokens
+            ):
+                continue
+            variant_tokens.append(token)
     variant = normalize_variant(" ".join(variant_tokens))
-    name = normalize_space(" ".join(part for part in (before, " ".join(after_tokens)) if part))
+    after_tokens = [token for token in after_tokens if token not in variant_tokens]
+    name = normalize_space(
+        " ".join(
+            part
+            for part in (before, " ".join(configuration_tokens), " ".join(after_tokens))
+            if part
+        )
+    )
     return OffihoIdentity(code=code, name=name, variant=variant)
 
 
@@ -263,107 +525,11 @@ def parse_inventory_xls(path: Path) -> list[dict[str, Any]]:
 
 
 def _parse_inventory_xls(path: Path) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    items: list[dict[str, Any]] = []
-    by_inventory_key: dict[str, dict[str, Any]] = {}
-    source_row_count = 0
-    duplicate_row_count = 0
-    excluded_stock_status_count = 0
-    excluded_header_row_count = 0
-    defaulted_pieces_status_count = 0
-    excluded_blank_stock_count = 0
-    for row_number, raw_key, raw_stock, raw_pieces, raw_price in _inventory_source_rows(path):
-        inventory_key = normalize_space(raw_key).upper()
-        if not inventory_key:
-            continue
-        if _normalize_header(raw_key) == "codigo" and _normalize_header(raw_stock) == "existencia":
-            excluded_header_row_count += 1
-            continue
-        if normalize_space(raw_stock) == "":
-            excluded_blank_stock_count += 1
-            continue
-        if normalize_space(raw_stock).upper() in NON_QUANTITATIVE_STOCK_STATUSES:
-            excluded_stock_status_count += 1
-            continue
-        stock = _inventory_decimal(
-            raw_stock,
-            row_number=row_number,
-            column_name="C",
-            field="Existencia",
-            required=True,
-        )
-        source_row_count += 1
-        identity = extract_offiho_identity(inventory_key)
-        if normalize_space(raw_pieces).upper() in NON_QUANTITATIVE_STOCK_STATUSES:
-            defaulted_pieces_status_count += 1
-            pieces_per_box = Decimal("1")
-        else:
-            pieces_per_box = _inventory_decimal(
-                raw_pieces,
-                row_number=row_number,
-                column_name="D",
-                field="Piezas por Caja",
-                required=False,
-            ) or Decimal("1")
-        unit_price = _inventory_decimal(
-            raw_price,
-            row_number=row_number,
-            column_name="E",
-            field="Precio Lista 1",
-            required=False,
-        )
-        item = {
-            "inventory_key": inventory_key,
-            "code": identity.code,
-            "name": identity.name,
-            "variant": identity.variant,
-            "unit": "PZA",
-            "pieces_per_box": json_number(pieces_per_box),
-            "available_quantity": json_number(stock),
-            "unit_price": json_number(unit_price or Decimal("0")),
-            "price_source": "inventory" if unit_price is not None else "missing",
-        }
-        existing = by_inventory_key.get(inventory_key)
-        if existing is not None:
-            if existing == item:
-                duplicate_row_count += 1
-                continue
-            raise RuntimeError(f"La clave {inventory_key} aparece con datos distintos")
-        by_inventory_key[inventory_key] = item
-        items.append(item)
-    return items, {
-        "source_row_count": source_row_count,
-        "duplicate_row_count": duplicate_row_count,
-        "unique_item_count": len(items),
-        "excluded_stock_status_count": excluded_stock_status_count,
-        "excluded_header_row_count": excluded_header_row_count,
-        "defaulted_pieces_status_count": defaulted_pieces_status_count,
-        "excluded_blank_stock_count": excluded_blank_stock_count,
-    }
-
-
-def _inventory_source_rows(path: Path) -> list[tuple[int, Any, Any, Any, Any]]:
     try:
-        workbook = xlrd.open_workbook(path)
-    except xlrd.biffh.XLRDError:
-        payload = path.read_bytes()
-        if not payload.lstrip(b"\xef\xbb\xbf\x00\t\r\n ").lower().startswith((b"<!doctype html", b"<html")):
-            raise
-        return _html_inventory_rows(payload)
-
-    try:
-        sheet = workbook.sheet_by_name("Publicaci\u00f3n")
-    except xlrd.biffh.XLRDError:
-        raise RuntimeError("No se encontro la hoja Publicaci\u00f3n") from None
-    return [
-        (
-            row + 1,
-            sheet.cell_value(row, 1),
-            sheet.cell_value(row, 2),
-            sheet.cell_value(row, 3),
-            sheet.cell_value(row, 4),
-        )
-        for row in range(5, sheet.nrows)
-    ]
+        return _parse_shared_offiho_inventory(path)
+    except ValueError as exc:
+        # Mantiene el contrato historico del CLI mientras comparte el parser real.
+        raise RuntimeError(str(exc)) from exc
 
 
 class _HtmlTableParser(HTMLParser):
@@ -446,9 +612,17 @@ def _variant_lookup_keys(value: str) -> list[str]:
     keys = [canonical] if canonical else []
     if len(words) > 1 and "PLUS" in words:
         keys.append(normalize_space(" ".join(word for word in words if word != "PLUS")))
+    if len(words) > 1 and words[0] in {"MALLA", "TAPIZ", "TAPIZADO"}:
+        keys.append(normalize_space(" ".join(words[1:])))
     if canonical == "AZUL MARINO":
         keys.extend(["MARINO", "AZUL"])
     return list(dict.fromkeys(keys))
+
+
+def _identity_variant_lookup_keys(identity: OffihoIdentity) -> list[str]:
+    keys = list(_variant_lookup_keys(identity.variant))
+    keys.extend(_identity_finish_lookup_keys(identity))
+    return list(dict.fromkeys(key for key in keys if key))
 
 
 def price_key(code: str, variant: str) -> str:
@@ -739,6 +913,7 @@ def match_official_brochure_product(
         if not asset_path.is_file() or asset_path.stat().st_size <= 0:
             return {}
         return {
+            "matched_title": prefix,
             "product_url": f"{OFFICIAL_BROCHURE_URL}#page={page_number}",
             "image_url": f"{asset_base_url.rstrip('/')}/images/{asset_name}",
             "description": "",
@@ -797,6 +972,7 @@ def _materialize_pdf_record(
             image_url = f"{asset_base_url}/images/{target_image.name}"
     return {
         "unit_price": record.get("unit_price"),
+        "matched_title": str(record.get("title", "")),
         "description": str(record.get("description", "")),
         "product_url": f"{asset_base_url}/{target_pdf.name}#page={int(record['page_index']) + 1}",
         "image_url": image_url,
@@ -819,7 +995,12 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
         url = str(candidate.get("url", ""))
         image_url = _trusted_cached_image(candidate)["image_url"]
         codes = {str(code).upper() for code in candidate.get("codes", [])}
-        if not any(_official_code_matches(identity, code) for code in codes) or not is_official_url(url):
+        if (
+            not any(_official_code_matches(identity, code) for code in codes)
+            or not is_official_url(url)
+            or not _candidate_supports_identity_features(candidate, identity)
+            or not _candidate_supports_identity_configuration(candidate, identity)
+        ):
             continue
         if image_url == url:
             image_url = ""
@@ -827,6 +1008,14 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
             {
                 "url": url,
                 "image_url": image_url,
+                "codes": sorted(codes),
+                "names": sorted(
+                    {
+                        _product_name_key(name)
+                        for name in candidate.get("names", [])
+                        if _product_name_key(name)
+                    }
+                ),
                 "variant_images": _trusted_cached_variant_images(candidate),
                 "description": str(candidate.get("description", "")),
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
@@ -852,12 +1041,18 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
         url = str(candidate.get("url", ""))
         names = {_product_name_key(name) for name in candidate.get("names", [])}
         matched_name = next((name for name in name_keys if name in names), "")
-        if not matched_name or not is_official_url(url):
+        if (
+            not matched_name
+            or not is_official_url(url)
+            or not _candidate_supports_identity_features(candidate, identity)
+            or not _candidate_supports_identity_configuration(candidate, identity)
+        ):
             continue
         name_matches.append(
             {
                 "url": url,
                 "image_url": _trusted_cached_image(candidate)["image_url"],
+                "codes": sorted({str(code).upper() for code in candidate.get("codes", [])}),
                 "variant_images": _trusted_cached_variant_images(candidate),
                 "description": str(candidate.get("description", "")),
                 "source_updated_at": str(candidate.get("source_updated_at", "")),
@@ -874,26 +1069,501 @@ def match_official_product(identity: OffihoIdentity, candidates: Sequence[dict[s
     return {"url": "", "image_url": "", "description": "", "match_status": "unmatched", "source_updated_at": ""}
 
 
+def _colos_identity_model_key(identity: OffihoIdentity) -> str:
+    code = normalize_space(identity.code)
+    vesper_code = re.fullmatch(r"VESPER/0*(\d+)[A-Z]*", code, re.IGNORECASE)
+    parts = ["VESPER", str(int(vesper_code.group(1)))] if vesper_code else [code]
+    name_tokens = normalize_space(identity.name).split()
+    finish_positions = [
+        index
+        for index, token in enumerate(name_tokens)
+        if token.upper() in COLOS_FINISH_CODE_TOKENS
+    ]
+    if finish_positions:
+        # El ultimo codigo es el acabado. Los anteriores pueden pertenecer al
+        # modelo (TORRE S, STECCA L, SPLIT GL).
+        name_tokens = name_tokens[: finish_positions[-1]]
+    parts.extend(name_tokens)
+    return _product_name_key(" ".join(parts))
+
+
+def _colos_variant_image_for_identity(
+    product: dict[str, Any],
+    identity: OffihoIdentity,
+) -> str:
+    images = _trusted_cached_variant_images(product)
+    for key in _identity_variant_lookup_keys(identity):
+        metadata = images.get(key)
+        if isinstance(metadata, dict):
+            image_url = _trusted_cached_image(metadata)["image_url"]
+            if image_url:
+                return image_url
+    return ""
+
+
+def match_colos_product(
+    identity: OffihoIdentity,
+    candidates: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    model_key = _colos_identity_model_key(identity)
+    if not model_key:
+        return {
+            "url": "",
+            "image_url": "",
+            "description": "",
+            "match_status": "unmatched",
+            "source_updated_at": "",
+        }
+    matching = [
+        candidate
+        for candidate in candidates
+        if urllib.parse.urlsplit(str(candidate.get("url", ""))).hostname in COLOS_HOSTS
+        and model_key
+        in {
+            _product_name_key(name)
+            for name in candidate.get("names", [])
+            if _product_name_key(name)
+        }
+    ]
+    if len(matching) != 1:
+        return {
+            "url": "",
+            "image_url": "",
+            "description": "",
+            "match_status": "unmatched",
+            "source_updated_at": "",
+        }
+    product = matching[0]
+    image_url = _colos_variant_image_for_identity(product, identity)
+    if not image_url and not identity.variant:
+        image_url = _trusted_cached_image(product)["image_url"]
+    return {
+        "url": str(product.get("url", "")),
+        "image_url": image_url,
+        "description": str(product.get("description", "")),
+        "match_status": "official_colos_match",
+        "source_updated_at": str(product.get("source_updated_at", "")),
+        "has_variant_catalog": bool(_trusted_cached_variant_images(product)),
+    }
+
+
+def load_exact_image_manifest(
+    path: Path | None,
+    *,
+    allowed_hosts: frozenset[str],
+    allowed_image_hosts: frozenset[str] | None = None,
+    match_status: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    if path is None:
+        return {}, {"name": "", "sha256": "", "size_bytes": 0, "record_count": 0}
+    if not path.is_file():
+        raise RuntimeError(f"No existe el manifiesto de imagenes exactas: {path}")
+    payload = path.read_bytes()
+    try:
+        rows = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Manifiesto de imagenes exactas invalido: {path}") from exc
+    if isinstance(rows, dict) and rows.get("schema_version") == 1:
+        rows = rows.get("items")
+    if not isinstance(rows, list):
+        raise RuntimeError(f"El manifiesto de imagenes exactas debe contener una lista: {path}")
+    image_hosts = allowed_hosts if allowed_image_hosts is None else allowed_image_hosts
+    index: dict[str, dict[str, Any]] = {}
+    for position, raw in enumerate(rows, start=1):
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"Registro {position} invalido en {path}")
+        inventory_key = normalize_space(raw.get("inventory_key")).upper()
+        product_url = normalize_space(raw.get("product_url"))
+        image_url = normalize_space(raw.get("image_url"))
+        product_host = urllib.parse.urlsplit(product_url).hostname
+        image_host = urllib.parse.urlsplit(image_url).hostname
+        if (
+            not inventory_key
+            or inventory_key in index
+            or not _is_safe_https_url_for_hosts(product_url, allowed_hosts)
+            or product_host not in allowed_hosts
+            or not _is_safe_https_url_for_hosts(image_url, image_hosts)
+            or Path(urllib.parse.urlsplit(image_url).path).suffix.casefold()
+            not in IMAGE_EXTENSIONS
+            or image_host not in image_hosts
+        ):
+            raise RuntimeError(
+                f"Registro exacto inseguro o duplicado {position} ({inventory_key!r}) en {path}"
+            )
+        index[inventory_key] = {
+            "url": product_url,
+            "image_url": image_url,
+            "description": "",
+            "match_status": match_status,
+            "source_updated_at": normalize_space(raw.get("evidence_as_of")),
+            "has_variant_catalog": False,
+        }
+    return index, {
+        "name": path.name,
+        "sha256": _sha256_bytes(payload),
+        "size_bytes": len(payload),
+        "record_count": len(index),
+    }
+
+
+def load_generated_image_manifest(
+    path: Path | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    if path is None:
+        return {}, {"name": "", "sha256": "", "size_bytes": 0, "record_count": 0}
+    if not path.is_file():
+        raise RuntimeError(f"No existe el manifiesto de imagenes generadas: {path}")
+    payload = path.read_bytes()
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Manifiesto de imagenes generadas invalido: {path}") from exc
+    rows = document.get("items") if isinstance(document, dict) and document.get("schema_version") == 1 else None
+    generator = normalize_space(document.get("generator")) if isinstance(document, dict) else ""
+    if not isinstance(rows, list) or not generator:
+        raise RuntimeError(f"El manifiesto de imagenes generadas debe usar schema v1: {path}")
+    index: dict[str, dict[str, Any]] = {}
+    for position, raw in enumerate(rows, start=1):
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"Registro generado {position} invalido en {path}")
+        inventory_key = normalize_space(raw.get("inventory_key")).upper()
+        product_url = normalize_space(raw.get("product_url"))
+        image_url = normalize_space(raw.get("image_url"))
+        image_label = normalize_space(raw.get("image_label"))
+        reference_key = normalize_space(raw.get("reference_inventory_key")).upper()
+        reference_url = normalize_space(raw.get("reference_image_url"))
+        prompt = normalize_space(raw.get("generation_prompt"))
+        source_sha256 = normalize_space(raw.get("source_sha256")).casefold()
+        evidence_as_of = normalize_space(raw.get("evidence_as_of"))
+        review = normalize_space(raw.get("review"))
+        try:
+            datetime.fromisoformat(evidence_as_of)
+        except ValueError:
+            evidence_as_of = ""
+        if (
+            not inventory_key
+            or inventory_key in index
+            or not image_label
+            or not reference_key
+            or not prompt
+            or len(source_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in source_sha256)
+            or not evidence_as_of
+            or not review
+            or not _is_safe_https_url_for_hosts(
+                product_url, CATALOG_SOURCE_HOSTS | MANAGED_ASSET_HOSTS
+            )
+            or not _is_safe_https_url_for_hosts(image_url, MANAGED_ASSET_HOSTS)
+            or Path(urllib.parse.urlsplit(image_url).path).suffix.casefold() not in IMAGE_EXTENSIONS
+            or not _is_safe_https_url_for_hosts(
+                reference_url, CATALOG_SOURCE_HOSTS | MANAGED_ASSET_HOSTS
+            )
+        ):
+            raise RuntimeError(
+                f"Registro generado inseguro o incompleto {position} ({inventory_key!r}) en {path}"
+            )
+        index[inventory_key] = {
+            "url": product_url,
+            "image_url": image_url,
+            "description": "",
+            "match_status": "generated_visual_reference",
+            "source_updated_at": evidence_as_of,
+            "has_variant_catalog": False,
+            "image_kind": "generated_reference",
+            "image_label": image_label,
+            "image_references": [reference_key, reference_url],
+            "generation_prompt": prompt,
+            "generation_model": generator,
+            "image_source_sha256": source_sha256,
+        }
+    return index, {
+        "name": path.name,
+        "sha256": _sha256_bytes(payload),
+        "size_bytes": len(payload),
+        "record_count": len(index),
+        "generator": generator,
+    }
+
+
+def apply_generated_images(
+    items: Sequence[dict[str, Any]],
+    generated_images: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Rellena únicamente vacíos; una evidencia oficial siempre conserva prioridad."""
+
+    for item in items:
+        if item.get("image_url"):
+            item["image_kind"] = "official"
+            continue
+        generated = generated_images.get(normalize_space(item.get("inventory_key")).upper())
+        if not generated:
+            item["image_kind"] = "placeholder"
+            continue
+        item["product_url"] = item.get("product_url") or generated.get("url", "")
+        for field in (
+            "image_url",
+            "match_status",
+            "source_updated_at",
+            "image_kind",
+            "image_label",
+            "image_references",
+            "generation_prompt",
+            "generation_model",
+            "image_source_sha256",
+        ):
+            item[field] = generated.get(field, "")
+
+
+def load_visual_rejection_manifest(
+    path: Path | None,
+    *,
+    inventory_keys: set[str] | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Carga rechazos visuales ligados a una URL concreta.
+
+    El rechazo no bloquea futuras fotografías correctas: sólo retira el URL
+    que fue inspeccionado y declarado conflictivo en el manifiesto.
+    """
+
+    if path is None:
+        return {}, {"name": "", "sha256": "", "size_bytes": 0, "record_count": 0}
+    if not path.is_file():
+        raise RuntimeError(f"No existe el manifiesto de rechazos visuales: {path}")
+    payload = path.read_bytes()
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Manifiesto de rechazos visuales invalido: {path}") from exc
+    rows = document.get("items") if isinstance(document, dict) and document.get("schema_version") == 1 else None
+    if not isinstance(rows, list):
+        raise RuntimeError(f"El manifiesto de rechazos visuales debe usar schema v1: {path}")
+    allowed_image_hosts = OFFICIAL_HOSTS | MANAGED_ASSET_HOSTS
+    index: dict[str, dict[str, Any]] = {}
+    seen_pairs: set[tuple[str, str]] = set()
+    for position, raw in enumerate(rows, start=1):
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"Rechazo visual {position} invalido en {path}")
+        inventory_key = normalize_space(raw.get("inventory_key")).upper()
+        image_url = normalize_space(raw.get("rejected_image_url"))
+        reason = normalize_space(raw.get("reason"))
+        evidence_as_of = normalize_space(raw.get("evidence_as_of"))
+        review = normalize_space(raw.get("review"))
+        try:
+            parsed_evidence_date = datetime.fromisoformat(evidence_as_of)
+        except ValueError:
+            parsed_evidence_date = None
+        is_safe_url = _is_safe_https_url_for_hosts(image_url, allowed_image_hosts)
+        canonical_image_url = (
+            _canonical_visual_rejection_url(image_url) if is_safe_url else ""
+        )
+        pair = (inventory_key, canonical_image_url)
+        if (
+            not inventory_key
+            or not reason
+            or not review
+            or parsed_evidence_date is None
+            or (inventory_keys is not None and inventory_key not in inventory_keys)
+            or pair in seen_pairs
+            or not is_safe_url
+            or Path(urllib.parse.urlsplit(image_url).path).suffix.casefold()
+            not in IMAGE_EXTENSIONS
+        ):
+            raise RuntimeError(
+                f"Rechazo visual inseguro o duplicado {position} ({inventory_key!r}) en {path}"
+            )
+        seen_pairs.add(pair)
+        record = index.setdefault(inventory_key, {"image_urls": set(), "reason": reason})
+        record["image_urls"].add(canonical_image_url)
+    return index, {
+        "name": path.name,
+        "sha256": _sha256_bytes(payload),
+        "size_bytes": len(payload),
+        "record_count": len(seen_pairs),
+    }
+
+
+def apply_visual_rejections(
+    items: Sequence[dict[str, Any]],
+    rejections: Mapping[str, Mapping[str, Any]],
+) -> None:
+    for item in items:
+        image_url = normalize_space(item.get("image_url"))
+        if _is_visual_rejected(item.get("inventory_key"), image_url, rejections):
+            item["image_url"] = ""
+            item["match_status"] = "visual_conflict_rejected"
+
+
+def _canonical_visual_rejection_url(value: Any) -> str:
+    """Normaliza equivalencias HTTP sin confundir una imagen versionada.
+
+    La ruta y la consulta permanecen intactas; sÃ³lo se normalizan esquema/host,
+    el puerto HTTPS implÃ­cito, el alias www de Offiho y el fragmento local.
+    """
+
+    url = normalize_space(value)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return url
+    host = (parsed.hostname or "").casefold()
+    official_aliases = {
+        "www.offiho.com": "offiho.com",
+        "www.offihoblack.com": "offihoblack.com",
+        "www.colos.it": "colos.it",
+    }
+    host = official_aliases.get(host, host)
+    netloc = host if port in {None, 443} else f"{host}:{port}"
+    return urllib.parse.urlunsplit(
+        (parsed.scheme.casefold(), netloc, parsed.path, parsed.query, "")
+    )
+
+
+def _is_visual_rejected(
+    inventory_key: Any,
+    image_url: Any,
+    rejections: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    rejection = rejections.get(normalize_space(inventory_key).upper())
+    url = normalize_space(image_url)
+    if not rejection or not url:
+        return False
+    rejected_urls = {
+        _canonical_visual_rejection_url(candidate)
+        for candidate in rejection.get("image_urls", set())
+    }
+    return _canonical_visual_rejection_url(url) in rejected_urls
+
+
+def _first_non_rejected_product(
+    inventory_key: str,
+    candidates: Sequence[Mapping[str, Any] | None],
+    rejections: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    """Elige por precedencia sin permitir que un rechazo tape una fuente inferior."""
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if _is_visual_rejected(inventory_key, candidate.get("image_url"), rejections):
+            continue
+        return dict(candidate)
+    return None
+
+
+def _without_rejected_product_image(
+    inventory_key: str,
+    product: Mapping[str, Any],
+    rejections: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    sanitized = dict(product)
+    if _is_visual_rejected(inventory_key, sanitized.get("image_url"), rejections):
+        sanitized["image_url"] = ""
+        sanitized["match_status"] = "visual_conflict_rejected"
+    return sanitized
+
+
+def _without_rejected_candidate_images(
+    inventory_key: str,
+    candidate: Mapping[str, Any],
+    rejections: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Retira evidencia rechazada antes de que el ranking elija un candidato."""
+
+    sanitized = dict(candidate)
+    if _is_visual_rejected(inventory_key, sanitized.get("image_url"), rejections):
+        sanitized.update(_empty_image_metadata())
+    raw_variants = sanitized.get("variant_images")
+    if isinstance(raw_variants, dict):
+        sanitized["variant_images"] = {
+            key: metadata
+            for key, metadata in raw_variants.items()
+            if not isinstance(metadata, Mapping)
+            or not _is_visual_rejected(
+                inventory_key,
+                metadata.get("image_url"),
+                rejections,
+            )
+        }
+    return sanitized
+
+
 def _official_code_matches(identity: OffihoIdentity, candidate_code: str) -> bool:
     candidate = str(candidate_code or "").upper()
     if not candidate:
         return False
-    variant_tokens = {
-        re.sub(r"[^A-Z0-9]", "", token)
-        for token in str(identity.variant or "").upper().split()
-    }
-    compound_variant = re.sub(r"[^A-Z0-9]", "", str(identity.variant or "").upper())
-    if compound_variant:
-        variant_tokens.add(compound_variant)
+    requested_suffixes = _identity_requested_code_suffixes(identity)
     for target in _identity_code_targets(identity):
         if candidate == target:
             return True
         if not candidate.startswith(target):
             continue
         suffix = re.sub(r"[^A-Z0-9]", "", candidate[len(target) :])
-        if suffix and suffix in variant_tokens:
+        if suffix and suffix in requested_suffixes:
             return True
     return False
+
+
+def _identity_configuration_code_suffixes(identity: OffihoIdentity) -> set[str]:
+    name = unicodedata.normalize("NFKD", str(identity.name or "").upper())
+    name = name.encode("ascii", "ignore").decode("ascii")
+    suffixes: set[str] = set()
+    if re.search(r"\bC\s*/\s*B\b", name) or re.search(r"\bCON\s+BRAZOS?\b", name):
+        suffixes.add("CB")
+    for token in re.findall(r"[A-Z0-9]+", name):
+        suffix = CONFIGURATION_CODE_SUFFIX_ALIASES.get(token)
+        if suffix:
+            suffixes.add(suffix)
+    return suffixes
+
+
+def _identity_requested_code_suffixes(identity: OffihoIdentity) -> set[str]:
+    ordered_variant_suffixes = [
+        re.sub(r"[^A-Z0-9]", "", token)
+        for token in str(identity.variant or "").upper().split()
+        if re.sub(r"[^A-Z0-9]", "", token)
+    ]
+    variant_suffixes = set(ordered_variant_suffixes)
+    compound_variant = "".join(ordered_variant_suffixes)
+    if compound_variant:
+        variant_suffixes.add(compound_variant)
+    variant_suffixes.discard("")
+    configuration_suffixes = _identity_configuration_code_suffixes(identity)
+    combined = {
+        configuration + variant
+        for configuration in configuration_suffixes
+        for variant in variant_suffixes
+    } | {
+        variant + configuration
+        for configuration in configuration_suffixes
+        for variant in variant_suffixes
+    }
+    if compound_variant:
+        for configuration in configuration_suffixes:
+            combined.add(compound_variant + configuration)
+            if len(ordered_variant_suffixes) > 1:
+                combined.add(
+                    ordered_variant_suffixes[0]
+                    + configuration
+                    + "".join(ordered_variant_suffixes[1:])
+                )
+    return variant_suffixes | configuration_suffixes | combined
+
+
+def _candidate_configuration_code_rank(product: dict[str, Any], identity: OffihoIdentity) -> int:
+    requested = _identity_configuration_code_suffixes(identity)
+    if not requested:
+        return 0
+    rank = 0
+    for raw_code in product.get("codes", []):
+        candidate = str(raw_code or "").upper()
+        for target in _identity_code_targets(identity):
+            if not candidate.startswith(target):
+                continue
+            suffix = re.sub(r"[^A-Z0-9]", "", candidate[len(target) :])
+            if suffix in requested or any(suffix.startswith(value) for value in requested):
+                rank = max(rank, 1)
+    return rank
 
 
 def _select_official_product(
@@ -901,19 +1571,70 @@ def _select_official_product(
     matches: Sequence[dict[str, Any]],
     match_status: str,
 ) -> dict[str, Any]:
-    def url_rank(product: dict[str, Any]) -> tuple[int, int, int, int, str]:
+    def url_rank(product: dict[str, Any]) -> tuple[Any, ...]:
         url = product["url"]
         path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
         compact_path = re.sub(r"[^A-Z0-9]", "", path.upper())
         compact_code = re.sub(r"[^A-Z0-9]", "", identity.code.upper())
         leaf_name = _product_name_key(path.rstrip("/").rsplit("/", 1)[-1], codes=[identity.code])
         name_key = product.get("matched_name") or _product_name_key(identity.name)
+        identity_name_tokens = set(str(name_key).split())
+        candidate_names = {
+            _product_name_key(name)
+            for name in product.get("names", [])
+            if _product_name_key(name)
+        }
+        name_exact = int(bool(name_key and name_key in candidate_names))
+        name_token_equal = int(
+            bool(identity_name_tokens)
+            and any(set(candidate.split()) == identity_name_tokens for candidate in candidate_names)
+        )
+        name_overlap = max(
+            (len(identity_name_tokens & set(candidate.split())) for candidate in candidate_names),
+            default=0,
+        )
+        name_difference = min(
+            (len(identity_name_tokens ^ set(candidate.split())) for candidate in candidate_names),
+            default=999,
+        )
+        requested_variant_tokens = set(
+            re.findall(
+                r"[A-Z0-9]+",
+                " ".join(_variant_lookup_keys(identity.variant)),
+            )
+        )
+        candidate_variant_tokens = set(
+            re.findall(
+                r"[A-Z0-9]+",
+                unicodedata.normalize(
+                    "NFKD",
+                    f"{' '.join(candidate_names)} {urllib.parse.unquote(path)}".upper(),
+                ).encode("ascii", "ignore").decode("ascii"),
+            )
+        )
+        variant_word_overlap = len(requested_variant_tokens & candidate_variant_tokens)
+        configuration_specific = _candidate_configuration_code_rank(product, identity)
+        requested_configuration_suffixes = _identity_configuration_code_suffixes(identity)
+        configuration_path_specific = int(
+            any(
+                _compact_variant_value(target + suffix) in compact_path
+                for target in _identity_code_targets(identity)
+                for suffix in requested_configuration_suffixes
+            )
+        )
+        product_code_specific = int(
+            any(
+                _compact_variant_value(code) in compact_path
+                for code in product.get("codes", [])
+                if _compact_variant_value(code)
+            )
+        )
         if match_status == "official_code_match":
             variant_specific = int(
                 bool(identity.variant)
                 and any(
                     key and compact_code + key in compact_path
-                    for key in map(_compact_variant_value, _variant_lookup_keys(identity.variant))
+                    for key in map(_compact_variant_value, _identity_variant_lookup_keys(identity))
                 )
             )
             primary = int(bool(compact_code and compact_code in compact_path))
@@ -924,27 +1645,57 @@ def _select_official_product(
             primary = int(bool(name_key and leaf_name == name_key))
             secondary = -path.count("/")
             depth = int(bool(product.get("image_url")))
-        return variant_specific, primary, secondary, depth, url
+        return (
+            configuration_path_specific,
+            configuration_specific,
+            product_code_specific,
+            name_exact,
+            name_token_equal,
+            variant_word_overlap,
+            name_overlap,
+            -name_difference,
+            variant_specific,
+            primary,
+            secondary,
+            depth,
+            url,
+        )
 
     url_product = max(matches, key=url_rank)
+    scoped_matches = [
+        product
+        for product in matches
+        if _same_official_product_scope(product, url_product)
+    ]
     variant_image_products = [
         (product, _variant_image_for_identity(product, identity))
-        for product in matches
+        for product in scoped_matches
     ]
     variant_image_products = [pair for pair in variant_image_products if pair[1]]
     has_variant_catalog = any(
         _product_targets_identity(product, identity)
         and bool(_trusted_cached_variant_images(product))
-        for product in matches
+        for product in scoped_matches
     )
     if variant_image_products:
         image_url = max(variant_image_products, key=lambda pair: url_rank(pair[0]))[1]
     else:
         image_products = [
             product
-            for product in matches
+            for product in scoped_matches
             if product.get("image_url")
-            and not _image_conflicts_with_identity_variant(str(product["image_url"]), identity)
+            and not _image_has_conflicting_product_code(str(product["image_url"]), identity)
+            and (
+                not _image_conflicts_with_identity_variant(str(product["image_url"]), identity)
+                or _product_targets_exact_variant(product, identity)
+            )
+            and not _image_conflicts_with_identity_configuration(str(product["image_url"]), identity)
+            and _generic_product_supports_identity_variant(product, identity)
+            and (
+                not has_variant_catalog
+                or not identity.variant
+                or _product_targets_exact_variant(product, identity)
+            )
             and (
                 product.get("curated_name_match") is True
                 or _product_targets_identity(product, identity)
@@ -952,7 +1703,9 @@ def _select_official_product(
             )
         ]
         image_url = str(max(image_products, key=url_rank)["image_url"]) if image_products else ""
-    description_products = [product for product in matches if product.get("description")]
+    description_products = [product for product in scoped_matches if product.get("description")]
+    if not description_products:
+        description_products = [product for product in matches if product.get("description")]
     description = max(description_products, key=url_rank)["description"] if description_products else ""
     return {
         "url": url_product["url"],
@@ -964,23 +1717,106 @@ def _select_official_product(
     }
 
 
+def _same_official_product_scope(
+    candidate: dict[str, Any],
+    selected: dict[str, Any],
+) -> bool:
+    def url_key(product: dict[str, Any]) -> tuple[str, str]:
+        parsed = urllib.parse.urlsplit(str(product.get("url", "")))
+        host = str(parsed.hostname or "").casefold().removeprefix("www.")
+        path = urllib.parse.unquote(parsed.path).casefold().rstrip("/")
+        return host, path
+
+    if url_key(candidate) == url_key(selected):
+        return True
+    candidate_codes = {str(code).upper() for code in candidate.get("codes", []) if str(code).strip()}
+    selected_codes = {str(code).upper() for code in selected.get("codes", []) if str(code).strip()}
+    candidate_names = {
+        _product_name_key(name)
+        for name in candidate.get("names", [])
+        if _product_name_key(name)
+    }
+    selected_names = {
+        _product_name_key(name)
+        for name in selected.get("names", [])
+        if _product_name_key(name)
+    }
+    return bool(
+        candidate_codes
+        and candidate_codes == selected_codes
+        and candidate_names
+        and candidate_names == selected_names
+    )
+
+
 def _variant_image_for_identity(product: dict[str, Any], identity: OffihoIdentity) -> str:
     if not _product_targets_identity(product, identity):
         return ""
     images = product.get("variant_images", {})
     if not isinstance(images, dict):
         return ""
-    for key in _variant_lookup_keys(identity.variant):
+    identity_keys = _identity_variant_lookup_keys(identity)
+    finish_keys = _identity_finish_lookup_keys(identity)
+    for key in [*finish_keys, *(key for key in identity_keys if key not in finish_keys)]:
         metadata = images.get(key)
         if isinstance(metadata, dict):
             image_url = _trusted_cached_image(metadata)["image_url"]
-            if image_url and _image_targets_identity(image_url, identity):
-                return image_url
+            product_host = urllib.parse.urlsplit(str(product.get("url", ""))).hostname
+            exact_shopify_variant_binding = bool(
+                image_url
+                and product_host in {"offihoblack.com", "www.offihoblack.com"}
+                and _single_code_product_targets_identity(product, identity)
+            )
+            if image_url and (
+                _image_targets_identity(image_url, identity)
+                or _single_code_product_targets_identity(product, identity)
+            ) and (
+                exact_shopify_variant_binding
+                or not _image_has_conflicting_product_code(image_url, identity)
+            ):
+                if not _image_conflicts_with_identity_configuration(image_url, identity):
+                    return image_url
     return ""
 
 
 def _product_targets_identity(product: dict[str, Any], identity: OffihoIdentity) -> bool:
-    return _image_targets_identity(str(product.get("url", "")), identity)
+    return (
+        _single_code_product_targets_identity(product, identity)
+        or _image_targets_identity(str(product.get("url", "")), identity)
+    )
+
+
+def _single_code_product_targets_identity(
+    product: dict[str, Any],
+    identity: OffihoIdentity,
+) -> bool:
+    codes = {
+        str(code).upper()
+        for code in product.get("codes", [])
+        if str(code).strip()
+    }
+    return len(codes) == 1 and any(
+        _official_code_matches(identity, code)
+        for code in codes
+    )
+
+
+def _product_targets_exact_variant(product: dict[str, Any], identity: OffihoIdentity) -> bool:
+    variant_keys = [_compact_variant_value(key) for key in _identity_variant_lookup_keys(identity)]
+    if not any(variant_keys):
+        return False
+    compact_codes = [
+        _compact_variant_value(code)
+        for code in _identity_code_targets(identity)
+        if _compact_variant_value(code)
+    ]
+    for value in (str(product.get("url", "")), str(product.get("image_url", ""))):
+        compact_path = _compact_variant_value(
+            urllib.parse.unquote(urllib.parse.urlsplit(value).path)
+        )
+        if any(code + variant in compact_path for code in compact_codes for variant in variant_keys):
+            return True
+    return False
 
 
 def _image_targets_identity(value: str, identity: OffihoIdentity) -> bool:
@@ -995,18 +1831,151 @@ def _image_targets_identity(value: str, identity: OffihoIdentity) -> bool:
     )
 
 
-def _image_conflicts_with_identity_variant(value: str, identity: OffihoIdentity) -> bool:
-    requested = set(_variant_lookup_keys(identity.variant))
-    if not requested:
+def _image_has_conflicting_product_code(value: str, identity: OffihoIdentity) -> bool:
+    stem = Path(urllib.parse.unquote(urllib.parse.urlsplit(value).path)).stem.upper()
+    referenced_codes = {match.group(0).upper() for match in CODE_RE.finditer(stem)}
+    target_codes = {
+        _compact_variant_value(code)
+        for code in _identity_code_targets(identity)
+        if _compact_variant_value(code)
+    }
+    return bool(
+        referenced_codes
+        and not any(
+            _compact_variant_value(referenced_code).startswith(target)
+            for referenced_code in referenced_codes
+            for target in target_codes
+        )
+    )
+
+
+def _image_conflicts_with_identity_configuration(value: str, identity: OffihoIdentity) -> bool:
+    requested_tokens = set(re.findall(r"\b(?:G|B|W|N|R|V|O)\d+\b", str(identity.name or "").upper()))
+    if not requested_tokens:
         return False
-    labeled = set(_variant_keys_from_image_reference(value, _identity_code_targets(identity)))
-    return bool(labeled and requested.isdisjoint(labeled))
+    image_text = urllib.parse.unquote(urllib.parse.urlsplit(value).path).upper()
+    labeled_tokens = set(re.findall(r"(?:^|[^A-Z0-9])((?:G|B|W|N|R|V|O)\d+)(?=[^A-Z0-9]|[A-Z])", image_text))
+    return bool(labeled_tokens and requested_tokens.isdisjoint(labeled_tokens))
+
+
+def _generic_product_supports_identity_variant(
+    product: dict[str, Any],
+    identity: OffihoIdentity,
+) -> bool:
+    if not identity.variant and _identity_has_ambiguous_finish_codes(identity):
+        return False
+    requested_keys = [
+        tuple(key.split())
+        for key in _identity_variant_lookup_keys(identity)
+        if key
+    ]
+    if not requested_keys:
+        return True
+    codes = list(product.get("codes", [])) or list(_identity_code_targets(identity))
+    requested_suffixes = {_compact_variant_value(" ".join(key)) for key in requested_keys}
+    for raw_code in codes:
+        candidate_code = _compact_variant_value(raw_code)
+        for target in map(_compact_variant_value, _identity_code_targets(identity)):
+            if candidate_code.startswith(target) and candidate_code[len(target) :] in requested_suffixes:
+                return True
+    for value in (str(product.get("image_url", "")), str(product.get("url", ""))):
+        labeled_keys = [
+            tuple(key.split())
+            for key in _variant_keys_from_image_reference(value, codes)
+            if key
+        ]
+        if labeled_keys:
+            return any(requested == labeled for requested in requested_keys for labeled in labeled_keys)
+
+    name_keys = _variant_keys_from_free_text(" ".join(str(name) for name in product.get("names", [])))
+    if name_keys:
+        return any(tuple(key.split()) in requested_keys for key in name_keys)
+
+    if len(requested_keys[0]) != len(set(requested_keys[0])):
+        return False
+    description_words = _explicit_variant_words_from_description(str(product.get("description", "")))
+    return any(set(requested) == description_words for requested in requested_keys)
+
+
+def _variant_keys_from_free_text(value: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKD", str(value or "").upper())
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    variant_words = {
+        _compact_variant_value(word): word
+        for word in VARIANT_WORDS
+        if _compact_variant_value(word)
+    }
+    words = [
+        variant_words[token]
+        for token in re.findall(r"[A-Z0-9]+", ascii_text)
+        if token in variant_words
+    ]
+    return _variant_lookup_keys(" ".join(words))
+
+
+def _explicit_variant_words_from_description(value: str) -> set[str]:
+    normalized = unicodedata.normalize("NFKD", str(value or "").upper())
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    words: set[str] = set()
+    for segment in re.findall(r"\b(?:COLOR(?:ES)?|TAPIZ(?:ADO)?)\b\s*:?\s*([^.;\n]+)", ascii_text):
+        for key in _variant_keys_from_free_text(segment):
+            words.update(key.split())
+    return words
+
+
+def _image_conflicts_with_identity_variant(value: str, identity: OffihoIdentity) -> bool:
+    requested_keys = [tuple(key.split()) for key in _identity_variant_lookup_keys(identity) if key]
+    if not requested_keys:
+        return False
+    labeled_keys = [
+        tuple(key.split())
+        for key in _variant_keys_from_image_reference(value, _identity_code_targets(identity))
+        if key
+    ]
+    if not labeled_keys or any(requested == labeled for requested in requested_keys for labeled in labeled_keys):
+        return False
+    if len(requested_keys[0]) > 1 and len(labeled_keys[0]) > 1:
+        return True
+    requested_words = {word for key in requested_keys for word in key}
+    labeled_words = {word for key in labeled_keys for word in key}
+    return requested_words.isdisjoint(labeled_words)
 
 
 def _identity_code_targets(identity: OffihoIdentity) -> tuple[str, ...]:
     code = str(identity.code or "").upper()
     alias = OFFICIAL_CODE_ALIASES.get(code, "")
     return tuple(value for value in (code, alias) if value)
+
+
+def _identity_finish_lookup_keys(identity: OffihoIdentity) -> list[str]:
+    normalized = unicodedata.normalize("NFKD", str(identity.name or "").upper())
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    keys: list[str] = []
+    compound_pattern = r"(?:[A-Z]{1,2}\d+)(?:\s*/\s*(?:[A-Z]{1,2}\d+))+"
+    compounds = re.findall(compound_pattern, ascii_text)
+    finish_tokens = [
+        token
+        for token in re.findall(r"[A-Z0-9]+", ascii_text)
+        if FINISH_CODE_RE.fullmatch(token) or token in FINISH_CODE_WORDS
+    ]
+    if compounds and len(finish_tokens) == len(re.findall(r"[A-Z0-9]+", " ".join(compounds))):
+        for compound in compounds:
+            keys.extend(_variant_lookup_keys(compound))
+    if not keys:
+        if len(finish_tokens) == 1:
+            keys.extend(_variant_lookup_keys(finish_tokens[0]))
+    return list(dict.fromkeys(key for key in keys if key))
+
+
+def _identity_has_ambiguous_finish_codes(identity: OffihoIdentity) -> bool:
+    normalized = unicodedata.normalize("NFKD", str(identity.name or "").upper())
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    finish_tokens = [
+        token
+        for token in re.findall(r"[A-Z0-9]+", ascii_text)
+        if FINISH_CODE_RE.fullmatch(token) or token in FINISH_CODE_WORDS
+    ]
+    return len(finish_tokens) > 1 and not _identity_finish_lookup_keys(identity)
 
 
 def _identity_name_keys(identity: OffihoIdentity) -> list[str]:
@@ -1023,6 +1992,159 @@ def _identity_name_keys(identity: OffihoIdentity) -> list[str]:
     if identity.code and CODE_RE.fullmatch(identity.code) is None:
         add(identity.code)
     return keys
+
+
+def _candidate_supports_identity_features(
+    candidate: dict[str, Any],
+    identity: OffihoIdentity,
+) -> bool:
+    identity_code = "" if CODE_RE.fullmatch(identity.code) else identity.code
+    required = _required_features_from_text(f"{identity_code} {identity.name}")
+    candidate_text = " ".join(
+        [
+            urllib.parse.unquote(urllib.parse.urlsplit(str(candidate.get("url", ""))).path),
+            *(str(name) for name in candidate.get("names", [])),
+        ]
+    )
+    candidate_features = _required_features_from_text(candidate_text)
+    if required:
+        return required <= candidate_features
+    return not (candidate_features & EXCLUSIVE_ACCESSORY_FEATURE_WORDS)
+
+
+def _candidate_supports_identity_configuration(
+    candidate: dict[str, Any],
+    identity: OffihoIdentity,
+) -> bool:
+    requested = _identity_configuration_code_suffixes(identity)
+    if not requested:
+        return True
+    candidate_text = " ".join(
+        [
+            urllib.parse.unquote(urllib.parse.urlsplit(str(candidate.get("url", ""))).path),
+            *(str(name) for name in candidate.get("names", [])),
+            *(str(code) for code in candidate.get("codes", [])),
+        ]
+    )
+    ascii_text = (
+        unicodedata.normalize("NFKD", candidate_text.upper())
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    tokens = set(re.findall(r"[A-Z0-9]+", ascii_text))
+    compact_codes = {
+        _compact_variant_value(code)
+        for code in candidate.get("codes", [])
+        if _compact_variant_value(code)
+    }
+    raw_codes = {
+        str(code).upper()
+        for code in candidate.get("codes", [])
+        if str(code).strip()
+    }
+    target_codes = {
+        _compact_variant_value(code)
+        for code in _identity_code_targets(identity)
+        if _compact_variant_value(code)
+    }
+
+    def supports(suffix: str) -> bool:
+        if suffix in tokens:
+            return True
+        if suffix == "CB" and re.search(r"\bCON\s+BRAZOS?\b", ascii_text):
+            return True
+        return any(
+            _compact_variant_value(code) != target
+            and _compact_variant_value(code).startswith(target)
+            and _official_code_matches(identity, code)
+            for target in target_codes
+            for code in raw_codes
+        )
+
+    return all(supports(suffix) for suffix in requested)
+
+
+def _required_features_from_text(value: str) -> set[str]:
+    ascii_text = (
+        unicodedata.normalize("NFKD", str(value or "").upper())
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    features: set[str] = set()
+    for token in re.findall(r"[A-Z0-9]+", ascii_text):
+        for feature in REQUIRED_FEATURE_WORDS:
+            if token == feature or (
+                token.startswith(feature)
+                and (len(feature) >= 5 or feature == "KIT")
+            ):
+                features.add("BRAZO" if feature == "BRAZOS" else feature)
+    return features
+
+
+def _support_product_for_identity(
+    identity: OffihoIdentity,
+    pdf_product: dict[str, Any],
+    brochure_product: dict[str, Any],
+    *,
+    inventory_key: str = "",
+    visual_rejections: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    rejections = visual_rejections or {}
+    for product in (pdf_product, brochure_product):
+        if not product.get("image_url"):
+            continue
+        if _is_visual_rejected(inventory_key, product.get("image_url"), rejections):
+            continue
+        candidate = {
+            "url": product.get("product_url", ""),
+            "names": [product.get("matched_title", "")],
+            "codes": [],
+        }
+        if (
+            _candidate_supports_identity_features(candidate, identity)
+            and _candidate_supports_identity_configuration(candidate, identity)
+            and _support_product_has_exact_variant_evidence(product, identity)
+        ):
+            return product
+    return {}
+
+
+def _support_product_has_exact_variant_evidence(
+    product: dict[str, Any],
+    identity: OffihoIdentity,
+) -> bool:
+    requested = [_canonical_variant_compact(key) for key in _identity_variant_lookup_keys(identity)]
+    requested = [key for key in requested if key]
+    if not requested:
+        matched_title = _pdf_match_key(product.get("matched_title", ""))
+        inventory_identity = _pdf_match_key(normalize_space(f"{identity.code} {identity.name}"))
+        return bool(matched_title and inventory_identity and matched_title == inventory_identity)
+    evidence_text = " ".join(
+        [
+            str(product.get("matched_title", "")),
+            urllib.parse.unquote(urllib.parse.urlsplit(str(product.get("image_url", ""))).path),
+        ]
+    )
+    evidence_keys = {
+        _canonical_variant_compact(key)
+        for key in _variant_keys_from_free_text(evidence_text)
+        if _canonical_variant_compact(key)
+    }
+    requested_words = {word for key in _identity_variant_lookup_keys(identity) for word in key.split()}
+    evidence_words = {
+        VARIANT_CANONICAL_WORDS.get(word, word)
+        for word in re.findall(r"[A-Z0-9]+", unicodedata.normalize("NFKD", evidence_text.upper()))
+        if word in VARIANT_WORDS or word in VARIANT_CANONICAL_WORDS
+    }
+    has_variant_evidence = any(key in evidence_keys for key in requested) or bool(requested_words) and requested_words <= evidence_words
+    return has_variant_evidence
+
+
+def _canonical_variant_compact(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "").upper())
+    ascii_text = "".join(char for char in normalized if not unicodedata.combining(char))
+    words = [VARIANT_CANONICAL_WORDS.get(word, word) for word in re.findall(r"[A-Z0-9]+", ascii_text)]
+    return "".join(words)
 
 
 def _product_name_key(value: str, *, codes: Sequence[str] = ()) -> str:
@@ -1042,8 +2164,22 @@ def _product_name_key(value: str, *, codes: Sequence[str] = ()) -> str:
 
 
 def is_official_url(value: str) -> bool:
+    return _is_safe_https_url_for_hosts(value, OFFICIAL_HOSTS)
+
+
+def _is_safe_https_url_for_hosts(value: str, allowed_hosts: frozenset[str]) -> bool:
     parsed = urllib.parse.urlparse(value)
-    return parsed.scheme == "https" and parsed.hostname in OFFICIAL_HOSTS and not parsed.username and not parsed.password
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname in allowed_hosts
+        and port in {None, 443}
+        and not parsed.username
+        and not parsed.password
+    )
 
 
 def is_official_image_url(value: str) -> bool:
@@ -1118,8 +2254,10 @@ def _trusted_cached_code_images(value: dict[str, Any]) -> dict[str, dict[str, An
 
 def _verify_variant_images(images: dict[str, str]) -> dict[str, dict[str, Any]]:
     verified_by_url: dict[str, dict[str, Any]] = {}
-    for image_url in sorted(set(images.values())):
-        metadata = _verify_official_image(image_url)
+    image_urls = sorted(set(images.values()))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        metadata_by_url = executor.map(_verify_official_image, image_urls)
+    for image_url, metadata in zip(image_urls, metadata_by_url):
         if metadata["image_url"]:
             verified_by_url[image_url] = metadata
     return {
@@ -1131,8 +2269,10 @@ def _verify_variant_images(images: dict[str, str]) -> dict[str, dict[str, Any]]:
 
 def _verify_code_images(images: dict[str, str]) -> dict[str, dict[str, Any]]:
     verified_by_url: dict[str, dict[str, Any]] = {}
-    for image_url in sorted(set(images.values())):
-        metadata = _verify_official_image(image_url)
+    image_urls = sorted(set(images.values()))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        metadata_by_url = executor.map(_verify_official_image, image_urls)
+    for image_url, metadata in zip(image_urls, metadata_by_url):
         if metadata["image_url"]:
             verified_by_url[image_url] = metadata
     return {
@@ -1202,12 +2342,26 @@ class _PageParser(HTMLParser):
         self.meta: dict[str, str] = {}
         self.text: list[str] = []
         self.names: list[str] = []
+        self.primary_names: list[str] = []
         self.collection_images: list[dict[str, str]] = []
         self._name_tag = ""
         self._name_parts: list[str] = []
+        self._ignored_depth = 0
+        self._product_options_depth = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style", "noscript"}:
+            self._ignored_depth += 1
+            return
+        if self._ignored_depth:
+            return
         values = {name.lower(): value or "" for name, value in attrs}
+        classes = {value.casefold() for value in values.get("class", "").split()}
+        if tag == "div":
+            if self._product_options_depth:
+                self._product_options_depth += 1
+            elif "product-options" in classes:
+                self._product_options_depth = 1
         if tag == "a" and values.get("href"):
             self.links.append(values["href"])
         elif tag in {"img", "source"}:
@@ -1216,9 +2370,12 @@ class _PageParser(HTMLParser):
                     self.images.append(values[name])
             if values.get("srcset"):
                 self.images.extend(_srcset_urls(values["srcset"]))
-            classes = {value.casefold() for value in values.get("class", "").split()}
             cloudzoom = values.get("data-cloudzoom", "")
-            if "colecciones" in classes and cloudzoom:
+            if (
+                self._product_options_depth
+                and classes.intersection({"colecciones", "cloudzoom-gallery"})
+                and cloudzoom
+            ):
                 match = re.search(
                     r"(?:^|[,\s])image\s*:\s*(['\"])(?P<url>[^'\"]+)\1",
                     cloudzoom,
@@ -1241,21 +2398,125 @@ class _PageParser(HTMLParser):
             self._name_parts = []
 
     def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style", "noscript"} and self._ignored_depth:
+            self._ignored_depth -= 1
+            return
+        if self._ignored_depth:
+            return
+        if tag == "div" and self._product_options_depth:
+            self._product_options_depth -= 1
         if tag == self._name_tag:
             value = normalize_space(" ".join(self._name_parts))
             if value:
                 self.names.append(value)
+                if tag in {"title", "h1"}:
+                    self.primary_names.append(value)
             self._name_tag = ""
             self._name_parts = []
 
     def handle_data(self, data: str) -> None:
+        if self._ignored_depth:
+            return
         self.text.append(data)
         if self._name_tag:
             self._name_parts.append(data)
 
 
+class _ColosVariantParser(HTMLParser):
+    """Relaciona cada control de color Colos con su imagen ``img-coloreN``."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.labels: dict[str, str] = {}
+        self.images: dict[str, str] = {}
+        self._label_rel = ""
+        self._label_depth = 0
+        self._label_parts: list[str] = []
+        self._image_rel = ""
+        self._image_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {name.lower(): value or "" for name, value in attrs}
+        classes = values.get("class", "").split()
+
+        if self._label_rel:
+            self._label_depth += 1
+        elif tag == "a" and "ico-colore" in classes and values.get("data-rel"):
+            self._label_rel = values["data-rel"]
+            self._label_depth = 1
+            self._label_parts = []
+
+        if tag == "div":
+            if self._image_rel:
+                self._image_depth += 1
+            else:
+                relation = next(
+                    (value for value in classes if re.fullmatch(r"img-colore\d+", value)),
+                    "",
+                )
+                if relation:
+                    self._image_rel = relation
+                    self._image_depth = 1
+        elif tag in {"img", "source"} and self._image_rel:
+            raw_image = next(
+                (
+                    values[name]
+                    for name in ("src", "data-src", "data-original")
+                    if values.get(name)
+                ),
+                "",
+            )
+            if raw_image:
+                self.images.setdefault(self._image_rel, raw_image)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._label_rel:
+            self._label_depth -= 1
+            if self._label_depth == 0:
+                label = normalize_space(" ".join(self._label_parts))
+                if label:
+                    self.labels[self._label_rel] = label
+                self._label_rel = ""
+                self._label_parts = []
+        if tag == "div" and self._image_rel:
+            self._image_depth -= 1
+            if self._image_depth == 0:
+                self._image_rel = ""
+
+    def handle_data(self, data: str) -> None:
+        if self._label_rel:
+            self._label_parts.append(data)
+
+
 def _srcset_urls(value: str) -> list[str]:
     return [candidate.strip().split(" ", 1)[0] for candidate in value.split(",") if candidate.strip()]
+
+
+def _page_product_codes(
+    page_url: str,
+    parser: _PageParser,
+    *,
+    fallback_codes: Sequence[str] = (),
+) -> list[str]:
+    primary_codes = sorted(
+        {
+            code.upper()
+            for code in CODE_RE.findall(unescape(" ".join(parser.primary_names)))
+        }
+    )
+    if primary_codes:
+        return primary_codes
+    page_codes = sorted(
+        {
+            code.upper()
+            for code in CODE_RE.findall(
+                urllib.parse.unquote(urllib.parse.urlsplit(page_url).path)
+            )
+        }
+    )
+    if page_codes:
+        return page_codes
+    return sorted({str(code).upper() for code in fallback_codes if str(code).strip()})
 
 
 def _compact_variant_value(value: str) -> str:
@@ -1272,22 +2533,32 @@ def _variant_keys_from_image_reference(value: str, codes: Sequence[str]) -> list
     compact = _compact_variant_value(stem)
     for code in sorted(codes, key=lambda item: len(_compact_variant_value(item)), reverse=True):
         compact_code = _compact_variant_value(code)
-        if compact_code and compact.startswith(compact_code):
-            compact = compact[len(compact_code) :]
+        code_index = compact.find(compact_code) if compact_code else -1
+        if code_index >= 0:
+            compact = compact[code_index + len(compact_code) :]
             break
 
     words_by_compact = sorted(
         {(_compact_variant_value(word), word) for word in VARIANT_WORDS if _compact_variant_value(word)},
         key=lambda item: (-len(item[0]), item[0]),
     )
+    matches: list[tuple[int, int, str]] = []
+    for compact_word, word in words_by_compact:
+        start = 0
+        while True:
+            index = compact.find(compact_word, start)
+            if index < 0:
+                break
+            matches.append((index, -len(compact_word), word))
+            start = index + max(1, len(compact_word))
     words: list[str] = []
-    remaining = compact
-    while remaining:
-        matched = next((pair for pair in words_by_compact if remaining.startswith(pair[0])), None)
-        if matched is None:
-            break
-        words.append(matched[1])
-        remaining = remaining[len(matched[0]) :]
+    occupied_until = -1
+    for index, negative_length, word in sorted(matches):
+        length = -negative_length
+        if index < occupied_until:
+            continue
+        words.append(word)
+        occupied_until = index + length
     return _variant_lookup_keys(" ".join(words))
 
 
@@ -1334,10 +2605,113 @@ def _extract_variant_image_urls(
         keys = [
             *_variant_keys_from_image_reference(raw_image, codes),
             *_variant_keys_from_image_reference(collection_image.get("swatch", ""), codes),
+            *_finish_code_keys_from_swatch(collection_image.get("swatch", "")),
         ]
         for key in keys:
             images.setdefault(key, resolved)
     return dict(sorted(images.items()))
+
+
+def _colos_color_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", normalize_space(value).upper())
+    ascii_value = "".join(
+        char for char in normalized if not unicodedata.combining(char)
+    )
+    return COLOS_COLOR_ALIASES.get(ascii_value, normalize_variant(ascii_value))
+
+
+def _extract_colos_variant_image_urls(page_url: str, payload: str) -> dict[str, str]:
+    if urllib.parse.urlsplit(page_url).hostname not in COLOS_HOSTS:
+        return {}
+    parser = _ColosVariantParser()
+    parser.feed(payload)
+    images: dict[str, str] = {}
+    for relation, label in parser.labels.items():
+        raw_image = parser.images.get(relation, "")
+        resolved = urllib.parse.urljoin(page_url, normalize_space(raw_image))
+        key = _colos_color_key(label)
+        if key and is_official_image_url(resolved):
+            images.setdefault(key, resolved)
+    return dict(sorted(images.items()))
+
+
+def _finish_code_keys_from_swatch(value: str) -> list[str]:
+    stem = Path(urllib.parse.unquote(urllib.parse.urlsplit(str(value or "")).path)).stem.upper()
+    parts = re.findall(r"[A-Z0-9]+", stem)
+    if not parts or not all(FINISH_CODE_RE.fullmatch(part) or part in FINISH_CODE_WORDS for part in parts):
+        return []
+    return _variant_lookup_keys(" ".join(parts))
+
+
+def _extract_shopify_variant_image_urls(
+    page_url: str,
+    payload: str,
+    *,
+    codes: Sequence[str],
+) -> dict[str, str]:
+    if urllib.parse.urlsplit(page_url).hostname not in {"offihoblack.com", "www.offihoblack.com"}:
+        return {}
+
+    decoder = json.JSONDecoder()
+    candidates: dict[str, set[str]] = {}
+    marker = re.compile(r"\bGRFQConfigs\.product\s*=", flags=re.IGNORECASE)
+    for match in marker.finditer(payload):
+        remainder = payload[match.end() :].lstrip()
+        try:
+            product, _ = decoder.raw_decode(remainder)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(product, dict) or not isinstance(product.get("variants"), list):
+            continue
+
+        identity_text = " ".join(
+            str(product.get(field, "")) for field in ("title", "handle")
+        )
+        product_codes = {
+            code.upper() for code in CODE_RE.findall(unescape(identity_text))
+        }
+        expected_codes = {str(code).upper() for code in codes if str(code).strip()}
+        if product_codes and expected_codes and product_codes.isdisjoint(expected_codes):
+            continue
+
+        option_count = len(
+            [option for option in product.get("options", []) if normalize_space(option)]
+        ) if isinstance(product.get("options"), list) else 0
+        for variant in product["variants"]:
+            if not isinstance(variant, dict):
+                continue
+            featured_image = variant.get("featured_image")
+            raw_image = featured_image.get("src", "") if isinstance(featured_image, dict) else ""
+            if not raw_image:
+                featured_media = variant.get("featured_media")
+                preview = featured_media.get("preview_image", {}) if isinstance(featured_media, dict) else {}
+                raw_image = preview.get("src", "") if isinstance(preview, dict) else ""
+            resolved = urllib.parse.urljoin(page_url, normalize_space(raw_image))
+            if not is_official_image_url(resolved):
+                continue
+            if _product_image_score(page_url, resolved, codes) is None:
+                continue
+
+            title = normalize_space(variant.get("public_title") or variant.get("title"))
+            if title.casefold() == "default title":
+                continue
+            if option_count > 1:
+                labels = [title] if title else []
+            else:
+                labels = [
+                    str(variant.get(field, ""))
+                    for field in ("option1", "public_title", "title")
+                    if normalize_space(variant.get(field, ""))
+                ]
+            for label in labels:
+                for key in _variant_lookup_keys(label):
+                    if key != "DEFAULT TITLE":
+                        candidates.setdefault(key, set()).add(resolved)
+    return {
+        key: next(iter(urls))
+        for key, urls in sorted(candidates.items())
+        if len(urls) == 1
+    }
 
 
 def _extract_official_image_url(
@@ -1382,11 +2756,57 @@ def _product_image_score(page_url: str, image_url: str, codes: Sequence[str]) ->
     return score
 
 
+def _page_link_key(value: str) -> str:
+    parsed = urllib.parse.urlsplit(_normalize_official_link(str(value or "")))
+    return urllib.parse.urlunsplit(
+        (parsed.scheme.casefold(), parsed.netloc.casefold(), parsed.path.rstrip("/"), "", "")
+    )
+
+
+def _merge_linked_variant_pages(records: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Completa una ficha con la paleta extendida enlazada por el propio producto."""
+
+    by_url = {
+        _page_link_key(record.get("url", "")): record
+        for record in records
+        if normalize_space(record.get("url"))
+    }
+    enriched: list[dict[str, Any]] = []
+    for record in records:
+        merged = dict(record)
+        variants = dict(_trusted_cached_variant_images(record))
+        record_codes = {
+            str(code).upper() for code in record.get("codes", []) if str(code).strip()
+        }
+        for raw_link in record.get("links", []):
+            linked = by_url.get(_page_link_key(raw_link))
+            if not isinstance(linked, dict):
+                continue
+            linked_path = urllib.parse.urlsplit(str(linked.get("url", ""))).path.casefold()
+            linked_codes = {
+                str(code).upper()
+                for code in linked.get("codes", [])
+                if str(code).strip()
+            }
+            if (
+                not linked_path.rstrip("/").endswith("/colores")
+                or not record_codes
+                or linked_codes != record_codes
+            ):
+                continue
+            for key, metadata in _trusted_cached_variant_images(linked).items():
+                variants.setdefault(key, metadata)
+        merged["variant_images"] = dict(sorted(variants.items()))
+        enriched.append(merged)
+    return enriched
+
+
 def build_site_product_index(
     cache: dict[str, Any],
     *,
     no_network: bool = False,
     now: datetime | None = None,
+    include_search: bool | None = None,
 ) -> dict[str, dict[str, Any]]:
     current_time = now or datetime.now(timezone.utc)
     cache_version = cache.get("cache_version")
@@ -1431,6 +2851,12 @@ def build_site_product_index(
         if record:
             records.append(record)
 
+    use_search = SITE_SEEDS == DEFAULT_SITE_SEEDS if include_search is None else include_search
+    if use_search:
+        search_products = _fetch_offiho_search_product_urls()
+        remaining = max(0, MAX_DISCOVERED_PAGES - len(pages))
+        _fetch_discovered_pages(search_products[:remaining], pages, records)
+
     discovered = _prioritize_product_pages(
         {
             link
@@ -1442,7 +2868,7 @@ def build_site_product_index(
     first_level = discovered[:FIRST_LEVEL_DISCOVERY_LIMIT]
     _fetch_discovered_pages(first_level, pages, records)
 
-    for _ in range(2):
+    while True:
         remaining = max(0, MAX_DISCOVERED_PAGES - len(pages))
         if not remaining:
             break
@@ -1458,8 +2884,18 @@ def build_site_product_index(
             break
         _fetch_discovered_pages(next_level[:remaining], pages, records)
 
+    index = _site_index_from_records(records)
+    cache["site_index"] = index
+    cache["site_index_created_at"] = current_time.isoformat()
+    cache["site_index_expires_at"] = (current_time + timedelta(seconds=CACHE_TTL_SECONDS)).isoformat()
+    return index
+
+
+def _site_index_from_records(
+    records: Sequence[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
     index: dict[str, dict[str, Any]] = {}
-    for record in records:
+    for record in _merge_linked_variant_pages(records):
         codes = sorted({str(code).upper() for code in record.get("codes", []) if str(code).strip()})
         names = sorted({_product_name_key(name) for name in record.get("names", []) if _product_name_key(name)})
         code_images = _trusted_cached_code_images(record)
@@ -1474,6 +2910,9 @@ def build_site_product_index(
         }
         if candidate["image_url"] == candidate["url"]:
             candidate.update(_empty_image_metadata())
+        if _product_page_priority(candidate["url"]) <= 1:
+            page_key = f"page:{hashlib.sha256(candidate['url'].encode('utf-8')).hexdigest()[:20]}"
+            index[page_key] = candidate
         for key in codes:
             keyed_candidate = dict(candidate)
             keyed_candidate["codes"] = [key]
@@ -1486,9 +2925,6 @@ def build_site_product_index(
             existing = index.get(key)
             if existing is None or _site_candidate_rank(key, candidate) > _site_candidate_rank(key, existing):
                 index[key] = candidate
-    cache["site_index"] = index
-    cache["site_index_created_at"] = current_time.isoformat()
-    cache["site_index_expires_at"] = (current_time + timedelta(seconds=CACHE_TTL_SECONDS)).isoformat()
     return index
 
 
@@ -1505,6 +2941,47 @@ def _fetch_discovered_pages(
         record = pages.get(url)
         if isinstance(record, dict) and record:
             records.append(record)
+
+
+def _fetch_offiho_search_product_urls(
+    terms: Sequence[str] = OFFIHO_SEARCH_TERMS,
+) -> list[str]:
+    """Enumera hojas de producto publicadas en la búsqueda oficial de Offiho."""
+
+    urls: set[str] = set()
+    endpoint = "https://www.offiho.com/search.php"
+    for term in terms:
+        data = urllib.parse.urlencode({"keyword": normalize_space(term)}).encode("ascii")
+        request = urllib.request.Request(
+            endpoint,
+            data=data,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            method="POST",
+        )
+        try:
+            with _open_official(request, timeout=15) as response:
+                if urllib.parse.urlsplit(response.geturl()).hostname not in OFFIHO_HOSTS:
+                    continue
+                payload = response.read(1_500_000).decode("utf-8", errors="replace")
+        except (OSError, ValueError, urllib.error.URLError):
+            continue
+        parser = _PageParser()
+        parser.feed(payload)
+        for raw_link in parser.links:
+            resolved = _normalize_official_link(
+                urllib.parse.urldefrag(urllib.parse.urljoin(endpoint, raw_link))[0]
+            )
+            if (
+                urllib.parse.urlsplit(resolved).hostname in {"offiho.com", "www.offiho.com"}
+                and _product_page_priority(resolved) <= 1
+                and _is_official_page_url(resolved)
+            ):
+                urls.add(_canonical_product_url(resolved))
+    return _prioritize_product_pages(urls)
 
 
 def _prioritize_product_pages(urls: set[str]) -> list[str]:
@@ -1542,6 +3019,9 @@ def _site_candidate_rank(key: str, candidate: dict[str, Any]) -> tuple[int, int,
 
 def _product_page_priority(url: str) -> int:
     path = urllib.parse.urlsplit(url).path.casefold()
+    host = urllib.parse.urlsplit(url).hostname
+    if host in COLOS_HOSTS and re.fullmatch(r"/(?:en|es|it)/(?:products|productos|prodotti)/[^/]+/?", path):
+        return 0
     if "/products/" in path:
         return 0
     if "modelo-" in path or "/galeria/" in path:
@@ -1597,6 +3077,36 @@ def _sanitize_site_index(index: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return sanitized
 
 
+def _site_index_candidates(index: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for key, product in index.items():
+        codes = list(product.get("codes", []))
+        names = list(product.get("names", []))
+        if key.startswith("name:"):
+            names.append(key.removeprefix("name:"))
+        elif not key.startswith("page:"):
+            codes.append(key)
+        candidate = {
+            **product,
+            "codes": sorted({str(code).upper() for code in codes if str(code).strip()}),
+            "names": sorted({_product_name_key(name) for name in names if _product_name_key(name)}),
+        }
+        signature = _canonical_hash(
+            {
+                "url": candidate.get("url", ""),
+                "codes": candidate["codes"],
+                "names": candidate["names"],
+                "image_url": candidate.get("image_url", ""),
+                "variant_images": candidate.get("variant_images", {}),
+            }
+        )
+        if signature not in seen:
+            seen.add(signature)
+            candidates.append(candidate)
+    return candidates
+
+
 def _parse_cache_datetime(value: Any) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(str(value))
@@ -1643,15 +3153,7 @@ def _fetch_official_page(url: str) -> dict[str, Any]:
     page_text = " ".join(parser.text)
     metadata_text = " ".join(parser.meta.values())
     codes = sorted({code.upper() for code in CODE_RE.findall(unescape(f"{page_text} {metadata_text}"))})
-    page_codes = sorted(
-        {
-            code.upper()
-            for code in CODE_RE.findall(
-                urllib.parse.unquote(urllib.parse.urlsplit(page_url).path)
-            )
-        }
-    )
-    product_codes = page_codes or codes
+    product_codes = _page_product_codes(page_url, parser, fallback_codes=codes)
     names = _page_names(page_url, parser, product_codes)
     image_url = _extract_official_image_url(
         page_url,
@@ -1665,9 +3167,12 @@ def _fetch_official_page(url: str) -> dict[str, Any]:
         if len(product_codes) > 1
         else {}
     )
-    variant_images = _verify_variant_images(
-        _extract_variant_image_urls(page_url, parser, codes=product_codes)
+    variant_image_urls = _extract_variant_image_urls(page_url, parser, codes=product_codes)
+    variant_image_urls.update(
+        _extract_shopify_variant_image_urls(page_url, payload, codes=product_codes)
     )
+    variant_image_urls.update(_extract_colos_variant_image_urls(page_url, payload))
+    variant_images = _verify_variant_images(variant_image_urls)
     return {
         "url": page_url,
         "links": links,
@@ -1750,6 +3255,39 @@ def _deterministic_generated_at(pdf_paths: Sequence[Path]) -> tuple[str, str]:
     return LEGACY_CACHE_TIMESTAMP, "fixed_epoch"
 
 
+def _spec_index_hash_projection(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: ""
+            if key == "product_url"
+            and str(item or "").casefold().startswith("file:")
+            else _spec_index_hash_projection(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_spec_index_hash_projection(item) for item in value]
+    return value
+
+
+def _trusted_spec_product_url(product: Mapping[str, Any]) -> str:
+    value = normalize_space(product.get("product_url"))
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return ""
+    hostname = str(parsed.hostname or "").casefold().rstrip(".")
+    if (
+        parsed.scheme.casefold() != "https"
+        or not (hostname == "sharepoint.com" or hostname.endswith(".sharepoint.com"))
+        or parsed.username
+        or parsed.password
+        or port not in {None, 443}
+    ):
+        return ""
+    return value
+
+
 def build_catalog(
     inventory_path: Path,
     pdf_paths: Sequence[Path],
@@ -1759,6 +3297,15 @@ def build_catalog(
     no_network: bool = False,
     assets_dir: Path = DEFAULT_ASSETS_DIR,
     asset_base_url: str = DEFAULT_ASSET_BASE_URL,
+    spec_guide_paths: Sequence[Path] = (),
+    spec_source_urls: Mapping[str, str] | None = None,
+    colos_exact_manifest_path: Path | None = DEFAULT_COLOS_EXACT_MANIFEST_PATH,
+    offiho_exact_manifest_path: Path | None = DEFAULT_OFFIHO_EXACT_MANIFEST_PATH,
+    official_web_visual_exact_manifest_paths: Sequence[Path] = DEFAULT_OFFICIAL_WEB_VISUAL_EXACT_MANIFEST_PATHS,
+    catalog_exact_crop_manifest_paths: Sequence[Path] = DEFAULT_CATALOG_EXACT_CROP_MANIFEST_PATHS,
+    spec_visual_exact_manifest_paths: Sequence[Path] = DEFAULT_SPEC_VISUAL_EXACT_MANIFEST_PATHS,
+    visual_rejection_manifest_path: Path | None = DEFAULT_VISUAL_REJECTION_MANIFEST_PATH,
+    generated_image_manifest_path: Path | None = DEFAULT_GENERATED_IMAGE_MANIFEST_PATH,
 ) -> dict[str, Any]:
     cache = _load_cache(cache_path)
     inventory_bytes = inventory_path.read_bytes()
@@ -1777,6 +3324,104 @@ def build_catalog(
     pdf_sources.sort(key=lambda source: (source["sha256"], source["name"].casefold()))
     ordered_pdf_paths = [source["path"] for source in pdf_sources]
     items, inventory_audit = _parse_inventory_xls(inventory_path)
+    generated_images, generated_image_source = load_generated_image_manifest(
+        generated_image_manifest_path
+    )
+    ordered_spec_paths = sorted(
+        (Path(path) for path in spec_guide_paths),
+        key=lambda path: (path.name.casefold(), str(path.resolve()).casefold()),
+    )
+    spec_sources: list[dict[str, Any]] = []
+    for path in ordered_spec_paths:
+        if not path.is_file():
+            raise RuntimeError(f"No existe la guia SPEC Offiho: {path}")
+        payload = path.read_bytes()
+        spec_sources.append(
+            {
+                "name": path.name,
+                "sha256": _sha256_bytes(payload),
+                "size_bytes": len(payload),
+            }
+        )
+    colos_exact_images, colos_manifest_source = load_exact_image_manifest(
+        colos_exact_manifest_path,
+        allowed_hosts=COLOS_HOSTS,
+        match_status="official_colos_exact",
+    )
+    offiho_exact_images, offiho_manifest_source = load_exact_image_manifest(
+        offiho_exact_manifest_path,
+        allowed_hosts=OFFIHO_HOSTS,
+        match_status="official_variant_exact",
+    )
+    official_web_visual_exact_images: dict[str, dict[str, Any]] = {}
+    official_web_visual_manifest_sources: list[dict[str, Any]] = []
+    for path in sorted(
+        (Path(path) for path in official_web_visual_exact_manifest_paths),
+        key=lambda value: (value.name.casefold(), str(value.resolve()).casefold()),
+    ):
+        web_index, web_source = load_exact_image_manifest(
+            path,
+            allowed_hosts=OFFICIAL_HOSTS,
+            allowed_image_hosts=MANAGED_ASSET_HOSTS,
+            match_status="official_web_visual_exact",
+        )
+        duplicate_keys = sorted(set(official_web_visual_exact_images).intersection(web_index))
+        if duplicate_keys:
+            raise RuntimeError(
+                "Claves duplicadas entre manifiestos web visuales exactos: "
+                + ", ".join(duplicate_keys)
+            )
+        official_web_visual_exact_images.update(web_index)
+        official_web_visual_manifest_sources.append(web_source)
+    catalog_exact_crops: dict[str, dict[str, Any]] = {}
+    catalog_crop_sources: list[dict[str, Any]] = []
+    for path in sorted(
+        (Path(path) for path in catalog_exact_crop_manifest_paths),
+        key=lambda value: (value.name.casefold(), str(value.resolve()).casefold()),
+    ):
+        crop_index, crop_source = load_exact_image_manifest(
+            path,
+            allowed_hosts=CATALOG_SOURCE_HOSTS,
+            allowed_image_hosts=MANAGED_ASSET_HOSTS,
+            match_status="official_catalog_exact_crop",
+        )
+        duplicate_keys = sorted(set(catalog_exact_crops).intersection(crop_index))
+        if duplicate_keys:
+            raise RuntimeError(
+                "Claves duplicadas entre manifiestos de recortes exactos: "
+                + ", ".join(duplicate_keys)
+            )
+        catalog_exact_crops.update(crop_index)
+        catalog_crop_sources.append(crop_source)
+    spec_visual_exact_images: dict[str, dict[str, Any]] = {}
+    spec_visual_manifest_sources: list[dict[str, Any]] = []
+    for path in sorted(
+        (Path(path) for path in spec_visual_exact_manifest_paths),
+        key=lambda value: (value.name.casefold(), str(value.resolve()).casefold()),
+    ):
+        spec_index, spec_source = load_exact_image_manifest(
+            path,
+            allowed_hosts=SHAREPOINT_CATALOG_HOSTS,
+            allowed_image_hosts=MANAGED_ASSET_HOSTS,
+            match_status="spec_guide_visual_exact",
+        )
+        duplicate_keys = sorted(set(spec_visual_exact_images).intersection(spec_index))
+        if duplicate_keys:
+            raise RuntimeError(
+                "Claves duplicadas entre manifiestos SPEC visuales exactos: "
+                + ", ".join(duplicate_keys)
+            )
+        spec_visual_exact_images.update(spec_index)
+        spec_visual_manifest_sources.append(spec_source)
+    visual_rejections, visual_rejection_source = load_visual_rejection_manifest(
+        visual_rejection_manifest_path,
+        inventory_keys=(
+            {item["inventory_key"] for item in items}
+            if inventory_path.resolve()
+            == (PROJECT_ROOT / "catalog_sources" / "offiho" / "existencias.xls").resolve()
+            else None
+        ),
+    )
     pdf_prices = parse_pdf_price_index(ordered_pdf_paths)
     pdf_products = parse_pdf_product_index(
         ordered_pdf_paths,
@@ -1798,6 +3443,60 @@ def build_catalog(
     site_index = build_site_product_index(cache, no_network=no_network)
     site_index_sha256 = _canonical_hash(site_index)
     generated_at, generated_at_source = _deterministic_generated_at(ordered_pdf_paths)
+    site_candidates = _site_index_candidates(site_index)
+    matched_products: dict[str, dict[str, Any]] = {}
+    for item in items:
+        inventory_key = item["inventory_key"]
+        product = _first_non_rejected_product(
+            inventory_key,
+            (
+                offiho_exact_images.get(inventory_key),
+                official_web_visual_exact_images.get(inventory_key),
+                colos_exact_images.get(inventory_key),
+                catalog_exact_crops.get(inventory_key),
+                spec_visual_exact_images.get(inventory_key),
+            ),
+            visual_rejections,
+        )
+        if product is None:
+            filtered_site_candidates = (
+                [
+                    _without_rejected_candidate_images(
+                        inventory_key,
+                        candidate,
+                        visual_rejections,
+                    )
+                    for candidate in site_candidates
+                ]
+                if inventory_key in visual_rejections
+                else site_candidates
+            )
+            product = _without_rejected_product_image(
+                inventory_key,
+                match_official_product(
+                    OffihoIdentity(item["code"], item["name"], item["variant"]),
+                    filtered_site_candidates,
+                ),
+                visual_rejections,
+            )
+        matched_products[inventory_key] = product
+    spec_inventory_items = [
+        item
+        for item in items
+        if not matched_products[item["inventory_key"]].get("image_url")
+    ]
+    spec_images = (
+        extract_offiho_spec_images(
+            ordered_spec_paths,
+            spec_inventory_items,
+            assets_dir=assets_dir / "spec-images",
+            base_url=f"{asset_base_url.rstrip('/')}/spec-images",
+            source_urls=spec_source_urls,
+        )
+        if ordered_spec_paths and spec_inventory_items
+        else {}
+    )
+    spec_index_sha256 = _canonical_hash(_spec_index_hash_projection(spec_images))
     source_manifest = {
         "manifest_version": SOURCE_MANIFEST_VERSION,
         "inventory_sha256": inventory_sha256,
@@ -1805,25 +3504,25 @@ def build_catalog(
         "site_index_sha256": site_index_sha256,
         "pdf_index_sha256": pdf_index_sha256,
         "brochure_index_sha256": brochure_index_sha256,
+        "spec_guide_sha256": sorted(source["sha256"] for source in spec_sources),
+        "spec_index_sha256": spec_index_sha256,
+        "colos_exact_manifest_sha256": colos_manifest_source["sha256"],
+        "offiho_exact_manifest_sha256": offiho_manifest_source["sha256"],
+        "official_web_visual_exact_manifest_sha256": sorted(
+            source["sha256"] for source in official_web_visual_manifest_sources
+        ),
+        "catalog_exact_crop_manifest_sha256": sorted(
+            source["sha256"] for source in catalog_crop_sources
+        ),
+        "spec_visual_exact_manifest_sha256": sorted(
+            source["sha256"] for source in spec_visual_manifest_sources
+        ),
+        "visual_rejection_manifest_sha256": visual_rejection_source["sha256"],
+        "generated_image_manifest_sha256": generated_image_source["sha256"],
         "site_cache_version": CACHE_VERSION,
         "generated_at": generated_at,
         "generated_at_source": generated_at_source,
     }
-    site_candidates = []
-    for key, product in site_index.items():
-        codes = list(product.get("codes", []))
-        names = list(product.get("names", []))
-        if key.startswith("name:"):
-            names.append(key.removeprefix("name:"))
-        else:
-            codes.append(key)
-        site_candidates.append(
-            {
-                **product,
-                "codes": sorted({str(code).upper() for code in codes if str(code).strip()}),
-                "names": sorted({_product_name_key(name) for name in names if _product_name_key(name)}),
-            }
-        )
     for item in items:
         identity = OffihoIdentity(item["code"], item["name"], item["variant"])
         if item["price_source"] == "missing":
@@ -1831,32 +3530,60 @@ def build_catalog(
             if amount is not None:
                 item["unit_price"] = json_number(amount)
                 item["price_source"] = "pdf_exact"
-        product = match_official_product(identity, site_candidates)
+        product = matched_products[item["inventory_key"]]
+        spec_product = _without_rejected_product_image(
+            item["inventory_key"],
+            spec_images.get(item["inventory_key"], {}),
+            visual_rejections,
+        )
         pdf_product = pdf_products.get(item["inventory_key"], {})
         brochure_product = match_official_brochure_product(item, assets_dir, asset_base_url)
-        support_product = pdf_product if pdf_product.get("image_url") else brochure_product
+        support_product = _without_rejected_product_image(
+            item["inventory_key"],
+            _support_product_for_identity(
+                identity,
+                pdf_product,
+                brochure_product,
+                inventory_key=item["inventory_key"],
+                visual_rejections=visual_rejections,
+            ),
+            visual_rejections,
+        )
         if item["price_source"] == "missing" and pdf_product.get("unit_price") is not None:
             item["unit_price"] = json_number(pdf_product["unit_price"])
             item["price_source"] = "pdf_catalog"
         item["product_url"] = (
             product["url"]
-            or str(pdf_product.get("product_url", ""))
-            or str(brochure_product.get("product_url", ""))
+            or _trusted_spec_product_url(spec_product)
+            or str(support_product.get("product_url", ""))
         )
-        item["image_url"] = (
+        site_image_url = (
             product["image_url"]
             if product.get("has_variant_catalog")
             else product["image_url"] or str(support_product.get("image_url", ""))
         )
-        item["description"] = product["description"] or str(pdf_product.get("description", "")) or _inventory_description(item)
+        if not product["image_url"] and spec_product.get("image_url"):
+            site_image_url = str(spec_product["image_url"])
+        item["image_url"] = site_image_url
+        item["description"] = (
+            product["description"]
+            or str(spec_product.get("description", ""))
+            or str(pdf_product.get("description", ""))
+            or _inventory_description(item)
+        )
         item["description_source"] = (
             "official_site"
             if product["description"]
+            else "spec_guide"
+            if spec_product.get("description")
             else "pdf_catalog"
             if pdf_product.get("description")
             else "inventory_label"
         )
         item["match_status"] = (
+            str(spec_product.get("match_status", "spec_guide_exact"))
+            if not product["image_url"] and spec_product.get("image_url")
+            else
             product["match_status"]
             if product["url"] or product["image_url"]
             else str(support_product.get("match_status", "unmatched"))
@@ -1865,6 +3592,13 @@ def build_catalog(
             product["source_updated_at"]
             or str(support_product.get("source_updated_at", ""))
         )
+
+    _clear_cross_model_support_images(items, asset_base_url)
+    apply_visual_rejections(items, visual_rejections)
+    for item in items:
+        if not item.get("image_url") and item["inventory_key"] in visual_rejections:
+            item["match_status"] = "visual_conflict_rejected"
+    apply_generated_images(items, generated_images)
 
     result = {
         "source_hash": _canonical_hash(source_manifest),
@@ -1885,6 +3619,19 @@ def build_catalog(
                 }
                 for source in pdf_sources
             ],
+            "spec_guides": spec_sources,
+            "spec_image_index": {
+                "sha256": spec_index_sha256,
+                "record_count": len(spec_images),
+                "asset_base_url": f"{asset_base_url.rstrip('/')}/spec-images",
+            },
+            "colos_exact_images": colos_manifest_source,
+            "offiho_exact_images": offiho_manifest_source,
+            "official_web_visual_exact_images": official_web_visual_manifest_sources,
+            "catalog_exact_crops": catalog_crop_sources,
+            "spec_visual_exact_images": spec_visual_manifest_sources,
+            "visual_rejections": visual_rejection_source,
+            "generated_visual_references": generated_image_source,
             "site_index": {
                 "sha256": site_index_sha256,
                 "cache_version": CACHE_VERSION,
@@ -1909,7 +3656,8 @@ def build_catalog(
         "out_of_stock": sum(item["available_quantity"] == 0 for item in items),
         "inventory_prices": sum(item["price_source"] == "inventory" for item in items),
         "pdf_prices": sum(str(item["price_source"]).startswith("pdf_") for item in items),
-        "official_images": sum(bool(item["image_url"]) for item in items),
+        "official_images": sum(item.get("image_kind") == "official" for item in items),
+        "generated_images": sum(item.get("image_kind") == "generated_reference" for item in items),
         "described_items": sum(bool(item.get("description")) for item in items),
         "items": items,
     }
@@ -1918,6 +3666,39 @@ def build_catalog(
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result
+
+
+def _clear_cross_model_support_images(
+    items: Sequence[dict[str, Any]],
+    asset_base_url: str,
+) -> None:
+    """Retira fotos PDF compartidas cuando representan modelos distintos.
+
+    Los catalogos de apoyo a veces muestran una familia completa en una sola
+    fotografia. Esa imagen no es evidencia suficiente para cada codigo: si el
+    mismo activo local queda asociado a identidades de modelo diferentes, es
+    mas seguro publicar la ficha sin imagen. Variantes tipograficas de una
+    misma identidad (por ejemplo ``VESPER 103`` y ``VESPER/103``) se conservan.
+    """
+
+    support_prefix = f"{asset_base_url.rstrip('/')}/images/"
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        image_url = str(item.get("image_url", ""))
+        if image_url.startswith(support_prefix):
+            grouped.setdefault(image_url, []).append(item)
+
+    for shared_items in grouped.values():
+        model_keys = {
+            _compact_variant_value(
+                f"{normalize_space(item.get('code', ''))} {normalize_space(item.get('name', ''))}"
+            )
+            for item in shared_items
+        }
+        model_keys.discard("")
+        if len(model_keys) > 1:
+            for item in shared_items:
+                item["image_url"] = ""
 
 
 def _inventory_description(item: dict[str, Any]) -> str:
@@ -1943,11 +3724,17 @@ def _load_cache(path: Path) -> dict[str, Any]:
 
 
 def download_inventory(url: str, output_path: Path) -> Path:
-    if not is_official_url(url):
+    if (
+        not is_official_url(url)
+        or urllib.parse.urlsplit(url).hostname not in OFFIHO_HOSTS
+    ):
         raise ValueError("La URL de inventario debe ser HTTPS de un host oficial Offiho")
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.ms-excel"})
     with _open_official(request, timeout=30) as response:
-        if not is_official_url(response.geturl()):
+        if (
+            not is_official_url(response.geturl())
+            or urllib.parse.urlsplit(response.geturl()).hostname not in OFFIHO_HOSTS
+        ):
             raise ValueError("La descarga de inventario redirigio fuera de los hosts oficiales")
         content_type = response.headers.get_content_type()
         if content_type not in {"application/vnd.ms-excel", "application/octet-stream", "text/html"}:
@@ -1980,6 +3767,47 @@ def main() -> int:
     parser.add_argument("--inventory-url", default=DEFAULT_INVENTORY_URL)
     parser.add_argument("--inventory", default=str(DEFAULT_INVENTORY_PATH))
     parser.add_argument("--pdf", action="append", default=[])
+    parser.add_argument("--spec-guide", action="append", default=[])
+    parser.add_argument(
+        "--colos-exact-manifest",
+        default=str(DEFAULT_COLOS_EXACT_MANIFEST_PATH),
+    )
+    parser.add_argument(
+        "--offiho-exact-manifest",
+        default=str(DEFAULT_OFFIHO_EXACT_MANIFEST_PATH),
+    )
+    parser.add_argument(
+        "--official-web-visual-exact-manifest",
+        action="append",
+        default=None,
+        help=(
+            "Manifiesto web visual exacto; puede repetirse. Si se indica al "
+            "menos una vez, reemplaza el conjunto predeterminado."
+        ),
+    )
+    parser.add_argument(
+        "--catalog-exact-crop-manifest",
+        action="append",
+        default=None,
+    )
+    parser.add_argument(
+        "--spec-visual-exact-manifest",
+        action="append",
+        default=None,
+    )
+    parser.add_argument(
+        "--visual-rejection-manifest",
+        default=str(DEFAULT_VISUAL_REJECTION_MANIFEST_PATH),
+        help=(
+            "Manifiesto v1 de URLs visualmente rechazadas. Reemplaza el "
+            "predeterminado; una cadena vacia lo desactiva explicitamente."
+        ),
+    )
+    parser.add_argument(
+        "--generated-image-manifest",
+        default=str(DEFAULT_GENERATED_IMAGE_MANIFEST_PATH),
+        help="Manifiesto v1 de referencias visuales generadas; una cadena vacia lo desactiva.",
+    )
     parser.add_argument("--cache", default=str(DEFAULT_CACHE_PATH))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--assets-dir", default=str(DEFAULT_ASSETS_DIR))
@@ -2000,6 +3828,38 @@ def main() -> int:
         no_network=args.no_network,
         assets_dir=Path(args.assets_dir),
         asset_base_url=args.asset_base_url,
+        spec_guide_paths=[Path(path) for path in args.spec_guide],
+        colos_exact_manifest_path=(
+            Path(args.colos_exact_manifest) if args.colos_exact_manifest else None
+        ),
+        offiho_exact_manifest_path=(
+            Path(args.offiho_exact_manifest) if args.offiho_exact_manifest else None
+        ),
+        official_web_visual_exact_manifest_paths=(
+            [Path(path) for path in args.official_web_visual_exact_manifest]
+            if args.official_web_visual_exact_manifest is not None
+            else DEFAULT_OFFICIAL_WEB_VISUAL_EXACT_MANIFEST_PATHS
+        ),
+        catalog_exact_crop_manifest_paths=(
+            [Path(path) for path in args.catalog_exact_crop_manifest]
+            if args.catalog_exact_crop_manifest is not None
+            else DEFAULT_CATALOG_EXACT_CROP_MANIFEST_PATHS
+        ),
+        spec_visual_exact_manifest_paths=(
+            [Path(path) for path in args.spec_visual_exact_manifest]
+            if args.spec_visual_exact_manifest is not None
+            else DEFAULT_SPEC_VISUAL_EXACT_MANIFEST_PATHS
+        ),
+        visual_rejection_manifest_path=(
+            Path(args.visual_rejection_manifest)
+            if args.visual_rejection_manifest
+            else None
+        ),
+        generated_image_manifest_path=(
+            Path(args.generated_image_manifest)
+            if args.generated_image_manifest
+            else None
+        ),
     )
     print(
         json.dumps(

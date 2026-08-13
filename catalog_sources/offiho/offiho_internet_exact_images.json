@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "inventory_key": "PISTÓNCAJERO",
+      "product_url": "https://www.offiho.com/econosillas/kits-piston/piston-cajero",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/internet/piston-cajero-e9e7d8d7.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_product_page_and_inventory_exact_image"
+    },
+    {
+      "inventory_key": "G03C PISTON CROMADO REBASADOR",
+      "product_url": "https://www.offiho.com/accesorios/piston-base/accesorios-piston-rebasador-cromado",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/internet/g03c-piston-cromado-rebasador-037e7d5b.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_product_page_and_inventory_exact_image"
+    },
+    {
+      "inventory_key": "G03C CROMADO REBASADOR",
+      "product_url": "https://www.offiho.com/accesorios/piston-base/accesorios-piston-rebasador-cromado",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/internet/g03c-piston-cromado-rebasador-037e7d5b.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_product_page_and_inventory_exact_image"
+    },
+    {
+      "inventory_key": "R34 ALUMINIO LUCIDO",
+      "product_url": "https://www.offiho.com/accesorios/piston-base/accesorios-base-aluminio-lucido",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/internet/r34-aluminio-lucido-12a91484.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_product_page_and_inventory_exact_image"
+    }
+  ]
+}
