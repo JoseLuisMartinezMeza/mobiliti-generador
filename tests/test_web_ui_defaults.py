@@ -186,6 +186,16 @@ def test_vercel_routes_project_workspace_requests_to_fastapi_before_spa():
     )
 
 
+def test_vercel_keeps_static_catalog_assets_out_of_python_function_bundle():
+    config = json.loads(
+        Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+    )
+
+    assert config["functions"]["api/index.py"]["excludeFiles"] == (
+        "public/catalog-assets/**"
+    )
+
+
 def test_offiho_catalog_uses_factual_filters_cache_and_pagination_contracts():
     source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
     styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
