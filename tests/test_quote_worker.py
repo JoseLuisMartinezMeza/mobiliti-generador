@@ -195,6 +195,61 @@ def test_offiho_catalog_sync_skips_upsert_when_inventory_hash_is_unchanged(monke
     assert quote_worker.sync_offiho_catalog_if_due(CatalogClient(), force=True) is False
 
 
+def test_offiho_catalog_sync_promotes_newer_packaged_visual_manifest(monkeypatch):
+    durable = {
+        "source_hash": "durable-hash",
+        "generated_at": "2026-08-13T20:00:00+00:00",
+        "sources": {"manifest_version": 4},
+        "items": [{"inventory_key": "OHE-1 NEGRO", "image_url": ""}],
+    }
+    packaged = {
+        "source_hash": "packaged-hash",
+        "generated_at": "2026-07-01T00:00:00+00:00",
+        "sources": {"manifest_version": 8},
+        "items": [
+            {
+                "inventory_key": "OHE-1 NEGRO",
+                "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/generated-reference/test.png",
+            }
+        ],
+    }
+    refreshed = {**packaged, "source_hash": "refreshed-hash"}
+    bases = []
+
+    class CatalogClient:
+        def __init__(self):
+            self.upserts = []
+
+        def catalog_snapshot_get(self, supplier):
+            assert supplier == "offiho"
+            return {"supplier": supplier, "source_hash": "durable-hash", "payload": durable}
+
+        def catalog_snapshot_upsert(self, supplier, payload):
+            self.upserts.append((supplier, payload))
+            return {"supplier": supplier, "source_hash": payload["source_hash"]}
+
+    def fake_refresh(base_payload, *_args, **_kwargs):
+        bases.append(base_payload)
+        return refreshed
+
+    monkeypatch.setattr(quote_worker, "OFFIHO_SYNC_ENABLED", True)
+    monkeypatch.setattr(quote_worker, "_OFFIHO_LAST_SYNC_ATTEMPT", 0.0)
+    monkeypatch.setattr(quote_worker, "_fallback_offiho_catalog_payload", lambda: packaged)
+    monkeypatch.setattr(
+        quote_worker,
+        "download_offiho_inventory",
+        lambda path: SimpleNamespace(
+            path=Path(path), sha256="f" * 64, size_bytes=321, last_modified=""
+        ),
+    )
+    monkeypatch.setattr(quote_worker, "refresh_offiho_catalog_from_file", fake_refresh)
+    client = CatalogClient()
+
+    assert quote_worker.sync_offiho_catalog_if_due(client, force=True) is True
+    assert bases == [packaged]
+    assert client.upserts == [("offiho", refreshed)]
+
+
 def test_offiho_catalog_sync_failure_keeps_fallback_and_throttles_retry(monkeypatch):
     fallback = {
         "source_hash": "fallback-hash",

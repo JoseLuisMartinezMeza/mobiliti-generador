@@ -1945,6 +1945,14 @@ def _fallback_offiho_catalog_payload() -> dict:
     return payload
 
 
+def _offiho_manifest_version(payload: dict) -> int | None:
+    try:
+        version = int((payload.get("sources") or {}).get("manifest_version"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return version if version >= 0 else None
+
+
 def sync_tarkett_catalog_if_due(client, *, force: bool = False) -> bool:
     global _TARKETT_LAST_SYNC_ATTEMPT
     if not TARKETT_SYNC_ENABLED:
@@ -1993,7 +2001,14 @@ def sync_offiho_catalog_if_due(client, *, force: bool = False) -> bool:
 
     snapshot = client.catalog_snapshot_get("offiho")
     base_payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
-    if not isinstance(base_payload, dict):
+    if isinstance(base_payload, dict):
+        durable_version = _offiho_manifest_version(base_payload)
+        if durable_version is not None:
+            packaged_payload = _fallback_offiho_catalog_payload()
+            packaged_version = _offiho_manifest_version(packaged_payload)
+            if packaged_version is not None and packaged_version > durable_version:
+                base_payload = packaged_payload
+    else:
         base_payload = _fallback_offiho_catalog_payload()
 
     with tempfile.TemporaryDirectory(prefix="mobiliti-offiho-") as temp_dir:
