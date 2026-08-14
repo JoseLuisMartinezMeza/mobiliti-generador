@@ -420,6 +420,39 @@ def test_offiho_snapshot_upsert_uses_explicit_internal_api(monkeypatch):
     }
 
 
+def test_fetch_next_job_fails_closed_when_rest_authorization_is_false(monkeypatch):
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    client = quote_worker.SupabaseClient.__new__(quote_worker.SupabaseClient)
+
+    def fake_rest(_method, path, params=None, data=None):
+        if path == "/rpc/mobiliti_rest_authorized":
+            return False
+        return []
+
+    monkeypatch.setattr(client, "rest", fake_rest)
+
+    with pytest.raises(RuntimeError, match="no autorizado"):
+        quote_worker.fetch_next_job(client)
+
+
+def test_worker_cycle_failure_is_unhealthy(monkeypatch):
+    monkeypatch.setattr(render_web_worker, "state", {
+        "status": "degraded",
+        "processed": 0,
+        "last_run_at": "2026-08-14T05:00:00+00:00",
+        "last_error": "worker_cycle_failed",
+        "last_catalog_sync_at": None,
+        "last_catalog_sync_status": "disabled",
+        "last_rate_sync_at": None,
+        "last_rate_sync_status": "disabled",
+        "isolated_jobs": True,
+    })
+
+    payload = render_web_worker._health_payload()
+
+    assert payload["ok"] is False
+
+
 @pytest.mark.parametrize(
     ("tarkett_did_work", "offiho_did_work", "expected_calls", "expected_result"),
     [

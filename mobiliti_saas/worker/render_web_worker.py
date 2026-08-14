@@ -253,6 +253,7 @@ def _health_payload():
     with state_lock:
         current = dict(state)
     status = current.get("status")
+    last_error = current.get("last_error")
     catalog_status = current.get("last_catalog_sync_status")
     rate_status = current.get("last_rate_sync_status")
     if status not in {"starting", "running", "degraded", "stopping"}:
@@ -265,14 +266,14 @@ def _health_payload():
         "disabled", "never", "no_work", "misconfigured", "succeeded", "failed", "timeout",
     }:
         rate_status = "failed"
+    if last_error not in {None, "catalog_sync_failed", "worker_cycle_failed"}:
+        last_error = "worker_cycle_failed"
     return {
-        "ok": status in {"running", "degraded"},
+        "ok": status in {"running", "degraded"} and last_error != "worker_cycle_failed",
         "status": status,
         "processed": int(current.get("processed", 0)),
         "last_run_at": current.get("last_run_at"),
-        "last_error": current.get("last_error") if current.get("last_error") in {
-            None, "catalog_sync_failed", "worker_cycle_failed",
-        } else "worker_cycle_failed",
+        "last_error": last_error,
         "isolated_jobs": bool(current.get("isolated_jobs")),
         "last_catalog_sync_at": current.get("last_catalog_sync_at"),
         "last_catalog_sync_status": catalog_status,

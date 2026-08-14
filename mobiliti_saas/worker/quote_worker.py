@@ -1473,6 +1473,14 @@ def _run_generator(
 
 
 def fetch_next_job(client: SupabaseClient) -> dict | None:
+    if (
+        isinstance(client, SupabaseClient)
+        and not isinstance(client, PostgresClient)
+        and not os.environ.get("SUPABASE_SERVICE_KEY")
+    ):
+        authorized = client.rest("POST", "/rpc/mobiliti_rest_authorized", data={})
+        if authorized is not True:
+            raise RuntimeError("Worker REST no autorizado para saas_quote_jobs")
     rows = client.rest(
         "GET",
         "/saas_quote_jobs",
