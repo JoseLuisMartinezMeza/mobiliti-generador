@@ -101,6 +101,8 @@ def _upload_asset(object_name: str, local_path: Path) -> str:
         "Content-Type": content_type,
         "x-upsert": "false",
     }
+    if rest_secret := os.environ.get("MOBILITI_REST_SECRET"):
+        headers["x-mobiliti-rest-secret"] = rest_secret
     request = Request(
         f"{base_url}/storage/v1/object/catalog-assets/{encoded_name}",
         data=content,

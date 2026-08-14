@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -61,3 +62,39 @@ def test_local_promotion_stages_an_absent_cursor_without_manual_marker(monkeypat
     staged = next(call for call in calls if call[0] == "stage_candidate")
     assert staged[-1] is None
     assert all("manual://" not in repr(call) for call in calls)
+
+
+def test_asset_upload_with_anon_key_sends_authorized_rest_secret(monkeypatch, tmp_path):
+    module = _module()
+    content = b"catalog-image"
+    object_name = f"{hashlib.sha256(content).hexdigest()}.png"
+    source = tmp_path / object_name
+    source.write_bytes(content)
+    captured = {}
+
+    class Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b""
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setenv("SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co")
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "publishable-key")
+    monkeypatch.setenv("MOBILITI_REST_SECRET", "deployment-secret")
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+
+    assert module._upload_asset(object_name, source) == object_name
+    assert captured["timeout"] == 30
+    assert captured["request"].get_header("X-mobiliti-rest-secret") == "deployment-secret"
