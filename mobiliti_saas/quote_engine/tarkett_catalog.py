@@ -8,6 +8,7 @@ from typing import Any
 import json
 
 from .catalog_cart import create_catalog_quotation_workbook, parse_commercial_quantity
+from .catalog_collections import resolve_catalog_collection
 
 
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "tarkett_catalog.json"
@@ -49,6 +50,9 @@ class TarkettCatalogItem:
         return {
             "code": self.code,
             "name": self.name,
+            "collection": resolve_catalog_collection(
+                "tarkett", {"name": self.name, "product_url": self.product_url},
+            ),
             "unit": self.unit,
             "available_quantity": _json_number(self.available_quantity),
             "reserved_quantity": _json_number(reserved_quantity),

@@ -77,6 +77,7 @@ from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
     validate_mixed_catalog_payload,
 )
 from mobiliti_saas.quote_engine.catalog_search import search_catalog_products  # noqa: E402
+from mobiliti_saas.quote_engine.catalog_collections import resolve_catalog_collection  # noqa: E402
 from mobiliti_saas.quote_engine.project_model import (  # noqa: E402
     ASSET_KEY,
     normalize_project_payload,
@@ -3049,6 +3050,7 @@ def _supplier_catalog_response(supplier: str, usuario_id: int) -> dict:
     items = []
     for source_item in catalog["items"]:
         item = deepcopy(source_item)
+        item["collection"] = resolve_catalog_collection(supplier, item)
         reserved = totals.get(item["internal_id"], Decimal(0)) if item["availability_type"] == "stocked" else Decimal(0)
         try:
             stock = Decimal(str(item["stock"])) if item["stock"] is not None else None
@@ -5678,6 +5680,7 @@ def supplier_exchange_rates(base_currency: str = "USD", current_user: dict = Dep
 def catalog_search(
     q: str = "",
     supplier: str | None = None,
+    collection: str | None = None,
     offset: str = "0",
     limit: str = "20",
     current_user: dict = Depends(get_current_user),
@@ -5687,13 +5690,14 @@ def catalog_search(
         parsed_limit = _catalog_search_integer(limit, "limit", 1, 50)
         # Valida todos los controles antes de abrir un catalogo publicado.
         search_catalog_products(
-            {}, query=q, supplier=supplier, offset=parsed_offset, limit=parsed_limit,
+            {}, query=q, supplier=supplier, collection=collection,
+            offset=parsed_offset, limit=parsed_limit,
         )
         clean_supplier = supplier.strip().lower() if supplier is not None else None
         _require_active_subscription(current_user["id"])
         snapshots = _catalog_search_snapshots(current_user["id"], clean_supplier)
         return search_catalog_products(
-            snapshots, query=q, supplier=clean_supplier,
+            snapshots, query=q, supplier=clean_supplier, collection=collection,
             offset=parsed_offset, limit=parsed_limit,
         )
     except HTTPException:

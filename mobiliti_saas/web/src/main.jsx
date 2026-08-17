@@ -1028,6 +1028,7 @@ function TarkettView({ token, userId, cartLines, onAddCartLine, onOpenCart, cart
   const { request } = useApi(token);
   const [catalog, setCatalog] = useState({ source_hash: "", generated_at: "", total: 0, items: [] });
   const [query, setQuery] = useState("");
+  const [collectionFilter, setCollectionFilter] = useState("all");
   const [unitFilter, setUnitFilter] = useState("all");
   const [quantityDraftsByCode, setQuantityDraftsByCode] = useState({});
   const [loading, setLoading] = useState(true);
@@ -1072,15 +1073,20 @@ function TarkettView({ token, userId, cartLines, onAddCartLine, onOpenCart, cart
     const units = new Set((catalog.items || []).map((item) => item.unit).filter(Boolean));
     return Array.from(units).sort((a, b) => a.localeCompare(b, "es"));
   }, [catalog.items]);
+  const collectionOptions = useMemo(() => {
+    const collections = new Set((catalog.items || []).map((item) => item.collection).filter(Boolean));
+    return Array.from(collections).sort((a, b) => a.localeCompare(b, "es"));
+  }, [catalog.items]);
 
   const filteredItems = useMemo(() => {
     const cleanQuery = normalizeCatalogText(query);
     return (catalog.items || []).filter((item) => {
+      const matchesCollection = collectionFilter === "all" || item.collection === collectionFilter;
       const matchesUnit = unitFilter === "all" || item.unit === unitFilter;
-      const haystack = normalizeCatalogText(`${item.code} ${item.name} ${item.unit}`);
-      return matchesUnit && (!cleanQuery || haystack.includes(cleanQuery));
+      const haystack = normalizeCatalogText(`${item.code} ${item.name} ${item.collection} ${item.unit}`);
+      return matchesCollection && matchesUnit && (!cleanQuery || haystack.includes(cleanQuery));
     });
-  }, [catalog.items, query, unitFilter]);
+  }, [catalog.items, collectionFilter, query, unitFilter]);
 
   function addTarkettItem(item) {
     const existing = cartLines.find((line) => line.catalog === "tarkett" && line.identity.code === item.code);
@@ -1143,6 +1149,10 @@ function TarkettView({ token, userId, cartLines, onAddCartLine, onOpenCart, cart
               <Search size={18} />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar clave, producto o unidad" />
             </label>
+            <select value={collectionFilter} onChange={(event) => setCollectionFilter(event.target.value)} aria-label="Filtrar por colección">
+              <option value="all">Todas las colecciones</option>
+              {collectionOptions.map((collection) => <option key={collection} value={collection}>{collection}</option>)}
+            </select>
             <select value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
               <option value="all">Todas las unidades</option>
               {unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
@@ -1229,6 +1239,7 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
   const { request } = useApi(token);
   const [catalog, setCatalog] = useState({ source_hash: "", generated_at: "", total: 0, items: [] });
   const [query, setQuery] = useState("");
+  const [collectionFilter, setCollectionFilter] = useState("all");
   const [unitFilter, setUnitFilter] = useState("all");
   const [availabilityFilter, setAvailabilityFilter] = useState("all");
   const [page, setPage] = useState(1);
@@ -1316,21 +1327,23 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
   }, [request, reloadKey, userId]);
 
   const unitOptions = useMemo(() => Array.from(new Set((catalog.items || []).map((item) => item.unit).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [catalog.items]);
+  const collectionOptions = useMemo(() => Array.from(new Set((catalog.items || []).map((item) => item.collection).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [catalog.items]);
   const filteredItems = useMemo(() => {
     const cleanQuery = normalizeOffihoText(query);
     return (catalog.items || []).filter((item) => {
       const available = offihoStockLimit(item);
+      const matchesCollection = collectionFilter === "all" || item.collection === collectionFilter;
       const matchesUnit = unitFilter === "all" || item.unit === unitFilter;
       const matchesAvailability = availabilityFilter === "all" || (availabilityFilter === "available" && available > 0) || (availabilityFilter === "out" && available <= 0);
-      const haystack = normalizeOffihoText(`${item.inventory_key} ${item.code} ${item.name} ${item.variant} ${item.unit}`);
-      return matchesUnit && matchesAvailability && (!cleanQuery || haystack.includes(cleanQuery));
+      const haystack = normalizeOffihoText(`${item.inventory_key} ${item.code} ${item.name} ${item.variant} ${item.collection} ${item.unit}`);
+      return matchesCollection && matchesUnit && matchesAvailability && (!cleanQuery || haystack.includes(cleanQuery));
     });
-  }, [availabilityFilter, catalog.items, query, unitFilter]);
+  }, [availabilityFilter, catalog.items, collectionFilter, query, unitFilter]);
   const pageCount = Math.max(1, Math.ceil(filteredItems.length / OFFIHO_PAGE_SIZE));
   const pageStart = (page - 1) * OFFIHO_PAGE_SIZE;
   const pagedItems = useMemo(() => filteredItems.slice(pageStart, pageStart + OFFIHO_PAGE_SIZE), [filteredItems, pageStart]);
 
-  useEffect(() => { setPage(1); }, [availabilityFilter, query, unitFilter]);
+  useEffect(() => { setPage(1); }, [availabilityFilter, collectionFilter, query, unitFilter]);
   useEffect(() => { setPage((current) => Math.min(current, pageCount)); }, [pageCount]);
 
   function changeOffihoDraft(inventoryKey, rawQuantity) {
@@ -1430,6 +1443,7 @@ function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartB
         <div className="tarkett-catalog">
           <div className="tarkett-toolbar offiho-toolbar">
             <label className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar clave, modelo, variante o producto" aria-label="Buscar catalogo Offiho" /></label>
+            <select value={collectionFilter} onChange={(event) => setCollectionFilter(event.target.value)} aria-label="Filtrar por colección"><option value="all">Todas las colecciones</option>{collectionOptions.map((collection) => <option key={collection} value={collection}>{collection}</option>)}</select>
             <select value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)} aria-label="Filtrar por unidad"><option value="all">Todas las unidades</option>{unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select>
             <select value={availabilityFilter} onChange={(event) => setAvailabilityFilter(event.target.value)} aria-label="Filtrar por disponibilidad"><option value="all">Toda disponibilidad</option><option value="available">Con existencia</option><option value="out">Agotados</option></select>
             <span role="status" aria-live="polite">{loading ? (reloadKey ? "Refrescando..." : "Cargando...") : `${filteredItems.length} visibles`}</span>
@@ -2218,7 +2232,7 @@ function createMixedQuoteController({
         const failure = new Error(
           finalJob.error_message || "La cotizacion fallo; el proyecto se conservo para reintentar.",
         );
-        setError(failure.message);
+        if (!propagateFailure) setError(failure.message);
         setNotice("");
         setOpen(true);
         if (propagateFailure) throw failure;
@@ -2234,7 +2248,9 @@ function createMixedQuoteController({
       return finalJob;
     } catch (quoteFailure) {
       if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
-      setError(quoteFailure.message || "No se pudo generar la cotizacion mixta");
+      if (!propagateFailure) {
+        setError(quoteFailure.message || "No se pudo generar la cotizacion mixta");
+      }
       if (propagateFailure) throw quoteFailure;
     } finally {
       if (submissionEpoch === mixedQuoteSessionEpochRef.current) {

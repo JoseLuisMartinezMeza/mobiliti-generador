@@ -1,5 +1,5 @@
 import {useEffect, useMemo, useState} from "react";
-import {ImageOff, Trash2} from "lucide-react";
+import {ClipboardPaste, Copy, ImageOff, Trash2} from "lucide-react";
 
 import ImportedCartLineFields from "./ImportedCartLineFields";
 import {createImportedLineDraft} from "./importedCartLineDraft.js";
@@ -13,11 +13,13 @@ import {
   MAX_MIXED_CART_SECTIONS,
   addProjectComplement,
   closeMixedCartSection,
+  copyProjectLineTree,
   createMixedCartLine,
   groupMixedCartLines,
   mergeMixedCartSection,
   moveMixedCartLine,
   moveMixedCartLineToSection,
+  pasteProjectLineTree,
   projectComplements,
   projectLineHasMatchIdentity,
   projectLineMatches,
@@ -234,6 +236,7 @@ export default function ProjectEditor({
   const [activeTab, setActiveTab] = useState("products");
   const [picker, setPicker] = useState(null);
   const [pendingComplement, setPendingComplement] = useState(null);
+  const [projectClipboard, setProjectClipboard] = useState(null);
   const [error, setError] = useState("");
   const [generating, setGenerating] = useState(false);
   const lines = project?.lines || [];
@@ -262,6 +265,10 @@ export default function ProjectEditor({
     }
   }, [pendingComplement]);
   const disabled = generating || autosave?.status === "conflict";
+
+  useEffect(() => {
+    setProjectClipboard(null);
+  }, [project?.id]);
 
   function commit(next) {
     setError("");
@@ -378,6 +385,23 @@ export default function ProjectEditor({
       commitLines(removeProjectLineTree(lines, lineId));
     } catch (failure) {
       setError(failure.message || "No se pudo quitar el producto.");
+    }
+  }
+
+  function copyLine(lineId) {
+    try {
+      setError("");
+      setProjectClipboard(copyProjectLineTree(lines, lineId));
+    } catch (failure) {
+      setError(failure.message || "No se pudo copiar el producto.");
+    }
+  }
+
+  function pasteLine(targetLineId) {
+    try {
+      commitLines(pasteProjectLineTree(lines, projectClipboard, targetLineId));
+    } catch (failure) {
+      setError(failure.message || "No se pudo pegar el producto.");
     }
   }
 
@@ -559,6 +583,29 @@ export default function ProjectEditor({
                                 </option>
                               ))}
                             </select>
+                            <button
+                              className="project-line-clipboard-action"
+                              type="button"
+                              disabled={disabled}
+                              aria-label={`Copiar ${line.snapshot.name}`}
+                              aria-pressed={projectClipboard?.sourceLineId === line.lineId}
+                              title="Copiar item con todos sus complementos"
+                              onClick={() => copyLine(line.lineId)}
+                            >
+                              <Copy size={17} aria-hidden="true" />
+                              Copiar
+                            </button>
+                            <button
+                              className="project-line-clipboard-action"
+                              type="button"
+                              disabled={disabled || !projectClipboard}
+                              aria-label={`Pegar antes de ${line.snapshot.name}`}
+                              title="Insertar la copia antes de este item"
+                              onClick={() => pasteLine(line.lineId)}
+                            >
+                              <ClipboardPaste size={17} aria-hidden="true" />
+                              Pegar
+                            </button>
                             <button type="button" disabled={disabled} onClick={() => openPicker("replace-one", line)}>
                               Cambiar producto
                             </button>

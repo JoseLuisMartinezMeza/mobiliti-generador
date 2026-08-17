@@ -9,6 +9,7 @@ import json
 from urllib.parse import urlsplit
 
 from .catalog_cart import OFFICIAL_IMAGE_HOSTS, parse_commercial_quantity
+from .catalog_collections import resolve_catalog_collection
 
 
 CATALOG_PATH = Path(__file__).resolve().parent / "data" / "offiho_catalog.json"
@@ -134,6 +135,16 @@ class OffihoCatalogItem:
             "inventory_key": self.inventory_key,
             "code": self.code,
             "name": self.name,
+            "collection": resolve_catalog_collection(
+                "offiho",
+                {
+                    "product_url": self.product_url,
+                    "image_url": self.image_url,
+                    "match_status": self.match_status,
+                    "description_source": self.description_source,
+                    "image_references": self.image_references,
+                },
+            ),
             "variant": self.variant,
             "unit": self.unit,
             "pieces_per_box": _json_number(self.pieces_per_box),

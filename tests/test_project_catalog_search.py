@@ -49,6 +49,7 @@ def test_search_returns_safe_display_price_and_dimensions_without_private_source
         "snapshot": {
             "name": "Olíve II Chair",
             "code": "OLIVE-II",
+            "collection": "Sillas",
             "image_url": "https://assets.example/sunon.png",
             "dimensions": "600 x 600 mm",
             "availability": "Disponible",
@@ -434,6 +435,42 @@ def test_search_omits_identity_that_fails_mixed_catalog_preflight():
 def test_search_rejects_non_allowlisted_supplier():
     with pytest.raises(ValueError, match="Catalogo no permitido"):
         search_catalog_products({}, query="silla", supplier="cliente", offset=0, limit=20)
+
+
+def test_search_lists_and_filters_derived_collections_for_one_supplier():
+    catalogs = {
+        "sunon": {
+            "items": [
+                _supplier_item("sunon", "Aulenti Task Chair", "CHAIR-1"),
+                _supplier_item("sunon", "Manager Desk", "DESK-1"),
+            ]
+        }
+    }
+
+    result = search_catalog_products(
+        catalogs,
+        query="",
+        supplier="sunon",
+        collection="Sillas operativas",
+        offset=0,
+        limit=20,
+    )
+
+    assert result["collections"] == ["Escritorios", "Sillas operativas"]
+    assert result["total"] == 1
+    assert result["items"][0]["official_code"] == "CHAIR-1"
+    assert result["items"][0]["snapshot"]["collection"] == "Sillas operativas"
+
+
+def test_search_rejects_collection_without_supplier_or_with_control_characters():
+    with pytest.raises(ValueError, match="proveedor"):
+        search_catalog_products(
+            {}, query="", supplier=None, collection="Sillas", offset=0, limit=20,
+        )
+    with pytest.raises(ValueError, match="collection invalida"):
+        search_catalog_products(
+            {}, query="", supplier="sunon", collection="Sillas\x01", offset=0, limit=20,
+        )
 
 
 def test_search_sanitizes_metadata_with_closed_availability_and_warnings():

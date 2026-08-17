@@ -46,6 +46,8 @@ export default function ProductPickerDialog({
 }) {
   const [query, setQuery] = useState("");
   const [supplier, setSupplier] = useState("");
+  const [collection, setCollection] = useState("");
+  const [collections, setCollections] = useState([]);
   const [results, setResults] = useState([]);
   const [selected, setSelected] = useState(null);
   const [selectedBaseOptionId, setSelectedBaseOptionId] = useState("");
@@ -78,6 +80,8 @@ export default function ProductPickerDialog({
     if (!open) {
       setQuery("");
       setSupplier("");
+      setCollection("");
+      setCollections([]);
       setResults([]);
       setSelected(null);
       setSelectedBaseOptionId("");
@@ -106,12 +110,21 @@ export default function ProductPickerDialog({
     const timer = window.setTimeout(async () => {
       try {
         const response = await request(
-          buildCatalogSearchPath({query, supplier, offset, limit: PAGE_SIZE}),
+          buildCatalogSearchPath({
+            query, supplier, collection, offset, limit: PAGE_SIZE,
+          }),
           {signal: controller.signal},
         );
         if (controller.signal.aborted || requestVersion !== requestVersionRef.current) return;
         const items = Array.isArray(response?.items) ? response.items : [];
+        const nextCollections = supplier && Array.isArray(response?.collections)
+          ? response.collections.filter((value) => typeof value === "string" && value.trim())
+          : [];
         setResults(items);
+        setCollections(nextCollections);
+        setCollection((current) => (
+          current && !nextCollections.includes(current) ? "" : current
+        ));
         setTotal(Number(response?.total) || 0);
         setSelected((current) => (
           current && items.some((item) => (
@@ -121,6 +134,7 @@ export default function ProductPickerDialog({
       } catch (requestError) {
         if (controller.signal.aborted || requestVersion !== requestVersionRef.current) return;
         setResults([]);
+        setCollections([]);
         setTotal(0);
         setSelected(null);
         setSelectedBaseOptionId("");
@@ -136,7 +150,7 @@ export default function ProductPickerDialog({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [open, query, supplier, offset, request]);
+  }, [open, query, supplier, collection, offset, request]);
 
   const rangeLabel = useMemo(() => {
     if (!total) return "0–0 de 0";
@@ -234,6 +248,8 @@ export default function ProductPickerDialog({
               value={supplier}
               onChange={(event) => {
                 setSupplier(event.target.value);
+                setCollection("");
+                setCollections([]);
                 setOffset(0);
                 setSelected(null);
                 setSelectedBaseOptionId("");
@@ -242,6 +258,28 @@ export default function ProductPickerDialog({
             >
               <option value="">Todos los proveedores</option>
               {CATALOG_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>
+            Colección
+            <select
+              aria-label="Colección"
+              value={collection}
+              disabled={!supplier}
+              onChange={(event) => {
+                setCollection(event.target.value);
+                setOffset(0);
+                setSelected(null);
+                setSelectedBaseOptionId("");
+                setSelectedAddOnOptionIds([]);
+              }}
+            >
+              <option value="">
+                {supplier ? "Todas las colecciones" : "Selecciona un proveedor"}
+              </option>
+              {collections.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
             </select>
           </label>
         </div>
@@ -284,6 +322,9 @@ export default function ProductPickerDialog({
                     <span className="project-picker-result-copy">
                       <strong>{itemSnapshot.name || "Producto sin nombre"}</strong>
                       <span>{catalogLabel(item.catalog)}</span>
+                      {itemSnapshot.collection ? (
+                        <small>Colección: {itemSnapshot.collection}</small>
+                      ) : null}
                       {itemVariantConfiguration ? (
                         <small>Acabado / material del aro: {itemVariantConfiguration}</small>
                       ) : null}
@@ -325,6 +366,7 @@ export default function ProductPickerDialog({
                   : <span className="project-picker-no-image">Sin imagen</span>}
                 <strong>{preview.name}</strong>
                 <span>{previewSupplier || "Proveedor no disponible"}</span>
+                {preview.collection ? <span>Colección: {preview.collection}</span> : null}
                 <span>Código: {selected.official_code || "Código por verificar"}</span>
                 {!selected.official_code ? (
                   <span>Referencia técnica: {productTechnicalKey(selected)}</span>

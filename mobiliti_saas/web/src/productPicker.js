@@ -18,13 +18,22 @@ export function catalogLabel(catalog) {
   return CATALOG_LABELS.get(catalog) || "Catálogo no disponible";
 }
 
-export function buildCatalogSearchPath({query = "", supplier = "", offset = 0, limit = 20}) {
+export function buildCatalogSearchPath({
+  query = "",
+  supplier = "",
+  collection = "",
+  offset = 0,
+  limit = 20,
+}) {
   const params = new URLSearchParams({
     q: String(query),
     offset: String(offset),
     limit: String(limit),
   });
-  if (CATALOG_LABELS.has(supplier)) params.set("supplier", supplier);
+  if (CATALOG_LABELS.has(supplier)) {
+    params.set("supplier", supplier);
+    if (String(collection).trim()) params.set("collection", String(collection).trim());
+  }
   return `/catalogs/search?${params.toString()}`;
 }
 

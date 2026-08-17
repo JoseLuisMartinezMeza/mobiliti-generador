@@ -144,13 +144,21 @@ def test_catalog_search_requires_authentication_subscription_and_valid_query(mon
         {"q": "olive", "limit": "true"},
         {"q": "olive", "limit": "0"},
         {"q": "olive", "limit": "51"},
+        {"q": "olive", "collection": "Sillas"},
+        {"q": "olive", "supplier": "sunon", "collection": "Sillas\x01"},
     ):
         assert client.get("/catalogs/search", params=params, headers=_auth_headers(7)).status_code == 400
     assert calls == []
 
     response = client.get(
         "/catalogs/search",
-        params={"q": "OLÍVE", "supplier": "sunon", "offset": "0", "limit": "1"},
+        params={
+            "q": "OLÍVE",
+            "supplier": "sunon",
+            "collection": "Sillas",
+            "offset": "0",
+            "limit": "1",
+        },
         headers=_auth_headers(7),
     )
     assert response.status_code == 200, response.json()
@@ -163,12 +171,14 @@ def test_catalog_search_requires_authentication_subscription_and_valid_query(mon
     assert response.json()["items"][0]["snapshot"] == {
         "name": "Olive II Chair",
         "code": "OLIVE-II",
+        "collection": "Sillas",
         "image_url": "https://assets.example/olive.png",
         "dimensions": "",
         "availability": "Fabricación por confirmar",
         "configuration": "",
         "warnings": ["Fabricación por confirmar"],
     }
+    assert response.json()["collections"] == ["Sillas"]
 
     monkeypatch.setattr(index, "_require_active_subscription", lambda _usuario_id: (_ for _ in ()).throw(RuntimeError("down")))
     assert client.get("/catalogs/search?q=olive", headers=_auth_headers(7)).status_code == 503

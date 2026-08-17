@@ -24,14 +24,27 @@ IMPORT_PREVIEW_IMAGE = (
 TARKETT_CATALOG = {
     "source_hash": "tarkett-e2e",
     "generated_at": "2026-07-19T20:00:00Z",
-    "total": 1,
+    "total": 2,
     "items": [{
         "code": "25731726",
         "name": "Piso Tarkett",
+        "collection": "Ambienta Series",
         "unit": "M2",
         "unit_price": "650.00",
         "price_source": "catalog",
         "available_quantity": "10",
+        "reserved_quantity": "0",
+        "reserved_by_others": False,
+        "image_url": "",
+        "product_url": "",
+    }, {
+        "code": "712199002",
+        "name": "Desso Defend",
+        "collection": "Desso Defend",
+        "unit": "M2",
+        "unit_price": "333.10",
+        "price_source": "catalog",
+        "available_quantity": "8",
         "reserved_quantity": "0",
         "reserved_by_others": False,
         "image_url": "",
@@ -47,6 +60,7 @@ OFFIHO_CATALOG = {
         "inventory_key": "OFF-1",
         "code": "OFF-1",
         "name": "Silla Offiho",
+        "collection": "Offiho",
         "variant": "Negro",
         "unit": "PZA",
         "pieces_per_box": "1",
@@ -66,6 +80,7 @@ OFFIHO_CATALOG = {
         "inventory_key": "OHE-405 NEGRO ALUFSEN",
         "code": "OHE-405",
         "name": "ALUFSEN",
+        "collection": "Offiho Black",
         "variant": "NEGRO",
         "unit": "PZA",
         "pieces_per_box": "1",
@@ -330,10 +345,38 @@ def test_project_survives_reload_and_supports_replacements_and_complements(
         complement.wait_for(state="visible")
         assert complement.count() == 1
 
+        principals = page.locator("article.project-principal")
+        principals.nth(0).get_by_role(
+            "button", name="Copiar OLIVE-II", exact=True
+        ).click()
+        principals.nth(1).get_by_role(
+            "button", name="Pegar antes de OLIVE-II", exact=True
+        ).click()
+        assert principals.count() == 3
+        assert page.get_by_text("+ HEAD-1", exact=True).count() == 2
+
         page.locator(".project-autosave-status.saved").wait_for(state="visible")
         assert stub.project_revision > 0
         persisted = deepcopy(stub.saved_project)
-        assert len(persisted["payload"]["lines"]) == 3
+        assert len(persisted["payload"]["lines"]) == 5
+        principal_lines = sorted(
+            (
+                line for line in persisted["payload"]["lines"]
+                if line["role"] == "principal"
+            ),
+            key=lambda line: line["position"],
+        )
+        assert [line["position"] for line in principal_lines] == [0, 1, 2]
+        complement_lines = [
+            line for line in persisted["payload"]["lines"]
+            if line["role"] == "complement"
+        ]
+        assert len({line["parent_line_id"] for line in complement_lines}) == 2
+        assert all(line["quantity"] == "2" for line in complement_lines)
+        assert all(
+            line["quantity_mode"] == "fixed_project"
+            for line in complement_lines
+        )
 
         page.reload()
         page.get_by_role("button", name="Proyectos", exact=True).click()
@@ -341,8 +384,8 @@ def test_project_survives_reload_and_supports_replacements_and_complements(
             ".project-card", has_text="QA Proyecto persistente"
         )
         project_card.get_by_role("button", name="Abrir", exact=True).click()
-        assert page.get_by_text("OLIVE-II", exact=True).count() == 2
-        assert page.get_by_text("+ HEAD-1", exact=True).count() == 1
+        assert page.get_by_text("OLIVE-II", exact=True).count() == 3
+        assert page.get_by_text("+ HEAD-1", exact=True).count() == 2
         assert stub.saved_project == persisted
 
         page.set_viewport_size({"width": 390, "height": 844})
@@ -361,12 +404,89 @@ def test_project_survives_reload_and_supports_replacements_and_complements(
         context.close()
 
 
+def test_complement_picker_filters_results_by_supplier_collection(vite_url, browser):
+    stub = ApiStub([])
+    stub.enable_project_routes(project_id=PROJECT_ID)
+    context, page = new_page(
+        browser, {"width": 1440, "height": 1000}, stub, vite_url
+    )
+    try:
+        page.goto(vite_url)
+        create_active_project(page, "QA colecciones en complementos")
+
+        page.get_by_role("button", name="Agregar producto", exact=True).click()
+        picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Buscar producto", exact=True).fill("OLIVE-II")
+        picker.get_by_role(
+            "button", name=re.compile("OLIVE-II", re.IGNORECASE)
+        ).click()
+        picker.get_by_role(
+            "button", name="Agregar al Proyecto", exact=True
+        ).click()
+
+        page.get_by_role(
+            "button", name="Agregar complemento", exact=True
+        ).click()
+        picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Proveedor", exact=True).select_option("sunon")
+        collection = picker.get_by_label("Colección", exact=True)
+        collection.locator('option[value="Escritorios"]').wait_for(state="attached")
+        assert collection.locator("option").all_text_contents() == [
+            "Todas las colecciones",
+            "Escritorios",
+            "Sillas operativas",
+        ]
+
+        collection.select_option("Escritorios")
+        picker.get_by_role(
+            "button", name=re.compile("DESK-1", re.IGNORECASE)
+        ).wait_for()
+        assert picker.get_by_text("OLIVE-II", exact=True).count() == 0
+        assert any(
+            "supplier=sunon" in query
+            and "collection=Escritorios" in query
+            for query in stub.catalog_search_queries
+        )
+        assert stub.unexpected_requests == []
+    finally:
+        context.close()
+
+
+def test_project_quote_failure_is_rendered_once(vite_url, browser):
+    message = "La tasa de conversion esta vencida"
+    stub = ApiStub([(400, {"detail": message})])
+    stub.enable_project_routes(project_id=PROJECT_ID)
+    context, page = new_page(
+        browser, {"width": 1440, "height": 1000}, stub, vite_url
+    )
+    try:
+        page.goto(vite_url)
+        create_active_project(page, "QA error unico")
+        add_catalog_product(
+            page, "Tarkett", "Piso Tarkett", close_panel=False
+        )
+        editor = open_project_editor_from_quick_panel(page)
+        fill_required_fields(editor)
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+
+        editor.get_by_role(
+            "button", name=re.compile("^Generar cotizaci")
+        ).click()
+        page.get_by_text(message, exact=True).first.wait_for(state="visible")
+
+        assert page.get_by_text(message, exact=True).count() == 1
+        assert stub.unexpected_requests == []
+    finally:
+        context.close()
+
+
 class ApiStub:
     def __init__(self, mixed_responses, import_preview=None, offiho_catalogs=None):
         self.mixed_responses = list(mixed_responses)
         self.import_preview = import_preview
         self.offiho_catalogs = list(offiho_catalogs or [OFFIHO_CATALOG])
         self.offiho_get_queries = []
+        self.catalog_search_queries = []
         self.mixed_post_bodies = []
         self.upload_count = 0
         self.unexpected_requests = []
@@ -619,8 +739,10 @@ class ApiStub:
                 and request.method == "GET"
                 and path == "/catalogs/search"
             ):
+                self.catalog_search_queries.append(parsed.query)
                 products = [{
                     "catalog": "sunon",
+                    "collection": "Sillas operativas",
                     "quotable": True,
                     "official_code": "OLIVE-II",
                     "identity": {
@@ -631,6 +753,26 @@ class ApiStub:
                     "snapshot": {
                         "name": "OLIVE-II",
                         "code": "OLIVE-II",
+                        "collection": "Sillas operativas",
+                        "image_url": IMPORT_PREVIEW_IMAGE,
+                        "availability": "Disponible",
+                        "configuration": "",
+                        "warnings": [],
+                    },
+                }, {
+                    "catalog": "sunon",
+                    "collection": "Escritorios",
+                    "quotable": True,
+                    "official_code": "DESK-1",
+                    "identity": {
+                        "internal_id": "sunon:desk-1",
+                        "base_option_id": "",
+                        "add_on_option_ids": [],
+                    },
+                    "snapshot": {
+                        "name": "DESK-1",
+                        "code": "DESK-1",
+                        "collection": "Escritorios",
                         "image_url": IMPORT_PREVIEW_IMAGE,
                         "availability": "Disponible",
                         "configuration": "",
@@ -638,6 +780,7 @@ class ApiStub:
                     },
                 }, {
                     "catalog": "alma",
+                    "collection": "VATICAN",
                     "quotable": True,
                     "official_code": "HEAD-1",
                     "identity": {
@@ -648,16 +791,39 @@ class ApiStub:
                     "snapshot": {
                         "name": "HEAD-1",
                         "code": "HEAD-1",
+                        "collection": "VATICAN",
                         "image_url": IMPORT_PREVIEW_IMAGE,
                         "availability": "Disponible",
                         "configuration": "",
                         "warnings": [],
                     },
                 }]
+                params = parse_qs(parsed.query)
+                supplier = params.get("supplier", [""])[0]
+                collection = params.get("collection", [""])[0]
+                query = params.get("q", [""])[0].casefold()
+                supplier_products = [
+                    product for product in products
+                    if not supplier or product["catalog"] == supplier
+                ]
+                collections = sorted({
+                    product["collection"] for product in supplier_products
+                }) if supplier else []
+                visible_products = [
+                    product for product in supplier_products
+                    if (
+                        not collection or product["collection"] == collection
+                    ) and (
+                        not query
+                        or query in product["official_code"].casefold()
+                        or query in product["snapshot"]["name"].casefold()
+                    )
+                ]
                 fulfill_json(route, {
-                    "items": deepcopy(products),
-                    "total": len(products),
+                    "items": deepcopy(visible_products),
+                    "total": len(visible_products),
                     "next_offset": None,
+                    "collections": collections,
                 })
                 return
             if request.method == "POST" and path == "/cotizaciones/init-upload":
@@ -1003,6 +1169,52 @@ def test_offiho_refresh_requests_fresh_snapshot_and_replaces_visible_stock(vite_
         page.get_by_text("Existencia 3", exact=True).wait_for()
         assert stub.offiho_get_queries == ["", "fresh=1"]
         assert page.get_by_text(re.compile(r"11 ago 2026"), exact=False).count() > 0
+        assert stub.unexpected_requests == []
+    finally:
+        context.close()
+
+
+def test_offiho_catalog_filters_visible_products_by_collection(vite_url, browser):
+    stub = ApiStub([])
+    context, page = new_page(browser, {"width": 1280, "height": 900}, stub, vite_url)
+    try:
+        page.goto(vite_url)
+        page.get_by_role("button", name=re.compile(r"^Offiho")).click()
+        page.get_by_text("Silla Offiho", exact=True).wait_for()
+
+        collection = page.get_by_label("Filtrar por colección", exact=True)
+        assert collection.locator("option").all_text_contents() == [
+            "Todas las colecciones",
+            "Offiho",
+            "Offiho Black",
+        ]
+        collection.select_option("Offiho Black")
+
+        page.get_by_text("ALUFSEN", exact=True).wait_for()
+        assert page.get_by_text("Silla Offiho", exact=True).count() == 0
+        assert stub.unexpected_requests == []
+    finally:
+        context.close()
+
+
+def test_tarkett_catalog_filters_visible_products_by_collection(vite_url, browser):
+    stub = ApiStub([])
+    context, page = new_page(browser, {"width": 1280, "height": 900}, stub, vite_url)
+    try:
+        page.goto(vite_url)
+        page.get_by_role("button", name=re.compile(r"^Tarkett")).click()
+        page.get_by_text("Piso Tarkett", exact=True).wait_for()
+
+        collection = page.get_by_label("Filtrar por colección", exact=True)
+        assert collection.locator("option").all_text_contents() == [
+            "Todas las colecciones",
+            "Ambienta Series",
+            "Desso Defend",
+        ]
+        collection.select_option("Desso Defend")
+
+        page.locator("article.tarkett-product", has_text="Desso Defend").wait_for()
+        assert page.get_by_text("Piso Tarkett", exact=True).count() == 0
         assert stub.unexpected_requests == []
     finally:
         context.close()

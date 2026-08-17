@@ -362,8 +362,9 @@ def _extract_usd_mxn_rate(payload: bytes | str) -> float | None:
 def _fetch_latest_usd_mxn_row() -> dict[str, str] | None:
     """Obtiene la referencia diaria USD/MXN más reciente disponible."""
 
+    reference_day = date.today()
     request = Request(
-        FRANKFURTER_USD_MXN_URL,
+        f"{FRANKFURTER_USD_MXN_URL}?date={reference_day.isoformat()}&providers=BANXICO",
         headers={"User-Agent": "mobiliti-quote-engine/1.0"},
     )
     try:
@@ -379,7 +380,7 @@ def _fetch_latest_usd_mxn_row() -> dict[str, str] | None:
         effective_day = date.fromisoformat(effective_date)
     except ValueError:
         return None
-    if effective_day > date.today():
+    if effective_day > reference_day:
         return None
     if (
         not rate

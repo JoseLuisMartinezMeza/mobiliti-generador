@@ -128,6 +128,147 @@ def test_occurrences_replace_one_all_and_remove_principal_complements():
     }
 
 
+def test_copy_paste_inserts_an_independent_snapshot_before_target_with_complements():
+    result = run_js(r"""
+      const sourceId = "11111111-1111-4111-8111-111111111111";
+      const targetId = "22222222-2222-4222-8222-222222222222";
+      const childId = "33333333-3333-4333-8333-333333333333";
+      const base = model.hydrateProject({
+        schema_version: 1,
+        quote_fields: {
+          proyecto: "Proyecto", cliente: "Cliente", correo: "", telefono: "",
+          direccion: "", razon_social: "", quote_currency: "MXN", descuento: "40",
+          template: "official_2026_gdl", description_language: "es",
+        },
+        sections: [
+          {section_id: "section-1", concept: "Origen", position: 0},
+          {section_id: "section-2", concept: "Destino", position: 1},
+        ],
+        lines: [{
+          line_id: sourceId,
+          role: "principal",
+          section_id: "section-1",
+          parent_line_id: null,
+          position: 0,
+          quantity: "3",
+          source: "imported",
+          official_code: "IMP-1",
+          display_cache: {
+            name: "Mesa importada", code: "IMP-1", image_url: "",
+            configuration: "Nogal con electrificacion",
+          },
+          import_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          source_row: 9,
+          source_currency: "USD",
+          provider: "Proveedor original",
+          name: "Mesa configurada",
+          description: "Descripcion editada",
+          dimension: "240 x 120 cm",
+          unit_price: "125.50",
+          image_asset_key: "projects/1/project/images/source-row-9.png",
+          source_asset_key: "projects/1/project/sources/source.xlsx",
+        }, {
+          line_id: targetId,
+          role: "principal",
+          section_id: "section-2",
+          parent_line_id: null,
+          position: 0,
+          quantity: "1",
+          source: "catalog",
+          official_code: "TARGET-1",
+          display_cache: {name: "Destino", code: "TARGET-1", image_url: ""},
+          catalog: "sunon",
+          identity: {
+            internal_id: "sunon:target", base_option_id: "", add_on_option_ids: [],
+          },
+          quantity_rules_cache: {
+            min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true,
+          },
+        }],
+      });
+      let lines = model.addProjectComplement(base.lines, sourceId, {
+        lineId: childId,
+        catalog: "alma",
+        identity: {
+          internal_id: "alma:power", base_option_id: "base-nogal",
+          add_on_option_ids: ["usb", "contacto"],
+        },
+        officialCode: "POWER-1",
+        provider: "ALMA",
+        quantity: "2",
+        quantityRules: {
+          min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true,
+        },
+        snapshot: {
+          name: "Modulo electrico", code: "POWER-1", image_url: "", unit: "PZA",
+          availability: "Sobre pedido", configuration: "USB + contacto", warnings: [],
+        },
+      }, "fixed_project");
+
+      const clipboard = model.copyProjectLineTree(lines, sourceId);
+      lines = model.updateImportedCartLine(lines, lines[0].key, {
+        name: "Fuente modificada despues de copiar",
+        unitPrice: "999.00",
+      });
+      const pastedLines = model.pasteProjectLineTree(lines, clipboard, targetId);
+      const pasted = pastedLines.find((line) => (
+        line.role === "principal"
+        && line.sectionId === "section-2"
+        && line.officialCode === "IMP-1"
+      ));
+      const pastedChild = model.projectComplements(pastedLines, pasted.lineId)[0];
+      const saved = model.serializeProject({...base, lines: pastedLines});
+      const reopened = model.hydrateProject(saved);
+      const reopenedCopy = reopened.lines.find((line) => line.lineId === pasted.lineId);
+      const edited = model.updateImportedCartLine(reopened.lines, reopenedCopy.key, {
+        name: "Solo la copia",
+      });
+      console.log(JSON.stringify({
+        section2: pastedLines
+          .filter((line) => line.role === "principal" && line.sectionId === "section-2")
+          .sort((left, right) => left.position - right.position)
+          .map((line) => `${line.officialCode}:${line.position}`),
+        sourceName: lines.find((line) => line.lineId === sourceId).edits.name,
+        copiedName: pasted.edits.name,
+        copiedPrice: pasted.edits.unitPrice,
+        copiedQuantity: pasted.quantity,
+        copiedConfiguration: pasted.snapshot.configuration,
+        newPrincipalId: pasted.lineId !== sourceId && pasted.lineId !== targetId,
+        newComplementId: pastedChild.lineId !== childId,
+        complementParent: pastedChild.parentLineId === pasted.lineId,
+        complementMode: pastedChild.quantityMode,
+        complementQuantity: pastedChild.quantity,
+        complementOptions: pastedChild.identity.add_on_option_ids,
+        reopenedUniqueKeys: new Set(reopened.lines.map((line) => line.key)).size,
+        reopenedLineCount: reopened.lines.length,
+        editedImportedNames: edited
+          .filter((line) => line.kind === "imported")
+          .sort((left, right) => left.sectionId.localeCompare(right.sectionId))
+          .map((line) => line.edits.name),
+      }));
+    """)
+    assert result == {
+        "section2": ["IMP-1:0", "TARGET-1:1"],
+        "sourceName": "Fuente modificada despues de copiar",
+        "copiedName": "Mesa configurada",
+        "copiedPrice": "125.50",
+        "copiedQuantity": "3",
+        "copiedConfiguration": "Nogal con electrificacion",
+        "newPrincipalId": True,
+        "newComplementId": True,
+        "complementParent": True,
+        "complementMode": "fixed_project",
+        "complementQuantity": "2",
+        "complementOptions": ["contacto", "usb"],
+        "reopenedUniqueKeys": 5,
+        "reopenedLineCount": 5,
+        "editedImportedNames": [
+            "Fuente modificada despues de copiar",
+            "Solo la copia",
+        ],
+    }
+
+
 def test_imported_line_matches_provider_and_official_code():
     result = run_js(r"""
       const imported = {

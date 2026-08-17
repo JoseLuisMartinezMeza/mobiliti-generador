@@ -766,11 +766,22 @@ def test_product_picker_search_path_omits_empty_supplier_and_includes_valid_supp
       console.log(JSON.stringify({
         initial: picker.buildCatalogSearchPath({query: "", supplier: "", offset: 0, limit: 20}),
         filtered: picker.buildCatalogSearchPath({query: "silla", supplier: "alma", offset: 20, limit: 20}),
+        collection: picker.buildCatalogSearchPath({
+          query: "mesa",
+          supplier: "jome",
+          collection: "Archiveros Fijos",
+          offset: 0,
+          limit: 20,
+        }),
       }));
     """)
     assert result == {
         "initial": "/catalogs/search?q=&offset=0&limit=20",
         "filtered": "/catalogs/search?q=silla&offset=20&limit=20&supplier=alma",
+        "collection": (
+            "/catalogs/search?q=mesa&offset=0&limit=20&supplier=jome"
+            "&collection=Archiveros+Fijos"
+        ),
     }
 
 

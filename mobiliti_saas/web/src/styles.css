@@ -968,7 +968,7 @@ textarea:focus {
 
 .project-picker-filters {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 230px;
+  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(200px, 230px));
   gap: 14px;
   padding: 18px 24px;
 }
@@ -1186,7 +1186,7 @@ textarea:focus {
 
 .tarkett-toolbar {
   display: grid;
-  grid-template-columns: minmax(250px, 1fr) minmax(190px, 260px) auto;
+  grid-template-columns: minmax(250px, 1fr) repeat(2, minmax(190px, 260px)) auto;
   gap: 12px;
   align-items: center;
 }
@@ -1456,7 +1456,7 @@ textarea:focus {
 }
 
 .offiho-toolbar {
-  grid-template-columns: minmax(240px, 1fr) minmax(150px, 190px) minmax(180px, 220px) auto;
+  grid-template-columns: minmax(240px, 1fr) minmax(160px, 210px) minmax(150px, 190px) minmax(180px, 220px) auto;
 }
 
 .offiho-product {
@@ -3606,6 +3606,19 @@ textarea:focus {
   padding: 7px 9px;
   color: var(--ink-soft);
   background: #fff;
+}
+
+.project-line-actions .project-line-clipboard-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.project-line-clipboard-action[aria-pressed="true"] {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: #f2faf7;
 }
 
 .project-line-remove {

@@ -678,7 +678,14 @@ function copyImportedCartLine(line) {
   if (!line || typeof line !== "object" || Array.isArray(line) || line.kind !== "imported") {
     throw new Error("Linea importada invalida");
   }
-  const identity = normalizedImportedIdentity(line.importId, line.sourceRow, line.key);
+  const identity = normalizedImportedIdentity(
+    line.importId,
+    line.sourceRow,
+    importedKey(line.importId, line.sourceRow),
+  );
+  const occurrenceKey = line.key === identity.key
+    ? identity.key
+    : normalizedProjectLineId(line.key);
   const role = normalizedProjectRole(line.role ?? "principal");
   const parentLineId = line.parentLineId == null ? null : normalizedProjectLineId(line.parentLineId);
   if ((role === "principal" && parentLineId !== null) || (role === "complement" && parentLineId === null)) {
@@ -695,7 +702,7 @@ function copyImportedCartLine(line) {
     : null;
   return {
     kind: "imported",
-    key: identity.key,
+    key: occurrenceKey,
     lineId: normalizedProjectLineId(line.lineId ?? createProjectLineId()),
     officialCode: normalizedOfficialCode(line.officialCode, line.snapshot),
     provider: normalizedProvider(line.provider ?? line.edits?.provider, ""),
@@ -1120,6 +1127,95 @@ export function projectComplements(lines, parentLineId) {
     .sort((left, right) => left.position - right.position);
 }
 
+function cloneProjectLine(line) {
+  if (!line || typeof line !== "object" || Array.isArray(line)) {
+    throw new Error("Linea de Proyecto invalida");
+  }
+  return globalThis.structuredClone(line);
+}
+
+export function copyProjectLineTree(lines, lineId) {
+  if (!Array.isArray(lines)) throw new Error("Lineas de Proyecto invalidas");
+  const sourceLineId = normalizedProjectLineId(lineId);
+  const principal = lines.find((line) => line.lineId === sourceLineId);
+  if (!principal) throw new Error("Producto del Proyecto no encontrado");
+  if (principal.role !== "principal") throw new Error("Solo se puede copiar un producto principal");
+  return {
+    sourceLineId,
+    principal: cloneProjectLine(principal),
+    complements: projectComplements(lines, sourceLineId).map(cloneProjectLine),
+  };
+}
+
+export function pasteProjectLineTree(lines, clipboard, targetLineId) {
+  if (!Array.isArray(lines)) throw new Error("Lineas de Proyecto invalidas");
+  const targetId = normalizedProjectLineId(targetLineId);
+  const targetIndex = lines.findIndex((line) => line.lineId === targetId);
+  if (targetIndex < 0) throw new Error("Producto del Proyecto no encontrado");
+  const target = lines[targetIndex];
+  if (target.role !== "principal") throw new Error("El destino debe ser un producto principal");
+  if (!clipboard || typeof clipboard !== "object" || Array.isArray(clipboard)
+      || !clipboard.principal || !Array.isArray(clipboard.complements)) {
+    throw new Error("No hay un producto copiado");
+  }
+  const sourceLineId = normalizedProjectLineId(clipboard.principal.lineId);
+  if (clipboard.principal.role !== "principal"
+      || clipboard.complements.some((line) => (
+        line?.role !== "complement" || line.parentLineId !== sourceLineId
+      ))) {
+    throw new Error("Copia de producto invalida");
+  }
+
+  const sectionId = normalizedSectionId(target.sectionId);
+  const position = normalizedPosition(target.position);
+  const usedLineIds = new Set(lines.map((line) => normalizedProjectLineId(line.lineId)));
+  function freshLineId() {
+    let lineId = createProjectLineId();
+    while (usedLineIds.has(lineId)) lineId = createProjectLineId();
+    usedLineIds.add(lineId);
+    return lineId;
+  }
+
+  const principalLineId = freshLineId();
+  const principal = {
+    ...cloneProjectLine(clipboard.principal),
+    key: principalLineId,
+    lineId: principalLineId,
+    role: "principal",
+    parentLineId: null,
+    quantityMode: null,
+    sectionId,
+    position,
+  };
+  const complements = [...clipboard.complements]
+    .sort((left, right) => normalizedPosition(left.position) - normalizedPosition(right.position))
+    .map((line, childPosition) => {
+      const childLineId = freshLineId();
+      return {
+        ...cloneProjectLine(line),
+        key: childLineId,
+        lineId: childLineId,
+        role: "complement",
+        parentLineId: principalLineId,
+        sectionId: null,
+        position: childPosition,
+      };
+    });
+  const shifted = lines.map((line) => (
+    line.role === "principal"
+      && line.sectionId === sectionId
+      && normalizedPosition(line.position) >= position
+      ? {...line, position: line.position + 1}
+      : line
+  ));
+  return [
+    ...shifted.slice(0, targetIndex),
+    principal,
+    ...complements,
+    ...shifted.slice(targetIndex),
+  ];
+}
+
 export function createMixedCartLine({
   catalog,
   identity,
@@ -1542,10 +1638,11 @@ function hydratePersistedImportedLine(line) {
   );
   const snapshot = copyImportedSnapshot(hydrateProjectDisplayCache(line.display_cache));
   const provider = normalizedImportedText(line.provider, "Proveedor", { limit: 500 });
+  const lineId = normalizedProjectLineId(line.line_id);
   return {
     kind: "imported",
-    key: identity.key,
-    lineId: normalizedProjectLineId(line.line_id),
+    key: lineId,
+    lineId,
     officialCode: normalizedImportedText(line.official_code, "Codigo oficial", {
       allowEmpty: true,
       limit: 500,

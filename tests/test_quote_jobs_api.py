@@ -2041,6 +2041,7 @@ def test_tarkett_catalog_returns_base_stock_and_other_user_reservations(monkeypa
     assert item["reserved_quantity"] == 3.5
     assert item["reserved_by_others"] is True
     assert item["product_url"] == "https://tarkett.com.mx/producto/cadiz/"
+    assert item["collection"] == "Aurea Tech"
 
 
 def test_tarkett_catalog_cache_reloads_default_file_mtime(monkeypatch, tmp_path):
@@ -2197,7 +2198,7 @@ def _valid_offiho_body(quantity=1):
     }
 
 
-def test_offiho_catalog_returns_1207_items_with_catalog_prices_and_reservations(monkeypatch):
+def test_offiho_catalog_returns_1288_items_with_catalog_prices_and_reservations(monkeypatch):
     _mock_user(monkeypatch)
     monkeypatch.setattr(index, "db_list_offiho_reservations", lambda status="active": [])
 
@@ -2205,11 +2206,11 @@ def test_offiho_catalog_returns_1207_items_with_catalog_prices_and_reservations(
 
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["total"] == 1207
-    assert len(payload["items"]) == 1207
-    assert payload["source_row_count"] == 1287
+    assert payload["total"] == 1288
+    assert len(payload["items"]) == 1288
+    assert payload["source_row_count"] == 1368
     assert payload["duplicate_row_count"] == 80
-    assert payload["unique_item_count"] == 1207
+    assert payload["unique_item_count"] == 1288
     item = payload["items"][0]
     assert {"unit_price", "available_quantity", "product_url", "image_url", "is_out_of_stock", "reserved_quantity", "reserved_by_others"} <= set(item)
 
@@ -2513,7 +2514,7 @@ def test_offiho_catalog_rejects_invalid_database_snapshot_and_uses_static_fallba
 
     catalog = index._load_offiho_catalog_cached()
 
-    assert catalog["unique_item_count"] == 1207
+    assert catalog["unique_item_count"] == 1288
     assert not index._OFFIHO_CATALOG_CACHE["path"].startswith("supabase:")
 
 
@@ -3035,6 +3036,65 @@ def test_dev_exchange_rates_keep_stored_usd_when_market_date_is_future_locally(
     rows = index.db_list_exchange_rates()
 
     assert rows == [stored]
+
+
+def test_dev_exchange_rates_request_banxico_not_later_than_local_day(monkeypatch):
+    from mobiliti_saas.quote_engine import engine
+
+    stored = {
+        "currency": "USD",
+        "effective_date": (date.today() - timedelta(days=20)).isoformat(),
+        "mxn_per_unit": "18.500000",
+        "retrieved_at": (
+            datetime.now(timezone.utc) - timedelta(days=20)
+        ).isoformat(),
+    }
+    future_payload = json.dumps({
+        "date": (date.today() + timedelta(days=1)).isoformat(),
+        "base": "USD",
+        "quote": "MXN",
+        "rate": 17.4782,
+    }).encode("utf-8")
+    current_payload = json.dumps({
+        "date": (date.today() - timedelta(days=2)).isoformat(),
+        "base": "USD",
+        "quote": "MXN",
+        "rate": 17.0218,
+    }).encode("utf-8")
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return self.payload
+
+    def fake_urlopen(request, **_kwargs):
+        local_day = f"date={date.today().isoformat()}"
+        is_banxico_local_day = (
+            local_day in request.full_url
+            and "providers=BANXICO" in request.full_url
+        )
+        return Response(current_payload if is_banxico_local_day else future_payload)
+
+    monkeypatch.setattr(index, "DEV_MODE", True)
+    monkeypatch.setattr(
+        index,
+        "_dev_load",
+        lambda: {"exchange_rates": [stored]},
+    )
+    monkeypatch.setattr(engine, "urlopen", fake_urlopen)
+
+    rows = index.db_list_exchange_rates()
+
+    assert rows[0]["effective_date"] == (date.today() - timedelta(days=2)).isoformat()
+    assert rows[0]["mxn_per_unit"] == "17.021800"
 
 
 def _valid_supplier_line():

@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import unicodedata
 
+from .catalog_collections import MAX_COLLECTION_LENGTH, resolve_catalog_collection
 from .mixed_catalog import (
     MIXED_CATALOG_ORDER,
     MIXED_EXPECTED_BASE_CURRENCY,
@@ -243,6 +244,21 @@ def _supplier(value: object) -> str | None:
     return clean
 
 
+def _collection(value: object, supplier: str | None) -> str:
+    if value is None or value == "":
+        return ""
+    if (
+        not isinstance(value, str)
+        or len(value) > MAX_COLLECTION_LENGTH
+        or any(unicodedata.category(character) in _CONTROL_CATEGORIES for character in value)
+    ):
+        raise ValueError("collection invalida")
+    clean = _fold(value)
+    if clean and supplier is None:
+        raise ValueError("collection requiere proveedor")
+    return clean
+
+
 def _canonical_item(catalog: str, raw: dict) -> dict | None:
     base_choices = _base_choices(raw)
     add_on_choices = _add_on_choices(raw, base_choices)
@@ -267,6 +283,7 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
     if not display_key:
         return None
     name = _text(raw.get("name")) or official_code or display_key
+    collection = resolve_catalog_collection(catalog, raw)
     availability = _availability_label(raw)
     result = {
         "catalog": catalog,
@@ -283,6 +300,7 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
         "snapshot": {
             "name": name,
             "code": official_code,
+            "collection": collection,
             "image_url": _text(raw.get("image_url")),
             "dimensions": _dimensions(raw),
             "availability": availability,
@@ -303,16 +321,20 @@ def _canonical_item(catalog: str, raw: dict) -> dict | None:
     return result
 
 
-def search_catalog_products(catalogs, *, query, supplier, offset, limit) -> dict:
+def search_catalog_products(
+    catalogs, *, query, supplier, offset, limit, collection=None,
+) -> dict:
     """Busca snapshots publicados sin exponer datos comerciales del catálogo."""
     needle = _search_query(query)
     supplier = _supplier(supplier)
+    selected_collection = _collection(collection, supplier)
     offset = _page_value(offset, "offset", 0)
     limit = _page_value(limit, "limit", 1, MAX_SEARCH_LIMIT)
     if not isinstance(catalogs, dict):
         raise ValueError("Catalogos invalidos")
 
     rows: list[dict] = []
+    collection_options: set[str] = set()
     for catalog in MIXED_CATALOG_ORDER:
         if supplier is not None and catalog != supplier:
             continue
@@ -324,16 +346,22 @@ def search_catalog_products(catalogs, *, query, supplier, offset, limit) -> dict
         for raw in raw_items:
             if not isinstance(raw, dict):
                 continue
+            item = _canonical_item(catalog, raw)
+            if item is None:
+                continue
+            item_collection = item["snapshot"]["collection"]
+            if supplier is not None:
+                collection_options.add(item_collection)
             haystack = _fold(
                 f"{raw.get('code', '')} {raw.get('sku', '')} "
                 f"{raw.get('internal_id', '')} {raw.get('name', '')} "
-                f"{raw.get('description', '')}"
+                f"{raw.get('description', '')} {item_collection}"
             )
             if needle and needle not in haystack:
                 continue
-            item = _canonical_item(catalog, raw)
-            if item is not None:
-                catalog_rows.append(item)
+            if selected_collection and _fold(item_collection) != selected_collection:
+                continue
+            catalog_rows.append(item)
         rows.extend(sorted(
             catalog_rows,
             key=lambda item: (
@@ -346,8 +374,13 @@ def search_catalog_products(catalogs, *, query, supplier, offset, limit) -> dict
 
     total = len(rows)
     next_offset = offset + limit if offset + limit < total else None
-    return {
+    result = {
         "items": rows[offset:offset + limit],
         "total": total,
         "next_offset": next_offset,
     }
+    if supplier is not None:
+        result["collections"] = sorted(
+            collection_options, key=lambda value: (_fold(value), value),
+        )
+    return result
