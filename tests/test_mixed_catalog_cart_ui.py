@@ -156,6 +156,16 @@ def test_manual_sections_label_reorder_move_merge_and_serialize():
       } catch (error) {
         emptyCloseError = error.message;
       }
+      const limitSections = Array.from({length: 32}, (_, index) => ({
+        id: `section-${index + 1}`,
+        concept: `Espacio ${index + 1}`,
+      }));
+      let limitCloseError = "";
+      try {
+        closeMixedCartSection(limitSections, [{sectionId: "section-32"}]);
+      } catch (error) {
+        limitCloseError = error.message;
+      }
 
       console.log(JSON.stringify({
         labels,
@@ -165,6 +175,7 @@ def test_manual_sections_label_reorder_move_merge_and_serialize():
         compactedSectionCount: compacted.sections.length,
         serializedWithoutEmptyTail,
         emptyCloseError,
+        limitCloseError,
         maxSections: MAX_MIXED_CART_SECTIONS,
       }));
         """
@@ -181,51 +192,63 @@ def test_manual_sections_label_reorder_move_merge_and_serialize():
     assert result["compactedSectionCount"] == 2
     assert len(result["serializedWithoutEmptyTail"]) == 1
     assert "producto" in result["emptyCloseError"].lower()
+    assert result["limitCloseError"] == "Limite de 32 secciones alcanzado"
     assert result["maxSections"] == 32
 
 
 def test_imported_bundle_supports_35_sections_and_137_products_through_project_round_trip():
     result = run_mixed_cart_js(
         r"""
-      const importId = "11111111-1111-4111-8111-111111111111";
-      const items = Array.from({length: 137}, (_, index) => {
-        const sourceRow = index + 9;
+      const makePreview = (importId, prefix) => {
+        const items = Array.from({length: 137}, (_, index) => {
+          const sourceRow = index + 9;
+          return {
+            key: `import:${importId}:${sourceRow}`,
+            source_row: sourceRow,
+            name: `${prefix} Producto ${sourceRow}`,
+            description: "",
+            dimension: "",
+            quantity: "1",
+            unit_price: "10",
+            image_url: "",
+          };
+        });
         return {
-          key: `import:${importId}:${sourceRow}`,
-          source_row: sourceRow,
-          name: `Producto ${sourceRow}`,
-          description: "",
-          dimension: "",
-          quantity: "1",
-          unit_price: "10",
-          image_url: "",
+          import_id: importId,
+          original_filename: `${prefix}.xlsx`,
+          provider: "Proveedor",
+          source_currency: "USD",
+          sections: Array.from({length: 35}, (_, index) => ({
+            id: `import-section-${index + 1}`,
+            title: `${prefix} Seccion ${index + 1}`,
+            item_keys: items.slice(index * 4, (index + 1) * 4).map((item) => item.key),
+          })),
+          items,
         };
-      });
-      const sections = Array.from({length: 35}, (_, index) => ({
-        id: `import-section-${index + 1}`,
-        title: `Seccion ${index + 1}`,
-        item_keys: items
-          .filter((_, itemIndex) => Math.floor(itemIndex / 4) === index || (index === 34 && itemIndex === 136))
-          .map((item) => item.key),
-      }));
-      const preview = {
-        import_id: importId,
-        original_filename: "Sales del Valle.xlsx",
-        provider: "Proveedor",
-        source_currency: "USD",
-        sections,
-        items,
       };
-      const bundle = createImportedCartBundle(
-        preview,
+      const firstImportId = "11111111-1111-4111-8111-111111111111";
+      const secondImportId = "22222222-2222-4222-8222-222222222222";
+      const firstBundle = createImportedCartBundle(
+        makePreview(firstImportId, "Primera importacion"),
         "USD",
         "Proveedor",
         createInitialMixedCartSections(),
       );
-      const replaced = replaceImportedCartBundle(
+      const firstState = replaceImportedCartBundle(
         [],
         createInitialMixedCartSections(),
-        bundle,
+        firstBundle,
+      );
+      const secondBundle = createImportedCartBundle(
+        makePreview(secondImportId, "Segunda importacion"),
+        "USD",
+        "Proveedor",
+        firstState.sections,
+      );
+      const replaced = replaceImportedCartBundle(
+        firstState.lines,
+        firstState.sections,
+        secondBundle,
       );
       const quoteFields = {
         proyecto: "Sales del Valle",
@@ -245,8 +268,13 @@ def test_imported_bundle_supports_35_sections_and_137_products_through_project_r
         linesPerSection: state.sections.map((section) => state.lines.filter((line) => line.sectionId === section.id).length),
       });
       console.log(JSON.stringify({
-        bundle: {sections: bundle.sections.length, lines: bundle.lines.length, coverage: coverage(bundle)},
+        first: {sections: firstState.sections.length, lines: firstState.lines.length, coverage: coverage(firstState)},
+        secondBundle: {sections: secondBundle.sections.length, lines: secondBundle.lines.length},
         replaced: {sections: replaced.sections.length, lines: replaced.lines.length, coverage: coverage(replaced)},
+        obsoleteSections: firstState.sections
+          .map((section) => section.id)
+          .filter((id) => replaced.sections.some((section) => section.id === id)),
+        importIds: [...new Set(replaced.lines.map((line) => line.importId))],
         serialized: {sections: serialized.sections.length, lines: serialized.lines.length},
         hydrated: {
           sections: hydrated.sections.length,
@@ -259,21 +287,23 @@ def test_imported_bundle_supports_35_sections_and_137_products_through_project_r
         """
     )
 
-    for state in (result["bundle"], result["replaced"], result["hydrated"]):
+    assert result["replaced"]["sections"] == 35, result["replaced"]
+    for state in (result["first"], result["replaced"], result["hydrated"]):
         assert state["sections"] == 35
         assert state["lines"] == 137
         assert state["coverage"]["sectionIds"] == 35
         assert state["coverage"]["lineSectionIds"] == 35
-    assert result["bundle"]["coverage"]["linesPerSection"] == [4] * 34 + [1]
     assert result["replaced"]["coverage"]["linesPerSection"] == [4] * 34 + [1]
     assert result["hydrated"]["coverage"]["linesPerSection"] == [4] * 34 + [1]
+    assert result["obsoleteSections"] == []
+    assert result["importIds"] == ["22222222-2222-4222-8222-222222222222"]
     assert result["serialized"] == {"sections": 35, "lines": 137}
     assert result["hydrated"]["lastSection"] == {
-        "id": "section-35",
-        "concept": "Seccion 35",
+        "id": "section-70",
+        "concept": "Segunda importacion Seccion 35",
     }
     assert result["hydrated"]["lastProduct"]["sourceRow"] == 145
-    assert result["hydrated"]["lastProduct"]["edits"]["name"] == "Producto 145"
+    assert result["hydrated"]["lastProduct"]["edits"]["name"] == "Segunda importacion Producto 145"
 
 
 def test_group_mixed_cart_lines_preserves_order_and_rejects_unknown_sections():

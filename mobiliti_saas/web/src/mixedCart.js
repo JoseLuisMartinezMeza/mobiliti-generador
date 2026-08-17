@@ -1019,7 +1019,11 @@ export function replaceImportedCartBundle(lines, sections, bundle) {
   }
   const finalLines = [...catalogLines, ...nextImportedLines];
   const nextSectionIds = new Set(nextImportedLines.map((line) => line.sectionId));
-  const incomingById = new Map(incomingSections.map((section) => [section.id, section]));
+  const incomingById = new Map(
+    incomingSections
+      .filter((section) => nextSectionIds.has(section.id))
+      .map((section) => [section.id, section]),
+  );
   const resultSections = [];
   const seenSectionIds = new Set();
   const addSection = (section) => {
@@ -1034,7 +1038,9 @@ export function replaceImportedCartBundle(lines, sections, bundle) {
       && !nextSectionIds.has(section.id);
     if (!removedPreviousImport) addSection(incomingById.get(section.id) || section);
   }
-  for (const section of incomingSections) addSection(section);
+  for (const section of incomingSections) {
+    if (nextSectionIds.has(section.id)) addSection(section);
+  }
   if (finalLines.some((line) => !seenSectionIds.has(line?.sectionId))) {
     throw new Error("Secciones importadas invalidas");
   }
