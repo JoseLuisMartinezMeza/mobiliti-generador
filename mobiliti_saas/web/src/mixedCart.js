@@ -105,7 +105,7 @@ function normalizedProvider(value, catalog) {
 }
 
 function validatedSections(sections) {
-  if (!Array.isArray(sections) || !sections.length || sections.length > MAX_MIXED_CART_SECTIONS) {
+  if (!Array.isArray(sections) || !sections.length) {
     throw new Error("Secciones invalidas");
   }
   const seen = new Set();
@@ -735,9 +735,6 @@ function importedPresentationSections(previewSections, currentSections) {
   const highestId = current.reduce((highest, section) => (
     Math.max(highest, Number(SECTION_ID_PATTERN.exec(section.id)?.[1] || 0))
   ), 0);
-  if (current.length - Number(replacesInitialSection) + previewSections.length > MAX_MIXED_CART_SECTIONS) {
-    throw new Error(`Limite de ${MAX_MIXED_CART_SECTIONS} secciones alcanzado`);
-  }
   const seenKeys = new Set();
   const seenSourceIds = new Set();
   return previewSections.map((section, index) => {
@@ -1038,8 +1035,7 @@ export function replaceImportedCartBundle(lines, sections, bundle) {
     if (!removedPreviousImport) addSection(incomingById.get(section.id) || section);
   }
   for (const section of incomingSections) addSection(section);
-  if (resultSections.length > MAX_MIXED_CART_SECTIONS
-      || finalLines.some((line) => !seenSectionIds.has(line?.sectionId))) {
+  if (finalLines.some((line) => !seenSectionIds.has(line?.sectionId))) {
     throw new Error("Secciones importadas invalidas");
   }
   return { lines: finalLines, sections: resultSections };

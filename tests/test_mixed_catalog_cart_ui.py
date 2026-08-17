@@ -184,6 +184,98 @@ def test_manual_sections_label_reorder_move_merge_and_serialize():
     assert result["maxSections"] == 32
 
 
+def test_imported_bundle_supports_35_sections_and_137_products_through_project_round_trip():
+    result = run_mixed_cart_js(
+        r"""
+      const importId = "11111111-1111-4111-8111-111111111111";
+      const items = Array.from({length: 137}, (_, index) => {
+        const sourceRow = index + 9;
+        return {
+          key: `import:${importId}:${sourceRow}`,
+          source_row: sourceRow,
+          name: `Producto ${sourceRow}`,
+          description: "",
+          dimension: "",
+          quantity: "1",
+          unit_price: "10",
+          image_url: "",
+        };
+      });
+      const sections = Array.from({length: 35}, (_, index) => ({
+        id: `import-section-${index + 1}`,
+        title: `Seccion ${index + 1}`,
+        item_keys: items
+          .filter((_, itemIndex) => Math.floor(itemIndex / 4) === index || (index === 34 && itemIndex === 136))
+          .map((item) => item.key),
+      }));
+      const preview = {
+        import_id: importId,
+        original_filename: "Sales del Valle.xlsx",
+        provider: "Proveedor",
+        source_currency: "USD",
+        sections,
+        items,
+      };
+      const bundle = createImportedCartBundle(
+        preview,
+        "USD",
+        "Proveedor",
+        createInitialMixedCartSections(),
+      );
+      const replaced = replaceImportedCartBundle(
+        [],
+        createInitialMixedCartSections(),
+        bundle,
+      );
+      const quoteFields = {
+        proyecto: "Sales del Valle",
+        cliente: "Cliente",
+        correo: "cliente@example.com",
+        telefono: "555-0100",
+        direccion: "Direccion",
+        razon_social: "Empresa",
+        quote_currency: "USD",
+        descuento: "0",
+      };
+      const serialized = serializeProject({quoteFields, ...replaced});
+      const hydrated = hydrateProject(serialized);
+      const coverage = (state) => ({
+        sectionIds: new Set(state.sections.map((section) => section.id)).size,
+        lineSectionIds: new Set(state.lines.map((line) => line.sectionId)).size,
+        linesPerSection: state.sections.map((section) => state.lines.filter((line) => line.sectionId === section.id).length),
+      });
+      console.log(JSON.stringify({
+        bundle: {sections: bundle.sections.length, lines: bundle.lines.length, coverage: coverage(bundle)},
+        replaced: {sections: replaced.sections.length, lines: replaced.lines.length, coverage: coverage(replaced)},
+        serialized: {sections: serialized.sections.length, lines: serialized.lines.length},
+        hydrated: {
+          sections: hydrated.sections.length,
+          lines: hydrated.lines.length,
+          coverage: coverage(hydrated),
+          lastSection: hydrated.sections.at(-1),
+          lastProduct: hydrated.lines.at(-1),
+        },
+      }));
+        """
+    )
+
+    for state in (result["bundle"], result["replaced"], result["hydrated"]):
+        assert state["sections"] == 35
+        assert state["lines"] == 137
+        assert state["coverage"]["sectionIds"] == 35
+        assert state["coverage"]["lineSectionIds"] == 35
+    assert result["bundle"]["coverage"]["linesPerSection"] == [4] * 34 + [1]
+    assert result["replaced"]["coverage"]["linesPerSection"] == [4] * 34 + [1]
+    assert result["hydrated"]["coverage"]["linesPerSection"] == [4] * 34 + [1]
+    assert result["serialized"] == {"sections": 35, "lines": 137}
+    assert result["hydrated"]["lastSection"] == {
+        "id": "section-35",
+        "concept": "Seccion 35",
+    }
+    assert result["hydrated"]["lastProduct"]["sourceRow"] == 145
+    assert result["hydrated"]["lastProduct"]["edits"]["name"] == "Producto 145"
+
+
 def test_group_mixed_cart_lines_preserves_order_and_rejects_unknown_sections():
     result = run_mixed_cart_js(
         r"""
