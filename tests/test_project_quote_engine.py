@@ -731,6 +731,47 @@ def test_exact_auditor_requires_explicit_project_signal_for_grouped_rows():
     )
 
 
+def test_exact_auditor_accepts_grouped_project_with_pending_component():
+    base = XlsxPackage.read(engine.OFFICIAL_TEMPLATE_PATH)
+    row_map = plan_mobiliti_layout(
+        (SectionNeed("section-1", "Recepción", 2),)
+    )
+    grouped = CotizacionSheetEditor.from_xml(
+        base.parts[base.sheet_part("Cotizacion")]
+    ).compose(
+        metadata=CotizacionMetadata(quotation_number="PROJECT-PENDING"),
+        sections=(
+            CotizacionSection(
+                title="Recepción",
+                products=(
+                    CotizacionProduct(
+                        item_key=PRINCIPAL_ID,
+                        name="MAIN-1",
+                        description="Principal\n+ Complemento pendiente",
+                        dimensions="600 x 600 mm",
+                        quantity=Decimal("10"),
+                        mobiliti_row=14,
+                        discount=Decimal("0.4"),
+                        description_formula="=Quotation!D9",
+                        price_terms=(
+                            CotizacionPriceTerm(14),
+                            CotizacionPriceTerm(15, denominator=Decimal("12")),
+                        ),
+                        price_pending=True,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    _validate_exact_cotizacion_surface(
+        base,
+        grouped,
+        row_map,
+        project_composition=True,
+    )
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [

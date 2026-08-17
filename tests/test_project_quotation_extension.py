@@ -311,6 +311,7 @@ def _drawing_anchors(content: bytes) -> dict[int, dict[str, object]]:
         non_visual = picture.find(f".//{_XDR}cNvPr")
         assert non_visual is not None
         result[row] = {
+            "id": non_visual.attrib["id"],
             "col": int(marker.findtext(f"{_XDR}col")),
             "colOff": marker.findtext(f"{_XDR}colOff"),
             "rowOff": marker.findtext(f"{_XDR}rowOff"),
@@ -484,6 +485,58 @@ def test_original_quotation_keeps_one_final_project_list_without_stale_imports()
         assert len(sheet._images) == 2
     finally:
         workbook.close()
+
+
+def test_original_quotation_allows_a_copied_imported_row_in_another_section():
+    original = _source_workbook()
+    imported = _line(
+        "imported-original",
+        origin="imported",
+        source_row=9,
+        title="RECEPCION",
+        name="Producto original",
+        image=_png_bytes("blue"),
+        cost=Decimal("125"),
+        quantity=Decimal("2"),
+    )
+    copied = _line(
+        "imported-copy",
+        origin="imported",
+        source_row=9,
+        title="MUESTRAS",
+        name="Producto original",
+        image=_png_bytes("blue"),
+        cost=Decimal("125"),
+        quantity=Decimal("2"),
+    )
+
+    augmented, quotation_rows, quotation_rates = engine._augment_original_quotation(
+        original,
+        (imported, copied),
+    )
+
+    assert quotation_rows == {
+        "imported-original": 9,
+        "imported-copy": 11,
+    }
+    assert quotation_rates == {
+        "imported-original": Decimal("1"),
+        "imported-copy": Decimal("1"),
+    }
+    workbook = load_workbook(BytesIO(augmented), data_only=False)
+    sheet = workbook["Quotation"]
+    try:
+        assert sheet["A8"].value == "- RECEPCION"
+        assert sheet["B9"].value == "Producto original"
+        assert sheet["A10"].value == "- MUESTRAS"
+        assert sheet["B11"].value == "Producto original"
+        assert len(sheet._images) == 2
+    finally:
+        workbook.close()
+    anchors = _drawing_anchors(augmented)
+    assert set(anchors) == {9, 11}
+    assert len({anchor["id"] for anchor in anchors.values()}) == 2
+    assert len({anchor["name"] for anchor in anchors.values()}) == 2
 
 
 def test_original_quotation_without_section_title_uses_project_section():

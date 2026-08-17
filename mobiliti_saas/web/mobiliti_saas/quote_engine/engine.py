@@ -3868,7 +3868,7 @@ def _augment_quotation_drawing(
     content_first_row: int | None = None,
     content_last_row: int | None = None,
     last_populated_row: int | None = None,
-    content_row_map: Mapping[int, int] | None = None,
+    content_row_map: Mapping[int, Sequence[int]] | None = None,
     footer_delta: int = 0,
 ) -> tuple[dict[str, bytes], dict[str, bytes]]:
     row_map = dict(content_row_map or {})
@@ -3917,6 +3917,7 @@ def _augment_quotation_drawing(
         assert content_first_row is not None
         assert content_last_row is not None
         assert last_populated_row is not None
+        next_copied_picture_id = _next_picture_id(drawing_root)
         for anchor in list(drawing_root):
             marker = anchor.find(f"{{{_XDR_NS}}}from")
             row_node = (
@@ -3928,22 +3929,44 @@ def _augment_quotation_drawing(
                 continue
             source_row = int(row_node.text) + 1
             if content_first_row <= source_row <= content_last_row:
-                target_row = row_map.get(source_row)
-                if target_row is None:
+                target_rows = row_map.get(source_row, ())
+                if not target_rows:
                     drawing_root.remove(anchor)
                     continue
                 if anchor.find(f"{{{_XDR_NS}}}pic") is not None:
                     index = list(drawing_root).index(anchor)
                     drawing_root.remove(anchor)
-                    drawing_root.insert(
-                        index,
-                        _contained_quotation_product_anchor(
+                    for copy_index, target_row in enumerate(target_rows):
+                        copied_anchor = _contained_quotation_product_anchor(
                             anchor,
                             target_row=target_row,
                             sheet_root=sheet_root,
-                        ),
-                    )
+                        )
+                        if copy_index:
+                            non_visual = copied_anchor.find(
+                                f".//{{{_XDR_NS}}}cNvPr"
+                            )
+                            if non_visual is None:
+                                raise ValueError(
+                                    "Imagen importada sin identidad Quotation"
+                                )
+                            base_name = (
+                                non_visual.attrib.get("name", "").strip()
+                                or "Imagen importada"
+                            )
+                            non_visual.attrib.update(
+                                {
+                                    "id": str(next_copied_picture_id),
+                                    "name": (
+                                        f"{base_name} copia "
+                                        f"{next_copied_picture_id}"
+                                    ),
+                                }
+                            )
+                            next_copied_picture_id += 1
+                        drawing_root.insert(index + copy_index, copied_anchor)
                     continue
+                target_row = target_rows[0]
                 row_delta = target_row - source_row
             elif content_last_row < source_row <= last_populated_row:
                 row_delta = footer_delta
@@ -4117,8 +4140,7 @@ def _augment_original_quotation(
 
     planned_rows: list[ET.Element] = []
     planned_merge_sources: list[tuple[int, int]] = []
-    source_product_targets: dict[int, int] = {}
-    used_product_rows: set[int] = set()
+    source_product_targets: dict[int, list[int]] = {}
     product_targets: list[int] = []
     product_index = 0
     cursor = layout.first_row
@@ -4155,13 +4177,10 @@ def _augment_original_quotation(
                 else None
             )
             if source_product_row is not None:
-                if source_product_row in used_product_rows:
-                    raise ValueError(
-                        "Fila importada duplicada al ampliar Quotation"
-                    )
-                used_product_rows.add(source_product_row)
                 product_source = source_rows[source_product_row]
-                source_product_targets[source_product_row] = cursor
+                source_product_targets.setdefault(source_product_row, []).append(
+                    cursor
+                )
             else:
                 product_source = product_style_row
             product_source_row = int(product_source.attrib["r"])

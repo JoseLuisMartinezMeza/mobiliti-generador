@@ -496,6 +496,7 @@ class CotizacionSheetMutation:
     images: tuple[CotizacionProductImage, ...] = ()
     terms_row_delta: int = 0
     product_rows: tuple[int, ...] = ()
+    product_mobiliti_rows: tuple[tuple[int, ...], ...] = ()
     composer_variant: str = "official"
     section_subtotal_rows: tuple[int, ...] = ()
 
@@ -514,6 +515,18 @@ class CotizacionSheetMutation:
             type(item) is int and item >= 1 for item in self.product_rows
         ):
             raise TypeError("Filas de producto Cotizacion inválidas")
+        if (
+            not isinstance(self.product_mobiliti_rows, tuple)
+            or len(self.product_mobiliti_rows) != len(self.product_rows)
+            or not all(
+                isinstance(rows, tuple)
+                and rows
+                and all(type(row) is int and 1 <= row <= XLSX_MAX_ROWS for row in rows)
+                and len(rows) == len(set(rows))
+                for rows in self.product_mobiliti_rows
+            )
+        ):
+            raise TypeError("Filas Mobiliti por producto Cotizacion inválidas")
         if self.composer_variant not in {"official", "sunon_cdmx_v1c"}:
             raise ValueError("Variante de compositor Cotizacion inválida")
         if (
@@ -919,6 +932,10 @@ class CotizacionSheetEditor:
             images=tuple(images),
             terms_row_delta=total_delta,
             product_rows=tuple(product_rows),
+            product_mobiliti_rows=tuple(
+                tuple(term.mobiliti_row for term in product.price_terms)
+                for product in products
+            ),
             composer_variant=composer_variant,
             section_subtotal_rows=tuple(section_subtotal_rows),
         )
@@ -1400,6 +1417,7 @@ def merge_cotizacion_product_images(
         images=mutation.images,
         terms_row_delta=mutation.terms_row_delta,
         product_rows=mutation.product_rows,
+        product_mobiliti_rows=mutation.product_mobiliti_rows,
         composer_variant=mutation.composer_variant,
         section_subtotal_rows=mutation.section_subtotal_rows,
     )
@@ -1916,6 +1934,9 @@ def _validate_exact_cotizacion_surface(
         if current_title is None:
             raise ValueError("Cotizacion no cumple el contrato exacto de secciones")
         product_sequence += 1
+        declared_mobiliti_rows = mutation.product_mobiliti_rows[
+            product_sequence - 1
+        ]
         if first_discount is None:
             first_discount = _exact_typed_value(
                 _require_root_cell(candidate, f"G{worksheet_row}"),
@@ -1947,9 +1968,14 @@ def _validate_exact_cotizacion_surface(
                 f"A{worksheet_row}",
             )
             match = re.fullmatch(r"Mobiliti!D([1-9][0-9]*)", name_formula)
-            if match is None:
+            if (
+                match is None
+                or int(match.group(1)) != declared_mobiliti_rows[0]
+            ):
                 raise ValueError("Referencia pendiente Cotizacion inválida")
-            price_terms = (CotizacionPriceTerm(int(match.group(1))),)
+            price_terms = tuple(
+                CotizacionPriceTerm(row) for row in declared_mobiliti_rows
+            )
         else:
             formula = _exact_formula_text(price_cell, f"F{worksheet_row}")
             match = re.fullmatch(r"Mobiliti!X([1-9][0-9]*)", formula)
@@ -1957,6 +1983,10 @@ def _validate_exact_cotizacion_surface(
                 price_terms = _cotizacion_price_terms_from_formula(formula)
             else:
                 price_terms = (CotizacionPriceTerm(int(match.group(1))),)
+            if tuple(term.mobiliti_row for term in price_terms) != declared_mobiliti_rows:
+                raise ValueError(
+                    "Cotizacion no cumple el contrato exacto de filas Mobiliti"
+                )
         mobiliti_row = price_terms[0].mobiliti_row
         mobiliti_rows.extend(term.mobiliti_row for term in price_terms)
         description_cell = _require_root_cell(candidate, f"C{worksheet_row}")
