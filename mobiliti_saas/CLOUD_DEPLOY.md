@@ -89,7 +89,7 @@ JWT_SECRET_KEY=[LONG_RANDOM_SECRET]
 CORS_ORIGINS=https://TU-WEB.vercel.app
 QUOTE_STORAGE_BUCKET=quote-files
 MAX_QUOTE_UPLOAD_MB=25
-MAX_QUOTE_OUTPUT_MB=100
+MAX_QUOTE_OUTPUT_MB=150
 QUOTE_STORAGE_PROVIDER=r2
 R2_ACCOUNT_ID=[CLOUDFLARE_ACCOUNT_ID]
 R2_ACCESS_KEY_ID=[R2_S3_ACCESS_KEY_ID]
@@ -116,7 +116,7 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-saas.ps1 -Prod -ApiUrl h
 `saas_doctor.py` debe confirmar:
 
 - `saas_quote_jobs` accesible por REST
-- bucket `quote-files` privado con `file_size_limit` de 100 MB para permitir outputs XLSX con imagenes
+- bucket `quote-files` privado con `file_size_limit` de 150 MB para permitir outputs XLSX con imagenes
 - env vars reales, sin placeholders
 
 ## 3. Web en Vercel

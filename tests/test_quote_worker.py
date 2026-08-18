@@ -2431,6 +2431,28 @@ def test_process_job_rejects_output_larger_than_storage_limit(monkeypatch):
     assert "supera el limite de Storage" in failed_payload["error_message"]
 
 
+@pytest.mark.parametrize(
+    "size_bytes",
+    [int(115.7 * 1024 * 1024), 150 * 1024 * 1024],
+)
+def test_default_output_limit_allows_workbooks_up_to_150_mb(size_bytes):
+    source = SimpleNamespace(stat=lambda: SimpleNamespace(st_size=size_bytes))
+
+    quote_worker._validate_output_size(source)
+
+
+def test_default_output_limit_rejects_workbooks_over_150_mb():
+    source = SimpleNamespace(
+        stat=lambda: SimpleNamespace(st_size=150 * 1024 * 1024 + 1)
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"150\.0 MB.*limite de Storage de 150 MB",
+    ):
+        quote_worker._validate_output_size(source)
+
+
 class FencedWorkerClient:
     def __init__(self, *, completion_mode="ok"):
         self.lock = threading.RLock()

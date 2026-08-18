@@ -103,7 +103,7 @@ VALUES (
     'quote-files',
     'quote-files',
     FALSE,
-    104857600,
+    157286400,
     ARRAY[
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/pdf',

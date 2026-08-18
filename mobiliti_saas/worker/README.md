@@ -43,7 +43,7 @@ Variables opcionales:
 $env:QUOTE_STORAGE_PROVIDER="supabase"
 $env:QUOTE_STORAGE_BUCKET="quote-files"
 $env:QUOTE_ENGINE="python"
-$env:MAX_QUOTE_OUTPUT_MB="100"
+$env:MAX_QUOTE_OUTPUT_MB="150"
 $env:TEMPLATE_PATH="C:\ruta\Formato Cotizacion 2026 Oficial.xlsx"
 $env:WORKER_POLL_SECONDS="10"
 $env:WORKER_STALE_MINUTES="30"

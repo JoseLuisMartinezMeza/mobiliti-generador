@@ -44,7 +44,7 @@ WORKER_HEARTBEAT_SECONDS = max(
     1.0,
     float(os.environ.get("WORKER_HEARTBEAT_SECONDS", str(min(60, WORKER_LEASE_SECONDS / 3)))),
 )
-MAX_QUOTE_OUTPUT_MB = int(os.environ.get("MAX_QUOTE_OUTPUT_MB", "100"))
+MAX_QUOTE_OUTPUT_MB = int(os.environ.get("MAX_QUOTE_OUTPUT_MB", "150"))
 MAX_IMPORTED_SOURCE_BYTES = 25 * 1024 * 1024
 QUOTE_ENGINE = os.environ.get("QUOTE_ENGINE", "python").strip().lower()
 DATABASE_URL = os.environ.get("DATABASE_URL")
