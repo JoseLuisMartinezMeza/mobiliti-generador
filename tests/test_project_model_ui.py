@@ -128,6 +128,114 @@ def test_occurrences_replace_one_all_and_remove_principal_complements():
     }
 
 
+def test_section_reordering_persists_the_complete_product_tree():
+    result = run_js(r"""
+      const firstId = "11111111-1111-4111-8111-111111111111";
+      const secondId = "22222222-2222-4222-8222-222222222222";
+      const complementId = "33333333-3333-4333-8333-333333333333";
+      const sections = [
+        {id: "section-1", concept: "Recepcion"},
+        {id: "section-2", concept: "Sala de juntas"},
+      ];
+      const base = {
+        catalog: "sunon",
+        identity: {internal_id: "sunon:chair", base_option_id: "", add_on_option_ids: []},
+        officialCode: "CHAIR-1",
+        provider: "Sunon",
+        quantity: "2",
+        quantityRules: {min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true},
+        snapshot: {name: "Chair", code: "CHAIR-1", image_url: "", unit: "PZA",
+          availability: "", configuration: "", warnings: []},
+      };
+      let lines = [
+        model.createMixedCartLine({...base, lineId: firstId, sectionId: "section-1"}),
+        model.createMixedCartLine({...base, lineId: secondId, sectionId: "section-2"}),
+      ];
+      lines = model.addProjectComplement(lines, firstId, {
+        ...base,
+        lineId: complementId,
+        officialCode: "POWER-1",
+        snapshot: {...base.snapshot, name: "Multicontacto", code: "POWER-1"},
+      }, "fixed_project");
+
+      const movedSections = model.moveMixedCartSection(sections, lines, "section-1", "down");
+      const saved = model.serializeProject({
+        quoteFields: {
+          proyecto: "Proyecto", cliente: "Cliente", correo: "", telefono: "",
+          direccion: "", razon_social: "", quote_currency: "MXN", descuento: "40",
+          template: "official_2026_gdl", description_language: "es",
+        },
+        sections: movedSections,
+        lines,
+      });
+      const reopened = model.hydrateProject(saved);
+      console.log(JSON.stringify({
+        originalOrder: sections.map((section) => section.id),
+        savedOrder: saved.sections.map((section) => `${section.section_id}:${section.position}`),
+        reopenedOrder: reopened.sections.map((section) => section.id),
+        relationships: reopened.lines.map((line) => ({
+          lineId: line.lineId,
+          role: line.role,
+          sectionId: line.sectionId,
+          parentLineId: line.parentLineId,
+        })),
+      }));
+    """)
+    assert result == {
+        "originalOrder": ["section-1", "section-2"],
+        "savedOrder": ["section-2:0", "section-1:1"],
+        "reopenedOrder": ["section-2", "section-1"],
+        "relationships": [
+            {
+                "lineId": "11111111-1111-4111-8111-111111111111",
+                "role": "principal",
+                "sectionId": "section-1",
+                "parentLineId": None,
+            },
+            {
+                "lineId": "22222222-2222-4222-8222-222222222222",
+                "role": "principal",
+                "sectionId": "section-2",
+                "parentLineId": None,
+            },
+            {
+                "lineId": "33333333-3333-4333-8333-333333333333",
+                "role": "complement",
+                "sectionId": None,
+                "parentLineId": "11111111-1111-4111-8111-111111111111",
+            },
+        ],
+    }
+
+
+def test_section_reordering_keeps_the_empty_tail_section_anchored():
+    result = run_js(r"""
+      const sections = [
+        {id: "section-1", concept: "Recepcion"},
+        {id: "section-2", concept: "Sala de juntas"},
+        {id: "section-3", concept: "Espacio abierto"},
+      ];
+      const lines = [
+        {sectionId: "section-1"},
+        {sectionId: "section-2"},
+      ];
+      const emptyMovedUp = model.moveMixedCartSection(
+        sections, lines, "section-3", "up"
+      );
+      const occupiedMovedDown = model.moveMixedCartSection(
+        sections, lines, "section-2", "down"
+      );
+      console.log(JSON.stringify({
+        emptyMovedUp: emptyMovedUp.map((section) => section.id),
+        occupiedMovedDown: occupiedMovedDown.map((section) => section.id),
+      }));
+    """)
+    assert result == {
+        "emptyMovedUp": ["section-1", "section-2", "section-3"],
+        "occupiedMovedDown": ["section-1", "section-2", "section-3"],
+    }
+
+
 def test_copy_paste_inserts_an_independent_snapshot_before_target_with_complements():
     result = run_js(r"""
       const sourceId = "11111111-1111-4111-8111-111111111111";

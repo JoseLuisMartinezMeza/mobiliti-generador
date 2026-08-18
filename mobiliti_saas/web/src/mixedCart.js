@@ -179,6 +179,22 @@ export function renameMixedCartSection(sections, id, concept) {
   ));
 }
 
+export function moveMixedCartSection(sections, lines, id, direction) {
+  if (!new Set(["up", "down"]).has(direction)) throw new Error("Direccion invalida");
+  if (!Array.isArray(lines)) throw new Error("Lineas de carrito invalidas");
+  const current = validatedSections(sections);
+  const sectionId = normalizedSectionId(id);
+  const index = current.findIndex((section) => section.id === sectionId);
+  if (index < 0) throw new Error("Seccion no encontrada");
+  const targetIndex = index + (direction === "up" ? -1 : 1);
+  if (targetIndex < 0 || targetIndex >= current.length) return current;
+  const occupied = new Set(lines.map((line) => line.sectionId));
+  if (!occupied.has(sectionId) || !occupied.has(current[targetIndex].id)) return current;
+  const next = [...current];
+  [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+  return next;
+}
+
 export function mergeMixedCartSection(sections, lines, id) {
   const current = validatedSections(sections);
   const sectionId = normalizedSectionId(id);

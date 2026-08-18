@@ -19,6 +19,7 @@ import {
   mergeMixedCartSection,
   moveMixedCartLine,
   moveMixedCartLineToSection,
+  moveMixedCartSection,
   pasteProjectLineTree,
   projectComplements,
   projectLineHasMatchIdentity,
@@ -476,6 +477,10 @@ export default function ProjectEditor({
         <div className="project-editor-products">
           {sections.map((section, sectionIndex) => {
             const sectionLines = grouped.get(section.id) || [];
+            const previousSectionOccupied = sectionIndex > 0
+              && (grouped.get(sections[sectionIndex - 1].id) || []).length > 0;
+            const nextSectionOccupied = sectionIndex < sections.length - 1
+              && (grouped.get(sections[sectionIndex + 1].id) || []).length > 0;
             return (
               <section className="project-editor-section" key={section.id}>
                 <header className="project-editor-section-header">
@@ -502,6 +507,30 @@ export default function ProjectEditor({
                       }
                     }}
                   />
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    aria-label={`Subir sección ${sectionIndex + 1}`}
+                    disabled={disabled || !sectionLines.length || !previousSectionOccupied}
+                    onClick={() => commit({
+                      ...project,
+                      sections: moveMixedCartSection(sections, lines, section.id, "up"),
+                    })}
+                  >
+                    Subir
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    aria-label={`Bajar sección ${sectionIndex + 1}`}
+                    disabled={disabled || !sectionLines.length || !nextSectionOccupied}
+                    onClick={() => commit({
+                      ...project,
+                      sections: moveMixedCartSection(sections, lines, section.id, "down"),
+                    })}
+                  >
+                    Bajar
+                  </button>
                   <span>{sectionLines.length} producto(s)</span>
                   <button
                     type="button"

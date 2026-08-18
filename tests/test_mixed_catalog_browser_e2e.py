@@ -404,6 +404,142 @@ def test_project_survives_reload_and_supports_replacements_and_complements(
         context.close()
 
 
+def test_project_section_controls_persist_the_complete_reordered_sections(
+    vite_url, browser
+):
+    stub = ApiStub([])
+    stub.enable_project_routes(project_id=PROJECT_ID)
+    context, page = new_page(
+        browser, {"width": 1440, "height": 1000}, stub, vite_url
+    )
+    console_errors = capture_console_errors(page)
+    page_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+    def project_patch(response):
+        return (
+            response.request.method == "PATCH"
+            and urlparse(response.url).path == f"/projects/{PROJECT_ID}"
+        )
+
+    def add_product(section, code):
+        section.get_by_role("button", name="Agregar producto", exact=True).click()
+        picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Buscar producto", exact=True).fill(code)
+        picker.get_by_role("button", name=re.compile(code, re.IGNORECASE)).click()
+        picker.get_by_role("button", name="Agregar al Proyecto", exact=True).click()
+
+    try:
+        page.goto(vite_url)
+        create_active_project(page, "QA reordenar secciones")
+        sections = page.locator(".project-editor-section")
+
+        add_product(sections.nth(0), "OLIVE-II")
+        sections.nth(0).get_by_role(
+            "button", name="Agregar complemento", exact=True
+        ).click()
+        picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Buscar producto", exact=True).fill("HEAD-1")
+        picker.get_by_role(
+            "button", name=re.compile("HEAD-1", re.IGNORECASE)
+        ).click()
+        picker.get_by_role(
+            "button", name="Agregar complemento", exact=True
+        ).click()
+        config = page.get_by_role("dialog", name="Configurar HEAD-1")
+        config.get_by_role("combobox").select_option("fixed_project")
+        config.get_by_role("textbox").fill("2")
+        config.get_by_role(
+            "button", name="Confirmar complemento", exact=True
+        ).click()
+
+        page.get_by_role(
+            "button", name=re.compile("^Cerrar secci")
+        ).click()
+        assert sections.count() == 2
+        add_product(sections.nth(1), "DESK-1")
+        sections.nth(0).get_by_label(re.compile("Concepto de la secci")).fill(
+            "Recepcion"
+        )
+        with page.expect_response(project_patch):
+            sections.nth(1).get_by_label(re.compile("Concepto de la secci")).fill(
+                "Sala de juntas"
+            )
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+
+        with page.expect_response(project_patch):
+            page.get_by_role(
+                "button", name=re.compile("^Cerrar secci")
+            ).click()
+        assert sections.count() == 3
+        assert sections.nth(0).get_by_role(
+            "button", name=re.compile("^Subir secci")
+        ).is_disabled()
+        assert sections.nth(0).get_by_role(
+            "button", name=re.compile("^Bajar secci")
+        ).is_enabled()
+        assert sections.nth(1).get_by_role(
+            "button", name=re.compile("^Subir secci")
+        ).is_enabled()
+        assert sections.nth(1).get_by_role(
+            "button", name=re.compile("^Bajar secci")
+        ).is_disabled()
+        assert sections.nth(2).get_by_role(
+            "button", name=re.compile("^Subir secci")
+        ).is_disabled()
+        assert sections.nth(2).get_by_role(
+            "button", name=re.compile("^Bajar secci")
+        ).is_disabled()
+
+        before = deepcopy(stub.saved_project["payload"])
+        with page.expect_response(project_patch):
+            sections.nth(1).get_by_role(
+                "button", name=re.compile("^Subir secci")
+            ).click()
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+        after = deepcopy(stub.saved_project["payload"])
+
+        assert [
+            f'{section["concept"]}:{section["position"]}'
+            for section in after["sections"]
+        ] == ["Sala de juntas:0", "Recepcion:1", "Operativos:2"]
+        assert after["lines"] == before["lines"]
+        assert sections.nth(0).get_by_text("DESK-1", exact=True).count() == 1
+        assert sections.nth(1).get_by_text("OLIVE-II", exact=True).count() == 1
+        assert sections.nth(1).get_by_text("+ HEAD-1", exact=True).count() == 1
+        principal = sections.nth(1).locator("article.project-principal").first
+        assert principal.get_by_role("button", name="Subir", exact=True).count() == 1
+        assert principal.get_by_role("button", name="Bajar", exact=True).count() == 1
+
+        with page.expect_response(project_patch):
+            sections.nth(0).get_by_role(
+                "button", name=re.compile("^Bajar secci")
+            ).click()
+        assert [
+            section["concept"] for section in stub.saved_project["payload"]["sections"]
+        ] == ["Recepcion", "Sala de juntas", "Operativos"]
+        with page.expect_response(project_patch):
+            sections.nth(1).get_by_role(
+                "button", name=re.compile("^Subir secci")
+            ).click()
+
+        page.reload()
+        page.get_by_role("button", name="Proyectos", exact=True).click()
+        project_card = page.locator(
+            ".project-card", has_text="QA reordenar secciones"
+        )
+        project_card.get_by_role("button", name="Abrir", exact=True).click()
+        sections = page.locator(".project-editor-section")
+        assert sections.nth(0).get_by_label(
+            re.compile("Concepto de la secci")
+        ).input_value() == "Sala de juntas"
+        assert sections.nth(1).get_by_text("+ HEAD-1", exact=True).count() == 1
+        assert stub.unexpected_requests == []
+        assert_no_browser_failures(page, console_errors, page_errors)
+    finally:
+        context.close()
+
+
 def test_complement_picker_filters_results_by_supplier_collection(vite_url, browser):
     stub = ApiStub([])
     stub.enable_project_routes(project_id=PROJECT_ID)
