@@ -23,6 +23,8 @@ from scripts.research_labenze_requiez_images import (
     LabenzeLegacySource,
     WooCommerceSource,
     InfinitiSource,
+    UrllibTransport,
+    _default_downloader,
     download_original,
     enumerate_requiez_candidates,
     enumerate_explicit_visual_candidates,
@@ -33,6 +35,7 @@ from scripts.research_labenze_requiez_images import (
     run_research,
     should_download_candidate,
     validate_candidate_urls,
+    validate_candidate_source_policy,
     validate_output_path,
 )
 
@@ -80,6 +83,236 @@ def _image_bytes(format_name="PNG", size=(640, 480)) -> bytes:
     stream = io.BytesIO()
     Image.new("RGB", size, (240, 240, 240)).save(stream, format=format_name)
     return stream.getvalue()
+
+
+class _TransportResponse:
+    def __init__(self, status, headers=None, body=b""):
+        self.status = status
+        self.headers = headers or {}
+        self._body = body
+
+    def read(self, limit):
+        return self._body[:limit]
+
+
+class _TransportConnection:
+    def __init__(self, *, peer_ip, response):
+        self.peer_ip = peer_ip
+        self.response = response
+        self.requests = []
+        self.closed = False
+
+    def request(self, method, target, *, headers):
+        self.requests.append((method, target, headers))
+
+    def getresponse(self):
+        return self.response
+
+    def close(self):
+        self.closed = True
+
+
+def test_secure_transport_never_connects_to_a_loopback_redirect_target():
+    connections = []
+
+    def connector(host, ip, port, timeout, ssl_context):
+        connection = _TransportConnection(
+            peer_ip=ip,
+            response=_TransportResponse(302, {"location": "https://127.0.0.1/admin"}),
+        )
+        connections.append((host, ip, connection))
+        return connection
+
+    transport = UrllibTransport(
+        resolver=lambda host: ["151.101.1.12"] if host == "api-productos.requiez.com" else [host],
+        connector=connector,
+    )
+
+    with pytest.raises(ValueError, match="pública|privada|permitido"):
+        transport.fetch(
+            "https://api-productos.requiez.com/productos",
+            source_name="requiez",
+            resource_kind="api",
+        )
+
+    assert [(host, ip) for host, ip, _ in connections] == [
+        ("api-productos.requiez.com", "151.101.1.12")
+    ]
+    assert len(connections[0][2].requests) == 1
+
+
+def test_secure_transport_rejects_dns_rebind_peer_mismatch_before_http_request():
+    connection = _TransportConnection(
+        peer_ip="151.101.1.99",
+        response=_TransportResponse(200, {"content-type": "application/json"}, b"[]"),
+    )
+    transport = UrllibTransport(
+        resolver=lambda host: ["151.101.1.12"],
+        connector=lambda host, ip, port, timeout, ssl_context: connection,
+    )
+
+    with pytest.raises(ValueError, match="peer|DNS binding"):
+        transport.fetch(
+            "https://api-productos.requiez.com/productos",
+            source_name="requiez",
+            resource_kind="api",
+        )
+
+    assert connection.requests == []
+    assert connection.closed is True
+
+
+def test_secure_transport_pins_public_ip_but_preserves_original_tls_host_and_http_host():
+    connection = _TransportConnection(
+        peer_ip="151.101.1.12",
+        response=_TransportResponse(200, {"content-type": "application/json"}, b"[]"),
+    )
+    connector_calls = []
+
+    def connector(host, ip, port, timeout, ssl_context):
+        connector_calls.append((host, ip, port, timeout, ssl_context))
+        return connection
+
+    transport = UrllibTransport(
+        resolver=lambda host: ["151.101.1.12"],
+        connector=connector,
+        timeout=7,
+    )
+
+    response = transport.fetch(
+        "https://api-productos.requiez.com/productos",
+        source_name="requiez",
+        resource_kind="api",
+    )
+
+    assert response.status == 200
+    assert connector_calls[0][:4] == (
+        "api-productos.requiez.com",
+        "151.101.1.12",
+        443,
+        7,
+    )
+    assert connection.requests[0][0:2] == ("GET", "/productos")
+    assert connection.requests[0][2]["Host"] == "api-productos.requiez.com"
+
+
+@pytest.mark.parametrize(
+    ("url", "resolved"),
+    [
+        ("http://api-productos.requiez.com/productos", ["151.101.1.12"]),
+        ("https://user:pass@api-productos.requiez.com/productos", ["151.101.1.12"]),
+        ("https://api-productos.requiez.com:444/productos", ["151.101.1.12"]),
+        ("https://api-productos.requiez.com/productos", ["151.101.1.12", "10.0.0.5"]),
+    ],
+)
+def test_secure_transport_rejects_downgrade_userinfo_port_and_mixed_dns_before_connect(url, resolved):
+    connect_calls = []
+    transport = UrllibTransport(
+        resolver=lambda host: resolved,
+        connector=lambda *args: connect_calls.append(args),
+    )
+
+    with pytest.raises(ValueError):
+        transport.fetch(url, source_name="requiez", resource_kind="api")
+
+    assert connect_calls == []
+
+
+def test_source_policy_rejects_arterio_candidate_using_another_approved_host_without_download(tmp_path):
+    transport_calls = []
+    client = CachedHttpClient(
+        tmp_path / "cache",
+        transport=lambda url: transport_calls.append(url),
+    )
+    candidate = ResearchCandidate(
+        source_name="arterio.mx",
+        source_kind="authorized_distributor",
+        source_id="1",
+        query="SKU-1",
+        matched_field="variation.sku",
+        product_url="https://arterio.mx/producto/silla/",
+        image_source_url="https://cdn.shopify.com/s/files/foreign.jpg",
+        evidence={},
+    )
+
+    with pytest.raises(ValueError, match="política de fuente|pol.tica de fuente"):
+        _default_downloader(client)(candidate, tmp_path / "originals")
+
+    assert transport_calls == []
+
+
+def test_redirect_is_path_and_source_validated_before_second_connection():
+    connections = []
+
+    def connector(host, ip, port, timeout, ssl_context):
+        connection = _TransportConnection(
+            peer_ip=ip,
+            response=_TransportResponse(
+                302,
+                {"location": "https://cdn.shopify.com/s/files/foreign.json"},
+            ),
+        )
+        connections.append(connection)
+        return connection
+
+    transport = UrllibTransport(
+        resolver=lambda host: ["151.101.1.12"],
+        connector=connector,
+    )
+
+    with pytest.raises(ValueError, match="política de fuente|pol.tica de fuente"):
+        transport.fetch(
+            "https://arterio.mx/wp-json/wc/store/v1/products?per_page=100&page=1",
+            source_name="arterio",
+            resource_kind="api",
+        )
+
+    assert len(connections) == 1
+    assert len(connections[0].requests) == 1
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        ResearchCandidate(
+            "api-productos.requiez.com", "manufacturer_official", "1", "R-1", "code",
+            "https://requiez.com/producto/R-1", "https://requiez.com/img/products/r-1/a.webp", {},
+        ),
+        ResearchCandidate(
+            "nogalbeat.com", "authorized_distributor", "2", "L-1", "variant.sku",
+            "https://nogalbeat.com/products/chair?variant=2", "https://cdn.shopify.com/s/files/a.jpg", {},
+        ),
+        ResearchCandidate(
+            "arterio.mx", "authorized_distributor", "3", "L-2", "variation.sku",
+            "https://arterio.mx/producto/chair/", "https://arterio.mx/wp-content/uploads/a.jpg", {},
+        ),
+        ResearchCandidate(
+            "infinitidesign.it", "manufacturer_official", "4", "L-3", "curated",
+            "https://www.infinitidesign.it/en/product/chair/",
+            "https://www.infinitidesign.it/wp-content/uploads/a.jpg", {},
+        ),
+    ],
+)
+def test_candidate_source_policy_accepts_only_its_own_product_and_image_routes(candidate):
+    assert validate_candidate_source_policy(candidate) is candidate
+
+
+@pytest.mark.parametrize(
+    ("url", "source_name", "resource_kind"),
+    [
+        ("https://arterio.mx/wp-json/wc/store/v1/products-evil", "arterio", "api"),
+        ("https://test.diagrama.labenze.com/productos-evil", "labenze_legacy", "api"),
+        ("https://nogalbeat.com/products.json?limit=250&page=internal", "nogalbeat.com", "feed"),
+        ("https://nogalbeat.com/products.json?limit=all&page=1", "nogalbeat.com", "feed"),
+    ],
+)
+def test_source_policy_rejects_prefix_confusion_and_non_numeric_shopify_pagination(
+    url, source_name, resource_kind
+):
+    from scripts.research_labenze_requiez_images import validate_source_resource_url
+
+    with pytest.raises(ValueError, match="política de fuente|pol.tica de fuente"):
+        validate_source_resource_url(url, source_name=source_name, resource_kind=resource_kind)
 
 
 def test_inventory_contract_fixes_the_canonical_sha_and_exact_identities(tmp_path):
@@ -528,6 +761,17 @@ def test_downloader_rejects_private_initial_or_redirect_destination(tmp_path):
         )
 
 
+def test_downloader_rejects_non_global_shared_address_space(tmp_path):
+    with pytest.raises(ValueError, match="privada|pública|p.blica"):
+        download_original(
+            _candidate(),
+            tmp_path,
+            allowed_image_hosts={"cdn.shopify.com"},
+            fetcher=lambda url: (_ for _ in ()).throw(AssertionError("no debe descargar")),
+            resolver=lambda host: ["100.64.0.1"],
+        )
+
+
 def test_downloader_rejects_over_8_mib_and_dimension_or_pixel_bombs_before_writing(tmp_path):
     oversized = HttpResponse(
         200,
@@ -832,6 +1076,104 @@ def test_pipeline_rejects_existing_output_before_calling_any_source(tmp_path):
             output_dir=output,
             sources=[ForbiddenSource()],
             expected_inventory_sha256=inventory_sha,
+        )
+
+
+def test_missing_cache_writes_failure_receipt_with_stage_and_available_input_hashes(tmp_path):
+    inventory = tmp_path / "inventory.jsonl"
+    inventory_sha = _write_inventory(inventory, _inventory_rows())
+    store = tmp_path / "store" / "db.json"
+    assets = tmp_path / "store" / "assets"
+    assets.mkdir(parents=True)
+    store.write_text("{}", encoding="utf-8")
+    output = tmp_path / "failed-missing-cache"
+
+    with pytest.raises(ValueError, match="Cache fuente ausente"):
+        run_research(
+            inventory_path=inventory,
+            store_path=store,
+            assets_dir=assets,
+            output_dir=output,
+            sources=[],
+            expected_inventory_sha256=inventory_sha,
+            cache_from=tmp_path / "missing-cache",
+        )
+
+    receipt = json.loads((output / "FAILED.json").read_text(encoding="utf-8"))
+    assert receipt["status"] == "failed"
+    assert receipt["stage"] == "copy_cache"
+    assert receipt["error_type"] == "ValueError"
+    assert "Cache fuente ausente" in receipt["error"]
+    assert receipt["inputs_before"]["inventory"]["sha256"]
+    assert receipt["inputs_before"]["store"]["sha256"]
+    assert receipt["inputs_before"]["assets"]["sha256"]
+
+
+def test_corrupt_cache_is_rejected_during_copy_and_leaves_failure_receipt(tmp_path):
+    inventory = tmp_path / "inventory.jsonl"
+    inventory_sha = _write_inventory(inventory, _inventory_rows())
+    store = tmp_path / "store" / "db.json"
+    assets = tmp_path / "store" / "assets"
+    assets.mkdir(parents=True)
+    store.write_text("{}", encoding="utf-8")
+    cache = tmp_path / "corrupt-cache"
+    cache.mkdir()
+    (cache / "entry.json").write_text(
+        json.dumps(
+            {
+                "request_url": "https://example.test/value",
+                "response_url": "https://example.test/value",
+                "status": 200,
+                "headers": {},
+                "body_base64": "W10=",
+                "body_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "failed-corrupt-cache"
+
+    with pytest.raises(ValueError, match="integridad|inválido|inv.lido"):
+        run_research(
+            inventory_path=inventory,
+            store_path=store,
+            assets_dir=assets,
+            output_dir=output,
+            sources=[],
+            expected_inventory_sha256=inventory_sha,
+            cache_from=cache,
+        )
+
+    receipt = json.loads((output / "FAILED.json").read_text(encoding="utf-8"))
+    assert receipt["stage"] == "copy_cache"
+    assert receipt["inputs_before"]["inventory"]["sha256"]
+
+
+def test_failure_receipt_write_error_never_masks_the_original_cache_error(tmp_path, monkeypatch):
+    inventory = tmp_path / "inventory.jsonl"
+    inventory_sha = _write_inventory(inventory, _inventory_rows())
+    store = tmp_path / "store" / "db.json"
+    assets = tmp_path / "store" / "assets"
+    assets.mkdir(parents=True)
+    store.write_text("{}", encoding="utf-8")
+    original_write_text = Path.write_text
+
+    def fail_receipt_only(path, *args, **kwargs):
+        if path.name == "FAILED.json":
+            raise OSError("receipt unavailable")
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_receipt_only)
+
+    with pytest.raises(ValueError, match="Cache fuente ausente"):
+        run_research(
+            inventory_path=inventory,
+            store_path=store,
+            assets_dir=assets,
+            output_dir=tmp_path / "failed-receipt-write",
+            sources=[],
+            expected_inventory_sha256=inventory_sha,
+            cache_from=tmp_path / "missing-cache",
         )
 
 

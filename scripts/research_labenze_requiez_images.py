@@ -7,12 +7,14 @@ import hashlib
 import base64
 import csv
 from email.utils import parsedate_to_datetime
+import http.client
 import io
 import ipaddress
 import json
 import re
 import socket
 import shutil
+import ssl
 import time
 import unicodedata
 from collections import Counter
@@ -20,10 +22,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
-from urllib.parse import quote
-from urllib.parse import parse_qsl, urlsplit
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qsl, quote, unquote, urljoin, urlsplit
 
 from PIL import Image, UnidentifiedImageError
 
@@ -158,7 +157,17 @@ class CachedHttpClient:
         payload = json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
         path.write_text(payload, encoding="utf-8", newline="\n")
 
-    def get(self, url: str) -> HttpResponse:
+    def get(
+        self,
+        url: str,
+        *,
+        source_name: str | None = None,
+        resource_kind: str | None = None,
+    ) -> HttpResponse:
+        if (source_name is None) != (resource_kind is None):
+            raise ValueError("source_name y resource_kind deben proporcionarse juntos")
+        if source_name is not None:
+            validate_source_resource_url(url, source_name=source_name, resource_kind=str(resource_kind))
         if self.allowed_hosts is not None:
             requested_host, _ = _url_host(url, "URL HTTP")
             if not _host_allowed(requested_host, self.allowed_hosts):
@@ -168,16 +177,23 @@ class CachedHttpClient:
         path = self._path(url)
         if path.is_file():
             response = self._read(path, url)
-            self._validate_final_response_host(response)
+            self._validate_final_response_host(response, source_name=source_name, resource_kind=resource_kind)
             return response
         if self.offline:
             raise ValueError(f"Falta respuesta en cache offline: {url}")
         last_response: HttpResponse | None = None
         for attempt in range(1, self.max_attempts + 1):
-            response = self.transport(url)
+            if source_name is not None and hasattr(self.transport, "fetch"):
+                response = self.transport.fetch(
+                    url,
+                    source_name=source_name,
+                    resource_kind=str(resource_kind),
+                )
+            else:
+                response = self.transport(url)
             if not isinstance(response, HttpResponse):
                 raise TypeError("transport debe devolver HttpResponse")
-            self._validate_final_response_host(response)
+            self._validate_final_response_host(response, source_name=source_name, resource_kind=resource_kind)
             last_response = response
             retryable = response.status == 429 or 500 <= response.status <= 599
             if not retryable:
@@ -204,7 +220,19 @@ class CachedHttpClient:
         assert last_response is not None
         raise ValueError(f"HTTP agotó reintentos con status {last_response.status}: {url}")
 
-    def _validate_final_response_host(self, response: HttpResponse) -> None:
+    def _validate_final_response_host(
+        self,
+        response: HttpResponse,
+        *,
+        source_name: str | None = None,
+        resource_kind: str | None = None,
+    ) -> None:
+        if source_name is not None:
+            validate_source_resource_url(
+                response.url,
+                source_name=source_name,
+                resource_kind=str(resource_kind),
+            )
         if self.allowed_hosts is None:
             return
         final_host, _ = _url_host(response.url, "redirect HTTP final")
@@ -213,8 +241,14 @@ class CachedHttpClient:
         if self.resolver is not None and not self.offline:
             _validate_public_host(final_host, self.resolver)
 
-    def get_json(self, url: str) -> object:
-        response = self.get(url)
+    def get_json(
+        self,
+        url: str,
+        *,
+        source_name: str | None = None,
+        resource_kind: str | None = None,
+    ) -> object:
+        response = self.get(url, source_name=source_name, resource_kind=resource_kind)
         if response.status != 200:
             raise ValueError(f"status HTTP inesperado: {response.status}")
         try:
@@ -543,7 +577,7 @@ class RequiezSource:
 
     def _listing(self) -> list[Mapping[str, object]]:
         if self._listing_value is None:
-            payload = self.client.get_json(self.listing_url)
+            payload = self.client.get_json(self.listing_url, source_name="requiez", resource_kind="api")
             if isinstance(payload, dict):
                 payload = payload.get("productos") or payload.get("products") or payload.get("data")
             if not isinstance(payload, list):
@@ -571,7 +605,7 @@ class RequiezSource:
             return CandidateEnumeration(terminal, [], match.reason)
         code = match.candidate.code or match.candidate.short_code
         detail_url = f"{self.detail_base_url}/{quote(code, safe='')}"
-        detail_payload = self.client.get_json(detail_url)
+        detail_payload = self.client.get_json(detail_url, source_name="requiez", resource_kind="api")
         if isinstance(detail_payload, dict) and isinstance(detail_payload.get("producto"), dict):
             detail_payload = detail_payload["producto"]
         elif isinstance(detail_payload, dict) and isinstance(detail_payload.get("product"), dict):
@@ -610,7 +644,7 @@ class ShopifySource:
         products: list[Mapping[str, object]] = []
         for page in range(1, self.max_pages + 1):
             url = f"{self.storefront_url}/products.json?limit=250&page={page}"
-            payload = self.client.get_json(url)
+            payload = self.client.get_json(url, source_name=self.source_name, resource_kind="feed")
             page_products = payload.get("products") if isinstance(payload, dict) else None
             if not isinstance(page_products, list):
                 raise ValueError(f"Página Shopify inválida: {url}")
@@ -650,7 +684,11 @@ class LabenzeLegacySource:
     def _load(self) -> None:
         if self._loaded:
             return
-        payload = self.client.get_json(self.listing_url)
+        payload = self.client.get_json(
+            self.listing_url,
+            source_name="labenze_legacy",
+            resource_kind="api",
+        )
         if not isinstance(payload, list) or any(not isinstance(value, Mapping) for value in payload):
             raise ValueError("Listado Labenze legacy inválido")
         if self.enumerate_details:
@@ -658,7 +696,11 @@ class LabenzeLegacySource:
                 source_id = str(product.get("id") or "")
                 if not source_id:
                     raise ValueError("Familia Labenze legacy sin id")
-                detail = self.client.get_json(f"{self.listing_url}/{quote(source_id, safe='')}")
+                detail = self.client.get_json(
+                    f"{self.listing_url}/{quote(source_id, safe='')}",
+                    source_name="labenze_legacy",
+                    resource_kind="api",
+                )
                 if not isinstance(detail, Mapping) or str(detail.get("id") or "") != source_id:
                     raise ValueError(f"Detalle Labenze legacy incompatible: {source_id}")
         self._loaded = True
@@ -691,7 +733,7 @@ class WooCommerceSource:
         prefix = f"{self.base_url}{query}"
         for page in range(1, self.max_pages + 1):
             url = f"{prefix}{separator}per_page=100&page={page}"
-            response = self.client.get(url)
+            response = self.client.get(url, source_name="arterio", resource_kind="api")
             if response.status != 200:
                 raise ValueError(f"status HTTP inesperado: {response.status}")
             try:
@@ -797,7 +839,7 @@ class InfinitiSource:
         products: dict[str, Mapping[str, object]] = {}
         for page in range(1, self.max_pages + 1):
             url = f"{self.wp_base_url}?lang=en&per_page=100&page={page}"
-            payload = self.client.get_json(url)
+            payload = self.client.get_json(url, source_name="infiniti", resource_kind="api")
             if not isinstance(payload, list):
                 raise ValueError(f"Página Infiniti WP inválida: {url}")
             for value in payload:
@@ -833,7 +875,7 @@ class InfinitiSource:
         if not isinstance(wp_product, Mapping) or str(wp_product.get("lang") or "en").casefold() != "en":
             return CandidateEnumeration("rejected", [], "infiniti_wp_product_missing")
         detail_url = f"{self.woo_detail_base_url}/{quote(product_id)}"
-        detail = self.client.get_json(detail_url)
+        detail = self.client.get_json(detail_url, source_name="infiniti", resource_kind="api")
         if not isinstance(detail, Mapping) or str(detail.get("id") or "") != product_id:
             return CandidateEnumeration("rejected", [], "infiniti_detail_identity_mismatch")
         product_url = str(detail.get("permalink") or wp_product.get("link") or "").strip()
@@ -923,6 +965,15 @@ def validate_candidate_urls(
     return candidate
 
 
+def validate_candidate_source_policy(candidate: ResearchCandidate) -> ResearchCandidate:
+    """Impide que una fuente reutilice hosts globales aprobados de otra fuente."""
+
+    source = _canonical_source_name(candidate.source_name)
+    validate_source_resource_url(candidate.product_url, source_name=source, resource_kind="product")
+    validate_source_resource_url(candidate.image_source_url, source_name=source, resource_kind="image")
+    return candidate
+
+
 def _default_resolver(host: str) -> list[str]:
     return sorted({result[4][0] for result in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)})
 
@@ -938,16 +989,8 @@ def _validate_public_host(host: str, resolver) -> None:
             raise ValueError(f"No se pudo resolver host de imagen: {host}") from exc
     if not addresses:
         raise ValueError(f"No se pudo resolver host de imagen: {host}")
-    if any(
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_reserved
-        or address.is_unspecified
-        for address in addresses
-    ):
-        raise ValueError(f"URL de imagen resuelve a red privada: {host}")
+    if any(not address.is_global for address in addresses):
+        raise ValueError(f"URL de imagen resuelve a red privada o no pública: {host}")
 
 
 def _detect_image_type(body: bytes) -> tuple[str, str]:
@@ -1089,12 +1132,59 @@ def _copy_cache(source: Path | None, destination: Path) -> None:
     for entry in sorted(source.rglob("*"), key=lambda item: item.as_posix()):
         if not entry.is_file():
             continue
+        if entry.suffix.casefold() != ".json":
+            raise ValueError(f"Cache HTTP contiene archivo inesperado: {entry.name}")
+        try:
+            cache_entry = json.loads(entry.read_text(encoding="utf-8"))
+            body = base64.b64decode(cache_entry["body_base64"], validate=True)
+            request_url = str(cache_entry["request_url"])
+            response_url = str(cache_entry["response_url"])
+            int(cache_entry["status"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Cache HTTP inválido durante copia: {entry}") from exc
+        if (
+            not request_url
+            or not response_url
+            or hashlib.sha256(body).hexdigest() != cache_entry.get("body_sha256")
+        ):
+            raise ValueError(f"Fallo de integridad en cache HTTP durante copia: {entry}")
         relative = entry.relative_to(source)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(entry, target)
         if _sha256_file(entry) != _sha256_file(target):
             raise RuntimeError(f"Cache copiada no coincide: {relative}")
+
+
+def _write_failure_receipt_best_effort(
+    output_dir: Path,
+    *,
+    exc: Exception,
+    stage: str,
+    researched_at: str,
+    inputs_before: Mapping[str, object] | None,
+) -> None:
+    """Registra el fallo si la salida existe sin reemplazar la excepción original."""
+
+    try:
+        if not output_dir.is_dir():
+            return
+        failure = {
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "stage": stage,
+            "researched_at": researched_at,
+        }
+        if inputs_before is not None:
+            failure["inputs_before"] = inputs_before
+        (output_dir / "FAILED.json").write_text(
+            json.dumps(failure, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except Exception:
+        return
 
 
 def _candidate_dict(candidate: ResearchCandidate) -> dict:
@@ -1265,11 +1355,15 @@ def run_research(
         "store": _tree_fingerprint(store_path),
         "assets": _tree_fingerprint(assets_dir),
     }
-    output_dir.mkdir(parents=True, exist_ok=False)
-    _copy_cache(cache_from, output_dir / "http-cache")
-    (output_dir / "originals").mkdir()
     timestamp = researched_at or datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    stage = "create_output"
     try:
+        output_dir.mkdir(parents=True, exist_ok=False)
+        stage = "copy_cache"
+        _copy_cache(cache_from, output_dir / "http-cache")
+        stage = "create_originals"
+        (output_dir / "originals").mkdir()
+        stage = "research"
         identity_counts = Counter(
             (str(row["supplier"]).casefold(), normalize_identity(_row_identity(row)))
             for row in rows
@@ -1342,16 +1436,12 @@ def run_research(
             raise RuntimeError("Inventario/store/assets cambiaron durante la investigación")
         return summary
     except Exception as exc:
-        failure = {
-            "status": "failed",
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-            "researched_at": timestamp,
-        }
-        (output_dir / "FAILED.json").write_text(
-            json.dumps(failure, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-            newline="\n",
+        _write_failure_receipt_best_effort(
+            output_dir,
+            exc=exc,
+            stage=stage,
+            researched_at=timestamp,
+            inputs_before=before,
         )
         raise
 
@@ -1396,37 +1486,234 @@ PRODUCT_PAGE_HOSTS = {
 IMAGE_HOSTS = SOURCE_HTTP_HOSTS - {"test.labenze.com"}
 
 
-class UrllibTransport:
-    """Transporte HTTPS mínimo; los redirects se validan fuera de urllib."""
+_SHOPIFY_SOURCES = {"nogalbeat.com", "nogalbeatstore.com", "3rin.com.mx"}
+_SOURCE_ALIASES = {
+    "api-productos.requiez.com": "requiez",
+    "labenze-legacy-api": "labenze_legacy",
+    "arterio.mx": "arterio",
+    "infinitidesign.it": "infiniti",
+}
 
-    def __init__(self, *, timeout: float = 30.0) -> None:
+
+def _canonical_source_name(source_name: object) -> str:
+    value = str(source_name or "").strip().casefold().rstrip(".")
+    return _SOURCE_ALIASES.get(value, value)
+
+
+def _secure_decoded_path(parsed, field: str) -> str:
+    try:
+        path = unquote(parsed.path, errors="strict")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"{field} contiene una ruta inválida") from exc
+    if not path.startswith("/") or "\\" in path or any(ord(char) < 32 for char in path):
+        raise ValueError(f"{field} contiene una ruta insegura")
+    if any(segment in {".", ".."} for segment in path.split("/")):
+        raise ValueError(f"{field} contiene traversal de ruta")
+    return path
+
+
+def _path_is_or_descends(path: str, base: str) -> bool:
+    return path.rstrip("/") == base.rstrip("/") or path.startswith(base.rstrip("/") + "/")
+
+
+def validate_source_resource_url(url: object, *, source_name: object, resource_kind: str):
+    """Aplica la frontera host+ruta propia de una fuente antes de conectar."""
+
+    host, parsed = _url_host(url, f"URL {resource_kind}")
+    if parsed.fragment:
+        raise ValueError(f"URL {resource_kind} no permite fragmentos")
+    path = _secure_decoded_path(parsed, f"URL {resource_kind}")
+    source = _canonical_source_name(source_name)
+    kind = str(resource_kind or "").casefold()
+    allowed = False
+
+    if source == "requiez":
+        if kind == "api":
+            allowed = host == "api-productos.requiez.com" and (
+                path.rstrip("/") == "/productos" or path.startswith("/producto/code/")
+            )
+        elif kind == "product":
+            allowed = host in {"requiez.com", "www.requiez.com"} and path.startswith("/producto/")
+        elif kind == "image":
+            allowed = host in {"requiez.com", "www.requiez.com"} and path.startswith("/img/")
+    elif source in _SHOPIFY_SOURCES:
+        own_hosts = {source, f"www.{source}"}
+        if kind == "feed":
+            query = parse_qsl(parsed.query, keep_blank_values=True)
+            values = {key.casefold(): value for key, value in query}
+            allowed = (
+                host in own_hosts
+                and path.rstrip("/") == "/products.json"
+                and len(query) == 2
+                and set(values) == {"limit", "page"}
+                and values["limit"] == "250"
+                and values["page"].isdigit()
+                and int(values["page"]) > 0
+            )
+        elif kind == "product":
+            allowed = host in own_hosts and path.startswith("/products/")
+        elif kind == "image":
+            allowed = host == "cdn.shopify.com" and path != "/"
+    elif source == "labenze_legacy":
+        if kind == "api":
+            allowed = host == "test.diagrama.labenze.com" and (
+                _path_is_or_descends(path, "/productos")
+            )
+        elif kind == "product":
+            allowed = host == "test.labenze.com" and path.startswith("/producto/")
+        elif kind == "image":
+            allowed = host in {"labenze.com", "www.labenze.com"} and path != "/"
+    elif source == "arterio":
+        if kind == "api":
+            allowed = host in {"arterio.mx", "www.arterio.mx"} and _path_is_or_descends(
+                path, "/wp-json/wc/store/v1/products"
+            )
+        elif kind == "product":
+            allowed = host in {"arterio.mx", "www.arterio.mx"} and path.startswith("/producto/")
+        elif kind == "image":
+            allowed = host in {"arterio.mx", "www.arterio.mx"} and path.startswith("/wp-content/")
+    elif source == "infiniti":
+        own_hosts = {"infinitidesign.it", "www.infinitidesign.it"}
+        if kind == "api":
+            allowed = host in own_hosts and (
+                path.rstrip("/") == "/wp-json/wp/v2/product"
+                or path.startswith("/wp-json/wc/store/v1/products/")
+            )
+        elif kind == "product":
+            allowed = host in own_hosts and "/product/" in path
+        elif kind == "image":
+            allowed = host in own_hosts and path.startswith("/wp-content/uploads/")
+
+    if not allowed:
+        raise ValueError(
+            f"URL {kind or 'desconocido'} usa host/ruta no permitido por la política de fuente "
+            f"{source or 'desconocida'}: "
+            f"{host}{path}"
+        )
+    return parsed
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS conectado a una IP ya validada, preservando SNI del hostname."""
+
+    def __init__(self, host: str, ip: str, port: int, timeout: float, context: ssl.SSLContext) -> None:
+        super().__init__(host, port=port, timeout=timeout, context=context)
+        self._pinned_ip = ip
+        self.peer_ip = ""
+
+    def connect(self) -> None:
+        raw_socket = socket.create_connection((self._pinned_ip, self.port), self.timeout)
+        try:
+            peer_ip = str(raw_socket.getpeername()[0])
+            _validate_expected_public_peer(peer_ip, self._pinned_ip)
+            self.sock = self._context.wrap_socket(raw_socket, server_hostname=self.host)
+            self.peer_ip = peer_ip
+        except Exception:
+            raw_socket.close()
+            raise
+
+
+def _default_connector(host: str, ip: str, port: int, timeout: float, ssl_context: ssl.SSLContext):
+    connection = _PinnedHTTPSConnection(host, ip, port, timeout, ssl_context)
+    connection.connect()
+    return connection
+
+
+def _public_addresses(host: str, resolver) -> list[str]:
+    try:
+        literal = ipaddress.ip_address(host)
+        addresses = [literal]
+    except ValueError:
+        try:
+            addresses = [ipaddress.ip_address(value) for value in resolver(host)]
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError(f"No se pudo resolver host público: {host}") from exc
+    if not addresses or any(not address.is_global for address in addresses):
+        raise ValueError(f"Host no resuelve exclusivamente a una red pública permitida: {host}")
+    return sorted({str(address) for address in addresses})
+
+
+def _validate_expected_public_peer(peer_ip: object, expected_ip: object) -> None:
+    try:
+        peer = ipaddress.ip_address(str(peer_ip))
+        expected = ipaddress.ip_address(str(expected_ip))
+    except ValueError as exc:
+        raise ValueError("peer de conexión inválido") from exc
+    if not peer.is_global or peer != expected:
+        raise ValueError(f"peer no coincide con DNS binding público: esperado={expected}, peer={peer}")
+
+
+class UrllibTransport:
+    """Transporte HTTPS con DNS pinning y redirects manuales limitados."""
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 30.0,
+        resolver=_default_resolver,
+        connector=_default_connector,
+        ssl_context: ssl.SSLContext | None = None,
+        max_redirects: int = 5,
+    ) -> None:
+        if max_redirects < 0:
+            raise ValueError("max_redirects no puede ser negativo")
         self.timeout = timeout
+        self.resolver = resolver
+        self.connector = connector
+        self.ssl_context = ssl_context or ssl.create_default_context()
+        self.max_redirects = max_redirects
 
     def __call__(self, url: str) -> HttpResponse:
-        request = Request(
-            url,
-            headers={
-                "Accept": "application/json,image/png,image/jpeg,image/webp,*/*;q=0.1",
-                "User-Agent": "MobilitiVisualResearch/1.0 (+read-only; exact-identity)",
-            },
-        )
-        try:
-            with urlopen(request, timeout=self.timeout) as response:
-                body = response.read(MAX_ORIGINAL_BYTES + 1)
-                return HttpResponse(
-                    status=int(response.status),
-                    url=str(response.geturl()),
-                    headers=dict(response.headers.items()),
-                    body=body,
-                )
-        except HTTPError as exc:
-            body = exc.read(MAX_ORIGINAL_BYTES + 1)
-            return HttpResponse(
-                status=int(exc.code),
-                url=str(exc.geturl()),
-                headers=dict(exc.headers.items()),
-                body=body,
+        raise ValueError("UrllibTransport requiere source_name y resource_kind mediante fetch()")
+
+    def fetch(self, url: str, *, source_name: str, resource_kind: str) -> HttpResponse:
+        current_url = str(url)
+        for hop in range(self.max_redirects + 1):
+            parsed = validate_source_resource_url(
+                current_url,
+                source_name=source_name,
+                resource_kind=resource_kind,
             )
+            host = parsed.hostname.lower().rstrip(".")
+            addresses = _public_addresses(host, self.resolver)
+            selected_ip = addresses[0]
+            connection = self.connector(host, selected_ip, 443, self.timeout, self.ssl_context)
+            try:
+                _validate_expected_public_peer(getattr(connection, "peer_ip", ""), selected_ip)
+                target = parsed.path or "/"
+                if parsed.query:
+                    target += f"?{parsed.query}"
+                connection.request(
+                    "GET",
+                    target,
+                    headers={
+                        "Accept": "application/json,image/png,image/jpeg,image/webp,*/*;q=0.1",
+                        "Host": host,
+                        "User-Agent": "MobilitiVisualResearch/1.0 (+read-only; exact-identity)",
+                    },
+                )
+                response = connection.getresponse()
+                headers = {str(key).casefold(): str(value) for key, value in response.headers.items()}
+                status = int(response.status)
+                if status in {301, 302, 303, 307, 308}:
+                    location = headers.get("location", "").strip()
+                    if not location:
+                        raise ValueError("redirect HTTP sin Location")
+                    if hop >= self.max_redirects:
+                        raise ValueError("redirect HTTP excedió el máximo permitido")
+                    next_url = urljoin(current_url, location)
+                    validate_source_resource_url(
+                        next_url,
+                        source_name=source_name,
+                        resource_kind=resource_kind,
+                    )
+                    current_url = next_url
+                    continue
+                body = response.read(MAX_ORIGINAL_BYTES + 1)
+                return HttpResponse(status=status, url=current_url, headers=headers, body=body)
+            finally:
+                connection.close()
+        raise ValueError("redirect HTTP excedió el máximo permitido")
 
 
 def _read_bindings(path: Path | None) -> list[Mapping[str, object]]:
@@ -1471,6 +1758,7 @@ def _default_downloader(client: CachedHttpClient):
     def acquire(candidate: ResearchCandidate, originals_dir: Path) -> DownloadResult:
         if not should_download_candidate(candidate):
             raise ValueError("candidato sin binding explícito descargable")
+        validate_candidate_source_policy(candidate)
         validate_candidate_urls(
             candidate,
             allowed_product_hosts=PRODUCT_PAGE_HOSTS,
@@ -1480,7 +1768,11 @@ def _default_downloader(client: CachedHttpClient):
             candidate,
             originals_dir,
             allowed_image_hosts=IMAGE_HOSTS,
-            fetcher=client.get,
+            fetcher=lambda url: client.get(
+                url,
+                source_name=_canonical_source_name(candidate.source_name),
+                resource_kind="image",
+            ),
             resolver=_default_resolver,
             check_dns=not client.offline,
         )
