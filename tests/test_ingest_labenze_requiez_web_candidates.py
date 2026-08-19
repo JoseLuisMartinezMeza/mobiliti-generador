@@ -1248,6 +1248,62 @@ def test_cycle_4_real_http_client_expected_failures_become_terminal_receipts(
     assert receipts[0]["reason"] == "transport_error"
 
 
+def test_cycle_4_secure_cached_transport_does_not_repeat_live_dns_after_fetch(
+    tmp_path, intake, monkeypatch
+):
+    """Online y replay aceptan los mismos bytes sin un segundo DNS mutable post-fetch."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    research = importlib.import_module("scripts.research_labenze_requiez_images")
+    image_body = _cycle_4_image_bytes()
+
+    class PinnedTransport(research.UrllibTransport):
+        def fetch(self, url, *, source_name, resource_kind, max_response_bytes):
+            del source_name, max_response_bytes
+            if resource_kind == "product":
+                return research.HttpResponse(
+                    200, url, {"content-type": "text/html"}, b"<title>exacto</title>"
+                )
+            return research.HttpResponse(
+                200, url, {"content-type": "image/png"}, image_body
+            )
+
+    dns_calls = []
+
+    def transient_dns(host, resolver):
+        del resolver
+        dns_calls.append(host)
+        if len(dns_calls) == 2:
+            raise ValueError("No se pudo resolver host de imagen: transitorio")
+
+    monkeypatch.setattr(research, "_validate_public_host", transient_dns)
+    cache_dir = tmp_path / "http-cache"
+    online_client = research.CachedHttpClient(
+        cache_dir,
+        transport=PinnedTransport(),
+        allowed_hosts=research.SOURCE_HTTP_HOSTS,
+        max_attempts=1,
+    )
+    row = _cycle_4_direct_row(intake, (640, 640))
+    online_receipts, online_candidates = module.acquire_direct_images(
+        [row], online_client, tmp_path / "online-originals"
+    )
+    replay_client = research.CachedHttpClient(
+        cache_dir,
+        transport=PinnedTransport(),
+        offline=True,
+        allowed_hosts=research.SOURCE_HTTP_HOSTS,
+        max_attempts=1,
+    )
+    replay_receipts, replay_candidates = module.acquire_direct_images(
+        [row], replay_client, tmp_path / "replay-originals"
+    )
+    assert dns_calls == []
+    assert online_receipts[0]["status"] == replay_receipts[0]["status"] == "downloaded"
+    assert len(online_candidates) == len(replay_candidates) == 1
+    assert online_candidates[0]["original"] == replay_candidates[0]["original"]
+
+
 @pytest.mark.parametrize(
     "error", [OSError("tls failure"), TimeoutError("timed out"), ValueError("Falta respuesta en cache offline: x")]
 )

@@ -1009,12 +1009,19 @@ def acquire_direct_images(
                     return response
 
                 try:
+                    transport_dns_bound = (
+                        isinstance(client, CachedHttpClient)
+                        and isinstance(getattr(client, "transport", None), UrllibTransport)
+                    )
                     cached = download_original(
                         research_candidate,
                         originals_dir,
                         allowed_image_hosts=IMAGE_HOSTS,
                         fetcher=fetch,
-                        check_dns=not bool(getattr(client, "offline", False)),
+                        check_dns=(
+                            not bool(getattr(client, "offline", False))
+                            and not transport_dns_bound
+                        ),
                     )
                 except ValueError as exc:
                     image_cache[image_url] = exc
