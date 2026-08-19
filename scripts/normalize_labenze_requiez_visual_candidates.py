@@ -84,6 +84,8 @@ class CandidateError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.file_binding = None
+        self.public_binding = None
 
 
 class TransactionDrift(PlanError):
@@ -111,6 +113,18 @@ class DirectoryBinding(NamedTuple):
     device: int
     inode: int
     mode: int
+
+
+class ArtifactBinding(NamedTuple):
+    relative: str
+    sha256: str
+    size: int
+    device: int
+    inode: int
+    mode: int
+    nlink: int
+    mtime_ns: int
+    ctime_ns: int
 
 
 def _sha256(data: bytes) -> str:
@@ -437,8 +451,6 @@ def _read_bound_file(
     if len(data) != before.st_size:
         raise CandidateError(f"{label}_CHANGED_DURING_READ", f"{label.lower()} cambió durante lectura")
     actual_sha = _sha256(data)
-    if expected_sha is not None and actual_sha != expected_sha:
-        raise CandidateError(f"{label}_SHA256_MISMATCH", f"hash de {label.lower()} divergente")
     after = path.stat()
     if (before.st_size, before.st_mtime_ns, before.st_ino) != (
         after.st_size,
@@ -460,7 +472,16 @@ def _read_bound_file(
         ctime_ns=after.st_ctime_ns,
         max_bytes=max_bytes,
     )
-    return path, data, {"bytes": len(data), "sha256": actual_sha}, binding
+    public_binding = {"bytes": len(data), "sha256": actual_sha}
+    if expected_sha is not None and actual_sha != expected_sha:
+        error = CandidateError(
+            f"{label}_SHA256_MISMATCH",
+            f"hash de {label.lower()} divergente",
+        )
+        error.file_binding = binding
+        error.public_binding = public_binding
+        raise error
+    return path, data, public_binding, binding
 
 
 def _assert_file_binding(root: Path, expected: FileBinding) -> None:
@@ -770,6 +791,7 @@ def _declared_failure_receipt(
     provenance: dict,
     code: str,
     message: str,
+    previous: dict | None = None,
 ) -> dict:
     receipt = _base_receipt(entry, plan_sha, provenance)
     receipt.update(
@@ -787,6 +809,10 @@ def _declared_failure_receipt(
             },
         }
     )
+    if previous is not None:
+        for field in ("source", "source_review"):
+            if field in previous:
+                receipt[field].update(previous[field])
     return receipt
 
 
@@ -797,21 +823,44 @@ def _process_entry(
     provenance: dict,
 ) -> tuple[dict, bytes | None, tuple[FileBinding, ...]]:
     receipt = _base_receipt(entry, plan_sha, provenance)
+    source_path = None
+    source_data = None
+    source_binding = None
+    source_file_binding = None
+    review_binding = None
+    review_file_binding = None
+    read_error = None
     try:
-        source_path, source_data, source_binding, source_file_binding = _read_bound_file(
-            root,
-            entry["source_path"],
-            entry["source_sha256"],
-            "SOURCE",
-            MAX_SOURCE_BYTES,
-        )
-        _review_path, _review_data, review_binding, review_file_binding = _read_bound_file(
-            root,
-            entry["source_review_path"],
-            entry["source_review_sha256"],
-            "SOURCE_REVIEW",
-            MAX_REVIEW_BYTES,
-        )
+        try:
+            source_path, source_data, source_binding, source_file_binding = _read_bound_file(
+                root,
+                entry["source_path"],
+                entry["source_sha256"],
+                "SOURCE",
+                MAX_SOURCE_BYTES,
+            )
+        except CandidateError as exc:
+            source_binding = exc.public_binding
+            source_file_binding = exc.file_binding
+            read_error = exc
+        try:
+            _review_path, _review_data, review_binding, review_file_binding = _read_bound_file(
+                root,
+                entry["source_review_path"],
+                entry["source_review_sha256"],
+                "SOURCE_REVIEW",
+                MAX_REVIEW_BYTES,
+            )
+        except CandidateError as exc:
+            review_binding = exc.public_binding
+            review_file_binding = exc.file_binding
+            if read_error is None:
+                read_error = exc
+        if read_error is not None:
+            raise read_error
+        assert source_path is not None and source_data is not None
+        assert source_binding is not None and source_file_binding is not None
+        assert review_binding is not None and review_file_binding is not None
         image, source_info = _decode_source(
             source_data, source_path.suffix, entry["source_dimensions"]
         )
@@ -850,22 +899,33 @@ def _process_entry(
         )
         return receipt, normalized["bytes"], (source_file_binding, review_file_binding)
     except CandidateError as exc:
+        source_receipt = {
+            "path": entry["source_path"],
+            "declared_sha256": entry["source_sha256"],
+            "declared_dimensions": entry["source_dimensions"],
+        }
+        if source_binding is not None:
+            source_receipt.update(source_binding)
+        review_receipt = {
+            "path": entry["source_review_path"],
+            "declared_sha256": entry["source_review_sha256"],
+        }
+        if review_binding is not None:
+            review_receipt.update(review_binding)
         receipt.update(
             {
                 "status": "FAILED",
                 "failure": {"code": exc.code, "message": exc.message},
-                "source": {
-                    "path": entry["source_path"],
-                    "declared_sha256": entry["source_sha256"],
-                    "declared_dimensions": entry["source_dimensions"],
-                },
-                "source_review": {
-                    "path": entry["source_review_path"],
-                    "declared_sha256": entry["source_review_sha256"],
-                },
+                "source": source_receipt,
+                "source_review": review_receipt,
             }
         )
-        return receipt, None, ()
+        bindings = tuple(
+            binding
+            for binding in (source_file_binding, review_file_binding)
+            if binding is not None
+        )
+        return receipt, None, bindings
 
 
 def _safe_output(
@@ -907,6 +967,151 @@ def _write_new(path: Path, payload: bytes) -> None:
         handle.write(payload)
 
 
+def _artifact_path(directory: Path, relative: str) -> Path:
+    pure = PurePosixPath(relative)
+    if pure.is_absolute() or not pure.parts or any(part in {"", ".", ".."} for part in pure.parts):
+        raise TransactionDrift(f"ruta de artifact inválida: {relative}")
+    current = directory
+    try:
+        for part in pure.parts[:-1]:
+            current = current / part
+            metadata = current.lstat()
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or current.is_symlink()
+                or _has_reparse_flag(current)
+            ):
+                raise TransactionDrift(f"ancestro de artifact inseguro: {relative}")
+    except TransactionDrift:
+        raise
+    except OSError as exc:
+        raise TransactionDrift(f"ancestro de artifact ausente: {relative}") from exc
+    return directory.joinpath(*pure.parts)
+
+
+def _read_artifact_binding(directory: Path, relative: str) -> ArtifactBinding:
+    path = _artifact_path(directory, relative)
+    try:
+        before = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or path.is_symlink()
+            or _has_reparse_flag(path)
+            or getattr(before, "st_nlink", 1) != 1
+        ):
+            raise TransactionDrift(f"artifact no regular o con alias: {relative}")
+        data = path.read_bytes()
+        after = path.lstat()
+    except TransactionDrift:
+        raise
+    except OSError as exc:
+        raise TransactionDrift(f"artifact ausente o ilegible: {relative}") from exc
+    stable_fields = (
+        "st_size",
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_nlink",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    )
+    if any(getattr(before, field, 0) != getattr(after, field, 0) for field in stable_fields):
+        raise TransactionDrift(f"artifact cambió durante lectura: {relative}")
+    if len(data) != after.st_size:
+        raise TransactionDrift(f"bytes de artifact divergentes: {relative}")
+    return ArtifactBinding(
+        relative=relative,
+        sha256=_sha256(data),
+        size=after.st_size,
+        device=getattr(after, "st_dev", 0),
+        inode=getattr(after, "st_ino", 0),
+        mode=after.st_mode,
+        nlink=getattr(after, "st_nlink", 1),
+        mtime_ns=after.st_mtime_ns,
+        ctime_ns=after.st_ctime_ns,
+    )
+
+
+def _bind_written_artifact(directory: Path, relative: str, payload: bytes) -> ArtifactBinding:
+    binding = _read_artifact_binding(directory, relative)
+    if binding.sha256 != _sha256(payload) or binding.size != len(payload):
+        raise TransactionDrift(f"artifact escrito diverge del payload: {relative}")
+    return binding
+
+
+def _scan_artifact_tree(directory: Path) -> tuple[set[str], set[str]]:
+    files: set[str] = set()
+    directories: set[str] = set()
+
+    def visit(current: Path, prefix: PurePosixPath) -> None:
+        try:
+            children = sorted(current.iterdir(), key=lambda child: child.name)
+        except OSError as exc:
+            raise TransactionDrift(f"árbol de artifacts ilegible: {prefix.as_posix()}") from exc
+        for child in children:
+            relative = (prefix / child.name).as_posix()
+            try:
+                metadata = child.lstat()
+                aliased = child.is_symlink() or _has_reparse_flag(child)
+            except OSError as exc:
+                raise TransactionDrift(f"artifact cambió durante recorrido: {relative}") from exc
+            if aliased:
+                raise TransactionDrift(f"artifact usa enlace/reparse: {relative}")
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.add(relative)
+                visit(child, prefix / child.name)
+            elif stat.S_ISREG(metadata.st_mode):
+                files.add(relative)
+            else:
+                raise TransactionDrift(f"artifact no regular: {relative}")
+
+    visit(directory, PurePosixPath())
+    return files, directories
+
+
+def _expected_artifact_directories(relative_paths: set[str]) -> set[str]:
+    expected: set[str] = set()
+    for relative in relative_paths:
+        parent = PurePosixPath(relative).parent
+        while parent.parts:
+            expected.add(parent.as_posix())
+            parent = parent.parent
+    return expected
+
+
+def _assert_artifact_tree(
+    directory: Path,
+    expected_directory: DirectoryBinding,
+    expected_artifacts: dict[str, ArtifactBinding],
+) -> None:
+    try:
+        current_directory = _capture_directory(directory, "árbol de artifacts")
+    except PlanError as exc:
+        raise TransactionDrift(f"identidad del árbol cambió: {exc}") from exc
+    expected_identity = (
+        expected_directory.device,
+        expected_directory.inode,
+        expected_directory.mode,
+    )
+    current_identity = (
+        current_directory.device,
+        current_directory.inode,
+        current_directory.mode,
+    )
+    if current_identity != expected_identity:
+        raise TransactionDrift("identidad del directorio de artifacts cambió")
+
+    actual_files, actual_directories = _scan_artifact_tree(directory)
+    expected_files = set(expected_artifacts)
+    if actual_files != expected_files:
+        raise TransactionDrift("rutas del árbol de artifacts cambiaron")
+    if actual_directories != _expected_artifact_directories(expected_files):
+        raise TransactionDrift("directorios del árbol de artifacts cambiaron")
+    for relative in sorted(expected_artifacts):
+        if _read_artifact_binding(directory, relative) != expected_artifacts[relative]:
+            raise TransactionDrift(f"binding de artifact cambió: {relative}")
+
+
 def _deduplicate_file_bindings(bindings: list[FileBinding]) -> tuple[FileBinding, ...]:
     unique: dict[tuple[str, str], FileBinding] = {}
     for binding in bindings:
@@ -932,17 +1137,42 @@ def _assert_transaction_bindings(
         raise TransactionDrift("binding cambió para el script ejecutado")
 
 
-def _write_failed_marker(root: Path, directory: Path, message: str, provenance: dict) -> None:
+def _safe_evidence_directory(root: Path, directory: Path) -> bool:
     try:
+        metadata = directory.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or directory.is_symlink()
+            or _has_reparse_flag(directory)
+        ):
+            return False
         resolved = directory.resolve(strict=True)
     except OSError:
+        return False
+    return resolved != root and root in resolved.parents
+
+
+def _write_evidence_marker(root: Path, directory: Path, name: str, payload: dict) -> None:
+    if not _safe_evidence_directory(root, directory):
         return
-    if resolved != root and root not in resolved.parents:
-        return
+    marker = directory / name
+    try:
+        if marker.exists() or marker.is_symlink() or _has_reparse_flag(marker):
+            return
+    except OSError:
+        pass
+    with marker.open("xb") as handle:
+        handle.write(_json_bytes(payload))
+
+
+def _write_failed_marker(root: Path, directory: Path, message: str, provenance: dict) -> None:
     marker = directory / "FAILED.json"
     if marker.exists():
         return
-    payload = _json_bytes(
+    _write_evidence_marker(
+        root,
+        directory,
+        "FAILED.json",
         {
             "schema_version": 1,
             "status": "FAILED",
@@ -950,25 +1180,45 @@ def _write_failed_marker(root: Path, directory: Path, message: str, provenance: 
             "approved": False,
             "promotion": {"allowed": False},
             "provenance": provenance,
-        }
+        },
     )
-    with marker.open("xb") as handle:
-        handle.write(payload)
+
+
+def _write_invalidated_marker(root: Path, directory: Path, message: str, provenance: dict) -> None:
+    _write_evidence_marker(
+        root,
+        directory,
+        "INVALIDATED.json",
+        {
+            "schema_version": 1,
+            "status": "INVALIDATED",
+            "failure": {"code": "TRANSACTION_ARTIFACT_INVALIDATED", "message": message},
+            "approved": False,
+            "promotion": {"allowed": False},
+            "provenance": provenance,
+        },
+    )
 
 
 def _quarantine_uncommitted_pass_artifacts(root: Path, directory: Path) -> None:
-    try:
-        resolved = directory.resolve(strict=True)
-    except OSError:
-        return
-    if resolved != root and root not in resolved.parents:
+    if not _safe_evidence_directory(root, directory):
         return
     moves = (
         (directory / "manifest.json", directory / "INVALIDATED_PASS_MANIFEST.json"),
         (directory / "receipts", directory / "INVALIDATED_RECEIPTS"),
     )
     for source, target in moves:
-        if source.exists() and not target.exists():
+        try:
+            metadata = source.lstat()
+            safe_source = (
+                not source.is_symlink()
+                and not _has_reparse_flag(source)
+                and (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode))
+            )
+            target_absent = not target.exists() and not target.is_symlink()
+        except OSError:
+            continue
+        if safe_source and target_absent:
             os.rename(source, target)
 
 
@@ -1013,39 +1263,40 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
     aggregate_asset_bytes = 0
     budget_exceeded = False
     for entry in entries:
-        if budget_exceeded:
-            receipt = _declared_failure_receipt(
-                entry,
-                plan_sha,
-                provenance,
-                "AGGREGATE_ASSET_MEMORY_BUDGET_EXCEEDED",
-                "presupuesto agregado de assets excedido; candidato no procesado",
-            )
-            processed.append({"entry": entry, "receipt": receipt, "asset": None, "bindings": ()})
-            continue
         receipt, asset, bindings = _process_entry(root, entry, plan_sha, provenance)
         if asset is not None:
-            asset_sha = receipt["output"]["sha256"]
-            pooled = asset_pool.get(asset_sha)
-            if pooled is not None:
-                asset = pooled
-            elif len(asset) > MAX_AGGREGATE_ASSET_BYTES - aggregate_asset_bytes:
-                budget_exceeded = True
+            if budget_exceeded:
                 receipt = _declared_failure_receipt(
                     entry,
                     plan_sha,
                     provenance,
                     "AGGREGATE_ASSET_MEMORY_BUDGET_EXCEEDED",
-                    (
-                        "presupuesto agregado de assets excedido; "
-                        f"límite {MAX_AGGREGATE_ASSET_BYTES} bytes"
-                    ),
+                    "presupuesto agregado de assets excedido; candidato no retenido",
+                    receipt,
                 )
                 asset = None
-                bindings = ()
             else:
-                asset_pool[asset_sha] = asset
-                aggregate_asset_bytes += len(asset)
+                asset_sha = receipt["output"]["sha256"]
+                pooled = asset_pool.get(asset_sha)
+                if pooled is not None:
+                    asset = pooled
+                elif len(asset) > MAX_AGGREGATE_ASSET_BYTES - aggregate_asset_bytes:
+                    budget_exceeded = True
+                    receipt = _declared_failure_receipt(
+                        entry,
+                        plan_sha,
+                        provenance,
+                        "AGGREGATE_ASSET_MEMORY_BUDGET_EXCEEDED",
+                        (
+                            "presupuesto agregado de assets excedido; "
+                            f"límite {MAX_AGGREGATE_ASSET_BYTES} bytes"
+                        ),
+                        receipt,
+                    )
+                    asset = None
+                else:
+                    asset_pool[asset_sha] = asset
+                    aggregate_asset_bytes += len(asset)
         processed.append(
             {"entry": entry, "receipt": receipt, "asset": asset, "bindings": bindings}
         )
@@ -1059,9 +1310,9 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
                     provenance,
                     "AGGREGATE_ASSET_MEMORY_BUDGET_EXCEEDED",
                     "presupuesto agregado de assets excedido; lote cerrado sin assets",
+                    item["receipt"],
                 )
                 item["asset"] = None
-                item["bindings"] = ()
         asset_pool.clear()
 
     by_output: dict[str, list[dict]] = {}
@@ -1084,6 +1335,7 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
                 provenance,
                 "OUTPUT_CONTENT_DUPLICATE",
                 "asset idéntico no se comparte automáticamente",
+                item["receipt"],
             )
             item["asset"] = None
 
@@ -1114,15 +1366,14 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
                     provenance,
                     "SHARED_VISUAL_GROUP_MEMBER_FAILED",
                     "otro miembro del grupo visual compartido falló; no se emite asset",
+                    item["receipt"],
                 )
             item["receipt"]["shared_visual_group"] = group_status
             item["asset"] = None
-            item["bindings"] = ()
 
     file_bindings = [plan_binding]
     for item in processed:
-        if item["receipt"]["status"] == "PASS":
-            file_bindings.extend(item["bindings"])
+        file_bindings.extend(item["bindings"])
     transaction_files = _deduplicate_file_bindings(file_bindings)
 
     def assert_stable() -> None:
@@ -1138,12 +1389,18 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
     try:
         assert_stable()
         stage.mkdir()
-        assert_stable()
+        _assert_directory_bindings(output_bindings)
+        try:
+            stage_binding = _capture_directory(stage, "staging")
+        except PlanError as exc:
+            raise TransactionDrift(f"identidad de staging inválida: {exc}") from exc
+        expected_artifacts: dict[str, ArtifactBinding] = {}
 
         def write_staged(relative: str, payload: bytes) -> None:
-            assert_stable()
+            if relative in expected_artifacts:
+                raise TransactionDrift(f"artifact duplicado en staging: {relative}")
             _write_new(stage / relative, payload)
-            assert_stable()
+            expected_artifacts[relative] = _bind_written_artifact(stage, relative, payload)
 
         prepared = {
             "schema_version": 1,
@@ -1163,7 +1420,6 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
                 write_staged(asset_path, item["asset"])
                 written_assets.add(asset_path)
 
-        assert_stable()
         for item in processed:
             if item["receipt"]["status"] == "PASS":
                 item["receipt"]["inputs_unchanged"] = True
@@ -1210,11 +1466,12 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
         }
         manifest["logical_sha256"] = _sha256(_canonical_bytes(manifest))
 
-        assert_stable()
         for receipt_path, receipt_bytes in receipt_payloads:
             write_staged(receipt_path, receipt_bytes)
         write_staged("manifest.json", _json_bytes(manifest))
+
         assert_stable()
+        _assert_artifact_tree(stage, stage_binding, expected_artifacts)
 
         try:
             os.rename(stage, output)
@@ -1223,12 +1480,14 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
                 "salida apareció durante publicación; staging preservado"
             ) from exc
         published = True
+        _assert_artifact_tree(output, stage_binding, expected_artifacts)
         assert_stable()
         return manifest
     except TransactionDrift as exc:
         location = output if published else stage
         if location.is_dir():
             _quarantine_uncommitted_pass_artifacts(root, location)
+            _write_invalidated_marker(root, location, str(exc), provenance)
             _write_failed_marker(root, location, str(exc), provenance)
         raise
 

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import random
+import shutil
 from pathlib import Path
 
 import pytest
@@ -594,6 +595,219 @@ def test_atomic_rename_observes_complete_manifest_and_receipts_in_stage(
     assert manifest["status"] == "PASS"
     assert observed["complete"] is True
     assert (output / "manifest.json").is_file()
+
+
+def test_complete_staged_tree_is_sealed_once_before_publish(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output = workspace / "output-staged-seal"
+    original_write_new = normalizer._write_new
+    injected = {"done": False}
+
+    def add_unexpected_artifact_after_manifest(path: Path, payload: bytes):
+        result = original_write_new(path, payload)
+        if path.name == "manifest.json" and not injected["done"]:
+            injected["done"] = True
+            (path.parent / "unexpected-evidence.bin").write_bytes(b"unexpected")
+        return result
+
+    monkeypatch.setattr(normalizer, "_write_new", add_unexpected_artifact_after_manifest)
+
+    with pytest.raises(normalizer.PlanError, match="artifact|árbol|tree|binding|cambió"):
+        normalizer.normalize_plan(plan, output, workspace)
+
+    assert not output.exists()
+    stages = list(workspace.glob(".output-staged-seal.staging-*"))
+    assert len(stages) == 1
+    assert (stages[0] / "unexpected-evidence.bin").read_bytes() == b"unexpected"
+    assert (stages[0] / "INVALIDATED_PASS_MANIFEST.json").is_file()
+    assert (stages[0] / "INVALIDATED.json").is_file()
+    assert (stages[0] / "FAILED.json").is_file()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["move_receipt", "replace_png", "hardlink_png", "swap_output"],
+)
+def test_tree_corruption_inside_final_rename_never_leaves_pass_publication(
+    normalizer, workspace: Path, monkeypatch, mutation: str
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output = workspace / f"output-tree-{mutation}"
+    preserved = workspace / f"preserved-stage-{mutation}"
+    original_rename = normalizer.os.rename
+    boundary = {"done": False}
+
+    def corrupt_inside_rename(source_path, destination_path):
+        staged = Path(source_path)
+        destination = Path(destination_path)
+        if destination == output and not boundary["done"]:
+            boundary["done"] = True
+            if mutation == "move_receipt":
+                receipt = next((staged / "receipts").glob("*.json"))
+                original_rename(receipt, staged / "moved-receipt-evidence.json")
+            elif mutation == "replace_png":
+                asset = next((staged / "assets").glob("*.png"))
+                asset.write_bytes(b"not-a-png")
+            elif mutation == "hardlink_png":
+                asset = next((staged / "assets").glob("*.png"))
+                os.link(asset, staged / "hardlinked-asset-evidence.png")
+            else:
+                shutil.copytree(staged, destination)
+                original_rename(staged, preserved)
+                return None
+        return original_rename(source_path, destination_path)
+
+    monkeypatch.setattr(normalizer.os, "rename", corrupt_inside_rename)
+
+    with pytest.raises(normalizer.PlanError, match="artifact|árbol|tree|binding|cambió"):
+        normalizer.normalize_plan(plan, output, workspace)
+
+    assert output.is_dir()
+    assert not (output / "manifest.json").exists()
+    assert (output / "INVALIDATED_PASS_MANIFEST.json").is_file()
+    assert (output / "INVALIDATED.json").is_file()
+    assert (output / "FAILED.json").is_file()
+    if mutation == "swap_output":
+        assert (preserved / "manifest.json").is_file()
+
+
+@pytest.mark.parametrize("changed_input", ["source", "review"])
+def test_failed_candidate_bindings_are_revalidated_post_publish(
+    normalizer, workspace: Path, monkeypatch, changed_input: str
+):
+    source = workspace / "low-resolution.png"
+    _save_image(source, (400, 700), (50, 50, 350, 650))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    review = workspace / "review.json"
+    output = workspace / f"output-failed-binding-{changed_input}"
+    original_rename = normalizer.os.rename
+    boundary = {"done": False}
+
+    def mutate_failed_input_inside_rename(source_path, destination_path):
+        if Path(destination_path) == output and not boundary["done"]:
+            boundary["done"] = True
+            target = source if changed_input == "source" else review
+            target.write_bytes(target.read_bytes() + b"\nchanged")
+        return original_rename(source_path, destination_path)
+
+    monkeypatch.setattr(normalizer.os, "rename", mutate_failed_input_inside_rename)
+
+    with pytest.raises(normalizer.PlanError, match="binding|cambió"):
+        normalizer.normalize_plan(plan, output, workspace)
+
+    assert output.is_dir()
+    assert not (output / "manifest.json").exists()
+    assert (output / "FAILED.json").is_file()
+    invalidated_receipt = next((output / "INVALIDATED_RECEIPTS").glob("*.json"))
+    receipt = json.loads(invalidated_receipt.read_text(encoding="utf-8"))
+    assert receipt["source"]["sha256"] == receipt["source"]["declared_sha256"]
+    assert receipt["source_review"]["sha256"] == receipt["source_review"]["declared_sha256"]
+
+
+@pytest.mark.parametrize("mismatched_input", ["source", "review"])
+def test_failed_sha_mismatch_still_binds_existing_file_for_post_publish_revalidation(
+    normalizer, workspace: Path, monkeypatch, mismatched_input: str
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    entry = _entry(workspace, source)
+    declared_field = (
+        "source_sha256" if mismatched_input == "source" else "source_review_sha256"
+    )
+    entry[declared_field] = "0" * 64
+    plan = _write_plan(workspace, [entry])
+    review = workspace / "review.json"
+    output = workspace / f"output-sha-mismatch-{mismatched_input}"
+    original_rename = normalizer.os.rename
+
+    def mutate_mismatched_file_inside_rename(source_path, destination_path):
+        if Path(destination_path) == output:
+            target = source if mismatched_input == "source" else review
+            target.write_bytes(target.read_bytes() + b"\nchanged")
+        return original_rename(source_path, destination_path)
+
+    monkeypatch.setattr(normalizer.os, "rename", mutate_mismatched_file_inside_rename)
+
+    with pytest.raises(normalizer.PlanError, match="binding|cambió"):
+        normalizer.normalize_plan(plan, output, workspace)
+
+    invalidated_receipt = next((output / "INVALIDATED_RECEIPTS").glob("*.json"))
+    receipt = json.loads(invalidated_receipt.read_text(encoding="utf-8"))
+    receipt_field = "source" if mismatched_input == "source" else "source_review"
+    assert receipt[receipt_field]["sha256"] != receipt[receipt_field]["declared_sha256"]
+    assert (output / "FAILED.json").is_file()
+
+
+def test_complete_artifact_tree_is_validated_exactly_pre_and_post_rename(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output = workspace / "output-tree-checkpoints"
+    original = getattr(normalizer, "_assert_artifact_tree", None)
+    checked: list[Path] = []
+
+    def trace_tree_check(*args, **kwargs):
+        checked.append(Path(args[0]))
+        if original is not None:
+            return original(*args, **kwargs)
+        return None
+
+    monkeypatch.setattr(normalizer, "_assert_artifact_tree", trace_tree_check, raising=False)
+
+    manifest = normalizer.normalize_plan(plan, output, workspace)
+
+    assert manifest["status"] == "PASS"
+    assert len(checked) == 2
+    assert checked[0].name.startswith(".output-tree-checkpoints.staging-")
+    assert checked[1] == output
+
+
+def test_input_hash_reads_remain_linear_for_hundreds_of_rows(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "shared-scale.png"
+    image = Image.new("RGB", (512, 512), "white")
+    image.paste((20, 80, 140), (50, 50, 462, 462))
+    image.save(source, format="PNG")
+    row_count = 200
+    internal_ids = [f"labenze:scale-{index:03d}" for index in range(row_count)]
+    evidence = _shared_visual_evidence(*internal_ids, group_id="linear-scale-group")
+    entries = [
+        _entry(
+            workspace,
+            source,
+            action="centered_canvas_padding_no_scale",
+            internal_id=internal_id,
+            sku=f"SCALE-{index:03d}",
+            product_key=f"scale-{index:03d}",
+            shared_visual_evidence=dict(evidence),
+        )
+        for index, internal_id in enumerate(internal_ids)
+    ]
+    plan = _write_plan(workspace, entries)
+    output = workspace / "output-linear-scale"
+    original_read_bound_file = normalizer._read_bound_file
+    reads = {"count": 0}
+
+    def count_bound_reads(*args, **kwargs):
+        reads["count"] += 1
+        return original_read_bound_file(*args, **kwargs)
+
+    monkeypatch.setattr(normalizer, "_read_bound_file", count_bound_reads)
+
+    manifest = normalizer.normalize_plan(plan, output, workspace)
+
+    assert manifest["status"] == "PASS"
+    assert manifest["summary"]["total"] == row_count
+    assert reads["count"] == row_count * 2 + 10
 
 
 def test_hardlink_source_is_rejected(normalizer, workspace: Path):
