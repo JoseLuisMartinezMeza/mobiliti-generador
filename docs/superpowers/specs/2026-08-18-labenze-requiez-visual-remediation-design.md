@@ -1,7 +1,7 @@
 # Diseño: remediación visual integral de Labenze y Requiez
 
 Fecha: 2026-08-18  
-Estado: diseño aprobado en conversación y autoauditoría aprobada; revisión del usuario pendiente  
+Estado: aprobado por el usuario
 Proyecto: Mobiliti SaaS Cotizador
 
 ## Objetivo
