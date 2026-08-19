@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
+from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID
 
 from PIL import Image
@@ -537,9 +538,13 @@ def _preserve_curated_visuals(previous, candidate):
     ):
         return candidate
     previous_by_id = {row["internal_id"]: row for row in previous["items"]}
+    shared_visual_ids = _shared_visual_preservation_ids(previous, candidate)
     for row in candidate["items"]:
         prior = previous_by_id.get(row["internal_id"])
-        if not _can_preserve_curated_visual(prior, row):
+        if (
+            row["internal_id"] not in shared_visual_ids
+            or not _can_preserve_curated_visual(prior, row)
+        ):
             continue
         asset = prior["attributes"]["approved_asset"]
         image_kind = prior["image_kind"]
@@ -573,6 +578,90 @@ def _preserve_curated_visuals(previous, candidate):
         row["product_url"] = prior["product_url"]
         row["attributes"] = attributes
     return candidate
+
+
+def _shared_visual_preservation_ids(previous, candidate):
+    items = previous.get("items")
+    candidate_items = candidate.get("items")
+    if not isinstance(items, list) or not isinstance(candidate_items, list):
+        return set()
+    if previous.get("supplier") == "sunon":
+        return {
+            row.get("internal_id") for row in items
+            if isinstance(row, dict) and isinstance(row.get("internal_id"), str)
+        }
+    candidates = {
+        row.get("internal_id"): row for row in candidate_items
+        if isinstance(row, dict) and isinstance(row.get("internal_id"), str)
+    }
+    by_asset = {}
+    ungrouped = set()
+    for row in items:
+        if not isinstance(row, dict) or not isinstance(row.get("internal_id"), str):
+            continue
+        attributes = row.get("attributes")
+        asset = attributes.get("approved_asset") if isinstance(attributes, dict) else None
+        path = asset.get("path") if isinstance(asset, dict) else None
+        if not isinstance(path, str):
+            ungrouped.add(row["internal_id"])
+            continue
+        by_asset.setdefault(path, []).append(row)
+    allowed = set(ungrouped)
+    for rows in by_asset.values():
+        if len(rows) == 1:
+            allowed.add(rows[0]["internal_id"])
+        elif _valid_shared_visual_group(previous, rows, candidates):
+            allowed.update(row["internal_id"] for row in rows)
+    return allowed
+
+
+def _valid_shared_visual_group(previous, rows, candidates):
+    internal_ids = {row["internal_id"] for row in rows}
+    groups = set()
+    evidence_urls = set()
+    for row in rows:
+        attributes = row.get("attributes")
+        reference = attributes.get("image_reference") if isinstance(attributes, dict) else None
+        if not isinstance(reference, dict):
+            return False
+        group = reference.get("shared_visual_group")
+        evidence = reference.get("shared_visual_evidence")
+        assigned = evidence.get("assigned_variant_ids") if isinstance(evidence, dict) else None
+        source_url = evidence.get("source_url") if isinstance(evidence, dict) else None
+        if (
+            not _nonempty_text(group)
+            or not isinstance(assigned, list)
+            or len(assigned) != len(internal_ids)
+            or any(not _nonempty_text(internal_id) for internal_id in assigned)
+            or set(assigned) != internal_ids
+            or not _is_secure_visual_url(source_url)
+        ):
+            return False
+        candidate = candidates.get(row["internal_id"])
+        if (
+            not isinstance(candidate, dict)
+            or row.get("supplier") != candidate.get("supplier")
+            or row.get("product_key") != candidate.get("product_key")
+            or row.get("sku") != candidate.get("sku")
+            or not _same_visual_configuration(row, candidate)
+        ):
+            return False
+        groups.add(group)
+        evidence_urls.add(source_url.strip())
+    if len(groups) != 1 or len(evidence_urls) != 1:
+        return False
+    matrix = previous.get("shared_visual_equivalence_matrix")
+    if matrix is None:
+        return True
+    group = next(iter(groups))
+    row = matrix.get(group) if isinstance(matrix, dict) else None
+    return (
+        isinstance(row, dict)
+        and set(row.get("variant_internal_ids") or []) == internal_ids
+        and _nonempty_text(row.get("evidence"))
+        and _is_secure_visual_url(row.get("same_source_url"))
+        and row["same_source_url"].strip() in evidence_urls
+    )
 
 
 def _can_preserve_curated_visual(previous, candidate):
@@ -647,15 +736,22 @@ def _valid_exact_source_reference(reference):
     ):
         return False
     location = reference.get("sheet_or_page")
-    if not (
-        (type(location) is int and location > 0)
-        or _nonempty_text(location)
-    ):
+    if isinstance(location, str):
+        valid_location = (
+            1 <= len(location) <= 128
+            and all(ord(character) >= 32 and ord(character) != 127 for character in location)
+        )
+    else:
+        valid_location = type(location) is int and 1 <= location <= 2_000
+    if not valid_location:
         return False
     position = reference.get("cell_or_bbox")
     if isinstance(position, str):
-        return bool(re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", position))
-    if not isinstance(position, list) or len(position) != 4:
+        return bool(re.fullmatch(
+            r"[A-Z]{1,3}[1-9][0-9]{0,6}(?::[A-Z]{1,3}[1-9][0-9]{0,6})?\Z",
+            position,
+        ))
+    if not isinstance(position, (tuple, list)) or len(position) != 4:
         return False
     if not all(_strict_number(value) and abs(value) <= 1_000_000 for value in position):
         return False
@@ -846,27 +942,51 @@ def _valid_reviewed_at(value):
 def _valid_product_visual_url(value, image_source_url, source_kind):
     if not _is_secure_visual_url(value):
         return False
-    match = re.fullmatch(
-        r"https://([^/\s?#]+)(/[^\s?#]*)?(?:\?[^#\s]*)?(?:#[^\s]*)?",
-        value,
-    )
-    path = (match.group(2) if match else "") or ""
-    lowered = path.casefold()
+    try:
+        if _canonical_visual_url(value) == _canonical_visual_url(image_source_url):
+            return False
+    except ValueError:
+        return False
+    parsed = urlsplit(value.strip())
+    path = parsed.path.casefold()
+    host = parsed.netloc.casefold()
+    query_keys = {
+        key.casefold() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+    }
     if (
-        lowered in {"", "/", "/index.html"}
+        host.startswith("cdn.")
+        or ".cdn." in host
+        or path in {"", "/"}
+        or path.endswith("/index.html")
         or any(
-            segment in lowered
+            segment in path
             for segment in (
                 "/buscar", "/search", "/familia", "/family",
                 "/categoria", "/category", "/collection",
             )
         )
-        or lowered.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif"))
-        or (lowered.endswith(".pdf") and source_kind != "catalog_pdf")
-        or (value == image_source_url and source_kind != "catalog_pdf")
+        or bool(query_keys & {
+            "q", "query", "search", "s", "buscar",
+            "keyword", "keywords", "term", "terms",
+        })
+        or path.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif"))
+        or path.endswith(".pdf")
     ):
         return False
     return True
+
+
+def _canonical_visual_url(value):
+    parsed = urlsplit(value.strip())
+    port = parsed.port
+    if (parsed.scheme.casefold(), port) in {("https", 443), ("http", 80)}:
+        port = None
+    return (
+        parsed.scheme.casefold(),
+        (parsed.hostname or "").casefold(),
+        port,
+        parsed.path.rstrip("/") or "/",
+    )
 
 
 def _strict_number(value):
@@ -916,15 +1036,14 @@ def _option_structure(options):
 def _is_secure_visual_url(value):
     if not isinstance(value, str):
         return False
-    match = re.fullmatch(
-        r"https://([^/\s?#]+)(?:/[^\s?#]*)?(?:\?[^#\s]*)?(?:#[^\s]*)?",
-        value,
-    )
-    return (
-        match is not None
-        and "@" not in match.group(1)
-        and not match.group(1).startswith((".", ":"))
-        and _valid_visual_host(match.group(1))
+    parsed = urlsplit(value.strip())
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    host = parsed.hostname or ""
+    return parsed.scheme.casefold() == "https" and bool(host) and _valid_visual_host(
+        f"{host}:{port}" if port is not None else host
     )
 
 

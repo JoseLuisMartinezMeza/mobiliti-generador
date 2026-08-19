@@ -1167,6 +1167,85 @@ def _importer_exact_item(supplier, status):
     return row
 
 
+def _xlsx_source_reference(cell="A1:B2", sheet="Precios"):
+    return {
+        "file_id": "a" * 64,
+        "sheet_or_page": sheet,
+        "cell_or_bbox": cell,
+    }
+
+
+def test_exact_xlsx_candidate_with_real_range_reference_displaces_curated_visual():
+    supplier = "requiez"
+    previous_row = _curated_item(supplier)
+    candidate_row = _exact_refresh_item(supplier, "exact_xlsx")
+    candidate_row["attributes"]["image_match"]["source_references"] = [
+        _xlsx_source_reference()
+    ]
+    expected = deepcopy(candidate_row)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    assert result["items"][0] == expected
+
+
+def test_prior_exact_xlsx_with_real_range_reference_never_degrades():
+    supplier = "labenze"
+    previous_row = _importer_exact_item(supplier, "exact_xlsx")
+    previous_row["attributes"]["image_match"]["source_references"] = [
+        _xlsx_source_reference("AA10:XFD1048576")
+    ]
+    candidate_row = _refresh_item(supplier)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    assert result["items"][0]["image_kind"] == "official"
+    assert result["items"][0]["attributes"]["image_match"] == previous_row["attributes"]["image_match"]
+
+
+@pytest.mark.parametrize(
+    ("sheet_or_page", "cell_or_bbox"),
+    (
+        (0, [10, 20, 110, 220]),
+        (2001, [10, 20, 110, 220]),
+        (True, [10, 20, 110, 220]),
+        ("", "A1"),
+        ("A\nB", "A1"),
+        ("A" * 129, "A1"),
+        ("Precios", "A0"),
+        ("Precios", "A1:B0"),
+        ("Precios", "A1:B2:C3"),
+        ("Precios", "A10000000"),
+        ("Precios", "A1\n"),
+    ),
+)
+def test_invalid_real_source_reference_blocks_exact_inheritance(
+    sheet_or_page, cell_or_bbox,
+):
+    supplier = "labenze"
+    previous_row = _importer_exact_item(supplier, "exact_xlsx")
+    previous_row["attributes"]["image_match"]["source_references"] = [{
+        "file_id": "a" * 64,
+        "sheet_or_page": sheet_or_page,
+        "cell_or_bbox": cell_or_bbox,
+    }]
+    candidate_row = _refresh_item(supplier)
+    expected = deepcopy(candidate_row)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    assert result["items"][0] == expected
+
+
 @pytest.mark.parametrize(
     "supplier,status",
     [("labenze", "exact_pdf"), ("requiez", "exact_xlsx"), ("requiez", "exact_web")],
@@ -1290,6 +1369,212 @@ def test_valid_official_v2_curated_visual_is_preserved_without_generated_trace()
     assert row["attributes"]["image_reference"]["generated"] is False
     assert "exact_search" not in row["attributes"]["image_reference"]
     assert "generation" not in row["attributes"]["image_reference"]
+
+
+@pytest.mark.parametrize(
+    ("product_url", "image_source_url", "source_kind", "preserved"),
+    (
+        (
+            "https://supplier.example.test/products/chair-1",
+            "https://media.example.test/chair-1.png",
+            "manufacturer_official",
+            True,
+        ),
+        (
+            "https://supplier.example.test/products/chair-1?utm_campaign=summer",
+            "https://media.example.test/chair-1.png",
+            "manufacturer_official",
+            True,
+        ),
+        (
+            "https://SUPPLIER.example.test:443/products/chair-1/?utm_source=visual",
+            "https://supplier.example.test/products/chair-1#photo",
+            "manufacturer_official",
+            False,
+        ),
+        (
+            "https://cdn.supplier.example.test/products/chair-1",
+            "https://media.example.test/chair-1.png",
+            "manufacturer_official",
+            False,
+        ),
+        (
+            "https://products.cdn.supplier.example.test/chair-1",
+            "https://media.example.test/chair-1.png",
+            "manufacturer_official",
+            False,
+        ),
+        (
+            "https://supplier.example.test/?utm_source=visual",
+            "https://media.example.test/chair-1.png",
+            "manufacturer_official",
+            False,
+        ),
+        (
+            "https://supplier.example.test/index.html",
+            "https://media.example.test/chair-1.png",
+            "manufacturer_official",
+            False,
+        ),
+        (
+            "https://supplier.example.test/products/chair-1?q=chair",
+            "https://media.example.test/chair-1.png",
+            "manufacturer_official",
+            False,
+        ),
+        (
+            "https://supplier.example.test/collection/chairs/chair-1",
+            "https://media.example.test/chair-1.png",
+            "manufacturer_official",
+            False,
+        ),
+        (
+            "https://supplier.example.test/files/chair-1.pdf",
+            "https://supplier.example.test/catalog/chair.pdf#page=4",
+            "catalog_pdf",
+            False,
+        ),
+        (
+            "https://supplier.example.test/products/chair-1",
+            "https://sharepoint.example.test/catalog/chair.pdf#page=4",
+            "catalog_pdf",
+            True,
+        ),
+        (
+            "https://supplier.example.test/products/chair-1",
+            "https://sharepoint.example.test/catalog/chair.pdf",
+            "catalog_pdf",
+            False,
+        ),
+    ),
+)
+def test_curated_v2_urls_match_builder_contract(
+    product_url, image_source_url, source_kind, preserved,
+):
+    supplier = "requiez"
+    previous_row = _curated_item(supplier)
+    previous_row["product_url"] = product_url
+    reference = previous_row["attributes"]["image_reference"]
+    reference["image_source_url"] = image_source_url
+    reference["source_kind"] = source_kind
+    candidate_row = _refresh_item(supplier)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    expected_kind = "generated_reference" if preserved else "placeholder"
+    assert result["items"][0]["image_kind"] == expected_kind
+
+
+def _second_shared_visual_row(row):
+    row = deepcopy(row)
+    supplier = row["supplier"]
+    row.update({
+        "internal_id": f"{supplier}:chair-2",
+        "product_key": "chair-2",
+        "sku": f"{supplier.upper()}-CHAIR-2",
+        "name": "Silla Dos",
+        "product_url": "https://supplier.example.test/products/chair-2",
+    })
+    reference = row.get("attributes", {}).get("image_reference")
+    if isinstance(reference, dict):
+        reference["source_locator"] = f"SKU {supplier.upper()}-CHAIR-2"
+        if "exact_search" in reference:
+            reference["exact_search"]["queries"] = [f"{supplier} chair-2"]
+            reference["generation"]["prompt"] = "Silla Dos aislada sobre fondo blanco."
+            reference["generation"]["references"][0]["url"] = row["product_url"]
+    return row
+
+
+def _two_item_curated_snapshot(supplier, rows):
+    result = _curated_snapshot(supplier, rows[0])
+    result["items"] = deepcopy(rows)
+    return result
+
+
+def _add_shared_visual_evidence(rows):
+    internal_ids = [row["internal_id"] for row in rows]
+    for row in rows:
+        reference = row["attributes"]["image_reference"]
+        reference["shared_visual_group"] = "chairs-one-two"
+        reference["shared_visual_evidence"] = {
+            "source_url": "https://supplier.example.test/series/chairs-one-two",
+            "assigned_variant_ids": internal_ids,
+        }
+
+
+def test_shared_generated_asset_without_global_evidence_preserves_neither_item():
+    supplier = "labenze"
+    previous_rows = [_curated_item(supplier)]
+    previous_rows.append(_second_shared_visual_row(previous_rows[0]))
+    candidate_rows = [_refresh_item(supplier)]
+    candidate_rows.append(_second_shared_visual_row(candidate_rows[0]))
+
+    result = catalog_service._preserve_curated_visuals(
+        _two_item_curated_snapshot(supplier, previous_rows),
+        _two_item_curated_snapshot(supplier, candidate_rows),
+    )
+
+    assert [row["image_kind"] for row in result["items"]] == ["placeholder", "placeholder"]
+
+
+def test_shared_generated_asset_with_complete_builder_v2_evidence_preserves_both():
+    supplier = "requiez"
+    previous_rows = [_curated_item(supplier)]
+    previous_rows.append(_second_shared_visual_row(previous_rows[0]))
+    _add_shared_visual_evidence(previous_rows)
+    candidate_rows = [_refresh_item(supplier)]
+    candidate_rows.append(_second_shared_visual_row(candidate_rows[0]))
+
+    result = catalog_service._preserve_curated_visuals(
+        _two_item_curated_snapshot(supplier, previous_rows),
+        _two_item_curated_snapshot(supplier, candidate_rows),
+    )
+
+    assert [row["image_kind"] for row in result["items"]] == [
+        "generated_reference", "generated_reference",
+    ]
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    (
+        "group_mismatch", "assigned_ids_incomplete", "source_url_mismatch",
+        "source_url_query_mismatch", "configuration_mismatch",
+    ),
+)
+def test_malformed_shared_visual_group_preserves_no_member(malformed):
+    supplier = "labenze"
+    previous_rows = [_curated_item(supplier)]
+    previous_rows.append(_second_shared_visual_row(previous_rows[0]))
+    _add_shared_visual_evidence(previous_rows)
+    candidate_rows = [_refresh_item(supplier)]
+    candidate_rows.append(_second_shared_visual_row(candidate_rows[0]))
+    if malformed == "group_mismatch":
+        previous_rows[1]["attributes"]["image_reference"]["shared_visual_group"] = "other"
+    elif malformed == "assigned_ids_incomplete":
+        previous_rows[1]["attributes"]["image_reference"]["shared_visual_evidence"]["assigned_variant_ids"] = [
+            previous_rows[1]["internal_id"]
+        ]
+    elif malformed == "source_url_mismatch":
+        previous_rows[1]["attributes"]["image_reference"]["shared_visual_evidence"]["source_url"] = (
+            "https://supplier.example.test/series/other"
+        )
+    elif malformed == "source_url_query_mismatch":
+        previous_rows[1]["attributes"]["image_reference"]["shared_visual_evidence"]["source_url"] += (
+            "?variant=chair-2"
+        )
+    else:
+        candidate_rows[1]["name"] = "Silla Dos visualmente distinta"
+
+    result = catalog_service._preserve_curated_visuals(
+        _two_item_curated_snapshot(supplier, previous_rows),
+        _two_item_curated_snapshot(supplier, candidate_rows),
+    )
+
+    assert [row["image_kind"] for row in result["items"]] == ["placeholder", "placeholder"]
 
 
 @pytest.mark.parametrize(
