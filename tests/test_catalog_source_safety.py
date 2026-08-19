@@ -870,6 +870,40 @@ def test_pdf_accepts_bounded_indexed_color_images(tmp_path):
     assert_code("PDF_INVALID", lambda: list(iter_pdf_pages(truncated)))
 
 
+def test_pdf_accepts_bounded_indexed_images_with_indirect_icc_base(tmp_path):
+    picture = tmp_path / "indexed-icc.png"
+    image = Image.new("P", (32, 32))
+    image.putpalette([0, 0, 0, 255, 255, 255] + [0, 0, 0] * 254)
+    image.save(picture)
+    source = tmp_path / "indexed-icc.pdf"
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_image(fitz.Rect(0, 0, 32, 32), filename=picture)
+    image_xref = page.get_images(full=True)[0][0]
+
+    profile_xref = document.get_new_xref()
+    document.update_object(profile_xref, "<< /N 3 >>")
+    document.update_stream(profile_xref, b"bounded-icc-profile")
+    base_xref = document.get_new_xref()
+    document.update_object(base_xref, f"[/ICCBased {profile_xref} 0 R]")
+    palette_xref = document.get_new_xref()
+    document.update_object(palette_xref, "<<>>")
+    document.update_stream(palette_xref, bytes(range(256)) * 3)
+    color_space_xref = document.get_new_xref()
+    document.update_object(
+        color_space_xref,
+        f"[/Indexed {base_xref} 0 R 255 {palette_xref} 0 R]",
+    )
+    document.xref_set_key(image_xref, "ColorSpace", f"{color_space_xref} 0 R")
+    document.save(source, deflate=True)
+    document.close()
+
+    pages = list(iter_pdf_pages(source))
+
+    assert len(pages) == 1
+    assert pages[0].image_count == 1
+
+
 def test_pdf_counts_byte_aligned_image_rows_in_aggregate_bound(tmp_path, monkeypatch):
     picture = tmp_path / "narrow.png"
     Image.new("1", (1, 32), 1).save(picture)

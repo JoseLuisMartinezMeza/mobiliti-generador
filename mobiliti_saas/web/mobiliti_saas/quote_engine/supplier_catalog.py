@@ -24,6 +24,8 @@ ALLOWED_SUPPLIERS = {
     "lauco",
     "idelika",
     "conceptos",
+    "labenze",
+    "requiez",
 }
 SUPPLIER_LABELS = {
     "cr-global": "CR Global",
@@ -35,13 +37,15 @@ SUPPLIER_LABELS = {
     "lauco": "Lauco",
     "idelika": "IDÉLIKA",
     "conceptos": "Conceptos",
+    "labenze": "Labenze",
+    "requiez": "Requiez",
 }
 ALLOWED_CURRENCIES = {"USD", "MXN", "EUR"}
 UNKNOWN_BASE_CURRENCY = "XXX"
 EXPECTED_SUPPLIER_BASE_CURRENCY = {
     "cr-global": "MXN", "sonara": "MXN", "sunon": "USD", "alma": "USD",
     "lumbro": "MXN", "jome": "MXN", "lauco": "MXN",
-    "idelika": "MXN", "conceptos": "MXN",
+    "idelika": "MXN", "conceptos": "MXN", "labenze": "MXN", "requiez": "MXN",
 }
 PUBLIC_ITEM_FIELDS = (
     "internal_id", "supplier", "product_key", "sku", "code_status",

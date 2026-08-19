@@ -255,6 +255,7 @@ CatalogAssetMatchStatus = Literal[
     "merged_xlsx",
     "family_xlsx",
     "exact_pdf",
+    "family_pdf",
     "exact_web",
     "model_web",
 ]
@@ -905,6 +906,20 @@ def _pdf_filters(document, xref: int) -> tuple[str, ...] | None:
     return names or None
 
 
+def _pdf_icc_components(document, raw_color_space: str) -> int | None:
+    match = re.fullmatch(
+        r"\[\s*/ICCBased\s+([1-9][0-9]*)\s+0\s+R\s*\]",
+        raw_color_space,
+    )
+    if match is None:
+        return None
+    profile_xref = int(match.group(1))
+    if not 0 < profile_xref < document.xref_length():
+        return None
+    components = _pdf_integer(document, profile_xref, "N")
+    return components if components in {1, 2, 3, 4} else None
+
+
 def _pdf_image_components(document, xref: int) -> int | None:
     kind, value = document.xref_get_key(xref, "ColorSpace")
     direct = {"/DeviceGray": 1, "/DeviceRGB": 3, "/DeviceCMYK": 4}
@@ -915,13 +930,24 @@ def _pdf_image_components(document, xref: int) -> int | None:
         color_xref = int(value.split(" ", 1)[0])
         raw_color_space = document.xref_object(color_xref, compressed=False).strip()
     indexed = re.fullmatch(
-        r"\[\s*/Indexed\s+(/DeviceGray|/DeviceRGB|/DeviceCMYK)\s+([0-9]+)\s+([1-9][0-9]*)\s+0\s+R\s*\]",
+        r"\[\s*/Indexed\s+(?:(/DeviceGray|/DeviceRGB|/DeviceCMYK)|"
+        r"([1-9][0-9]*)\s+0\s+R)\s+([0-9]+)\s+"
+        r"([1-9][0-9]*)\s+0\s+R\s*\]",
         raw_color_space,
     )
     if indexed is not None:
-        base_components = direct[indexed.group(1)]
-        highest_index = int(indexed.group(2))
-        palette_xref = int(indexed.group(3))
+        if indexed.group(1) is not None:
+            base_components = direct[indexed.group(1)]
+        else:
+            base_xref = int(indexed.group(2))
+            if not 0 < base_xref < document.xref_length():
+                return None
+            base_raw = document.xref_object(base_xref, compressed=False).strip()
+            base_components = _pdf_icc_components(document, base_raw)
+        if base_components is None:
+            return None
+        highest_index = int(indexed.group(3))
+        palette_xref = int(indexed.group(4))
         if not 0 < palette_xref < document.xref_length():
             return None
         expected_palette_bytes = (highest_index + 1) * base_components
@@ -947,15 +973,9 @@ def _pdf_image_components(document, xref: int) -> int | None:
         ):
             return 1
         return None
-    profile = None
-    if kind == "array":
-        match = re.fullmatch(r"\[\s*/ICCBased\s+([1-9][0-9]*)\s+0\s+R\s*\]", value)
-        profile = int(match.group(1)) if match else None
-    elif kind == "xref" and re.fullmatch(r"[1-9][0-9]* 0 R", value):
-        match = re.fullmatch(r"\[\s*/ICCBased\s+([1-9][0-9]*)\s+0\s+R\s*\]", raw_color_space)
-        profile = int(match.group(1)) if match else None
-    components = _pdf_integer(document, profile, "N") if profile is not None else None
-    return components if components in {1, 2, 3, 4} else None
+    if kind in {"array", "xref"}:
+        return _pdf_icc_components(document, raw_color_space)
+    return None
 
 
 def _pdf_image_decoded_size(document, xref: int) -> int:
