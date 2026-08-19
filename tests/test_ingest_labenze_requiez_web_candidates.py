@@ -1243,6 +1243,42 @@ def test_cycle_2_shopify_variant_bindings_require_exact_variant_query(intake):
     module.validate_normalized_routing(non_variants)
 
 
+@pytest.mark.parametrize("mutation", ["missing", "mismatch", "unverified"])
+def test_cycle_2_featured_image_variant_requires_structured_verified_evidence(
+    intake, mutation
+):
+    """La URL no puede autoverificar el variant_id de featured_image."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    payloads = json.loads(json.dumps(intake.report_payloads))
+    featured_rows = [
+        row
+        for row in payloads["labenze"]["rows"]
+        if row["evidence"].get("binding") == "variant.featured_image"
+    ]
+    assert len(featured_rows) == 71
+    assert all(
+        str(row["evidence"].get("variant_id") or "").isdigit()
+        and row["evidence"].get("product_link_verified") is True
+        for row in featured_rows
+    )
+    row = featured_rows[0]
+    if mutation == "missing":
+        row["evidence"].pop("variant_id")
+        row["evidence"].pop("product_link_verified")
+    elif mutation == "mismatch":
+        row["evidence"]["variant_id"] = "99999999999999"
+    else:
+        row["evidence"]["product_link_verified"] = False
+    with pytest.raises(ValueError, match="product_link_unverified"):
+        module.normalize_report_payloads(
+            intake.inventory_rows,
+            intake.research_rows,
+            payloads,
+            intake.report_hashes,
+        )
+
+
 @pytest.mark.parametrize("error", [OSError("socket down"), TimeoutError("timed out")])
 def test_cycle_4_expected_transport_errors_become_terminal_direct_receipts(
     tmp_path, intake, error

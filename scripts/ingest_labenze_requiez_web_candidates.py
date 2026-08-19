@@ -614,7 +614,36 @@ def _normalize_row(
             for key, value in parse_qsl(urlsplit(product_url).query, keep_blank_values=True)
             if key.casefold() == "variant"
         ]
-        variant_id = variant_values[0] if len(variant_values) == 1 and variant_values[0].isdigit() else None
+        binding = evidence.get("binding")
+        url_variant_id = (
+            variant_values[0]
+            if len(variant_values) == 1 and variant_values[0].isdigit()
+            else None
+        )
+        evidence_variant_id = evidence.get("variant_id")
+        if binding == "variant.featured_image":
+            evidence_variant_valid = (
+                not isinstance(evidence_variant_id, bool)
+                and isinstance(evidence_variant_id, (str, int))
+                and str(evidence_variant_id).isdigit()
+            )
+            if (
+                url_variant_id is None
+                or not evidence_variant_valid
+                or str(evidence_variant_id) != url_variant_id
+                or evidence.get("product_link_verified") is not True
+            ):
+                raise ValueError(
+                    f"product_link_unverified: {inventory_row['internal_id']}"
+                )
+            variant_id = str(evidence_variant_id)
+            product_link_verified = True
+        else:
+            variant_id = url_variant_id or evidence_variant_id
+            product_link_verified = (
+                bool(url_variant_id)
+                or evidence.get("product_link_verified") is True
+            )
         candidate = {
             "source_name": str(report_row.get("source_name") or ""),
             "source_kind": str(report_row.get("source_kind") or ""),
@@ -623,9 +652,9 @@ def _normalize_row(
             "image_source_url": image_url,
             "document_url": None,
             "page_number": None,
-            "binding": evidence.get("binding"),
-            "variant_id": variant_id or evidence.get("variant_id"),
-            "product_link_verified": bool(variant_id) or evidence.get("product_link_verified") is True,
+            "binding": binding,
+            "variant_id": variant_id,
+            "product_link_verified": product_link_verified,
             "evidence": evidence,
         }
     else:
