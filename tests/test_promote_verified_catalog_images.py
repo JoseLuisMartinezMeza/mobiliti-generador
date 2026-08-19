@@ -720,6 +720,70 @@ def test_labenze_requiez_records_lock_release_permission_error_without_failing_s
     assert persisted["lock"] == report["lock"]
 
 
+def test_labenze_requiez_records_restore_replace_permission_error_and_preserves_artifacts(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    report_path = tmp_path / "restore-replace-failed-report.json"
+    import os
+
+    real_replace = os.replace
+    corrupt_bytes = b"db-corrupto-despues-del-replace"
+
+    def corrupt_then_deny_restore(source, destination):
+        if Path(source).name.endswith(".rollback") and Path(destination) == fixture["active_path"]:
+            raise PermissionError("restore bloqueado por Windows")
+        result = real_replace(source, destination)
+        if Path(source) == fixture["staged"] and Path(destination) == fixture["active_path"]:
+            fixture["active_path"].write_bytes(corrupt_bytes)
+        return result
+
+    monkeypatch.setattr(promoter.os, "replace", corrupt_then_deny_restore)
+    with pytest.raises(RuntimeError, match="activo no coincide"):
+        _promote_labenze_requiez(fixture, report_path=report_path)
+
+    failed_report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert fixture["active_path"].read_bytes() == corrupt_bytes
+    assert failed_report["rollback"]["restore_attempted"] is True
+    assert failed_report["rollback"]["status"] == "restore_replace_failed"
+    assert "PermissionError" in failed_report["rollback"]["error"]
+    assert failed_report["rollback"]["restored"] is False
+    assert failed_report["rollback"]["verified"] is False
+    assert Path(failed_report["transaction"]["failed_publish_path"]).is_file()
+    assert fixture["backup"].read_bytes() == fixture["active_bytes"]
+
+
+def test_labenze_requiez_returns_auditable_success_when_receipt_write_fails(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    report_path = tmp_path / "receipt-write-failed-report.json"
+    real_write_report = promoter._write_report
+    writes = 0
+
+    def fail_second_write(reservation, report):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("recibo final no escribible")
+        return real_write_report(reservation, report)
+
+    monkeypatch.setattr(promoter, "_write_report", fail_second_write)
+    report = _promote_labenze_requiez(fixture, report_path=report_path)
+
+    assert report["status"] == "passed"
+    assert report["report_receipt_write_failed"] is True
+    assert "OSError" in report["report_receipt_write_error"]
+    assert Path(report["report_receipt_fallback_path"]).is_file()
+    assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == "passed"
+
+
+def test_labenze_requiez_reports_non_destructive_manual_rollback_procedure(tmp_path):
+    fixture = _labenze_requiez_fixture(tmp_path)
+
+    report = _promote_labenze_requiez(fixture)
+
+    procedure = report["rollback"]["procedure"].casefold()
+    for required in ("copiar", "temporal adyacente", "sha-256", "failed-publish", "os.replace", "no consumir"):
+        assert required in procedure
+
+
 def _authentic_shared_v2_fixture(tmp_path):
     assets = tmp_path / "assets"
     assets.mkdir(parents=True)

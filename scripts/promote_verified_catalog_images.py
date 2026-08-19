@@ -187,6 +187,19 @@ def _write_report(reservation: dict | None, report: dict) -> None:
     os.replace(temporary, report_path)
 
 
+def _write_report_receipt_fallback(reservation: dict | None, report: dict) -> str | None:
+    if reservation is None:
+        return None
+    receipt_path = reservation["path"].with_name(
+        f".{reservation['path'].name}.{reservation['token']}.receipt"
+    )
+    with receipt_path.open("x", encoding="utf-8") as receipt:
+        json.dump({**report, "reservation_token": reservation["token"]}, receipt, ensure_ascii=False, indent=2)
+        receipt.flush()
+        os.fsync(receipt.fileno())
+    return str(receipt_path)
+
+
 def _acquire_promotion_lock(active_db_path: Path) -> dict:
     lock_path = active_db_path.with_name(f".{active_db_path.name}.promotion.lock")
     token = uuid.uuid4().hex
@@ -261,7 +274,18 @@ def _restore_from_backup(
     if _sha256_if_file(transaction_path) != expected_sha256:
         rollback.update(restored=False, restore_performed=False, verified=False, status="rollback_copy_invalid")
         return False
-    os.replace(transaction_path, active_db_path)
+    try:
+        os.replace(transaction_path, active_db_path)
+    except OSError as exc:
+        rollback.update(
+            restored=False,
+            restore_performed=False,
+            verified=False,
+            status="restore_replace_failed",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        transaction["state"] = "restore_replace_failed"
+        return False
     restored_sha256 = _sha256(active_db_path.read_bytes())
     rollback.update(
         restored=True,
@@ -618,7 +642,12 @@ def promote_verified_catalog_images(
             "restored": False,
             "verified": False,
             "backup_verified": False,
-            "procedure": "Verificar backup_sha256 y publicar el respaldo con os.replace en el volumen activo.",
+            "procedure": (
+                "Rollback manual seguro: copiar el backup a un temporal adyacente al activo, "
+                "verificar su SHA-256, copiar el activo actual a un artefacto .failed-publish y verificarlo, "
+                "después usar os.replace del temporal al activo; no consumir ni mover el backup original "
+                "ni asumir que backup y activo están en el mismo volumen."
+            ),
         },
     }
     lock = None
@@ -667,7 +696,19 @@ def promote_verified_catalog_images(
         _release_promotion_lock(lock)
     _sync_lock_audit(audit, lock)
     report["lock"] = audit["lock"]
-    _write_report(report_reservation, report)
+    try:
+        _write_report(report_reservation, report)
+    except OSError as exc:
+        if error is not None:
+            raise
+        report.update(
+            report_receipt_write_failed=True,
+            report_receipt_write_error=f"{type(exc).__name__}: {exc}",
+        )
+        try:
+            report["report_receipt_fallback_path"] = _write_report_receipt_fallback(report_reservation, report)
+        except OSError as receipt_exc:
+            report["report_receipt_fallback_error"] = f"{type(receipt_exc).__name__}: {receipt_exc}"
     if error is not None:
         raise error
     return report
