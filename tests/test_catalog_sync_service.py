@@ -1167,9 +1167,9 @@ def _importer_exact_item(supplier, status):
     return row
 
 
-def _xlsx_source_reference(cell="A1:B2", sheet="Precios"):
+def _xlsx_source_reference(cell="A1:B2", sheet="Precios", file_id=None):
     return {
-        "file_id": "a" * 64,
+        "file_id": file_id or "a" * 64,
         "sheet_or_page": sheet,
         "cell_or_bbox": cell,
     }
@@ -1207,6 +1207,30 @@ def test_prior_exact_xlsx_with_real_range_reference_never_degrades():
 
     assert result["items"][0]["image_kind"] == "official"
     assert result["items"][0]["attributes"]["image_match"] == previous_row["attributes"]["image_match"]
+
+
+@pytest.mark.parametrize("prior", [False, True])
+def test_exact_xlsx_accepts_real_graph_file_id(prior):
+    supplier = "requiez"
+    previous_row = (
+        _importer_exact_item(supplier, "exact_xlsx")
+        if prior else _curated_item(supplier)
+    )
+    candidate_row = _refresh_item(supplier)
+    exact_row = previous_row if prior else _exact_refresh_item(supplier, "exact_xlsx")
+    exact_row["attributes"]["image_match"]["source_references"] = [
+        _xlsx_source_reference(file_id="graph-file-1")
+    ]
+    if not prior:
+        candidate_row = exact_row
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    assert result["items"][0]["image_kind"] == "official"
+    assert result["items"][0]["attributes"]["image_match"]["status"] == "exact_xlsx"
 
 
 @pytest.mark.parametrize(
@@ -1328,7 +1352,7 @@ def test_incoherent_prior_importer_exact_metadata_blocks_inheritance(incoherent)
     elif incoherent == "references_empty":
         previous_row["attributes"]["image_match"]["source_references"] = []
     elif incoherent == "reference_file":
-        previous_row["attributes"]["image_match"]["source_references"][0]["file_id"] = "no-sha"
+        previous_row["attributes"]["image_match"]["source_references"][0]["file_id"] = "bad/file"
     elif incoherent == "reference_location_bool":
         previous_row["attributes"]["image_match"]["source_references"][0]["sheet_or_page"] = True
     elif incoherent == "reference_bbox_order":
@@ -1498,7 +1522,6 @@ def _add_shared_visual_evidence(rows):
     internal_ids = [row["internal_id"] for row in rows]
     for row in rows:
         reference = row["attributes"]["image_reference"]
-        reference["shared_visual_group"] = "chairs-one-two"
         reference["shared_visual_evidence"] = {
             "source_url": "https://supplier.example.test/series/chairs-one-two",
             "assigned_variant_ids": internal_ids,
@@ -1538,11 +1561,30 @@ def test_shared_generated_asset_with_complete_builder_v2_evidence_preserves_both
     ]
 
 
+def test_duplicate_exact_importer_visuals_use_exact_contract_not_v2_shared_gate():
+    supplier = "labenze"
+    previous_rows = [_importer_exact_item(supplier, "exact_pdf")]
+    previous_rows.append(_second_shared_visual_row(previous_rows[0]))
+    candidate_rows = [_refresh_item(supplier)]
+    candidate_rows.append(_second_shared_visual_row(candidate_rows[0]))
+
+    result = catalog_service._preserve_curated_visuals(
+        _two_item_curated_snapshot(supplier, previous_rows),
+        _two_item_curated_snapshot(supplier, candidate_rows),
+    )
+
+    assert [row["image_kind"] for row in result["items"]] == ["official", "official"]
+    assert all(
+        row["attributes"]["image_match"]["status"] == "exact_pdf"
+        for row in result["items"]
+    )
+
+
 @pytest.mark.parametrize(
     "malformed",
     (
-        "group_mismatch", "assigned_ids_incomplete", "source_url_mismatch",
-        "source_url_query_mismatch", "configuration_mismatch",
+        "missing_evidence", "assigned_ids_incomplete", "assigned_ids_extra",
+        "source_url_mismatch", "source_url_query_mismatch", "configuration_mismatch",
     ),
 )
 def test_malformed_shared_visual_group_preserves_no_member(malformed):
@@ -1552,12 +1594,16 @@ def test_malformed_shared_visual_group_preserves_no_member(malformed):
     _add_shared_visual_evidence(previous_rows)
     candidate_rows = [_refresh_item(supplier)]
     candidate_rows.append(_second_shared_visual_row(candidate_rows[0]))
-    if malformed == "group_mismatch":
-        previous_rows[1]["attributes"]["image_reference"]["shared_visual_group"] = "other"
+    if malformed == "missing_evidence":
+        previous_rows[1]["attributes"]["image_reference"].pop("shared_visual_evidence")
     elif malformed == "assigned_ids_incomplete":
         previous_rows[1]["attributes"]["image_reference"]["shared_visual_evidence"]["assigned_variant_ids"] = [
             previous_rows[1]["internal_id"]
         ]
+    elif malformed == "assigned_ids_extra":
+        previous_rows[1]["attributes"]["image_reference"]["shared_visual_evidence"]["assigned_variant_ids"].append(
+            f"{supplier}:chair-3"
+        )
     elif malformed == "source_url_mismatch":
         previous_rows[1]["attributes"]["image_reference"]["shared_visual_evidence"]["source_url"] = (
             "https://supplier.example.test/series/other"
@@ -1575,6 +1621,19 @@ def test_malformed_shared_visual_group_preserves_no_member(malformed):
     )
 
     assert [row["image_kind"] for row in result["items"]] == ["placeholder", "placeholder"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://[broken",
+        "https://example.test:not-a-port/image.png",
+        "https://example.test:99999/image.png",
+        "https://／.example.test/image.png",
+    ),
+)
+def test_malformed_https_url_returns_false_without_aborting_sync(url):
+    assert catalog_service._is_secure_visual_url(url) is False
 
 
 @pytest.mark.parametrize(

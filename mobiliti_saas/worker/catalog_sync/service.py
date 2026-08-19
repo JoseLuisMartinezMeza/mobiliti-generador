@@ -595,42 +595,41 @@ def _shared_visual_preservation_ids(previous, candidate):
         if isinstance(row, dict) and isinstance(row.get("internal_id"), str)
     }
     by_asset = {}
-    ungrouped = set()
+    allowed = set()
     for row in items:
         if not isinstance(row, dict) or not isinstance(row.get("internal_id"), str):
+            continue
+        if _has_approved_exact_visual(row):
+            allowed.add(row["internal_id"])
             continue
         attributes = row.get("attributes")
         asset = attributes.get("approved_asset") if isinstance(attributes, dict) else None
         path = asset.get("path") if isinstance(asset, dict) else None
         if not isinstance(path, str):
-            ungrouped.add(row["internal_id"])
+            allowed.add(row["internal_id"])
             continue
         by_asset.setdefault(path, []).append(row)
-    allowed = set(ungrouped)
     for rows in by_asset.values():
         if len(rows) == 1:
             allowed.add(rows[0]["internal_id"])
-        elif _valid_shared_visual_group(previous, rows, candidates):
+        elif _valid_shared_visual_group(rows, candidates):
             allowed.update(row["internal_id"] for row in rows)
     return allowed
 
 
-def _valid_shared_visual_group(previous, rows, candidates):
+def _valid_shared_visual_group(rows, candidates):
     internal_ids = {row["internal_id"] for row in rows}
-    groups = set()
     evidence_urls = set()
     for row in rows:
         attributes = row.get("attributes")
         reference = attributes.get("image_reference") if isinstance(attributes, dict) else None
         if not isinstance(reference, dict):
             return False
-        group = reference.get("shared_visual_group")
         evidence = reference.get("shared_visual_evidence")
         assigned = evidence.get("assigned_variant_ids") if isinstance(evidence, dict) else None
         source_url = evidence.get("source_url") if isinstance(evidence, dict) else None
         if (
-            not _nonempty_text(group)
-            or not isinstance(assigned, list)
+            not isinstance(assigned, list)
             or len(assigned) != len(internal_ids)
             or any(not _nonempty_text(internal_id) for internal_id in assigned)
             or set(assigned) != internal_ids
@@ -646,22 +645,8 @@ def _valid_shared_visual_group(previous, rows, candidates):
             or not _same_visual_configuration(row, candidate)
         ):
             return False
-        groups.add(group)
         evidence_urls.add(source_url.strip())
-    if len(groups) != 1 or len(evidence_urls) != 1:
-        return False
-    matrix = previous.get("shared_visual_equivalence_matrix")
-    if matrix is None:
-        return True
-    group = next(iter(groups))
-    row = matrix.get(group) if isinstance(matrix, dict) else None
-    return (
-        isinstance(row, dict)
-        and set(row.get("variant_internal_ids") or []) == internal_ids
-        and _nonempty_text(row.get("evidence"))
-        and _is_secure_visual_url(row.get("same_source_url"))
-        and row["same_source_url"].strip() in evidence_urls
-    )
+    return len(evidence_urls) == 1
 
 
 def _can_preserve_curated_visual(previous, candidate):
@@ -732,7 +717,7 @@ def _valid_exact_source_reference(reference):
     if (
         not isinstance(reference, dict)
         or not isinstance(reference.get("file_id"), str)
-        or re.fullmatch(r"[0-9a-f]{64}", reference["file_id"]) is None
+        or re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", reference["file_id"]) is None
     ):
         return False
     location = reference.get("sheet_or_page")
@@ -1036,12 +1021,12 @@ def _option_structure(options):
 def _is_secure_visual_url(value):
     if not isinstance(value, str):
         return False
-    parsed = urlsplit(value.strip())
     try:
+        parsed = urlsplit(value.strip())
+        host = parsed.hostname or ""
         port = parsed.port
     except ValueError:
         return False
-    host = parsed.hostname or ""
     return parsed.scheme.casefold() == "https" and bool(host) and _valid_visual_host(
         f"{host}:{port}" if port is not None else host
     )
