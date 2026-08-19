@@ -36,6 +36,7 @@ from scripts.research_labenze_requiez_images import (
     should_download_candidate,
     validate_candidate_urls,
     validate_candidate_source_policy,
+    validate_source_resource_url,
     validate_output_path,
 )
 
@@ -309,10 +310,112 @@ def test_candidate_source_policy_accepts_only_its_own_product_and_image_routes(c
 def test_source_policy_rejects_prefix_confusion_and_non_numeric_shopify_pagination(
     url, source_name, resource_kind
 ):
-    from scripts.research_labenze_requiez_images import validate_source_resource_url
-
     with pytest.raises(ValueError, match="política de fuente|pol.tica de fuente"):
         validate_source_resource_url(url, source_name=source_name, resource_kind=resource_kind)
+
+
+@pytest.mark.parametrize(
+    ("source_name", "resource_kind", "url"),
+    [
+        ("requiez", "api", "https://api-productos.requiez.com/producto/code/%252e%252e/admin"),
+        ("nogalbeat.com", "product", "https://nogalbeat.com/products/%252fadmin"),
+        ("nogalbeatstore.com", "product", "https://nogalbeatstore.com/products/%252e%252e/admin"),
+        ("3rin.com.mx", "product", "https://3rin.com.mx/products/%250Aadmin"),
+        ("labenze_legacy", "api", "https://test.diagrama.labenze.com/productos/%255cadmin"),
+        ("arterio", "image", "https://arterio.mx/wp-content/uploads/%250Asecret.jpg"),
+        ("infiniti", "api", "https://www.infinitidesign.it/wp-json/wp/v2/product/%252fadmin"),
+    ],
+)
+def test_every_source_rejects_recursively_encoded_path_delimiters(
+    source_name, resource_kind, url
+):
+    with pytest.raises(ValueError, match="ruta|canonical|política|pol.tica"):
+        validate_source_resource_url(url, source_name=source_name, resource_kind=resource_kind)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://arterio.mx/wp-content/uploads/%2Fsecret.jpg",
+        "https://arterio.mx/wp-content/uploads/%25252e%25252e/secret.jpg",
+        "https://arterio.mx/wp-content/uploads/name%c3%a9.jpg",
+        "https://arterio.mx/wp-content/uploads/name\u00a0.jpg",
+        "https://arterio.mx/wp-content/uploads\uff0fsecret.jpg",
+        "https://arterio.mx/wp-content/uploads/..\u2044secret.jpg",
+        "https://arterio.mx/wp-content/uploads//secret.jpg",
+    ],
+)
+def test_path_canonicalization_rejects_encoded_slashes_noncanonical_roundtrips_and_unicode_confusables(url):
+    with pytest.raises(ValueError, match="ruta|canonical|Unicode|política|pol.tica"):
+        validate_source_resource_url(url, source_name="arterio", resource_kind="image")
+
+
+def test_redirect_with_double_encoded_traversal_is_rejected_before_second_connection():
+    connections = []
+
+    def connector(host, ip, port, timeout, ssl_context):
+        connection = _TransportConnection(
+            peer_ip=ip,
+            response=_TransportResponse(
+                302,
+                {"location": "/producto/code/%252e%252e/admin"},
+            ),
+        )
+        connections.append(connection)
+        return connection
+
+    transport = UrllibTransport(
+        resolver=lambda host: ["151.101.1.12"],
+        connector=connector,
+    )
+
+    with pytest.raises(ValueError, match="ruta|canonical"):
+        transport.fetch(
+            "https://api-productos.requiez.com/productos",
+            source_name="requiez",
+            resource_kind="api",
+        )
+
+    assert len(connections) == 1
+    assert len(connections[0].requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("resource_kind", "url"),
+    [
+        ("api", "https://www.infinitidesign.it/wp-json/wp/v2/product?lang=en&per_page=100&page=1"),
+        ("api", "https://www.infinitidesign.it/wp-json/wp/v2/product/22995"),
+        ("api", "https://www.infinitidesign.it/wp-json/wc/store/v1/products/22995"),
+        ("product", "https://www.infinitidesign.it/en/product/pure-loop-mono-4-legs/"),
+        ("product", "https://infinitidesign.it/es/product/canova/"),
+        ("product", "https://www.infinitidesign.it/it/product/22995/"),
+        ("image", "https://www.infinitidesign.it/wp-content/uploads/2026/08/canova.jpg"),
+    ],
+)
+def test_infiniti_accepts_only_exact_documented_resource_shapes(resource_kind, url):
+    assert validate_source_resource_url(url, source_name="infiniti", resource_kind=resource_kind)
+
+
+@pytest.mark.parametrize(
+    ("resource_kind", "url"),
+    [
+        ("api", "https://www.infinitidesign.it/evil/wp-json/wp/v2/product"),
+        ("api", "https://www.infinitidesign.it/wp-json/product/22995"),
+        ("api", "https://www.infinitidesign.it/wp-json/wp/v2/product-evil"),
+        ("api", "https://www.infinitidesign.it/wp-json/wc/store/v1/products/22995/images"),
+        ("product", "https://www.infinitidesign.it/evil/product/canova/"),
+        ("product", "https://www.infinitidesign.it/product/canova/"),
+        ("product", "https://www.infinitidesign.it/fr/product/canova/"),
+        ("product", "https://www.infinitidesign.it/en/product//"),
+        ("product", "https://www.infinitidesign.it/en/product/12345/"),
+        ("product", "https://www.infinitidesign.it/en/product/canova/more/"),
+        ("image", "https://www.infinitidesign.it/wp-content/uploads-evil/canova.jpg"),
+        ("image", "https://www.infinitidesign.it/evil/wp-content/uploads/canova.jpg"),
+    ],
+)
+def test_infiniti_rejects_lookalike_and_overbroad_resource_paths(resource_kind, url):
+    with pytest.raises(ValueError, match="ruta|política de fuente|pol.tica de fuente"):
+        validate_source_resource_url(url, source_name="infiniti", resource_kind=resource_kind)
 
 
 def test_inventory_contract_fixes_the_canonical_sha_and_exact_identities(tmp_path):

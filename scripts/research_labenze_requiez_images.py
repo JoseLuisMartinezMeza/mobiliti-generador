@@ -1493,6 +1493,19 @@ _SOURCE_ALIASES = {
     "arterio.mx": "arterio",
     "infinitidesign.it": "infiniti",
 }
+_MAX_PATH_PERCENT_DECODES = 6
+_PERCENT_ESCAPE_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+_UNICODE_PATH_CONFUSABLES = {
+    "\u2024",  # one dot leader
+    "\u2044",  # fraction slash
+    "\u2215",  # division slash
+    "\u29f8",  # big solidus
+    "\ufe52",  # small full stop
+    "\ufe68",  # small reverse solidus
+    "\uff0e",  # fullwidth full stop
+    "\uff0f",  # fullwidth solidus
+    "\uff3c",  # fullwidth reverse solidus
+}
 
 
 def _canonical_source_name(source_name: object) -> str:
@@ -1501,14 +1514,38 @@ def _canonical_source_name(source_name: object) -> str:
 
 
 def _secure_decoded_path(parsed, field: str) -> str:
+    raw_path = parsed.path
+    path = raw_path
+    stabilized = False
     try:
-        path = unquote(parsed.path, errors="strict")
+        for _ in range(_MAX_PATH_PERCENT_DECODES):
+            decoded = unquote(path, errors="strict")
+            if decoded == path:
+                stabilized = True
+                break
+            path = decoded
     except (UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"{field} contiene una ruta inválida") from exc
-    if not path.startswith("/") or "\\" in path or any(ord(char) < 32 for char in path):
+    if not stabilized or _PERCENT_ESCAPE_RE.search(path):
+        raise ValueError(f"{field} contiene percent-encoding residual o excesivo")
+    if (
+        not path.startswith("/")
+        or "//" in path
+        or "\\" in path
+        or any(unicodedata.category(char).startswith("C") for char in path)
+    ):
         raise ValueError(f"{field} contiene una ruta insegura")
+    if (
+        any(unicodedata.category(char).startswith("Z") for char in path)
+        or any(char in _UNICODE_PATH_CONFUSABLES for char in path)
+        or unicodedata.normalize("NFKC", path) != path
+    ):
+        raise ValueError(f"{field} contiene separadores o confusables Unicode")
     if any(segment in {".", ".."} for segment in path.split("/")):
         raise ValueError(f"{field} contiene traversal de ruta")
+    canonical = quote(path, safe="/-._~")
+    if canonical != raw_path:
+        raise ValueError(f"{field} no conserva su representación canonical")
     return path
 
 
@@ -1575,14 +1612,15 @@ def validate_source_resource_url(url: object, *, source_name: object, resource_k
     elif source == "infiniti":
         own_hosts = {"infinitidesign.it", "www.infinitidesign.it"}
         if kind == "api":
-            allowed = host in own_hosts and (
-                path.rstrip("/") == "/wp-json/wp/v2/product"
-                or path.startswith("/wp-json/wc/store/v1/products/")
-            )
+            wp_api = re.fullmatch(r"/wp-json/wp/v2/product(?:/[1-9][0-9]*)?/?", path)
+            woo_api = re.fullmatch(r"/wp-json/wc/store/v1/products(?:/[1-9][0-9]*)?/?", path)
+            allowed = host in own_hosts and bool(wp_api or woo_api)
         elif kind == "product":
-            allowed = host in own_hosts and "/product/" in path
+            page = re.fullmatch(r"/(en|es|it)/product/([a-z0-9]+(?:-[a-z0-9]+)*)/", path)
+            slug = page.group(2) if page else ""
+            allowed = host in own_hosts and bool(page) and (not slug.isdigit() or slug == "22995")
         elif kind == "image":
-            allowed = host in own_hosts and path.startswith("/wp-content/uploads/")
+            allowed = host in own_hosts and path.startswith("/wp-content/uploads/") and path != "/wp-content/uploads/"
 
     if not allowed:
         raise ValueError(
