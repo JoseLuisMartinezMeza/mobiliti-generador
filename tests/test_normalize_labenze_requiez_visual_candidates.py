@@ -562,6 +562,46 @@ def test_drift_inside_rename_never_publishes_pass_manifest(
     assert (output / "FAILED.json").is_file()
 
 
+def test_rename_that_moves_then_raises_quarantines_only_original_stage_identity(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output = workspace / "output-rename-raised"
+    original_rename = normalizer.os.rename
+    foreign_manifest = b'{"status":"FOREIGN"}\n'
+    injected = {"stage": None}
+
+    def move_then_recreate_stage_and_raise(source_path, destination_path):
+        source_path = Path(source_path)
+        destination_path = Path(destination_path)
+        result = original_rename(source_path, destination_path)
+        if destination_path == output:
+            source_path.mkdir()
+            (source_path / "manifest.json").write_bytes(foreign_manifest)
+            injected["stage"] = source_path
+            raise OSError("fallo sintético posterior al rename efectivo")
+        return result
+
+    monkeypatch.setattr(normalizer.os, "rename", move_then_recreate_stage_and_raise)
+
+    with pytest.raises(normalizer.PlanError, match="escritura|publicación"):
+        normalizer.normalize_plan(plan, output, workspace)
+
+    foreign_stage = injected["stage"]
+    assert foreign_stage is not None
+    assert (foreign_stage / "manifest.json").read_bytes() == foreign_manifest
+    assert not (foreign_stage / "INVALIDATED_PASS_MANIFEST.json").exists()
+    assert not (foreign_stage / "FAILED.json").exists()
+    assert output.is_dir()
+    assert not (output / "manifest.json").exists()
+    assert (output / "INVALIDATED_PASS_MANIFEST.json").is_file()
+    failed = json.loads((output / "FAILED.json").read_text(encoding="utf-8"))
+    assert failed["status"] == "FAILED"
+    assert failed["failure"]["code"] == "TRANSACTION_WRITE_FAILED"
+
+
 def test_drift_during_final_manifest_write_quarantines_pass_manifest(
     normalizer, workspace: Path, monkeypatch
 ):
@@ -689,7 +729,7 @@ def test_complete_staged_tree_is_sealed_once_before_publish(
     "mutation",
     ["move_receipt", "replace_png", "hardlink_png", "swap_output"],
 )
-def test_tree_corruption_inside_final_rename_never_leaves_pass_publication(
+def test_tree_corruption_inside_final_rename_respects_transaction_identity(
     normalizer, workspace: Path, monkeypatch, mutation: str
 ):
     source = workspace / "source.png"
@@ -726,12 +766,17 @@ def test_tree_corruption_inside_final_rename_never_leaves_pass_publication(
         normalizer.normalize_plan(plan, output, workspace)
 
     assert output.is_dir()
-    assert not (output / "manifest.json").exists()
-    assert (output / "INVALIDATED_PASS_MANIFEST.json").is_file()
-    assert (output / "INVALIDATED.json").is_file()
-    assert (output / "FAILED.json").is_file()
     if mutation == "swap_output":
         assert (preserved / "manifest.json").is_file()
+        assert (output / "manifest.json").is_file()
+        assert not (output / "INVALIDATED_PASS_MANIFEST.json").exists()
+        assert not (output / "INVALIDATED.json").exists()
+        assert not (output / "FAILED.json").exists()
+    else:
+        assert not (output / "manifest.json").exists()
+        assert (output / "INVALIDATED_PASS_MANIFEST.json").is_file()
+        assert (output / "INVALIDATED.json").is_file()
+        assert (output / "FAILED.json").is_file()
 
 
 @pytest.mark.parametrize("changed_input", ["source", "review"])

@@ -1404,15 +1404,15 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
             provenance,
         )
 
-    published = False
+    stage_binding = None
     try:
         assert_stable()
         stage.mkdir()
-        _assert_directory_bindings(output_bindings)
         try:
             stage_binding = _capture_directory(stage, "staging")
         except PlanError as exc:
             raise TransactionDrift(f"identidad de staging inválida: {exc}") from exc
+        _assert_directory_bindings(output_bindings)
         expected_artifacts: dict[str, ArtifactBinding] = {}
 
         def write_staged(relative: str, payload: bytes) -> None:
@@ -1498,7 +1498,6 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
             raise TransactionDrift(
                 "salida apareció durante publicación; staging preservado"
             ) from exc
-        published = True
         _assert_artifact_tree(output, stage_binding, expected_artifacts)
         assert_stable()
         return manifest
@@ -1511,8 +1510,23 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
                 f"{type(exc).__name__}: {exc}"
             )
             failure_code = "TRANSACTION_WRITE_FAILED"
-        location = output if published else stage
-        if location.is_dir():
+        location = None
+        if stage_binding is not None:
+            expected_identity = (
+                stage_binding.device,
+                stage_binding.inode,
+                stage_binding.mode,
+            )
+            for candidate in (stage, output):
+                try:
+                    current = _capture_directory(candidate, "evidencia transaccional")
+                except PlanError:
+                    continue
+                current_identity = (current.device, current.inode, current.mode)
+                if current_identity == expected_identity:
+                    location = candidate
+                    break
+        if location is not None:
             _quarantine_uncommitted_pass_artifacts(root, location)
             _write_invalidated_marker(root, location, str(failure), provenance)
             _write_failed_marker(
