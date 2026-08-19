@@ -564,6 +564,10 @@ def _preserve_curated_visuals(previous, candidate):
         for key in ("image_reference", "source_image_url", "web_image_quality"):
             if key in prior["attributes"]:
                 attributes[key] = json.loads(json.dumps(prior["attributes"][key]))
+        if _has_approved_exact_visual(prior):
+            attributes["image_match"] = json.loads(
+                json.dumps(prior["attributes"]["image_match"])
+            )
         row["image_url"] = ""
         row["image_kind"] = image_kind
         row["product_url"] = prior["product_url"]
@@ -601,36 +605,9 @@ def _can_preserve_curated_visual(previous, candidate):
     )
     if not safe_asset or candidate["supplier"] == "sunon":
         return safe_asset
-    reference = attributes.get("image_reference")
-    if (
-        asset.get("image_kind") != previous["image_kind"]
-        or not isinstance(reference, dict)
-        or reference.get("asset_sha256") != asset["path"][:-4]
-        or any(
-            reference.get(field) is not True
-            for field in (
-                "approved", "configuration_supported", "full_product_visible",
-                "not_cropped", "direct_product_reference",
-            )
-        )
-        or not _is_secure_visual_url(reference.get("image_source_url"))
-        or not _is_secure_visual_url(previous.get("product_url"))
-    ):
-        return False
-    source_image_url = attributes.get("source_image_url")
-    if source_image_url is not None and not _is_secure_visual_url(source_image_url):
-        return False
-    for quality in (
-        attributes.get("web_image_quality"),
-        reference.get("web_image_quality"),
-        reference.get("asset_quality"),
-    ):
-        if quality is not None and (
-            not isinstance(quality, dict)
-            or quality.get("sha256", asset["path"][:-4]) != asset["path"][:-4]
-        ):
-            return False
-    return True
+    if _has_approved_exact_visual(previous):
+        return True
+    return _valid_curated_v2_reference(previous, asset)
 
 
 def _has_approved_exact_visual(candidate):
@@ -644,15 +621,260 @@ def _has_approved_exact_visual(candidate):
     if not isinstance(image_match, dict) or not isinstance(asset, dict):
         return False
     sha256 = image_match.get("asset_sha256")
+    source_references = image_match.get("source_references")
     return (
-        image_match.get("status") in {"exact_pdf", "exact_xlsx", "exact_web"}
+        candidate.get("image_url") == ""
+        and image_match.get("status") in {"exact_pdf", "exact_xlsx", "exact_web"}
         and isinstance(sha256, str)
         and re.fullmatch(r"[0-9a-f]{64}", sha256) is not None
+        and isinstance(source_references, list)
+        and bool(source_references)
+        and all(_valid_exact_source_reference(reference) for reference in source_references)
         and asset.get("bucket") == "catalog-assets"
         and asset.get("path") == f"{sha256}.png"
         and asset.get("image_kind") == "official"
+        and isinstance(asset.get("label"), str)
+        and bool(asset["label"].strip())
         and asset.get("approved") is True
     )
+
+
+def _valid_exact_source_reference(reference):
+    if (
+        not isinstance(reference, dict)
+        or not isinstance(reference.get("file_id"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", reference["file_id"]) is None
+    ):
+        return False
+    location = reference.get("sheet_or_page")
+    if not (
+        (type(location) is int and location > 0)
+        or _nonempty_text(location)
+    ):
+        return False
+    position = reference.get("cell_or_bbox")
+    if isinstance(position, str):
+        return bool(re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", position))
+    if not isinstance(position, list) or len(position) != 4:
+        return False
+    if not all(_strict_number(value) and abs(value) <= 1_000_000 for value in position):
+        return False
+    return position[0] <= position[2] and position[1] <= position[3]
+
+
+def _valid_curated_v2_reference(previous, asset):
+    attributes = previous.get("attributes")
+    reference = attributes.get("image_reference") if isinstance(attributes, dict) else None
+    image_kind = previous.get("image_kind")
+    if (
+        not isinstance(reference, dict)
+        or image_kind not in {"official", "generated_reference"}
+        or previous.get("image_url") != ""
+        or asset.get("image_kind") != image_kind
+        or not isinstance(asset.get("label"), str)
+        or not asset["label"].strip()
+        or reference.get("asset_sha256") != asset["path"][:-4]
+        or any(
+            reference.get(field) is not True
+            for field in (
+                "approved", "configuration_supported", "full_product_visible",
+                "not_cropped", "direct_product_reference",
+            )
+        )
+        or not _nonempty_text(reference.get("source_locator"))
+        or not _nonempty_text(reference.get("reviewer"))
+        or reference.get("decision") not in {"retain", "replace"}
+        or not _nonempty_text(reference.get("reason"))
+        or (
+            "status" in reference
+            and (
+                not isinstance(reference["status"], str)
+                or "placeholder" in reference["status"].casefold()
+            )
+        )
+        or not _valid_reviewed_at(reference.get("reviewed_at"))
+        or reference.get("source_kind") not in {
+            "catalog_pdf", "manufacturer_official", "authorized_distributor",
+            "third_party_exact",
+        }
+        or not _valid_source_dimensions(reference.get("source_dimensions"))
+        or not _is_secure_visual_url(reference.get("image_source_url"))
+        or not _valid_product_visual_url(
+            previous.get("product_url"),
+            reference.get("image_source_url"),
+            reference.get("source_kind"),
+        )
+        or not _valid_asset_quality(
+            reference.get("asset_quality"),
+            reference.get("source_dimensions"),
+            asset["path"][:-4],
+        )
+        or reference.get("quality_exception") is not None
+    ):
+        return False
+    if reference["source_kind"] == "catalog_pdf" and not re.search(
+        r"\.pdf(?:\?[^#]*)?#(?:[^#]*&)?page=\d+(?:&|$)",
+        reference["image_source_url"],
+        re.IGNORECASE,
+    ):
+        return False
+    source_image_url = attributes.get("source_image_url")
+    if source_image_url is not None and not _is_secure_visual_url(source_image_url):
+        return False
+    for quality in (
+        attributes.get("web_image_quality"),
+        reference.get("web_image_quality"),
+    ):
+        if not _valid_optional_web_quality(quality, asset["path"][:-4]):
+            return False
+    return _valid_generated_provenance(reference, image_kind)
+
+
+def _valid_generated_provenance(reference, image_kind):
+    generated = reference.get("generated")
+    if image_kind == "official":
+        return generated is False
+    if generated is not True:
+        return False
+    search = reference.get("exact_search")
+    generation = reference.get("generation")
+    if (
+        not isinstance(search, dict)
+        or search.get("exhausted") is not True
+        or not isinstance(search.get("queries"), list)
+        or not search["queries"]
+        or any(not _nonempty_text(query) for query in search["queries"])
+        or not isinstance(generation, dict)
+        or not _nonempty_text(generation.get("prompt"))
+        or not _nonempty_text(generation.get("model"))
+        or not isinstance(generation.get("references"), list)
+        or not generation["references"]
+    ):
+        return False
+    for generated_reference in generation["references"]:
+        if (
+            not isinstance(generated_reference, dict)
+            or not _is_secure_visual_url(generated_reference.get("url"))
+            or not isinstance(generated_reference.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-fA-F]{64}", generated_reference["sha256"]) is None
+        ):
+            return False
+    return True
+
+
+def _valid_asset_quality(quality, source_dimensions, expected_sha256):
+    if not isinstance(quality, dict) or quality.get("sha256") != expected_sha256:
+        return False
+    canvas = quality.get("canvas")
+    bbox = quality.get("bbox")
+    if not isinstance(canvas, dict) or not isinstance(bbox, dict):
+        return False
+    width, height = canvas.get("width"), canvas.get("height")
+    left, top = bbox.get("left"), bbox.get("top")
+    bbox_width, bbox_height = bbox.get("width"), bbox.get("height")
+    if (
+        type(width) is not int
+        or type(height) is not int
+        or width != height
+        or not 1024 <= width <= 8192
+        or width * height > 25_000_000
+        or any(type(value) is not int for value in (left, top, bbox_width, bbox_height))
+        or left < 0
+        or top < 0
+        or bbox_width <= 0
+        or bbox_height <= 0
+        or left + bbox_width > width
+        or top + bbox_height > height
+        or bbox_width / width > 0.92
+        or bbox_height / height > 0.92
+    ):
+        return False
+    margin = quality.get("margin")
+    occupancy = quality.get("occupancy")
+    aspect_ratio = quality.get("aspect_ratio")
+    if not all(_strict_number(value) for value in (margin, occupancy, aspect_ratio)):
+        return False
+    calculated_margin = min(
+        left / width,
+        top / height,
+        (width - left - bbox_width) / width,
+        (height - top - bbox_height) / height,
+    )
+    calculated_aspect = bbox_width / bbox_height
+    source_aspect = source_dimensions["width"] / source_dimensions["height"]
+    return (
+        margin >= 0.04
+        and abs(margin - calculated_margin) <= 1e-9
+        and 0.12 <= occupancy <= 0.80
+        and aspect_ratio > 0
+        and abs(aspect_ratio - calculated_aspect) <= 1e-9
+        and abs(calculated_aspect / source_aspect - 1) <= 0.01
+    )
+
+
+def _valid_source_dimensions(dimensions):
+    return (
+        isinstance(dimensions, dict)
+        and _strict_number(dimensions.get("width"))
+        and _strict_number(dimensions.get("height"))
+        and dimensions["width"] > 0
+        and dimensions["height"] > 0
+    )
+
+
+def _valid_optional_web_quality(quality, expected_sha256):
+    if quality is None:
+        return True
+    if not isinstance(quality, dict) or quality.get("sha256") != expected_sha256:
+        return False
+    for field in ("width", "height"):
+        if field in quality and (type(quality[field]) is not int or quality[field] <= 0):
+            return False
+    return True
+
+
+def _valid_reviewed_at(value):
+    if not _nonempty_text(value):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_product_visual_url(value, image_source_url, source_kind):
+    if not _is_secure_visual_url(value):
+        return False
+    match = re.fullmatch(
+        r"https://([^/\s?#]+)(/[^\s?#]*)?(?:\?[^#\s]*)?(?:#[^\s]*)?",
+        value,
+    )
+    path = (match.group(2) if match else "") or ""
+    lowered = path.casefold()
+    if (
+        lowered in {"", "/", "/index.html"}
+        or any(
+            segment in lowered
+            for segment in (
+                "/buscar", "/search", "/familia", "/family",
+                "/categoria", "/category", "/collection",
+            )
+        )
+        or lowered.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif"))
+        or (lowered.endswith(".pdf") and source_kind != "catalog_pdf")
+        or (value == image_source_url and source_kind != "catalog_pdf")
+    ):
+        return False
+    return True
+
+
+def _strict_number(value):
+    return type(value) in {int, float} and value == value and -float("inf") < value < float("inf")
+
+
+def _nonempty_text(value):
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _same_visual_configuration(previous, candidate):
@@ -692,7 +914,34 @@ def _option_structure(options):
 
 
 def _is_secure_visual_url(value):
-    return isinstance(value, str) and value.startswith("https://")
+    if not isinstance(value, str):
+        return False
+    match = re.fullmatch(
+        r"https://([^/\s?#]+)(?:/[^\s?#]*)?(?:\?[^#\s]*)?(?:#[^\s]*)?",
+        value,
+    )
+    return (
+        match is not None
+        and "@" not in match.group(1)
+        and not match.group(1).startswith((".", ":"))
+        and _valid_visual_host(match.group(1))
+    )
+
+
+def _valid_visual_host(host_with_port):
+    host, separator, port = host_with_port.rpartition(":")
+    if not separator:
+        host, port = host_with_port, ""
+    elif not port.isdigit() or not 1 <= int(port) <= 65535:
+        return False
+    labels = host.split(".")
+    return all(
+        label
+        and label[0].isalnum()
+        and label[-1].isalnum()
+        and all(character.isalnum() or character == "-" for character in label)
+        for label in labels
+    )
 
 
 def _identity(snapshot):

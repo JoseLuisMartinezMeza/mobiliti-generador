@@ -996,12 +996,42 @@ def _curated_item(supplier, *, image_kind="generated_reference", **changes):
             },
             "image_reference": {
                 "asset_sha256": sha256,
+                "decision": "retain",
+                "reason": "Asociación visual revisada y aprobada.",
+                "generated": image_kind == "generated_reference",
+                "source_kind": "manufacturer_official",
+                "source_locator": f"SKU {supplier.upper()}-CHAIR-1",
+                "source_dimensions": {"width": 512, "height": 512},
+                "reviewer": "visual.reviewer@mobiliti.mx",
+                "reviewed_at": "2026-08-18T12:00:00Z",
                 "approved": True,
                 "configuration_supported": True,
                 "full_product_visible": True,
                 "not_cropped": True,
                 "direct_product_reference": True,
                 "image_source_url": "https://media.example.test/chair-1.png",
+                "asset_quality": {
+                    "sha256": sha256,
+                    "canvas": {"width": 1024, "height": 1024},
+                    "bbox": {"left": 256, "top": 256, "width": 512, "height": 512},
+                    "margin": 0.25,
+                    "occupancy": 0.25,
+                    "aspect_ratio": 1.0,
+                },
+                **({
+                    "exact_search": {
+                        "exhausted": True,
+                        "queries": [f"{supplier} chair-1"],
+                    },
+                    "generation": {
+                        "prompt": "Silla Uno aislada sobre fondo blanco.",
+                        "model": "gpt-image-1",
+                        "references": [{
+                            "url": "https://supplier.example.test/products/chair-1",
+                            "sha256": "a" * 64,
+                        }],
+                    },
+                } if image_kind == "generated_reference" else {}),
             },
             "source_image_url": "https://media.example.test/chair-1.png",
             "web_image_quality": {"sha256": sha256, "width": 1200, "height": 1200},
@@ -1099,9 +1129,41 @@ def _exact_refresh_item(supplier, status, *, approved=True):
     row["attributes"]["image_match"] = {
         "status": status,
         "asset_sha256": sha256,
+        "source_references": [{
+            "file_id": "a" * 64,
+            "sheet_or_page": 7,
+            "cell_or_bbox": [10.0, 20.0, 110.0, 220.0],
+        }],
     }
     row["attributes"]["approved_asset"]["approved"] = approved
     row["attributes"]["approved_asset"]["label"] = "Exacta nueva"
+    return row
+
+
+def _importer_exact_item(supplier, status):
+    sha256 = "e" * 64
+    row = _curated_item(supplier, image_kind="official")
+    row["attributes"] = {
+        "variant": "Respaldo alto",
+        "dimensions": "60 x 60 x 110 cm",
+        "commercial_note": "anterior",
+        "image_match": {
+            "status": status,
+            "asset_sha256": sha256,
+            "source_references": [{
+                "file_id": "a" * 64,
+                "sheet_or_page": 7,
+                "cell_or_bbox": [10.0, 20.0, 110.0, 220.0],
+            }],
+        },
+        "approved_asset": {
+            "bucket": "catalog-assets",
+            "path": f"{sha256}.png",
+            "image_kind": "official",
+            "label": "Imagen oficial exacta del importador",
+            "approved": True,
+        },
+    }
     return row
 
 
@@ -1136,17 +1198,24 @@ def test_unapproved_exact_status_cannot_displace_prior_curated_visual():
 
 
 @pytest.mark.parametrize("supplier", ["labenze", "requiez"])
-def test_prior_exact_official_visual_never_degrades_to_generated_reference(supplier):
-    previous_row = _curated_item(supplier, image_kind="official")
-    candidate_row = _refresh_item(supplier)
-    candidate_row["image_kind"] = "generated_reference"
-    candidate_row["attributes"]["approved_asset"] = {
-        "bucket": "catalog-assets",
-        "path": f"{'c' * 64}.png",
-        "image_kind": "generated_reference",
-        "label": "Imagen de referencia nueva",
-        "approved": True,
-    }
+@pytest.mark.parametrize(
+    "status,degraded",
+    [("exact_pdf", "placeholder"), ("exact_xlsx", "family"), ("exact_web", "generated")],
+)
+def test_prior_importer_exact_official_never_degrades_without_v2_reference(
+    supplier, status, degraded,
+):
+    previous_row = _importer_exact_item(supplier, status)
+    candidate_row = _refresh_item(supplier, family=degraded == "family")
+    if degraded == "generated":
+        candidate_row["image_kind"] = "generated_reference"
+        candidate_row["attributes"]["approved_asset"] = {
+            "bucket": "catalog-assets",
+            "path": f"{'c' * 64}.png",
+            "image_kind": "generated_reference",
+            "label": "Imagen de referencia nueva",
+            "approved": True,
+        }
 
     result = catalog_service._preserve_curated_visuals(
         _curated_snapshot(supplier, previous_row),
@@ -1155,6 +1224,184 @@ def test_prior_exact_official_visual_never_degrades_to_generated_reference(suppl
 
     assert result["items"][0]["image_kind"] == "official"
     assert result["items"][0]["attributes"]["approved_asset"]["path"] == f"{'e' * 64}.png"
+    assert result["items"][0]["attributes"]["image_match"] == previous_row["attributes"]["image_match"]
+    assert "image_reference" not in result["items"][0]["attributes"]
+    assert result["items"][0]["attributes"]["commercial_note"] == "nueva"
+
+
+@pytest.mark.parametrize(
+    "incoherent",
+    (
+        "status", "match_sha", "references_type", "references_empty",
+        "reference_file", "reference_location_bool", "reference_bbox_order",
+        "asset_path", "asset_kind", "approved_type", "label_type", "image_url",
+    ),
+)
+def test_incoherent_prior_importer_exact_metadata_blocks_inheritance(incoherent):
+    supplier = "labenze"
+    previous_row = _importer_exact_item(supplier, "exact_pdf")
+    if incoherent == "status":
+        previous_row["attributes"]["image_match"]["status"] = "family_pdf"
+    elif incoherent == "match_sha":
+        previous_row["attributes"]["image_match"]["asset_sha256"] = "d" * 64
+    elif incoherent == "references_type":
+        previous_row["attributes"]["image_match"]["source_references"] = "page-7"
+    elif incoherent == "references_empty":
+        previous_row["attributes"]["image_match"]["source_references"] = []
+    elif incoherent == "reference_file":
+        previous_row["attributes"]["image_match"]["source_references"][0]["file_id"] = "no-sha"
+    elif incoherent == "reference_location_bool":
+        previous_row["attributes"]["image_match"]["source_references"][0]["sheet_or_page"] = True
+    elif incoherent == "reference_bbox_order":
+        previous_row["attributes"]["image_match"]["source_references"][0]["cell_or_bbox"] = [110, 20, 10, 220]
+    elif incoherent == "asset_path":
+        previous_row["attributes"]["approved_asset"]["path"] = f"{'d' * 64}.png"
+    elif incoherent == "asset_kind":
+        previous_row["attributes"]["approved_asset"]["image_kind"] = "generated_reference"
+    elif incoherent == "approved_type":
+        previous_row["attributes"]["approved_asset"]["approved"] = 1
+    elif incoherent == "label_type":
+        previous_row["attributes"]["approved_asset"]["label"] = 7
+    else:
+        previous_row["image_url"] = "https://media.example.test/exact.png"
+    candidate_row = _refresh_item(supplier)
+    expected = deepcopy(candidate_row)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    assert result["items"][0] == expected
+
+
+def test_valid_official_v2_curated_visual_is_preserved_without_generated_trace():
+    supplier = "requiez"
+    previous_row = _curated_item(supplier, image_kind="official")
+    candidate_row = _refresh_item(supplier)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    row = result["items"][0]
+    assert row["image_kind"] == "official"
+    assert row["attributes"]["image_reference"]["generated"] is False
+    assert "exact_search" not in row["attributes"]["image_reference"]
+    assert "generation" not in row["attributes"]["image_reference"]
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    (
+        "missing_reviewer",
+        "missing_decision",
+        "reason_number",
+        "placeholder_status",
+        "reviewer_number",
+        "bad_reviewed_at",
+        "missing_source_kind",
+        "source_locator_number",
+        "source_dimensions_bool",
+        "missing_asset_quality",
+        "quality_canvas_list",
+        "quality_canvas_bool",
+        "quality_bbox_overflow",
+        "quality_margin_string",
+        "quality_occupancy_range",
+        "quality_aspect_mismatch",
+        "source_aspect_mismatch",
+        "https_without_host",
+        "https_invalid_host",
+        "prior_image_url",
+        "asset_label_number",
+        "approved_number",
+        "generated_string",
+        "search_exhausted_number",
+        "missing_generation",
+        "generation_prompt_number",
+        "generation_reference_without_host",
+        "generation_reference_hash",
+        "official_marked_generated",
+    ),
+)
+def test_curated_v2_reference_fails_closed_for_missing_or_malformed_nested_contract(
+    malformed,
+):
+    supplier = "requiez"
+    previous_row = _curated_item(
+        supplier,
+        image_kind="official" if malformed == "official_marked_generated" else "generated_reference",
+    )
+    reference = previous_row["attributes"]["image_reference"]
+    if malformed == "missing_reviewer":
+        reference.pop("reviewer")
+    elif malformed == "missing_decision":
+        reference.pop("decision")
+    elif malformed == "reason_number":
+        reference["reason"] = 7
+    elif malformed == "placeholder_status":
+        reference["status"] = "placeholder_pending"
+    elif malformed == "reviewer_number":
+        reference["reviewer"] = 7
+    elif malformed == "bad_reviewed_at":
+        reference["reviewed_at"] = "ayer"
+    elif malformed == "missing_source_kind":
+        reference.pop("source_kind")
+    elif malformed == "source_locator_number":
+        reference["source_locator"] = 7
+    elif malformed == "source_dimensions_bool":
+        reference["source_dimensions"]["width"] = True
+    elif malformed == "missing_asset_quality":
+        reference.pop("asset_quality")
+    elif malformed == "quality_canvas_list":
+        reference["asset_quality"]["canvas"] = []
+    elif malformed == "quality_canvas_bool":
+        reference["asset_quality"]["canvas"]["width"] = True
+    elif malformed == "quality_bbox_overflow":
+        reference["asset_quality"]["bbox"]["left"] = 800
+    elif malformed == "quality_margin_string":
+        reference["asset_quality"]["margin"] = "0.25"
+    elif malformed == "quality_occupancy_range":
+        reference["asset_quality"]["occupancy"] = 0.95
+    elif malformed == "quality_aspect_mismatch":
+        reference["asset_quality"]["aspect_ratio"] = 1.5
+    elif malformed == "source_aspect_mismatch":
+        reference["source_dimensions"] = {"width": 600, "height": 400}
+    elif malformed == "https_without_host":
+        reference["image_source_url"] = "https://"
+    elif malformed == "https_invalid_host":
+        reference["image_source_url"] = "https://-/chair.png"
+    elif malformed == "prior_image_url":
+        previous_row["image_url"] = "https://media.example.test/curated.png"
+    elif malformed == "asset_label_number":
+        previous_row["attributes"]["approved_asset"]["label"] = 7
+    elif malformed == "approved_number":
+        reference["approved"] = 1
+    elif malformed == "generated_string":
+        reference["generated"] = "true"
+    elif malformed == "search_exhausted_number":
+        reference["exact_search"]["exhausted"] = 1
+    elif malformed == "missing_generation":
+        reference.pop("generation")
+    elif malformed == "generation_prompt_number":
+        reference["generation"]["prompt"] = 7
+    elif malformed == "generation_reference_without_host":
+        reference["generation"]["references"][0]["url"] = "https://"
+    elif malformed == "generation_reference_hash":
+        reference["generation"]["references"][0]["sha256"] = "not-a-sha256"
+    else:
+        reference["generated"] = True
+    candidate_row = _refresh_item(supplier)
+    expected = deepcopy(candidate_row)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    assert result["items"][0] == expected
 
 
 @pytest.mark.parametrize(
