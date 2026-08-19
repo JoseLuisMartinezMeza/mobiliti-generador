@@ -253,13 +253,18 @@ def test_pdf_b26_real_tiene_cobertura_total_y_hash_confirmado():
     assert sum(item["image_kind"] == "official" for item in items) == len(items) - len(placeholders)
     assert sorted(item["attributes"]["source_code"] for item in placeholders) == [
         "155-10600-TAP",
+        "155-20040",
+        "155-20050",
+        "155-22100-TAP",
         "155-22900-BAS",
         "155-23100-BAS",
         "155-23100-BAS",
         "155-23100-BAS",
-        "156-10640",
     ]
-    assert all("Kit de tapizado" in item["name"] for item in placeholders)
+    assert all(
+        "Kit de tapizado" in item["name"] or "Juego de cojines" in item["name"]
+        for item in placeholders
+    )
     assert all(item["product_url"].startswith("https://") for item in items)
     assert sum(item["code_status"] == "needs_review" for item in items) == 8
     assert any(item["sku"] == "155-20400" and item["price_net"] == "2720.000000" for item in items)
@@ -275,6 +280,15 @@ def test_pdf_b26_real_tiene_cobertura_total_y_hash_confirmado():
     assert by_sku["155-22900-BAS"]["image_kind"] == "placeholder"
     assert "approved_asset" not in by_sku["155-22900-BAS"]["attributes"]
     assert "image_match" not in by_sku["155-22900-BAS"]["attributes"]
+    assert by_sku["156-10640"]["name"] == "ZEBRA BANCO TRINEO — Base Negra"
+    assert by_sku["156-10640"]["image_kind"] == "official"
+    assert by_sku["156-10640"]["attributes"]["image_match"]["status"] == "family_pdf"
+    assert "Kit de tapizado" in by_sku["155-22100-TAP"]["name"]
+    assert by_sku["155-22100-TAP"]["image_kind"] == "placeholder"
+    assert "Juego de cojines asiento y respaldo tapizado" in by_sku["155-20040"]["name"]
+    assert "Juego de cojines asiento y respaldo tapizado" in by_sku["155-20050"]["name"]
+    assert by_sku["155-20040"]["image_kind"] == "placeholder"
+    assert by_sku["155-20050"]["image_kind"] == "placeholder"
     for sku in ("110-52410", "110-52430", "110-52470", "110-52460"):
         assert [option["price_net"] for option in by_sku[sku]["base_price_options"]] == [
             "5275.000000",

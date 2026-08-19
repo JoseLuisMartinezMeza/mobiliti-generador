@@ -319,8 +319,20 @@ def _code_scoped_accessory_label(
 
     if not groups:
         return ""
-    start = max(group.bbox[3] for group in groups) - 1.5
-    end = start + 24.0
+    start = max(group.bbox[1] for group in groups) + 4.0
+    next_code_y = min(
+        (
+            candidate.line.y
+            for candidate in _codes(section)
+            if candidate.line.y > code.line.y + 0.1
+        ),
+        default=None,
+    )
+    if next_code_y is not None and next_code_y <= start:
+        return ""
+    end = max(group.bbox[3] for group in groups) + 24.0
+    if next_code_y is not None:
+        end = min(end, next_code_y - 0.01)
     lines = [
         line
         for line in section.lines
@@ -330,6 +342,7 @@ def _code_scoped_accessory_label(
         and _PRICE.search(line.text) is None
     ]
     label = _clean(" ".join(line.text for line in sorted(lines, key=lambda line: line.y)))
+    label = _clean(re.sub(r"^accesorios?\s*:\s*", "", label, flags=re.IGNORECASE))
     if _fold(label).startswith(("kit ", "juego ", "accesorio ")):
         return label
     return ""
