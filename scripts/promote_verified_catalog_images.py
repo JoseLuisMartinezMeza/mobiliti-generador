@@ -6,8 +6,10 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
 import shutil
+import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,6 +17,7 @@ from scripts.build_verified_catalog_images import (
     VALID_DECISIONS,
     _validate_v2_asset,
     _validate_v2_reference,
+    _validate_v2_shared_assets,
 )
 
 
@@ -68,6 +71,51 @@ def _validate_asset(source_assets_dir: Path, object_name: str) -> Path:
     if actual != Path(object_name).stem:
         raise ValueError(f"SHA-256 inválido para asset verificado: {object_name}")
     return source
+
+
+def _assert_active_sha(path: Path, expected_sha256: str) -> None:
+    actual_sha256 = _sha256(Path(path).read_bytes())
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            "El dev-store cambió concurrentemente antes de publicar: "
+            f"esperado {expected_sha256}, actual {actual_sha256}"
+        )
+
+
+def _existing_parent(path: Path) -> Path:
+    parent = Path(path).parent
+    while not parent.exists():
+        if parent == parent.parent:
+            raise ValueError(f"No existe directorio para staging: {path}")
+        parent = parent.parent
+    return parent
+
+
+def _require_staging_same_volume(active_db_path: Path, staged_path: Path) -> None:
+    if os.stat(active_db_path).st_dev != os.stat(_existing_parent(staged_path)).st_dev:
+        raise ValueError("El staging debe estar en el mismo volumen que el dev-store activo")
+
+
+def _validate_target_asset(path: Path, object_name: str) -> None:
+    if not path.is_file() or _sha256(path.read_bytes()) != Path(object_name).stem:
+        raise ValueError(f"Asset destino incompatible: {path}")
+
+
+def _copy_asset_atomically(source: Path, target: Path, object_name: str) -> bool:
+    """Publica un asset sólo después de verificar una copia temporal del mismo volumen."""
+
+    if target.exists():
+        _validate_target_asset(target, object_name)
+        return False
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    shutil.copy2(source, temporary)
+    _validate_target_asset(temporary, object_name)
+    if target.exists():
+        _validate_target_asset(target, object_name)
+        return False
+    os.replace(temporary, target)
+    _validate_target_asset(target, object_name)
+    return True
 
 
 def _validated_v2_asset(source_assets_dir: Path, item: dict, supplier: str) -> tuple[str, Path]:
@@ -172,6 +220,7 @@ def promote_verified_catalog_images(
     promoted = copy.deepcopy(active)
     report_suppliers: dict[str, dict] = {}
     required_assets: dict[str, Path] = {}
+    shared_v2_assets: dict[str, list[tuple[str, dict]]] = {}
 
     for supplier in normalized_suppliers:
         current_items = _items_by_id(promoted, supplier)
@@ -192,6 +241,16 @@ def promote_verified_catalog_images(
                 raise ValueError(f"image_kind verificado inválido para {internal_id}: {image_kind!r}")
             if supplier in V2_REQUIRED_SUPPLIERS:
                 object_name, source = _validated_v2_asset(source_assets_dir, verified_item, supplier)
+                reference = verified_item["attributes"]["image_reference"]
+                shared_v2_assets.setdefault(object_name, []).append(
+                    (
+                        internal_id,
+                        {
+                            "image_reference": copy.deepcopy(reference),
+                            "shared_visual_group": reference.get("shared_visual_group"),
+                        },
+                    )
+                )
             else:
                 object_name = _verified_object_name(verified_item)
                 source = _validate_asset(source_assets_dir, object_name)
@@ -213,8 +272,6 @@ def promote_verified_catalog_images(
 
             current_item["image_url"] = ""
             current_item["image_kind"] = image_kind
-            if verified_item.get("product_url"):
-                current_item["product_url"] = verified_item["product_url"]
             current_attributes["approved_asset"] = {
                 "bucket": "catalog-assets",
                 "path": object_name,
@@ -238,6 +295,10 @@ def promote_verified_catalog_images(
             )
         report_suppliers[supplier] = supplier_report
 
+    _validate_v2_shared_assets(
+        shared_v2_assets,
+        {"shared_visual_equivalence_matrix": verified.get("shared_visual_equivalence_matrix")},
+    )
     required_bytes = sum(source.stat().st_size for source in required_assets.values())
     if required_bytes > MAX_BATCH_ASSET_BYTES:
         raise ValueError("El lote de assets únicos supera 256 MiB")
@@ -245,32 +306,31 @@ def promote_verified_catalog_images(
         target = target_assets_dir / object_name
         if not target.exists():
             continue
-        if not target.is_file() or _sha256(target.read_bytes()) != Path(object_name).stem:
-            raise ValueError(f"Asset destino incompatible: {target}")
+        _validate_target_asset(target, object_name)
 
     promoted_bytes = json.dumps(promoted, ensure_ascii=False, indent=2).encode("utf-8")
+    _require_staging_same_volume(active_db_path, staged_path)
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     staged_path.parent.mkdir(parents=True, exist_ok=True)
     backup_path.write_bytes(active_bytes)
     if backup_path.read_bytes() != active_bytes:
         raise RuntimeError("El respaldo del dev-store no coincide byte a byte")
     staged_path.write_bytes(promoted_bytes)
-    if _sha256(staged_path.read_bytes()) != _sha256(promoted_bytes):
+    staging_sha = _sha256(promoted_bytes)
+    if _sha256(staged_path.read_bytes()) != staging_sha:
         raise RuntimeError("El staging del dev-store no coincide")
 
     target_assets_dir.mkdir(parents=True, exist_ok=True)
     copied = existing = 0
     for object_name, source in sorted(required_assets.items()):
         target = target_assets_dir / object_name
-        if target.exists():
+        if _copy_asset_atomically(source, target, object_name):
+            copied += 1
+        else:
             existing += 1
-            continue
-        shutil.copy2(source, target)
-        if _sha256(target.read_bytes()) != Path(object_name).stem:
-            raise RuntimeError(f"La copia del asset no coincide: {object_name}")
-        copied += 1
 
-    shutil.copyfile(staged_path, active_db_path)
+    _assert_active_sha(active_db_path, active_sha)
+    os.replace(staged_path, active_db_path)
     if _sha256(active_db_path.read_bytes()) != _sha256(promoted_bytes):
         raise RuntimeError("El dev-store activo no coincide con el staging")
 
@@ -283,11 +343,17 @@ def promote_verified_catalog_images(
         "before_sha256": active_sha,
         "after_sha256": _sha256(promoted_bytes),
         "backup_sha256": _sha256(backup_path.read_bytes()),
-        "staging_sha256": _sha256(staged_path.read_bytes()),
+        "staging_sha256": staging_sha,
         "suppliers": report_suppliers,
         "operational_counts": {
             "before": _operational_counts(active),
             "after": _operational_counts(promoted),
+        },
+        "rollback": {
+            "status": "not_required",
+            "restore_performed": False,
+            "backup_verified": _sha256(backup_path.read_bytes()) == active_sha,
+            "procedure": "Verificar backup_sha256 y publicar el respaldo con os.replace en el volumen activo.",
         },
         "assets": {
             "required": len(required_assets),

@@ -107,7 +107,7 @@ def test_promotes_only_selected_images_without_replacing_operational_data(tmp_pa
     assert promoted["catalog_published_snapshots"]["sonara"] == active["catalog_published_snapshots"]["sonara"]
     assert promoted_alma["price"] == 100
     assert promoted_alma["attributes"]["commercial_note"] == "preservar"
-    assert promoted_alma["product_url"] == "https://official.example/reference"
+    assert promoted_alma["product_url"] == "https://old.example/item"
     assert promoted_alma["image_url"] == ""
     assert promoted_alma["image_kind"] == "generated_reference"
     assert promoted_alma["attributes"]["image_reference"]["status"] == "official_family_reference"
@@ -272,6 +272,7 @@ def _labenze_requiez_fixture(tmp_path):
     for item in (active_labenze, active_requiez):
         item["image_url"] = ""
         item["image_kind"] = "placeholder"
+        item["product_url"] = f"https://activo.example/productos/{item['internal_id']}"
         item["attributes"].pop("image_reference")
         item["attributes"].pop("approved_asset")
     active = {
@@ -350,6 +351,7 @@ def test_joint_labenze_requiez_promotion_is_visual_only_and_auditable(tmp_path):
         assert after["options"] == before["options"]
         assert after["stock"] == before["stock"]
         assert after["warnings"] == before["warnings"]
+        assert after["product_url"] == before["product_url"]
         assert after["attributes"]["commercial_note"] == before["attributes"]["commercial_note"]
         assert after["image_url"] == ""
         assert after["attributes"]["approved_asset"]["path"].endswith(".png")
@@ -365,6 +367,10 @@ def test_joint_labenze_requiez_promotion_is_visual_only_and_auditable(tmp_path):
     assert report["assets"]["unique_objects"] == 2
     assert report["assets"]["unique_bytes"] > 0
     assert report["operational_counts"]["before"] == report["operational_counts"]["after"]
+    assert report["rollback"]["status"] == "not_required"
+    assert report["rollback"]["restore_performed"] is False
+    assert report["rollback"]["backup_verified"] is True
+    assert "os.replace" in report["rollback"]["procedure"]
 
 
 @pytest.mark.parametrize("failure", ("review", "png"))
@@ -451,3 +457,106 @@ def test_labenze_requiez_verifies_byte_backup_before_copying_any_asset(tmp_path,
         _promote_labenze_requiez(fixture)
 
     assert fixture["active_path"].read_bytes() == fixture["active_bytes"]
+
+
+def test_labenze_requiez_keeps_active_db_intact_if_atomic_publish_fails(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    import os
+
+    real_replace = os.replace
+
+    def fail_active_publish(source, destination):
+        if Path(source) == fixture["staged"]:
+            raise OSError("publicación atómica interrumpida")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(promoter, "os", os, raising=False)
+    monkeypatch.setattr(promoter.os, "replace", fail_active_publish)
+    with pytest.raises(OSError, match="atómica"):
+        _promote_labenze_requiez(fixture)
+
+    assert fixture["active_path"].read_bytes() == fixture["active_bytes"]
+    assert fixture["backup"].read_bytes() == fixture["active_bytes"]
+    assert fixture["staged"].is_file()
+
+
+def test_labenze_requiez_rechecks_active_sha_immediately_before_publish(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+
+    def write_concurrent_change(path, expected_sha256):
+        assert fixture["backup"].read_bytes() == fixture["active_bytes"]
+        fixture["active_path"].write_bytes(b'{"concurrent": true}')
+        raise ValueError("El dev-store cambió concurrentemente antes de publicar")
+
+    monkeypatch.setattr(promoter, "_assert_active_sha", write_concurrent_change, raising=False)
+    with pytest.raises(ValueError, match="concurrentemente"):
+        _promote_labenze_requiez(fixture)
+
+    assert fixture["active_path"].read_bytes() == b'{"concurrent": true}'
+
+
+@pytest.mark.parametrize("missing", ("group", "matrix", "evidence"))
+def test_labenze_requiez_rejects_shared_asset_without_global_v2_equivalence(tmp_path, missing):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    verified = json.loads(fixture["verified_path"].read_text(encoding="utf-8"))
+    labenze_item = verified["catalog_published_snapshots"]["labenze"]["payload"]["items"][0]
+    requiez_item = deepcopy(labenze_item)
+    requiez_item["internal_id"] = "requiez:one"
+    reference = requiez_item["attributes"]["image_reference"]
+    labenze_reference = labenze_item["attributes"]["image_reference"]
+    if missing != "group":
+        for candidate in (labenze_reference, reference):
+            candidate["shared_visual_group"] = "serie-compartida"
+            candidate["shared_visual_evidence"] = {
+                "source_url": "https://www.labenze.example/series/serie-compartida",
+                "assigned_variant_ids": ["labenze:one", "requiez:one"],
+            }
+    if missing == "evidence":
+        reference["shared_visual_evidence"]["assigned_variant_ids"] = ["requiez:one"]
+    if missing != "matrix":
+        verified["shared_visual_equivalence_matrix"] = {
+            "serie-compartida": {
+                "variant_internal_ids": ["labenze:one", "requiez:one"],
+                "same_source_url": "https://www.labenze.example/series/serie-compartida",
+                "evidence": "El fabricante asigna la misma imagen a ambas variantes.",
+            }
+        }
+    verified["catalog_published_snapshots"]["requiez"]["payload"]["items"] = [requiez_item]
+    fixture["verified_path"].write_text(json.dumps(verified), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="shared_visual"):
+        _promote_labenze_requiez(fixture)
+
+    assert fixture["active_path"].read_bytes() == fixture["active_bytes"]
+    assert not fixture["backup"].exists()
+
+
+def test_labenze_requiez_uses_atomic_asset_temp_and_retries_after_partial_copy(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    real_copy2 = promoter.shutil.copy2
+    calls = 0
+
+    def copy_second_asset_partially(source, target):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            Path(target).write_bytes(b"copia parcial")
+            raise OSError("copia parcial")
+        return real_copy2(source, target)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(promoter.shutil, "copy2", copy_second_asset_partially)
+        with pytest.raises(OSError, match="copia parcial"):
+            _promote_labenze_requiez(fixture)
+
+    published = list(fixture["target_assets"].glob("*.png"))
+    assert len(published) == 1
+    assert hashlib.sha256(published[0].read_bytes()).hexdigest() == published[0].stem
+
+    retry_report = _promote_labenze_requiez(
+        fixture,
+        backup_path=tmp_path / "active.retry.before.json",
+        staged_path=tmp_path / "active.retry.staged.json",
+    )
+    assert retry_report["assets"]["copied"] == 1
+    assert retry_report["assets"]["already_present"] == 1
