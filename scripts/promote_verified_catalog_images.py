@@ -11,10 +11,19 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from scripts.build_verified_catalog_images import (
+    VALID_DECISIONS,
+    _validate_v2_asset,
+    _validate_v2_reference,
+)
+
 
 ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:png|jpg|jpeg|webp)$")
 IMAGE_ATTRIBUTE_KEYS = ("image_reference", "source_image_url", "web_image_quality")
 VALID_IMAGE_KINDS = {"official", "generated_reference"}
+SUPPORTED_SUPPLIERS = ("alma", "cr-global", "labenze", "lumbro", "requiez", "sonara", "sunon")
+V2_REQUIRED_SUPPLIERS = {"labenze", "requiez"}
+MAX_BATCH_ASSET_BYTES = 256 * 1024 * 1024
 
 
 def _sha256(data: bytes) -> str:
@@ -61,6 +70,63 @@ def _validate_asset(source_assets_dir: Path, object_name: str) -> Path:
     return source
 
 
+def _validated_v2_asset(source_assets_dir: Path, item: dict, supplier: str) -> tuple[str, Path]:
+    """Reutiliza el contrato v2 del builder para una imagen ya verificada."""
+
+    internal_id = str(item.get("internal_id") or f"{supplier}:<sin-id>")
+    attributes = item.get("attributes")
+    if not isinstance(attributes, dict):
+        raise ValueError(f"attributes v2 ausentes para {internal_id}")
+    reference = attributes.get("image_reference")
+    approved_asset = attributes.get("approved_asset")
+    if not isinstance(reference, dict) or not isinstance(approved_asset, dict):
+        raise ValueError(f"Revisión global v2 incompleta para {internal_id}")
+
+    image_kind = str(item.get("image_kind") or "")
+    object_name = str(approved_asset.get("path") or "").lower()
+    if (
+        approved_asset.get("bucket") != "catalog-assets"
+        or approved_asset.get("approved") is not True
+        or approved_asset.get("image_kind") != image_kind
+    ):
+        raise ValueError(f"approved_asset v2 inválido para {internal_id}")
+    image_url_name = Path(urlsplit(str(item.get("image_url") or "")).path).name.lower()
+    if image_url_name != object_name:
+        raise ValueError(f"image_url v2 no coincide con approved_asset para {internal_id}")
+    if reference.get("asset_sha256") != Path(object_name).stem:
+        raise ValueError(f"asset_sha256 v2 inválido para {internal_id}")
+    if reference.get("direct_product_reference") is not True:
+        raise ValueError(f"Revisión global v2 incompleta para {internal_id}")
+    if str(reference.get("decision") or "") not in VALID_DECISIONS:
+        raise ValueError(f"Decisión v2 inválida para {internal_id}")
+    if not str(reference.get("reason") or "").strip():
+        raise ValueError(f"Razón v2 ausente para {internal_id}")
+
+    entry = {
+        "image_reference": copy.deepcopy(reference),
+        "image_kind": image_kind,
+        "product_url": item.get("product_url"),
+        "reason": reference.get("reason"),
+        "decision": reference.get("decision"),
+        "status": reference.get("status"),
+    }
+    validated_reference, _ = _validate_v2_reference(entry, internal_id, image_kind)
+    source, calculated_quality = _validate_v2_asset(
+        source_assets_dir, object_name, validated_reference, internal_id
+    )
+    if reference.get("asset_quality") != calculated_quality:
+        raise ValueError(f"asset_quality v2 inválido para {internal_id}")
+    return object_name, source
+
+
+def _operational_counts(data: dict) -> dict[str, int]:
+    return {
+        key: len(value)
+        for key, value in data.items()
+        if key != "catalog_published_snapshots" and isinstance(value, (list, dict))
+    }
+
+
 def promote_verified_catalog_images(
     *,
     active_db_path: Path,
@@ -83,6 +149,14 @@ def promote_verified_catalog_images(
 
     active_bytes = active_db_path.read_bytes()
     active_sha = _sha256(active_bytes)
+    normalized_suppliers = tuple(str(raw_supplier or "").strip().lower() for raw_supplier in suppliers)
+    if not normalized_suppliers or any(not supplier for supplier in normalized_suppliers):
+        raise ValueError("Se requiere al menos un proveedor válido")
+    if len(set(normalized_suppliers)) != len(normalized_suppliers):
+        raise ValueError("Un proveedor no puede promoverse más de una vez")
+    requires_v2 = any(supplier in V2_REQUIRED_SUPPLIERS for supplier in normalized_suppliers)
+    if requires_v2 and not str(expected_active_sha256 or "").strip():
+        raise ValueError("expected_active_sha256 es obligatorio para Labenze/Requiez")
     if expected_active_sha256 and active_sha != expected_active_sha256.lower():
         raise ValueError(
             f"El dev-store cambió antes de promover imágenes: esperado "
@@ -99,8 +173,7 @@ def promote_verified_catalog_images(
     report_suppliers: dict[str, dict] = {}
     required_assets: dict[str, Path] = {}
 
-    for raw_supplier in suppliers:
-        supplier = str(raw_supplier or "").strip().lower()
+    for supplier in normalized_suppliers:
         current_items = _items_by_id(promoted, supplier)
         verified_items = _items_by_id(verified, supplier)
         if set(current_items) != set(verified_items):
@@ -117,8 +190,11 @@ def promote_verified_catalog_images(
             image_kind = str(verified_item.get("image_kind") or "")
             if image_kind not in VALID_IMAGE_KINDS:
                 raise ValueError(f"image_kind verificado inválido para {internal_id}: {image_kind!r}")
-            object_name = _verified_object_name(verified_item)
-            source = _validate_asset(source_assets_dir, object_name)
+            if supplier in V2_REQUIRED_SUPPLIERS:
+                object_name, source = _validated_v2_asset(source_assets_dir, verified_item, supplier)
+            else:
+                object_name = _verified_object_name(verified_item)
+                source = _validate_asset(source_assets_dir, object_name)
             required_assets.setdefault(object_name, source)
             supplier_assets.add(object_name)
 
@@ -148,26 +224,29 @@ def promote_verified_catalog_images(
             }
             kinds[image_kind] += 1
 
-        report_suppliers[supplier] = {
+        supplier_report = {
             "items": len(current_items),
             "official": kinds["official"],
             "generated_reference": kinds["generated_reference"],
             "unique_assets": len(supplier_assets),
         }
+        if supplier in V2_REQUIRED_SUPPLIERS:
+            snapshot_id = promoted["catalog_published_snapshots"][supplier].get("id")
+            supplier_report.update(
+                snapshot_id_before=snapshot_id,
+                snapshot_id_after=snapshot_id,
+            )
+        report_suppliers[supplier] = supplier_report
 
-    target_assets_dir.mkdir(parents=True, exist_ok=True)
-    copied = existing = 0
-    for object_name, source in sorted(required_assets.items()):
+    required_bytes = sum(source.stat().st_size for source in required_assets.values())
+    if required_bytes > MAX_BATCH_ASSET_BYTES:
+        raise ValueError("El lote de assets únicos supera 256 MiB")
+    for object_name in required_assets:
         target = target_assets_dir / object_name
-        if target.exists():
-            if not target.is_file() or _sha256(target.read_bytes()) != Path(object_name).stem:
-                raise ValueError(f"Asset destino incompatible: {target}")
-            existing += 1
+        if not target.exists():
             continue
-        shutil.copy2(source, target)
-        if _sha256(target.read_bytes()) != Path(object_name).stem:
-            raise RuntimeError(f"La copia del asset no coincide: {object_name}")
-        copied += 1
+        if not target.is_file() or _sha256(target.read_bytes()) != Path(object_name).stem:
+            raise ValueError(f"Asset destino incompatible: {target}")
 
     promoted_bytes = json.dumps(promoted, ensure_ascii=False, indent=2).encode("utf-8")
     backup_path.parent.mkdir(parents=True, exist_ok=True)
@@ -178,6 +257,19 @@ def promote_verified_catalog_images(
     staged_path.write_bytes(promoted_bytes)
     if _sha256(staged_path.read_bytes()) != _sha256(promoted_bytes):
         raise RuntimeError("El staging del dev-store no coincide")
+
+    target_assets_dir.mkdir(parents=True, exist_ok=True)
+    copied = existing = 0
+    for object_name, source in sorted(required_assets.items()):
+        target = target_assets_dir / object_name
+        if target.exists():
+            existing += 1
+            continue
+        shutil.copy2(source, target)
+        if _sha256(target.read_bytes()) != Path(object_name).stem:
+            raise RuntimeError(f"La copia del asset no coincide: {object_name}")
+        copied += 1
+
     shutil.copyfile(staged_path, active_db_path)
     if _sha256(active_db_path.read_bytes()) != _sha256(promoted_bytes):
         raise RuntimeError("El dev-store activo no coincide con el staging")
@@ -190,9 +282,17 @@ def promote_verified_catalog_images(
         "staged": str(staged_path),
         "before_sha256": active_sha,
         "after_sha256": _sha256(promoted_bytes),
+        "backup_sha256": _sha256(backup_path.read_bytes()),
+        "staging_sha256": _sha256(staged_path.read_bytes()),
         "suppliers": report_suppliers,
+        "operational_counts": {
+            "before": _operational_counts(active),
+            "after": _operational_counts(promoted),
+        },
         "assets": {
             "required": len(required_assets),
+            "unique_objects": len(required_assets),
+            "unique_bytes": required_bytes,
             "copied": copied,
             "already_present": existing,
         },
@@ -211,7 +311,7 @@ def _parser() -> argparse.ArgumentParser:
         "--supplier",
         action="append",
         dest="suppliers",
-        choices=("alma", "cr-global", "lumbro", "sonara", "sunon"),
+        choices=SUPPORTED_SUPPLIERS,
         required=True,
     )
     parser.add_argument("--expected-active-sha256")
