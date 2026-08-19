@@ -37,7 +37,8 @@ IMPORTED_LINE_FIELDS = COMMON_LINE_FIELDS | frozenset({
     "source_asset_key",
 })
 DISPLAY_CACHE_REQUIRED_FIELDS = frozenset({"name", "code", "image_url"})
-DISPLAY_CACHE_FIELDS = DISPLAY_CACHE_REQUIRED_FIELDS | frozenset({"configuration"})
+DISPLAY_CACHE_FIELDS = DISPLAY_CACHE_REQUIRED_FIELDS | frozenset({"configuration", "warnings"})
+GENERATED_REFERENCE_WARNING = "Imagen de referencia"
 
 
 def _text(value: object, field: str, *, required: bool = True, limit: int = 2_000) -> str:
@@ -353,6 +354,12 @@ def _normalize_display_cache(raw: object) -> dict:
             required=False,
             limit=2_000,
         )
+    if "warnings" in raw:
+        warnings = raw["warnings"]
+        if not isinstance(warnings, list) or any(not isinstance(value, str) for value in warnings):
+            raise ValueError("display_cache.warnings inválido")
+        if GENERATED_REFERENCE_WARNING in warnings:
+            normalized["warnings"] = [GENERATED_REFERENCE_WARNING]
     return normalized
 
 

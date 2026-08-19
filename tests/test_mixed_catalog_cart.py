@@ -1417,7 +1417,7 @@ def test_mixed_cart_preserves_review_missing_price_and_generated_reference_warni
     )
     lines = {group["catalog"]: group["items"][0] for group in payload["groups"]}
     assert "Codigo por verificar" in lines["sonara"]["warnings"]
-    assert "Imagen de referencia" in lines["sonara"]["warnings"]
+    assert lines["sonara"]["warnings"].count("Imagen de referencia") == 1
     assert "Precio por confirmar" in lines["offiho"]["warnings"]
 
 
@@ -1457,7 +1457,7 @@ def test_mixed_cart_preserves_generated_offiho_reference_warning(mixed_catalogs,
 
     line = payload["groups"][0]["items"][0]
     assert line["image_kind"] == "generated_reference"
-    assert "Imagen de referencia" in line["warnings"]
+    assert line["warnings"].count("Imagen de referencia") == 1
 
 
 def test_mixed_cart_accepts_alma_review_code_with_pending_price(mixed_catalogs, rate_rows):

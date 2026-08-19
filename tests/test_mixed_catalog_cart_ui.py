@@ -196,6 +196,71 @@ def test_manual_sections_label_reorder_move_merge_and_serialize():
     assert result["maxSections"] == 32
 
 
+def test_project_display_cache_persists_only_generated_reference_warning():
+    result = run_mixed_cart_js(
+        r"""
+      const quantityRules = {
+        min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true,
+      };
+      const principalId = "11111111-1111-4111-8111-111111111111";
+      const principal = createMixedCartLine({
+        catalog: "requiez",
+        identity: {internal_id: "requiez:chair", base_option_id: "", add_on_option_ids: []},
+        quantity: "1",
+        quantityRules,
+        snapshot: {
+          name: "Silla", code: "RQ-1", image_url: "", unit: "PZA",
+          availability: "Fabricación por confirmar", configuration: "",
+          warnings: ["Entrega especial", "Imagen de referencia", "Imagen de referencia"],
+        },
+        lineId: principalId,
+        officialCode: "RQ-1",
+      });
+      const complement = createMixedCartLine({
+        catalog: "requiez",
+        identity: {internal_id: "requiez:headrest", base_option_id: "", add_on_option_ids: []},
+        quantity: "1",
+        quantityRules,
+        snapshot: {
+          name: "Cabecera", code: "RQ-H", image_url: "", unit: "PZA",
+          availability: "", configuration: "",
+          warnings: ["No persistir", "Imagen de referencia"],
+        },
+        lineId: "22222222-2222-4222-8222-222222222222",
+        officialCode: "RQ-H",
+        role: "complement",
+        parentLineId: principalId,
+        quantityMode: "per_parent_unit",
+      });
+      const state = {
+        quoteFields: {
+          proyecto: "Proyecto", cliente: "Cliente", correo: "cliente@example.com",
+          telefono: "33", direccion: "GDL", razon_social: "Cliente SA",
+          quote_currency: "MXN", descuento: "40",
+        },
+        sections: [{id: "section-1", concept: "Recepción"}],
+        lines: [principal, complement],
+      };
+      const persisted = serializeProject(state);
+      const reopened = hydrateProject(persisted);
+      const legacy = structuredClone(persisted);
+      legacy.lines.forEach((line) => delete line.display_cache.warnings);
+      const legacyReopened = hydrateProject(legacy);
+      console.log(JSON.stringify({
+        persisted: persisted.lines.map((line) => line.display_cache.warnings),
+        reopened: reopened.lines.map((line) => line.snapshot.warnings),
+        legacy: legacyReopened.lines.map((line) => line.snapshot.warnings),
+      }));
+    """
+    )
+
+    assert result == {
+        "persisted": [["Imagen de referencia"], ["Imagen de referencia"]],
+        "reopened": [["Imagen de referencia"], ["Imagen de referencia"]],
+        "legacy": [[], []],
+    }
+
+
 def test_imported_bundle_supports_35_sections_and_137_products_through_project_round_trip():
     result = run_mixed_cart_js(
         r"""

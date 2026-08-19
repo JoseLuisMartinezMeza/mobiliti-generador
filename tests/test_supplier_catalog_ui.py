@@ -529,6 +529,34 @@ def test_supplier_cart_snapshot_deduplicates_review_warning_and_names_configurat
     }
 
 
+def test_supplier_cart_snapshot_derives_generated_reference_warning_once():
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    helpers = "\n".join(
+        _javascript_function(component, name)
+        for name in (
+            "decimal", "nullableDecimal", "configuredBasePrice",
+            "warningKey", "pendingPriceContract", "initialConfiguration",
+            "cartWarnings",
+        )
+    )
+    result = _run_javascript(
+        f"{helpers}\n"
+        "const derive = cartWarnings({code_status: 'verified', image_kind: "
+        "'generated_reference', warnings: ['Entrega especial']});"
+        "const deduplicated = cartWarnings({code_status: 'verified', image_kind: "
+        "'generated_reference', warnings: [' imagen DE referencia ', "
+        "'Entrega especial']});"
+        "console.log(JSON.stringify({derive, deduplicated, generatedCount: "
+        "deduplicated.filter(value => warningKey(value) === 'imagen de referencia').length}));"
+    )
+
+    assert result == {
+        "derive": ["Entrega especial", "Imagen de referencia"],
+        "deduplicated": ["Imagen de referencia", "Entrega especial"],
+        "generatedCount": 1,
+    }
+
+
 def test_supplier_quantity_rules_confirm_stocked_and_out_of_stock_lines():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
     helpers = "\n".join(

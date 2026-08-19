@@ -44,6 +44,7 @@ const PROJECT_SCHEMA_VERSION = 1;
 const PROJECT_LINE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PROJECT_ROLES = new Set(["principal", "complement"]);
 const COMPLEMENT_QUANTITY_MODES = new Set(["per_parent_unit", "fixed_project"]);
+const GENERATED_REFERENCE_WARNING = "Imagen de referencia";
 const PROJECT_QUOTE_REQUIRED_FIELDS = new Set([
   "proyecto", "cliente", "correo", "telefono", "direccion", "razon_social",
   "quote_currency", "descuento",
@@ -1542,20 +1543,28 @@ function projectQuoteFields(quoteFields) {
 
 function projectDisplayCache(snapshot) {
   const copied = copySnapshot(snapshot);
-  return {
+  const displayCache = {
     name: copied.name,
     code: copied.code,
     image_url: copied.image_url,
     configuration: copied.configuration,
   };
+  if (copied.warnings.includes(GENERATED_REFERENCE_WARNING)) {
+    displayCache.warnings = [GENERATED_REFERENCE_WARNING];
+  }
+  return displayCache;
 }
 
 function hydrateProjectDisplayCache(displayCache) {
   const required = new Set(["name", "code", "image_url"]);
-  const allowed = new Set([...required, "configuration"]);
+  const allowed = new Set([...required, "configuration", "warnings"]);
   if (!displayCache || typeof displayCache !== "object" || Array.isArray(displayCache)
       || [...required].some((key) => !hasOwn(displayCache, key))
-      || Object.keys(displayCache).some((key) => !allowed.has(key))) {
+      || Object.keys(displayCache).some((key) => !allowed.has(key))
+      || (hasOwn(displayCache, "warnings") && (
+        !Array.isArray(displayCache.warnings)
+        || displayCache.warnings.some((warning) => typeof warning !== "string")
+      ))) {
     throw new Error("display_cache invalido");
   }
   return {
@@ -1565,7 +1574,9 @@ function hydrateProjectDisplayCache(displayCache) {
     unit: "",
     availability: "",
     configuration: displayCache.configuration || "",
-    warnings: [],
+    warnings: displayCache.warnings?.includes(GENERATED_REFERENCE_WARNING)
+      ? [GENERATED_REFERENCE_WARNING]
+      : [],
   };
 }
 

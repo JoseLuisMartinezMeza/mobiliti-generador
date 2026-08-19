@@ -38,6 +38,33 @@ def test_project_display_cache_preserves_configuration_and_accepts_legacy_rows()
     }
 
 
+def test_project_display_cache_normalizes_only_generated_reference_warning():
+    payload = valid_project_payload()
+    payload["lines"][0]["display_cache"]["warnings"] = [
+        "Mensaje arbitrario",
+        "Imagen de referencia",
+        "Imagen de referencia",
+        "imagen de referencia",
+    ]
+    payload["lines"][1]["display_cache"]["warnings"] = ["No persistir"]
+
+    normalized = normalize_project_payload(payload)
+
+    assert normalized["lines"][0]["display_cache"]["warnings"] == [
+        "Imagen de referencia"
+    ]
+    assert "warnings" not in normalized["lines"][1]["display_cache"]
+
+
+@pytest.mark.parametrize("warnings", ["Imagen de referencia", None, [1]])
+def test_project_display_cache_rejects_malformed_warning_lists(warnings):
+    payload = valid_project_payload()
+    payload["lines"][0]["display_cache"]["warnings"] = warnings
+
+    with pytest.raises(ValueError, match="display_cache"):
+        normalize_project_payload(payload)
+
+
 @pytest.mark.parametrize("mutation", ["duplicate", "orphan", "nested", "cycle"])
 def test_project_payload_rejects_invalid_graph(mutation):
     payload = valid_project_payload()

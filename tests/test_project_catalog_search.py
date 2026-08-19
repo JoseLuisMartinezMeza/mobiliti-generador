@@ -65,6 +65,28 @@ def test_search_returns_safe_display_price_and_dimensions_without_private_source
         assert forbidden not in serialized
 
 
+def test_search_derives_generated_reference_warning_once_with_commercial_status():
+    generated = _supplier_item("requiez", "Silla Requiez", "RQ-1")
+    generated.update({
+        "image_kind": "generated_reference",
+        "availability_type": "made_to_order",
+        "stock": None,
+        "warnings": ["Imagen de referencia", "Imagen de referencia"],
+    })
+
+    result = search_catalog_products(
+        {"requiez": {"items": [generated]}},
+        query="",
+        supplier="requiez",
+        offset=0,
+        limit=20,
+    )
+
+    warnings = result["items"][0]["snapshot"]["warnings"]
+    assert warnings == ["Imagen de referencia", "Fabricación por confirmar"]
+    assert warnings.count("Imagen de referencia") == 1
+
+
 def test_search_quotable_uses_the_cart_contract_for_pending_numeric_and_review_items():
     pending = {
         "internal_id": "idelika:school:mesa-sin-sku",

@@ -118,6 +118,11 @@ function ProjectImage({url, alt, icon = false}) {
   return <img src={url} alt={alt} onError={() => setFailed(true)} />;
 }
 
+function ImageReferenceBadge({warnings}) {
+  if (!warnings?.includes("Imagen de referencia")) return null;
+  return <span className="supplier-badge reference">Imagen de referencia</span>;
+}
+
 function QuantityEditor({line, disabled, onCommit}) {
   const [draft, setDraft] = useState(line.quantity);
   const [error, setError] = useState("");
@@ -192,6 +197,7 @@ function ComplementCard({
       <div className="project-complement-copy">
         <strong>+ {child.snapshot.name}</strong>
         <small>{child.officialCode} Â· {presentationProvider(child)}</small>
+        <ImageReferenceBadge warnings={child.snapshot.warnings} />
         <ImportedFields
           line={child}
           disabled={disabled}
@@ -572,6 +578,7 @@ export default function ProjectEditor({
                             <strong>{line.snapshot.name}</strong>
                             <small>{line.officialCode} Â· {presentationProvider(line)}</small>
                             {line.snapshot.configuration ? <span>{line.snapshot.configuration}</span> : null}
+                            <ImageReferenceBadge warnings={line.snapshot.warnings} />
                             <ImportedFields
                               line={line}
                               disabled={disabled}

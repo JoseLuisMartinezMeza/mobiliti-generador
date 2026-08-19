@@ -245,6 +245,12 @@ function cartWarnings(item) {
   if (pendingPriceContract(item, configuredBasePrice(item, initialConfiguration(item)))) {
     result.push("Precio por confirmar");
   }
+  if (item.image_kind === "generated_reference") {
+    result.forEach((value, index) => {
+      if (warningKey(value) === "imagen de referencia") result[index] = "Imagen de referencia";
+    });
+    result.push("Imagen de referencia");
+  }
   const seen = new Set();
   return result.filter((value) => {
     const key = warningKey(value);

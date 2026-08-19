@@ -215,6 +215,8 @@ def _catalog_warnings(raw: dict, availability: str) -> list[str]:
         warnings.append("Código por verificar")
     if has_pending_price_contract(raw):
         warnings.append("Precio por confirmar")
+    if raw.get("image_kind") == "generated_reference":
+        warnings.append("Imagen de referencia")
     warnings.extend(_availability_warnings(availability))
     return list(dict.fromkeys(warnings))
 

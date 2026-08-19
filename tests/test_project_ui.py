@@ -113,6 +113,62 @@ def test_project_editor_renders_direct_complements_and_quantity_modes():
     assert '<option value="fixed_project">Cantidad fija</option>' in source
 
 
+def test_project_editor_renders_generated_reference_badge_for_principal_and_complement():
+    source = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
+
+    assert "Imagen de referencia" in source
+    assert '<span className="supplier-badge reference">' in source
+    assert "<ImageReferenceBadge warnings={line.snapshot.warnings}" in source
+    assert "<ImageReferenceBadge warnings={child.snapshot.warnings}" in source
+
+
+def test_generated_reference_warning_survives_principal_and_complement_round_trip():
+    model_url = Path("mobiliti_saas/web/src/mixedCart.js").resolve().as_uri()
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=f"""
+          import * as model from {json.dumps(model_url)};
+          const rules = {{min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true}};
+          const principalId = "11111111-1111-4111-8111-111111111111";
+          const make = (lineId, role, parentLineId) => model.createMixedCartLine({{
+            catalog: "requiez",
+            identity: {{internal_id: `requiez:${{role}}`, base_option_id: "", add_on_option_ids: []}},
+            quantity: "1", quantityRules: rules,
+            snapshot: {{name: role, code: role, image_url: "", unit: "PZA",
+              availability: "", configuration: "",
+              warnings: ["Imagen de referencia", "Imagen de referencia", "No persistir"]}},
+            lineId, officialCode: role, role, parentLineId,
+            quantityMode: role === "complement" ? "fixed_project" : null,
+          }});
+          const state = {{
+            quoteFields: {{proyecto: "Proyecto", cliente: "Cliente", correo: "a@example.com",
+              telefono: "33", direccion: "GDL", razon_social: "Empresa",
+              quote_currency: "MXN", descuento: "40"}},
+            sections: [{{id: "section-1", concept: "Recepción"}}],
+            lines: [
+              make(principalId, "principal", null),
+              make("22222222-2222-4222-8222-222222222222", "complement", principalId),
+            ],
+          }};
+          const persisted = model.serializeProject(state);
+          const reopened = model.hydrateProject(persisted);
+          console.log(JSON.stringify({{
+            persisted: persisted.lines.map((line) => line.display_cache.warnings),
+            reopened: reopened.lines.map((line) => line.snapshot.warnings),
+          }}));
+        """,
+        text=True,
+        encoding="utf-8",
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == {
+        "persisted": [["Imagen de referencia"], ["Imagen de referencia"]],
+        "reopened": [["Imagen de referencia"], ["Imagen de referencia"]],
+    }
+
+
 def test_picker_target_uses_own_safe_quantity_and_canonical_catalog_provider():
     result = run_workspace(r"""
       const principal = {
