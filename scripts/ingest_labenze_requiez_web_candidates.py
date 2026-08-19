@@ -1010,8 +1010,8 @@ def acquire_direct_images(
 
                 try:
                     transport_dns_bound = (
-                        isinstance(client, CachedHttpClient)
-                        and isinstance(getattr(client, "transport", None), UrllibTransport)
+                        type(client) is CachedHttpClient
+                        and type(getattr(client, "transport", None)) is UrllibTransport
                     )
                     cached = download_original(
                         research_candidate,
@@ -2127,9 +2127,11 @@ def run_intake(
         "document_audit": Path(document_audit_path).resolve(),
         "inventory": Path(inventory_dir).resolve(),
         "labenze_pdf": Path(labenze_pdf).resolve(),
-        "labenze_report": Path(labenze_report_path).resolve(),
+        # Preservar la ruta léxica: load_strict_json debe hacer lstat al enlace,
+        # no al target que produciría Path.resolve().
+        "labenze_report": Path(labenze_report_path).absolute(),
         "requiez_pdf": Path(requiez_pdf).resolve(),
-        "requiez_report": Path(requiez_report_path).resolve(),
+        "requiez_report": Path(requiez_report_path).absolute(),
         "research": Path(research_dir).resolve(),
         "review": Path(review_dir).resolve(),
         "store": Path(store_path).resolve(),
@@ -2505,8 +2507,8 @@ def load_normalized_inputs(
         expected_review_logical_sha256=expected_review_logical_sha256,
     )
     report_paths = {
-        "labenze": Path(labenze_report_path).resolve(),
-        "requiez": Path(requiez_report_path).resolve(),
+        "labenze": Path(labenze_report_path).absolute(),
+        "requiez": Path(requiez_report_path).absolute(),
     }
     report_hashes = {
         "labenze": str(expected_labenze_report_sha256).casefold(),

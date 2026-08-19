@@ -100,6 +100,66 @@ def test_cycle_1_strict_json_rejects_wrong_physical_sha(tmp_path):
         module.load_strict_json(path, expected_sha256="0" * 64)
 
 
+def test_cycle_1_canonical_loader_preserves_lexical_report_path_for_symlink_gate(tmp_path):
+    """El loader no puede resolver el enlace antes de aplicar lstat/reparse al reporte."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    link = tmp_path / "labenze-report-link.json"
+    try:
+        link.symlink_to(LABENZE_REPORT)
+    except OSError as exc:
+        pytest.skip(f"El entorno no permite crear symlink de prueba: {exc}")
+    with pytest.raises(ValueError, match="no es archivo regular"):
+        module.load_normalized_inputs(
+            inventory_dir=INVENTORY_DIR,
+            research_dir=RESEARCH_DIR,
+            review_dir=REVIEW_DIR,
+            labenze_pdf=LABENZE_PDF,
+            requiez_pdf=REQUIEZ_PDF,
+            labenze_report_path=link,
+            requiez_report_path=REQUIEZ_REPORT,
+            expected_labenze_report_sha256="c4b9fdef321ea3fea1ecdc028b85ebbaeaa2429275a9e40ce811ba0c301f897b",
+            expected_requiez_report_sha256="c67b882bb825ac16a0a632879e5e0cbe6581238d28322fe0b668e027fd8d99ab",
+        )
+
+
+def test_cycle_1_loader_does_not_resolve_report_before_strict_lstat(tmp_path, monkeypatch):
+    """Prueba determinista del orden aunque Windows no permita crear symlinks."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    lexical = tmp_path / "lexical-report-link.json"
+    resolved_target = LABENZE_REPORT.resolve()
+    original_resolve = Path.resolve
+
+    def simulated_symlink_resolve(path, *args, **kwargs):
+        if path == lexical:
+            return resolved_target
+        return original_resolve(path, *args, **kwargs)
+
+    captured = []
+
+    def capture_strict_path(path, *, expected_sha256):
+        del expected_sha256
+        captured.append(Path(path))
+        raise RuntimeError("captured lexical report path")
+
+    monkeypatch.setattr(Path, "resolve", simulated_symlink_resolve)
+    monkeypatch.setattr(module, "load_strict_json", capture_strict_path)
+    with pytest.raises(RuntimeError, match="captured lexical"):
+        module.load_normalized_inputs(
+            inventory_dir=INVENTORY_DIR,
+            research_dir=RESEARCH_DIR,
+            review_dir=REVIEW_DIR,
+            labenze_pdf=LABENZE_PDF,
+            requiez_pdf=REQUIEZ_PDF,
+            labenze_report_path=lexical,
+            requiez_report_path=REQUIEZ_REPORT,
+            expected_labenze_report_sha256="c4b9fdef321ea3fea1ecdc028b85ebbaeaa2429275a9e40ce811ba0c301f897b",
+            expected_requiez_report_sha256="c67b882bb825ac16a0a632879e5e0cbe6581238d28322fe0b668e027fd8d99ab",
+        )
+    assert captured == [lexical.absolute()]
+
+
 def test_cycle_1_report_schema_summary_and_identity_drift_are_blocking(intake):
     """Rompe si campos desconocidos, resumen divergente o identidad alterada pasan el gate."""
 
@@ -1257,9 +1317,88 @@ def test_cycle_4_secure_cached_transport_does_not_repeat_live_dns_after_fetch(
     research = importlib.import_module("scripts.research_labenze_requiez_images")
     image_body = _cycle_4_image_bytes()
 
-    class PinnedTransport(research.UrllibTransport):
+    class RawResponse:
+        def __init__(self, *, image):
+            self.status = 200
+            self.headers = {
+                "content-type": "image/png" if image else "text/html"
+            }
+            self.body = image_body if image else b"<title>exacto</title>"
+
+        def read(self, _maximum):
+            return self.body
+
+    resolver_calls = []
+    connector_calls = []
+
+    def resolver(host):
+        resolver_calls.append(host)
+        return ["1.1.1.1"]
+
+    class Connection:
+        def __init__(self, host, ip):
+            self.host = host
+            self.peer_ip = ip
+
+        def request(self, method, target, headers):
+            connector_calls.append((self.host, method, target, headers["Host"]))
+
+        def getresponse(self):
+            return RawResponse(image=self.host == "cdn.shopify.com")
+
+        def close(self):
+            return None
+
+    def connector(host, ip, _port, _timeout, _context):
+        return Connection(host, ip)
+
+    redundant_dns_calls = []
+
+    def redundant_dns(host, resolver_function):
+        del resolver_function
+        redundant_dns_calls.append(host)
+        raise ValueError("No se pudo resolver host de imagen: transitorio")
+
+    monkeypatch.setattr(research, "_validate_public_host", redundant_dns)
+    transport = research.UrllibTransport(resolver=resolver, connector=connector)
+    cache_dir = tmp_path / "http-cache"
+    online_client = research.CachedHttpClient(
+        cache_dir,
+        transport=transport,
+        allowed_hosts=research.SOURCE_HTTP_HOSTS,
+        max_attempts=1,
+    )
+    row = _cycle_4_direct_row(intake, (640, 640))
+    online_receipts, online_candidates = module.acquire_direct_images(
+        [row], online_client, tmp_path / "online-originals"
+    )
+    resolver_calls_after_online = list(resolver_calls)
+    connector_calls_after_online = list(connector_calls)
+    replay_client = research.CachedHttpClient(
+        cache_dir,
+        transport=transport,
+        offline=True,
+        allowed_hosts=research.SOURCE_HTTP_HOSTS,
+        max_attempts=1,
+    )
+    replay_receipts, replay_candidates = module.acquire_direct_images(
+        [row], replay_client, tmp_path / "replay-originals"
+    )
+    assert sorted(resolver_calls_after_online) == ["cdn.shopify.com", "nogalbeat.com"]
+    assert len(connector_calls_after_online) == 2
+    assert resolver_calls == resolver_calls_after_online
+    assert connector_calls == connector_calls_after_online
+    assert redundant_dns_calls == []
+    assert online_receipts[0]["status"] == replay_receipts[0]["status"] == "downloaded"
+    assert len(online_candidates) == len(replay_candidates) == 1
+    assert online_candidates[0]["original"] == replay_candidates[0]["original"]
+
+    class UnsafeTransport(research.UrllibTransport):
+        calls = 0
+
         def fetch(self, url, *, source_name, resource_kind, max_response_bytes):
             del source_name, max_response_bytes
+            self.calls += 1
             if resource_kind == "product":
                 return research.HttpResponse(
                     200, url, {"content-type": "text/html"}, b"<title>exacto</title>"
@@ -1268,40 +1407,21 @@ def test_cycle_4_secure_cached_transport_does_not_repeat_live_dns_after_fetch(
                 200, url, {"content-type": "image/png"}, image_body
             )
 
-    dns_calls = []
-
-    def transient_dns(host, resolver):
-        del resolver
-        dns_calls.append(host)
-        if len(dns_calls) == 2:
-            raise ValueError("No se pudo resolver host de imagen: transitorio")
-
-    monkeypatch.setattr(research, "_validate_public_host", transient_dns)
-    cache_dir = tmp_path / "http-cache"
-    online_client = research.CachedHttpClient(
-        cache_dir,
-        transport=PinnedTransport(),
+    unsafe_transport = UnsafeTransport()
+    unsafe_client = research.CachedHttpClient(
+        tmp_path / "unsafe-cache",
+        transport=unsafe_transport,
         allowed_hosts=research.SOURCE_HTTP_HOSTS,
         max_attempts=1,
     )
-    row = _cycle_4_direct_row(intake, (640, 640))
-    online_receipts, online_candidates = module.acquire_direct_images(
-        [row], online_client, tmp_path / "online-originals"
+    unsafe_receipts, unsafe_candidates = module.acquire_direct_images(
+        [row], unsafe_client, tmp_path / "unsafe-originals"
     )
-    replay_client = research.CachedHttpClient(
-        cache_dir,
-        transport=PinnedTransport(),
-        offline=True,
-        allowed_hosts=research.SOURCE_HTTP_HOSTS,
-        max_attempts=1,
-    )
-    replay_receipts, replay_candidates = module.acquire_direct_images(
-        [row], replay_client, tmp_path / "replay-originals"
-    )
-    assert dns_calls == []
-    assert online_receipts[0]["status"] == replay_receipts[0]["status"] == "downloaded"
-    assert len(online_candidates) == len(replay_candidates) == 1
-    assert online_candidates[0]["original"] == replay_candidates[0]["original"]
+    assert unsafe_candidates == []
+    assert unsafe_receipts[0]["status"] == "rejected"
+    assert "transitorio" in unsafe_receipts[0]["reason"]
+    assert unsafe_transport.calls == 1  # La ficha se obtuvo; imagen se bloqueó antes del fetch.
+    assert redundant_dns_calls == ["cdn.shopify.com"]
 
 
 @pytest.mark.parametrize(
