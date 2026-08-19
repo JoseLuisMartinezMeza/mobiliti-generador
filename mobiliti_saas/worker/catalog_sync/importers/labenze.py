@@ -511,7 +511,9 @@ def _records_from_section(page: fitz.Page, section: _Section) -> tuple[_Record, 
                 price_bboxes=tuple(evidence.bbox for evidence in evidence_groups),
                 crop_bbox=_clip_for_record(page, section, code, group),
                 image_match_status=(
-                    "exact_pdf" if len(codes) == 1 and len(image_blocks) == 1 else "family_pdf"
+                    "placeholder"
+                    if accessory_label
+                    else "exact_pdf" if len(codes) == 1 and len(image_blocks) == 1 else "family_pdf"
                 ),
             )
         )
@@ -750,7 +752,11 @@ def _build(
                 for bbox in record.price_bboxes
             )
             image_reference = source_ref(source_hash, record.page_number, record.crop_bbox)
-            asset = _render_asset(page, record.crop_bbox) if include_assets else None
+            asset = (
+                _render_asset(page, record.crop_bbox)
+                if include_assets and record.image_match_status != "placeholder"
+                else None
+            )
             item = _item(
                 record,
                 source_hash=source_hash,

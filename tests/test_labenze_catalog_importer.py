@@ -239,17 +239,27 @@ def test_pdf_b26_real_tiene_cobertura_total_y_hash_confirmado():
 
     build = build_labenze_snapshot_with_assets((_source(_REAL_PDF),))
     items = build.snapshot["items"]
+    placeholders = [item for item in items if item["image_kind"] == "placeholder"]
 
     assert len(items) == 462
     assert len({item["internal_id"] for item in items}) == len(items)
-    assert len(build.bindings) == len(items)
+    assert len(build.bindings) == len(items) - len(placeholders)
     assert all(item["price_net"] for item in items)
     assert all(
         item["sku"]
         or (item["code_status"] == "needs_review" and item["attributes"]["source_code"])
         for item in items
     )
-    assert all(item["image_kind"] == "official" for item in items)
+    assert sum(item["image_kind"] == "official" for item in items) == len(items) - len(placeholders)
+    assert sorted(item["attributes"]["source_code"] for item in placeholders) == [
+        "155-10600-TAP",
+        "155-22900-BAS",
+        "155-23100-BAS",
+        "155-23100-BAS",
+        "155-23100-BAS",
+        "156-10640",
+    ]
+    assert all("Kit de tapizado" in item["name"] for item in placeholders)
     assert all(item["product_url"].startswith("https://") for item in items)
     assert sum(item["code_status"] == "needs_review" for item in items) == 8
     assert any(item["sku"] == "155-20400" and item["price_net"] == "2720.000000" for item in items)
@@ -262,6 +272,9 @@ def test_pdf_b26_real_tiene_cobertura_total_y_hash_confirmado():
         "Kit de tapizado base de asiento para HUG."
     )
     assert "silla 4 patas" not in by_sku["155-22900-BAS"]["description"].casefold()
+    assert by_sku["155-22900-BAS"]["image_kind"] == "placeholder"
+    assert "approved_asset" not in by_sku["155-22900-BAS"]["attributes"]
+    assert "image_match" not in by_sku["155-22900-BAS"]["attributes"]
     for sku in ("110-52410", "110-52430", "110-52470", "110-52460"):
         assert [option["price_net"] for option in by_sku[sku]["base_price_options"]] == [
             "5275.000000",
