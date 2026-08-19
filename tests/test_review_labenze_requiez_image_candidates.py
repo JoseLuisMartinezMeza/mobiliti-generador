@@ -5,6 +5,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -798,3 +800,127 @@ def test_contact_sheet_wraps_complete_labels_without_clipping(tmp_path):
         left, top, right, bottom = label["bbox"]
         assert tile_left <= left < right <= tile_right
         assert tile_top <= top < bottom <= tile_bottom
+
+
+def test_csv_neutralizes_formula_prefixes_in_all_string_cells_only(tmp_path):
+    """Excel nunca debe interpretar nombre, URL o descripción como fórmula."""
+
+    row = {
+        "name": "  =HYPERLINK(\"https://evil.example\")",
+        "product_url": "\t+WEBSERVICE(\"https://evil.example\")",
+        "description": "\r@SUM(1,1)",
+        "source_code": "-2+3",
+        "nested": {
+            "formula": "=1+1",
+            "tab": "\t@payload",
+        },
+        "safe": "https://requiez.com/producto/RI-50",
+    }
+    csv_path = tmp_path / "review.csv"
+    jsonl_path = tmp_path / "review.jsonl"
+
+    review._write_csv(csv_path, [row])
+    review._write_jsonl(jsonl_path, [row])
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        exported = next(csv.DictReader(handle))
+    assert exported["name"].startswith("'")
+    assert exported["product_url"].startswith("'")
+    assert exported["description"].startswith("'")
+    assert exported["source_code"].startswith("'")
+    assert exported["safe"] == row["safe"]
+    assert json.loads(exported["nested"]) == row["nested"]
+    for value in exported.values():
+        if value.startswith("'"):
+            continue
+        assert value.lstrip(" \t\r\n")[:1] not in {"=", "+", "-", "@"}
+        assert value[:1] not in {"\t", "\r"}
+    assert json.loads(jsonl_path.read_text(encoding="utf-8")) == row
+
+
+@pytest.mark.parametrize(
+    ("target", "bad_url"),
+    [
+        ("product", "file:///tmp/producto"),
+        ("product", "javascript:alert(1)"),
+        ("product", "https://requiez.com.evil.example/producto/RM-9025N-NG"),
+        ("product", "https://user:pass@requiez.com/producto/RM-9025N-NG"),
+        ("product", "\thttps://requiez.com/producto/RM-9025N-NG"),
+        (
+            "product",
+            "https://requiez.com/producto/RM-9025N-NG?variant=123%0AInjected",
+        ),
+        ("image", "https://evil.example/img/products/skate/frente.png"),
+        ("image", "https://requiez.com/producto/not-an-image.png"),
+        ("final", "https://evil.example/img/products/skate/frente.png"),
+    ],
+)
+def test_review_rejects_unsafe_or_off_policy_candidate_urls(
+    tmp_path, monkeypatch, target, bad_url
+):
+    """Esquema, userinfo, controles, host engañoso o ruta ajena deben bloquearse."""
+
+    _small_contract(monkeypatch)
+    inputs = _build_inputs(tmp_path)
+    rows = inputs["research_rows"]
+    found = next(row for row in rows if row["internal_id"] == "requiez:rm-9025n-ng")
+    candidate = found["candidates"][0]
+    if target == "product":
+        candidate["product_url"] = bad_url
+    elif target == "image":
+        candidate["image_source_url"] = bad_url
+        candidate["download"]["requested_url"] = bad_url
+        candidate["download"]["final_url"] = bad_url
+    else:
+        candidate["download"]["final_url"] = bad_url
+    inputs["research_sha"] = _rewrite_research(inputs, rows)
+
+    with pytest.raises(ValueError, match="URL|HTTPS|host|ruta|política|control"):
+        _run(inputs, tmp_path / "review")
+
+
+def test_review_rejects_source_kind_incoherent_with_source_name(tmp_path, monkeypatch):
+    """Una fuente oficial no puede reclasificarse como distribuidor."""
+
+    _small_contract(monkeypatch)
+    inputs = _build_inputs(tmp_path)
+    rows = inputs["research_rows"]
+    found = next(row for row in rows if row["internal_id"] == "requiez:rm-9025n-ng")
+    found["candidates"][0]["source_kind"] = "authorized_distributor"
+    inputs["research_sha"] = _rewrite_research(inputs, rows)
+
+    with pytest.raises(ValueError, match="source_kind|fuente"):
+        _run(inputs, tmp_path / "review")
+
+
+def test_review_rejects_unproven_allowed_redirect(tmp_path, monkeypatch):
+    """Incluso un redirect al host permitido requiere evidencia exacta de Task 6A."""
+
+    _small_contract(monkeypatch)
+    inputs = _build_inputs(tmp_path)
+    rows = inputs["research_rows"]
+    found = next(row for row in rows if row["internal_id"] == "requiez:rm-9025n-ng")
+    found["candidates"][0]["download"]["final_url"] = (
+        "https://requiez.com/img/products/skate/redirected.png"
+    )
+    inputs["research_sha"] = _rewrite_research(inputs, rows)
+
+    with pytest.raises(ValueError, match="redirect|evidencia|cache"):
+        _run(inputs, tmp_path / "review")
+
+
+def test_script_direct_cli_can_load_task6a_url_policy():
+    """Ejecutar `python scripts/...py` debe poder cargar la policy local sin red."""
+
+    script = Path("scripts/review_labenze_requiez_image_candidates.py").resolve()
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=script.parent.parent,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--research-dir" in result.stdout

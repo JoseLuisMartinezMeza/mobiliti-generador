@@ -3,18 +3,42 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import hashlib
 import json
 import math
 import re
 import stat
+import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+
+try:
+    from scripts.research_labenze_requiez_images import (
+        IMAGE_HOSTS,
+        PRODUCT_PAGE_HOSTS,
+        ResearchCandidate,
+        validate_candidate_source_policy,
+        validate_candidate_urls,
+        validate_source_resource_url,
+    )
+except ModuleNotFoundError as exc:  # Permite ejecutar este archivo directamente desde scripts/.
+    if not str(exc.name or "").startswith("scripts"):
+        raise
+    from research_labenze_requiez_images import (  # type: ignore[no-redef]
+        IMAGE_HOSTS,
+        PRODUCT_PAGE_HOSTS,
+        ResearchCandidate,
+        validate_candidate_source_policy,
+        validate_candidate_urls,
+        validate_source_resource_url,
+    )
 
 
 CANONICAL_INVENTORY_SHA256 = "476013bf863552d4e622f510c39a019fc1549859714edbd1e8b76994d31a0812"
@@ -52,6 +76,14 @@ MIME_BY_FORMAT = {
     "PNG": ("image/png", {".png"}),
     "JPEG": ("image/jpeg", {".jpg", ".jpeg"}),
     "WEBP": ("image/webp", {".webp"}),
+}
+SOURCE_KIND_POLICY = {
+    "api-productos.requiez.com": {"manufacturer_official"},
+    "nogalbeat.com": {"authorized_distributor"},
+    "nogalbeatstore.com": {"authorized_distributor"},
+    "3rin.com.mx": {"authorized_distributor"},
+    "arterio.mx": {"authorized_distributor"},
+    "infinitidesign.it": {"manufacturer_official"},
 }
 
 
@@ -132,12 +164,32 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
         for row in rows:
             writer.writerow(
                 {
-                    key: json.dumps(value, ensure_ascii=False, sort_keys=True)
-                    if isinstance(value, (dict, list))
-                    else value
+                    key: _csv_cell(value)
                     for key, value in row.items()
                 }
             )
+
+
+def _csv_cell(value: object) -> object:
+    serialized: object = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if isinstance(value, (dict, list))
+        else value
+    )
+    if not isinstance(serialized, str) or not serialized:
+        return serialized
+    index = 0
+    leading_control = False
+    while index < len(serialized):
+        character = serialized[index]
+        if not (character.isspace() or unicodedata.category(character).startswith("C")):
+            break
+        leading_control = leading_control or character in "\t\r\n" or unicodedata.category(
+            character
+        ).startswith("C")
+        index += 1
+    formula_prefix = index < len(serialized) and serialized[index] in "=+-@"
+    return f"'{serialized}" if leading_control or formula_prefix else serialized
 
 
 def _load_json(path: Path, label: str) -> dict:
@@ -643,11 +695,119 @@ def _pending_review() -> dict[str, object]:
     }
 
 
+def _strict_url_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"URL {field} debe ser texto HTTPS sin whitespace exterior")
+    if any(character.isspace() or unicodedata.category(character).startswith("C") for character in value):
+        raise ValueError(f"URL {field} contiene whitespace o control no permitido")
+    decoded = value
+    try:
+        for _ in range(6):
+            next_decoded = unquote(decoded, errors="strict")
+            if any(
+                character.isspace() or unicodedata.category(character).startswith("C")
+                for character in next_decoded
+            ):
+                raise ValueError(f"URL {field} contiene control percent-encoded no permitido")
+            if next_decoded == decoded:
+                break
+            decoded = next_decoded
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"URL {field} contiene percent-encoding inválido") from exc
+    return value
+
+
+def _canonical_https_url(value: str) -> str:
+    parsed = urlsplit(value)
+    host = str(parsed.hostname or "").casefold().rstrip(".")
+    port = parsed.port
+    netloc = host if port in {None, 443} else f"{host}:{port}"
+    return urlunsplit((parsed.scheme.casefold(), netloc, parsed.path, parsed.query, ""))
+
+
+def _validate_redirect_evidence(
+    research_dir: Path,
+    *,
+    requested_url: str,
+    final_url: str,
+    download: Mapping[str, object],
+) -> None:
+    cache_name = hashlib.sha256(requested_url.encode("utf-8")).hexdigest() + ".json"
+    cache_path = research_dir / "http-cache" / cache_name
+    _assert_regular_file(cache_path, "evidencia cache de redirect")
+    evidence = _load_json(cache_path, "evidencia cache de redirect")
+    try:
+        body = base64.b64decode(evidence["body_base64"], validate=True)
+        status = int(evidence["status"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Evidencia cache de redirect inválida") from exc
+    actual_sha = hashlib.sha256(body).hexdigest()
+    if (
+        evidence.get("request_url") != requested_url
+        or evidence.get("response_url") != final_url
+        or status != 200
+        or evidence.get("body_sha256") != actual_sha
+        or actual_sha != str(download.get("sha256") or "").lower()
+        or len(body) != int(download.get("bytes", -1))
+    ):
+        raise ValueError("Redirect no coincide con evidencia cache de Task 6A")
+
+
+def validate_candidate_download_urls(
+    candidate: Mapping[str, object],
+    download: Mapping[str, object],
+    research_dir: Path,
+) -> None:
+    """Revalida la política URL de Task 6A sin efectuar solicitudes de red."""
+
+    source_name = str(candidate.get("source_name") or "")
+    source_kind = str(candidate.get("source_kind") or "")
+    canonical_source = source_name.casefold().rstrip(".")
+    if source_name != source_name.strip() or source_kind not in SOURCE_KIND_POLICY.get(
+        canonical_source, set()
+    ):
+        raise ValueError(
+            f"source_kind incoherente con fuente {source_name!r}: {source_kind!r}"
+        )
+    product_url = _strict_url_text(candidate.get("product_url"), "product_url")
+    image_url = _strict_url_text(candidate.get("image_source_url"), "image_source_url")
+    requested_url = _strict_url_text(download.get("requested_url"), "download.requested_url")
+    final_url = _strict_url_text(download.get("final_url"), "download.final_url")
+    if requested_url != image_url:
+        raise ValueError("URL download.requested_url no coincide con image_source_url")
+    research_candidate = ResearchCandidate(
+        source_name=source_name,
+        source_kind=source_kind,
+        source_id=str(candidate.get("source_id") or ""),
+        query=str(candidate.get("query") or ""),
+        matched_field=str(candidate.get("matched_field") or ""),
+        product_url=product_url,
+        image_source_url=image_url,
+        evidence=candidate.get("evidence") if isinstance(candidate.get("evidence"), dict) else {},
+        approved=False,
+    )
+    validate_candidate_source_policy(research_candidate)
+    validate_candidate_urls(
+        research_candidate,
+        allowed_product_hosts=PRODUCT_PAGE_HOSTS,
+        allowed_image_hosts=IMAGE_HOSTS,
+    )
+    validate_source_resource_url(final_url, source_name=source_name, resource_kind="image")
+    if _canonical_https_url(final_url) != _canonical_https_url(requested_url):
+        _validate_redirect_evidence(
+            research_dir,
+            requested_url=requested_url,
+            final_url=final_url,
+            download=download,
+        )
+
+
 def _candidate_rows(
     inventory_rows: Sequence[Mapping[str, object]],
     research_rows: Sequence[Mapping[str, object]],
-    originals_dir: Path,
+    research_dir: Path,
 ) -> tuple[list[dict], dict[str, list[dict]]]:
+    originals_dir = research_dir / "originals"
     inventory_by_id = {str(row["internal_id"]): row for row in inventory_rows}
     metrics_cache: dict[str, dict] = {}
     declared_originals: set[str] = set()
@@ -666,11 +826,10 @@ def _candidate_rows(
             if not isinstance(download, dict) or download.get("status") != "downloaded":
                 raise ValueError(f"found_exact contiene candidato no descargado: {research_row['internal_id']}")
             downloaded_count += 1
+            validate_candidate_download_urls(candidate, download, research_dir)
             object_name = _safe_original_name(download.get("object_name"))
             sha256 = str(download.get("sha256") or "").lower()
             declared_originals.add(object_name)
-            if download.get("requested_url") != candidate.get("image_source_url"):
-                raise ValueError("URL de download no coincide con image_source_url")
             if object_name not in metrics_cache:
                 metrics_cache[object_name] = inspect_original(
                     originals_dir / object_name,
@@ -1062,7 +1221,7 @@ def run_review(
         candidates, candidates_by_identity = _candidate_rows(
             inventory_rows,
             research_rows,
-            research_dir / "originals",
+            research_dir,
         )
         search_rows = _search_rows(inventory_rows, research_rows, candidates_by_identity)
         stage = "render_contact_sheets"
