@@ -1,10 +1,12 @@
 import importlib
+import base64
 import hashlib
 import io
 import json
 import ssl
 import subprocess
 import sys
+import zlib
 from collections import Counter
 from pathlib import Path
 
@@ -468,7 +470,7 @@ def _cycle_5_document_row(intake, *, code="DOC-123", page=1):
                 row
                 for row in intake.normalized_rows
                 if row["acquisition_kind"] == "document_page"
-                and row["candidate"]["source_name"] == "segomuebles.com"
+                and row["candidate"]["source_name"] == "Tendence Mobili / media.cylex.mx"
             )
         )
     )
@@ -499,6 +501,27 @@ def test_cycle_5_document_is_fetched_once_preflighted_and_queued_without_crop(tm
     assert len(list((tmp_path / "documents").glob("*.pdf"))) == 1
     assert len(list((tmp_path / "page-previews").glob("*.png"))) == 1
     assert not (tmp_path / "originals").exists()
+
+
+def test_cycle_5_document_cache_revalidates_every_source_association(tmp_path, intake):
+    """Una URL cacheada no permite que otra source_name omita su política host+ruta."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    research = importlib.import_module("scripts.research_labenze_requiez_images")
+    first = _cycle_5_document_row(intake)
+    second = json.loads(json.dumps(first))
+    second["internal_id"] += ":wrong-source"
+    second["report_candidate_id"] = "9" * 64
+    second["candidate"]["source_name"] = "officenter.com.mx"
+    client = _Cycle5Client(research, _cycle_5_pdf_bytes(["Catálogo DOC-123"]))
+    receipts, queue = module.acquire_document_pages(
+        [first, second], client, tmp_path / "documents", tmp_path / "page-previews"
+    )
+    assert len(client.calls) == 1
+    assert len(queue) == 1
+    assert receipts[0]["status"] == "document_page_ready"
+    assert receipts[1]["status"] == "document_fetch_failed"
+    assert "no permit" in receipts[1]["reason"]
 
 
 def test_cycle_5_canonical_document_audit_corrects_pages_and_blocks_16(intake):
@@ -617,6 +640,39 @@ def test_cycle_5_comex_expansion_override_is_local_and_exact_hash_pinned(monkeyp
         module._preflight_document(url, body + b"changed")
 
 
+def test_cycle_5_segomuebles_profile_is_hash_pinned_and_bounded():
+    """El PDF Sego auditado admite sólo ASCII85→Flate acotado en su perfil local."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    url = "https://www.segomuebles.com/archivos/labenze.pdf"
+    profile = module.DOCUMENT_PREFLIGHT_PROFILES[url]
+    assert profile == {
+        "sha256": "6fbef668374ea03aa06bda01abf1e681b5e2da8e3decf1d311225d7139a3390c",
+        "page_count": 39,
+        "max_stream_expanded_bytes": 384 * 1024 * 1024,
+        "max_stream_ratio": 256,
+        "ascii85_flate_only": True,
+    }
+    cache_entry = json.loads(
+        (
+            ROOT
+            / ".mobiliti_dev_store/visual-remediation/web-intake-20260819T120000Z/http-cache/4fd97c168a54cda34f7c30ff899a4db99233a4988d0ee4bff1e3e656d8731b6c.json"
+        ).read_text(encoding="utf-8")
+    )
+    body = base64.b64decode(cache_entry["body_base64"], validate=True)
+    digest, pages = module._preflight_document(url, body)
+    assert digest == profile["sha256"]
+    assert len(pages) == 39
+    assert "16007055" in module._normalized_document_text(pages[6].text)
+    compressed = zlib.compress(b"A" * 7_140)
+    encoded = base64.a85encode(compressed) + b"~>"
+    assert module._pdf_ascii85_flate_size(encoded, max_stream_ratio=256) == 7_140
+    with pytest.raises(module.SourceSafetyError, match="PDF_LIMIT"):
+        module._pdf_ascii85_flate_size(encoded, max_stream_ratio=1)
+    with pytest.raises(ValueError, match="document_hash_mismatch"):
+        module._preflight_document(url, body + b"changed")
+
+
 def test_cycle_6_jun_placeholder_hash_is_blocked_even_when_flag_is_false(tmp_path, intake):
     """Rompe si el placeholder JUN conocido reaparece sin flag y entra a originals/review."""
 
@@ -658,6 +714,29 @@ def test_cycle_6_repeated_product_and_image_urls_are_fetched_once_with_fanout(tm
     assert len({candidate["candidate_id"] for candidate in candidates}) == 2
 
 
+def test_cycle_6_direct_cache_revalidates_every_source_association(tmp_path, intake):
+    """Deduplicar bytes no autoriza reutilizar una URL bajo una fuente incompatible."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    research = importlib.import_module("scripts.research_labenze_requiez_images")
+    first = _cycle_4_direct_row(intake, (640, 640))
+    second = json.loads(json.dumps(first))
+    second["internal_id"] += ":wrong-source"
+    second["canonical_identity"]["product_key"] += ":wrong-source"
+    second["report_candidate_id"] = "8" * 64
+    second["candidate"]["source_name"] = "3rin.com.mx"
+    client = _Cycle4Client(research, image_body=_cycle_4_image_bytes())
+    receipts, candidates = module.acquire_direct_images(
+        [first, second], client, tmp_path / "originals"
+    )
+    assert [call[2] for call in client.calls].count("product") == 1
+    assert [call[2] for call in client.calls].count("image") == 1
+    assert len(candidates) == 1
+    assert receipts[0]["status"] == "downloaded"
+    assert receipts[1]["status"] == "rejected"
+    assert "no permit" in receipts[1]["reason"]
+
+
 def test_cycle_6_duplicate_conflicts_and_same_signature_reuse_are_blocked(tmp_path, intake):
     """Todo SHA+firma compartido es potencial reuse bloqueado; nunca aprobación."""
 
@@ -697,6 +776,84 @@ def test_cycle_6_duplicate_conflicts_and_same_signature_reuse_are_blocked(tmp_pa
     assert exact["duplicate_conflict"] is False
     assert exact["potential_shared_visual"] is True
     assert exact["shared_visual_group"] is None
+
+
+def test_cycle_6_perceptual_references_compare_task6c_6a_and_active_assets(tmp_path):
+    """dHash referencia los tres lotes con efecto sólo informativo y SHA verificado."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    originals = tmp_path / "task6c-originals"
+    research_dir = tmp_path / "research"
+    assets = tmp_path / "assets"
+    (research_dir / "originals").mkdir(parents=True)
+    originals.mkdir()
+    assets.mkdir()
+
+    def write_image(path, color):
+        stream = io.BytesIO()
+        Image.new("RGB", (640, 640), color).save(stream, format="PNG")
+        body = stream.getvalue()
+        path.write_bytes(body)
+        return hashlib.sha256(body).hexdigest()
+
+    task6c_sha = write_image(originals / "task6c.png", "white")
+    task6a_sha = write_image(research_dir / "originals" / "task6a.png", "gray")
+    active_sha = write_image(assets / "active.png", "black")
+    candidates = [
+        {
+            "internal_id": "labenze:new",
+            "original": {"object_name": "task6c.png", "sha256": task6c_sha},
+            "visual_signature": {"sha256": "1" * 64},
+        }
+    ]
+    loaded = type(
+        "Loaded",
+        (),
+        {
+            "review_candidate_rows": [
+                {
+                    "internal_id": "labenze:6a",
+                    "original": {
+                        "path": "originals/task6a.png",
+                        "sha256": task6a_sha,
+                    },
+                    "visual_signature": {"sha256": "2" * 64},
+                }
+            ],
+            "inventory_rows": [
+                {
+                    "internal_id": "labenze:active",
+                    "current_asset": {
+                        "path": "active.png",
+                        "actual_sha256": active_sha,
+                    },
+                    "visual_signature": {"sha256": "3" * 64},
+                }
+            ],
+        },
+    )()
+    clusters = module._reference_perceptual_clusters(
+        candidates,
+        loaded,
+        originals_dir=originals,
+        research_dir=research_dir,
+        assets_dir=assets,
+    )
+    assert len(clusters) == 1
+    assert clusters[0]["internal_ids"] == ["labenze:6a", "labenze:active", "labenze:new"]
+    assert clusters[0]["batches"] == ["task5_active", "task6a", "task6c"]
+    assert clusters[0]["decision_effect"] == "inspection_only"
+    assert "path" not in json.dumps(clusters[0])
+
+    candidates[0]["original"]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="SHA"):
+        module._reference_perceptual_clusters(
+            candidates,
+            loaded,
+            originals_dir=originals,
+            research_dir=research_dir,
+            assets_dir=assets,
+        )
 
 
 def test_cycle_6_contact_sheet_uses_contain_and_labels_outside_image(tmp_path, intake):
@@ -789,6 +946,22 @@ def test_cycle_7_existing_output_fails_before_loading_or_network(tmp_path):
     output.mkdir()
     with pytest.raises(ValueError, match="ya existe"):
         module.validate_new_output(output, [tmp_path / "protected"])
+
+
+def test_cycle_7_cache_source_must_not_overlap_output(tmp_path):
+    """Rompe si el replay puede autocopiar output/http-cache dentro de su fuente."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    source = tmp_path / "source"
+    (source / "http-cache").mkdir(parents=True)
+    output_inside_source = source / "nested-output"
+    with pytest.raises(ValueError, match="cache.*solapa"):
+        module.validate_cache_isolation(output_inside_source, source)
+    with pytest.raises(ValueError, match="cache.*solapa"):
+        module.validate_cache_isolation(source, source)
+
+    external = tmp_path / "external-output"
+    assert module.validate_cache_isolation(external, source) == (source / "http-cache").resolve()
 
 
 def test_cycle_7_run_checks_existing_output_before_any_input_or_network(tmp_path):
@@ -987,8 +1160,50 @@ def test_cycle_4_expected_transport_errors_become_terminal_direct_receipts(
     assert receipts[0]["reason"] == "transport_error"
 
 
+@pytest.mark.parametrize("failure", ["dns", "offline_miss", "http_exhausted"])
+def test_cycle_4_real_http_client_expected_failures_become_terminal_receipts(
+    tmp_path, intake, failure
+):
+    """Ejercita DNS/cache/reintentos reales sin convertir fallos de política en transporte."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    research = importlib.import_module("scripts.research_labenze_requiez_images")
+
+    if failure == "dns":
+        def resolver(_host):
+            raise OSError("dns down")
+
+        transport = research.UrllibTransport(resolver=resolver)
+        offline = False
+    elif failure == "offline_miss":
+        transport = lambda _url: None
+        offline = True
+    else:
+        class ExhaustedTransport:
+            def fetch(self, url, **_kwargs):
+                return research.HttpResponse(503, url, {}, b"")
+
+        transport = ExhaustedTransport()
+        offline = False
+
+    client = research.CachedHttpClient(
+        tmp_path / f"cache-{failure}",
+        transport=transport,
+        offline=offline,
+        allowed_hosts=research.SOURCE_HTTP_HOSTS,
+        max_attempts=1,
+    )
+    row = next(row for row in intake.normalized_rows if row["acquisition_kind"] == "direct_image")
+    receipts, candidates = module.acquire_direct_images(
+        [row], client, tmp_path / f"originals-{failure}"
+    )
+    assert candidates == []
+    assert receipts[0]["status"] == "rejected"
+    assert receipts[0]["reason"] == "transport_error"
+
+
 @pytest.mark.parametrize(
-    "error", [OSError("tls failure"), TimeoutError("timed out"), ValueError("Cache offline faltante: x")]
+    "error", [OSError("tls failure"), TimeoutError("timed out"), ValueError("Falta respuesta en cache offline: x")]
 )
 def test_cycle_5_expected_transport_errors_become_replay_stable_document_receipts(
     tmp_path, intake, error

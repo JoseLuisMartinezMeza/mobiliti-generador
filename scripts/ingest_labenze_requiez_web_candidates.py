@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import hashlib
 import http.client
@@ -12,6 +13,7 @@ import re
 import stat
 import sys
 import unicodedata
+import zlib
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,11 +25,13 @@ import fitz
 from PIL import Image
 
 try:
+    from mobiliti_saas.worker.catalog_sync.importers import common as _pdf_common
     from mobiliti_saas.worker.catalog_sync.importers.common import SourceSafetyError, _pdf_pages
 except ModuleNotFoundError as exc:  # ``python scripts/<archivo>.py`` no incluye la raíz.
     if exc.name != "mobiliti_saas":
         raise
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from mobiliti_saas.worker.catalog_sync.importers import common as _pdf_common
     from mobiliti_saas.worker.catalog_sync.importers.common import SourceSafetyError, _pdf_pages
 
 try:
@@ -115,6 +119,13 @@ CANONICAL_PDF_SHA256 = {
 }
 MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 DOCUMENT_PREFLIGHT_PROFILES = {
+    "https://www.segomuebles.com/archivos/labenze.pdf": {
+        "sha256": "6fbef668374ea03aa06bda01abf1e681b5e2da8e3decf1d311225d7139a3390c",
+        "page_count": 39,
+        "max_stream_expanded_bytes": 384 * 1024 * 1024,
+        "max_stream_ratio": 256,
+        "ascii85_flate_only": True,
+    },
     "https://umbral-comex.labenze.com/Catalogo_Coleccion_Umbral_ComexLabenze.pdf": {
         "sha256": "f7f63160281cbd087dea8bbcd723872a076f0a78da89def0d5360b90359f6fcb",
         "page_count": 19,
@@ -744,7 +755,16 @@ def _client_get(client, url: str, **kwargs) -> object:
     except (OSError, TimeoutError, http.client.HTTPException) as exc:
         raise ValueError("transport_error") from exc
     except ValueError as exc:
-        if str(exc).startswith("Cache offline faltante:"):
+        message = str(exc)
+        dns_transport_failure = (
+            message.startswith("No se pudo resolver host público:")
+            and isinstance(exc.__cause__, (OSError, TimeoutError))
+        )
+        if (
+            message.startswith("Falta respuesta en cache offline:")
+            or message.startswith("HTTP agotó reintentos con status ")
+            or dns_transport_failure
+        ):
             raise ValueError("transport_error") from exc
         raise
 
@@ -941,6 +961,13 @@ def acquire_direct_images(
             "original": None,
         }
         try:
+            association = _as_research_candidate(candidate)
+            validate_candidate_source_policy(association)
+            validate_candidate_urls(
+                association,
+                allowed_product_hosts=PRODUCT_PAGE_HOSTS,
+                allowed_image_hosts=IMAGE_HOSTS,
+            )
             product_url = str(candidate["product_url"])
             page = product_cache.get(product_url)
             if isinstance(page, ValueError):
@@ -1133,8 +1160,241 @@ def _render_page_preview(data: bytes, page_number: int, destination: Path) -> No
         destination.write_bytes(payload)
 
 
+def _pdf_flate_size_bounded(raw: bytes, *, max_stream_ratio: int) -> int:
+    """Cuenta Flate sin materializar más de 64 MiB y aplica el ratio del perfil."""
+
+    if type(max_stream_ratio) is not int or not 1 <= max_stream_ratio <= 256:
+        raise SourceSafetyError("PDF_LIMIT")
+    decoder = zlib.decompressobj()
+    total = 0
+    invalid = False
+    try:
+        for offset in range(0, len(raw), 64 * 1024):
+            pending = raw[offset : offset + 64 * 1024]
+            while pending:
+                output = decoder.decompress(
+                    pending,
+                    min(
+                        64 * 1024,
+                        _pdf_common.MAX_PDF_STREAM_DECODED_BYTES - total + 1,
+                    ),
+                )
+                total += len(output)
+                if total > _pdf_common.MAX_PDF_STREAM_DECODED_BYTES:
+                    raise SourceSafetyError("PDF_LIMIT")
+                remaining = decoder.unconsumed_tail
+                if remaining == pending and not output:
+                    invalid = True
+                    break
+                pending = remaining
+            if invalid:
+                break
+        if not invalid and not decoder.eof:
+            output = decoder.flush(
+                _pdf_common.MAX_PDF_STREAM_DECODED_BYTES - total + 1
+            )
+            total += len(output)
+    except SourceSafetyError:
+        raise
+    except (MemoryError, OverflowError, zlib.error):
+        invalid = True
+    if invalid or not decoder.eof or decoder.unused_data:
+        raise SourceSafetyError("PDF_INVALID")
+    if total > _pdf_common.MAX_PDF_STREAM_DECODED_BYTES or (
+        total and (not raw or total / len(raw) > max_stream_ratio)
+    ):
+        raise SourceSafetyError("PDF_LIMIT")
+    return total
+
+
+def _pdf_ascii85_flate_size(raw: bytes, *, max_stream_ratio: int) -> int:
+    """Decodifica exclusivamente ASCII85→Flate con límites antes de expandir."""
+
+    if not 0 < len(raw) <= _pdf_common.MAX_PDF_STREAM_RAW_BYTES:
+        raise SourceSafetyError("PDF_LIMIT")
+    compact = b"".join(raw.split())
+    if len(compact) < 3 or not compact.endswith(b"~>") or compact.startswith(b"<~"):
+        raise SourceSafetyError("PDF_INVALID")
+    try:
+        compressed = base64.a85decode(
+            compact[:-2],
+            foldspaces=False,
+            adobe=False,
+            ignorechars=b"",
+        )
+    except (ValueError, OverflowError) as exc:
+        raise SourceSafetyError("PDF_INVALID") from exc
+    if not 0 < len(compressed) <= _pdf_common.MAX_PDF_STREAM_RAW_BYTES:
+        raise SourceSafetyError("PDF_LIMIT")
+    return _pdf_flate_size_bounded(
+        compressed,
+        max_stream_ratio=max_stream_ratio,
+    )
+
+
+def _sego_pdf_preflight(
+    document,
+    *,
+    max_stream_expanded_bytes: int,
+    max_stream_ratio: int,
+) -> dict[int, int]:
+    """Replica el gate común y añade un único filtro auditado para el SHA Sego."""
+
+    xref_count = document.xref_length()
+    if not 1 < xref_count <= _pdf_common.MAX_PDF_XREFS:
+        raise SourceSafetyError("PDF_LIMIT")
+    stream_count = 0
+    total_raw = 0
+    total_expanded = 0
+    raw_sizes: dict[int, int] = {}
+    for xref in range(1, xref_count):
+        keys = set(document.xref_get_keys(xref))
+        passive_open_action = (
+            "OpenAction" in keys
+            and _pdf_common._pdf_passive_internal_open_action(document, xref)
+        )
+        if "AA" in keys or ("OpenAction" in keys and not passive_open_action):
+            raise SourceSafetyError("PDF_UNSAFE")
+        type_value = document.xref_get_key(xref, "Type")[1]
+        action_value = document.xref_get_key(xref, "S")[1]
+        passive_uri = _pdf_common._pdf_passive_uri_action(document, xref)
+        passive_link = _pdf_common._pdf_passive_uri_action(document, xref, "A/")
+        chained_action = (
+            document.xref_get_key(xref, "Next")[0] != "null"
+            and type_value == "/Action"
+        ) or document.xref_get_key(xref, "A/Next")[0] != "null"
+        if chained_action:
+            raise SourceSafetyError("PDF_UNSAFE")
+        if (type_value == "/Action" and not passive_uri) or (
+            action_value
+            in {
+                "/GoToR",
+                "/ImportData",
+                "/JavaScript",
+                "/Launch",
+                "/Named",
+                "/SubmitForm",
+                "/URI",
+            }
+            and not passive_uri
+        ):
+            raise SourceSafetyError("PDF_UNSAFE")
+        raw_object = document.xref_object(xref, compressed=False).encode(
+            "latin-1", "ignore"
+        )
+        active_tokens = {
+            match.group(0) for match in _pdf_common._ACTIVE_PDF_TOKEN.finditer(raw_object)
+        }
+        allowed_active_tokens = (
+            active_tokens == {b"/URI"} and (passive_uri or passive_link)
+        ) or (active_tokens == {b"/OpenAction"} and passive_open_action)
+        if active_tokens and not allowed_active_tokens:
+            raise SourceSafetyError("PDF_UNSAFE")
+        if not document.xref_is_stream(xref):
+            continue
+
+        stream_count += 1
+        declared = _pdf_common._pdf_integer(document, xref, "Length")
+        if declared is None:
+            raise SourceSafetyError("PDF_INVALID")
+        if declared > _pdf_common.MAX_PDF_STREAM_RAW_BYTES:
+            raise SourceSafetyError("PDF_LIMIT")
+        total_raw += declared
+        if (
+            stream_count > _pdf_common.MAX_PDF_STREAMS
+            or total_raw > _pdf_common.MAX_FILE_BYTES
+        ):
+            raise SourceSafetyError("PDF_LIMIT")
+        raw = document.xref_stream_raw(xref)
+        if not isinstance(raw, bytes) or len(raw) != declared:
+            raise SourceSafetyError("PDF_INVALID")
+        raw_sizes[xref] = len(raw)
+        filters = _pdf_common._pdf_filters(document, xref)
+        subtype = document.xref_get_key(xref, "Subtype")[1]
+        if (
+            subtype == "/Image"
+            and filters
+            and set(filters) <= _pdf_common._PDF_IMAGE_FILTERS
+        ):
+            decoded = _pdf_common._pdf_image_decoded_size(document, xref)
+        elif filters == ():
+            decoded = len(raw)
+        elif filters == ("FlateDecode",):
+            decoded = _pdf_flate_size_bounded(
+                raw,
+                max_stream_ratio=max_stream_ratio,
+            )
+        elif filters == ("ASCII85Decode", "FlateDecode"):
+            decoded = _pdf_ascii85_flate_size(
+                raw,
+                max_stream_ratio=max_stream_ratio,
+            )
+        else:
+            raise SourceSafetyError("PDF_UNSAFE")
+        total_expanded += decoded
+        if total_expanded > max_stream_expanded_bytes:
+            raise SourceSafetyError("PDF_LIMIT")
+    return raw_sizes
+
+
+def _sego_pdf_pages(
+    data: bytes,
+    *,
+    max_stream_expanded_bytes: int,
+    max_stream_ratio: int,
+    max_pages: int,
+) -> tuple:
+    """Extrae texto Sego tras el preflight local exact-hash y los gates de página comunes."""
+
+    document = None
+    try:
+        document = fitz.open(stream=data, filetype="pdf")
+        if not document.is_pdf or document.needs_pass or document.is_encrypted:
+            raise SourceSafetyError("PDF_UNSAFE")
+        if not 0 < document.page_count <= max_pages:
+            raise SourceSafetyError("PDF_LIMIT")
+        if document.embfile_names():
+            raise SourceSafetyError("PDF_UNSAFE")
+        raw_sizes = _sego_pdf_preflight(
+            document,
+            max_stream_expanded_bytes=max_stream_expanded_bytes,
+            max_stream_ratio=max_stream_ratio,
+        )
+        total_images = 0
+        total_image_bytes = 0
+        page_image_counts = []
+        for index in range(document.page_count):
+            page = document.load_page(index)
+            image_count, image_bytes = _pdf_common._pdf_page_preflight(
+                document, page, raw_sizes
+            )
+            page_image_counts.append(image_count)
+            total_images += image_count
+            total_image_bytes += image_bytes
+            if (
+                total_images > _pdf_common.MAX_PDF_IMAGES
+                or total_image_bytes > _pdf_common.MAX_PDF_IMAGE_BYTES
+            ):
+                raise SourceSafetyError("PDF_LIMIT")
+        texts = _pdf_common._pdf_text_isolated(data, document.page_count)
+        return tuple(
+            _pdf_common.PdfPage(index + 1, text, page_image_counts[index])
+            for index, text in enumerate(texts)
+        )
+    except SourceSafetyError:
+        raise
+    except Exception as exc:
+        raise SourceSafetyError("PDF_INVALID") from exc
+    finally:
+        if document is not None:
+            try:
+                document.close()
+            except Exception as exc:
+                raise SourceSafetyError("PDF_INVALID") from exc
+
+
 def _preflight_document(url: str, body: bytes) -> tuple[str, tuple]:
-    """Aplica el preflight común; sólo Comex auditado eleva expansión por SHA."""
+    """Aplica el gate común o un perfil local fijado por URL+SHA."""
 
     digest = hashlib.sha256(body).hexdigest()
     profile = DOCUMENT_PREFLIGHT_PROFILES.get(url)
@@ -1142,8 +1402,18 @@ def _preflight_document(url: str, body: bytes) -> tuple[str, tuple]:
     if profile is not None:
         if digest != profile["sha256"]:
             raise ValueError("document_hash_mismatch")
-        kwargs["max_stream_expanded_bytes"] = profile["max_stream_expanded_bytes"]
-    pages = tuple(_pdf_pages(body, **kwargs))
+        if profile.get("ascii85_flate_only") is True:
+            pages = _sego_pdf_pages(
+                body,
+                max_pages=profile["page_count"],
+                max_stream_expanded_bytes=profile["max_stream_expanded_bytes"],
+                max_stream_ratio=profile["max_stream_ratio"],
+            )
+        else:
+            kwargs["max_stream_expanded_bytes"] = profile["max_stream_expanded_bytes"]
+            pages = tuple(_pdf_pages(body, **kwargs))
+    else:
+        pages = tuple(_pdf_pages(body, **kwargs))
     if profile is not None and len(pages) != profile["page_count"]:
         raise ValueError("document_page_count_mismatch")
     return digest, pages
@@ -1188,6 +1458,17 @@ def acquire_document_pages(
             "preview_path": None,
             "crop_path": None,
         }
+        source = _canonical_source_name(candidate.get("source_name"))
+        try:
+            validate_source_resource_url(
+                url,
+                source_name=source,
+                resource_kind="document",
+            )
+        except ValueError as exc:
+            receipt["reason"] = str(exc)
+            receipts.append(receipt)
+            continue
         if candidate.get("document_disposition") == "document_semantic_blocked":
             receipt["status"] = "document_semantic_blocked"
             receipt["reason"] = str(candidate.get("document_block_reason") or "document_semantic_blocked")
@@ -1195,7 +1476,6 @@ def acquire_document_pages(
             continue
         cached = document_cache.get(url)
         if cached is None:
-            source = _canonical_source_name(candidate.get("source_name"))
             validate_source_resource_url(url, source_name=source, resource_kind="document")
             try:
                 response = _client_get(
@@ -1492,6 +1772,26 @@ def validate_new_output(output_dir: Path, protected_paths: Sequence[Path]) -> Pa
     return output
 
 
+def validate_cache_isolation(output_dir: Path, cache_from: Path | None) -> Path | None:
+    """Normaliza la fuente de replay y rechaza cualquier solape con la salida."""
+
+    if cache_from is None:
+        return None
+    output = Path(output_dir).resolve()
+    declared_source = Path(cache_from).resolve()
+    source = (
+        declared_source / "http-cache"
+        if (declared_source / "http-cache").is_dir()
+        else declared_source
+    )
+    if any(
+        output == candidate or output in candidate.parents or candidate in output.parents
+        for candidate in (declared_source, source)
+    ):
+        raise ValueError("La fuente de cache se solapa con la salida")
+    return source
+
+
 def _write_union_csv(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
     fields = sorted({str(key) for row in rows for key in row})
     with Path(path).open("w", encoding="utf-8-sig", newline="") as handle:
@@ -1583,6 +1883,136 @@ def _reference_duplicate_clusters(
             }
         )
     return result
+
+
+def _verified_reference_image(root: Path, relative_path: object, expected_sha256: object) -> Path:
+    """Resuelve una imagen declarada dentro de su raíz y verifica su contenido físico."""
+
+    root = Path(root).resolve(strict=True)
+    relative = Path(str(relative_path or ""))
+    expected = str(expected_sha256 or "").casefold()
+    if (
+        not str(relative_path or "")
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected)
+    ):
+        raise ValueError("Ruta/SHA de referencia perceptual inválida")
+    try:
+        path = (root / relative).resolve(strict=True)
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"Imagen de referencia perceptual ausente: {relative.as_posix()}") from exc
+    reparse = bool(
+        getattr(metadata, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
+    if path == root or root not in path.parents or path.is_symlink() or reparse or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"Ruta de referencia perceptual no confinada: {relative.as_posix()}")
+    if _sha256_file(path) != expected:
+        raise ValueError(f"SHA de referencia perceptual divergente: {relative.as_posix()}")
+    return path
+
+
+def _reference_perceptual_clusters(
+    candidates: Sequence[Mapping[str, object]],
+    loaded: LoadedInputs,
+    *,
+    originals_dir: Path,
+    research_dir: Path,
+    assets_dir: Path,
+) -> list[dict]:
+    """Compara dHash de 6C, 6A y activos Task 5 sin decidir bloqueo ni reuse."""
+
+    declared: list[tuple[str, str, object, object, object, Path]] = []
+    for candidate in candidates:
+        original = candidate.get("original")
+        signature = candidate.get("visual_signature")
+        if not isinstance(original, Mapping) or not isinstance(signature, Mapping):
+            raise ValueError("Candidato 6C inválido para comparación perceptual")
+        declared.append(
+            (
+                "task6c",
+                str(candidate.get("internal_id") or ""),
+                original.get("object_name"),
+                original.get("sha256"),
+                signature.get("sha256"),
+                Path(originals_dir),
+            )
+        )
+    for candidate in loaded.review_candidate_rows:
+        original = candidate.get("original")
+        signature = candidate.get("visual_signature")
+        if not isinstance(original, Mapping) or not isinstance(signature, Mapping):
+            raise ValueError("Candidato 6A inválido para comparación perceptual")
+        declared.append(
+            (
+                "task6a",
+                str(candidate.get("internal_id") or ""),
+                original.get("path"),
+                original.get("sha256"),
+                signature.get("sha256"),
+                Path(research_dir),
+            )
+        )
+    for row in loaded.inventory_rows:
+        asset = row.get("current_asset")
+        signature = row.get("visual_signature")
+        if not isinstance(asset, Mapping) or not asset.get("path"):
+            continue
+        if not isinstance(signature, Mapping):
+            raise ValueError("Firma de activo Task 5 inválida para comparación perceptual")
+        declared.append(
+            (
+                "task5_active",
+                str(row.get("internal_id") or ""),
+                asset.get("path"),
+                asset.get("actual_sha256") or asset.get("sha256"),
+                signature.get("sha256"),
+                Path(assets_dir),
+            )
+        )
+
+    hash_cache: dict[tuple[str, str], str] = {}
+    grouped: dict[str, list[dict]] = {}
+    for batch, internal_id, relative, sha256, signature_sha256, root in declared:
+        path = _verified_reference_image(root, relative, sha256)
+        cache_key = (str(path), str(sha256))
+        dhash = hash_cache.get(cache_key)
+        if dhash is None:
+            dhash = _difference_hash(path)
+            hash_cache[cache_key] = dhash
+        grouped.setdefault(dhash, []).append(
+            {
+                "batch": batch,
+                "internal_id": internal_id,
+                "sha256": str(sha256),
+                "visual_signature_sha256": str(signature_sha256),
+            }
+        )
+
+    clusters = []
+    for dhash, values in sorted(grouped.items()):
+        internal_ids = sorted({value["internal_id"] for value in values})
+        if len(internal_ids) < 2:
+            continue
+        clusters.append(
+            {
+                "dhash": dhash,
+                "internal_ids": internal_ids,
+                "sha256s": sorted({value["sha256"] for value in values}),
+                "visual_signature_sha256s": sorted(
+                    {value["visual_signature_sha256"] for value in values}
+                ),
+                "batches": sorted({value["batch"] for value in values}),
+                "records": sorted(
+                    values,
+                    key=lambda value: (value["batch"], value["internal_id"], value["sha256"]),
+                ),
+                "decision_effect": "inspection_only",
+            }
+        )
+    return clusters
 
 
 def _skip_receipts(rows: Sequence[Mapping[str, object]]) -> list[dict]:
@@ -1693,6 +2123,7 @@ def run_intake(
         "store": Path(store_path).resolve(),
     }
     output_dir = validate_new_output(output_dir, list(paths.values()))
+    cache_source = validate_cache_isolation(output_dir, cache_from)
     timestamp = started_at or datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     stage = "validate_document_audit"
     if _sha256_file(paths["document_audit"]) != DOCUMENT_AUDIT_SHA256:
@@ -1723,11 +2154,6 @@ def run_intake(
         documents_dir.mkdir()
         previews_dir.mkdir()
         stage = "copy_http_cache"
-        cache_source = None
-        if cache_from is not None:
-            cache_source = Path(cache_from).resolve()
-            if (cache_source / "http-cache").is_dir():
-                cache_source = cache_source / "http-cache"
         if offline and cache_source is None:
             raise ValueError("Replay offline exige --cache-from")
         _copy_cache(cache_source, output_dir / "http-cache")
@@ -1759,6 +2185,13 @@ def run_intake(
         stage = "duplicates_and_global_queue"
         duplicate_clusters = analyze_duplicate_clusters(candidates, originals_dir)
         duplicate_clusters["reference_exact"] = _reference_duplicate_clusters(candidates, loaded)
+        duplicate_clusters["reference_perceptual"] = _reference_perceptual_clusters(
+            candidates,
+            loaded,
+            originals_dir=originals_dir,
+            research_dir=paths["research"],
+            assets_dir=paths["assets"],
+        )
         global_queue = build_global_search_queue(
             loaded,
             candidates,
