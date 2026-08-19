@@ -310,6 +310,31 @@ def _description(section: _Section) -> str:
     return _clean(" ".join(dict.fromkeys(pieces)))[:4000]
 
 
+def _code_scoped_accessory_label(
+    section: _Section,
+    code: _Code,
+    groups: Sequence[_PriceGroup],
+) -> str:
+    """Lee una etiqueta de accesorio publicada junto al precio de ese código."""
+
+    if not groups:
+        return ""
+    start = max(group.bbox[3] for group in groups) - 1.5
+    end = start + 24.0
+    lines = [
+        line
+        for line in section.lines
+        if abs(line.x - code.line.x) <= 3.0
+        and start <= line.y <= end
+        and _CODE.search(line.text.upper()) is None
+        and _PRICE.search(line.text) is None
+    ]
+    label = _clean(" ".join(line.text for line in sorted(lines, key=lambda line: line.y)))
+    if _fold(label).startswith(("kit ", "juego ", "accesorio ")):
+        return label
+    return ""
+
+
 def _configuration_label(section: _Section, code: _Code, group: _PriceGroup) -> str:
     """Obtiene sólo una etiqueta explícita de configuración de la misma fila."""
 
@@ -465,14 +490,21 @@ def _records_from_section(page: fitz.Page, section: _Section) -> tuple[_Record, 
     result = []
     for code, group, evidence_groups, options in assignments:
         direct = options[0][1] if options else group.values[0]
+        accessory_label = _code_scoped_accessory_label(section, code, evidence_groups)
+        title = section.title if not accessory_label else f"{section.title} — {accessory_label}"
+        record_description = (
+            description
+            if not accessory_label
+            else f"{accessory_label} para {section.title}."
+        )
         result.append(
             _Record(
                 page_number=section.page_number,
-                title=section.title,
+                title=title,
                 collection=_collection(section.page_number),
                 code=code.value,
                 variant=_configuration_label(section, code, group),
-                description=description,
+                description=record_description,
                 direct_price=direct,
                 options=options,
                 code_bbox=code.line.bbox,

@@ -256,6 +256,12 @@ def test_pdf_b26_real_tiene_cobertura_total_y_hash_confirmado():
     assert any(item["sku"] == "160-S1170" and item["price_net"] == "2305.000000" for item in items)
 
     by_sku = {item["sku"]: item for item in items if item["sku"]}
+    assert by_sku["155-22900"]["name"] == "HUG"
+    assert by_sku["155-22900-BAS"]["name"] == "HUG — Kit de tapizado base de asiento"
+    assert by_sku["155-22900-BAS"]["description"] == (
+        "Kit de tapizado base de asiento para HUG."
+    )
+    assert "silla 4 patas" not in by_sku["155-22900-BAS"]["description"].casefold()
     for sku in ("110-52410", "110-52430", "110-52470", "110-52460"):
         assert [option["price_net"] for option in by_sku[sku]["base_price_options"]] == [
             "5275.000000",
