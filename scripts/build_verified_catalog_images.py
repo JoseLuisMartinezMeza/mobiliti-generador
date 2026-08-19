@@ -195,9 +195,13 @@ def _validate_v2_asset(assets_dir: Path, object_name: str, image_reference: dict
     dimensions = image_reference.get("source_dimensions")
     if not isinstance(dimensions, dict):
         raise ValueError(f"source_dimensions ausentes para {internal_id}")
+    raw_width = dimensions.get("width")
+    raw_height = dimensions.get("height")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in (raw_width, raw_height)):
+        raise ValueError(f"source_dimensions inválidas para {internal_id}")
     try:
-        source_width = float(dimensions["width"])
-        source_height = float(dimensions["height"])
+        source_width = float(raw_width)
+        source_height = float(raw_height)
     except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
         raise ValueError(f"source_dimensions inválidas para {internal_id}") from exc
     if not all(math.isfinite(value) and value > 0 for value in (source_width, source_height)):

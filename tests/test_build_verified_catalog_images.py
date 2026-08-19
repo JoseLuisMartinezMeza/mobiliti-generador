@@ -531,9 +531,13 @@ def test_v2_rejects_search_landing_and_canonical_image_source_product_urls(tmp_p
         {"width": -512, "height": 512},
         {"width": float("nan"), "height": 512},
         {"width": 512, "height": float("inf")},
+        {"width": True, "height": 512},
+        {"width": 512, "height": False},
+        {"width": "512", "height": 512},
+        {"width": 512, "height": "512"},
     ],
 )
-def test_v2_rejects_non_positive_or_non_finite_source_dimensions(tmp_path, dimensions):
+def test_v2_rejects_non_numeric_non_positive_or_non_finite_source_dimensions(tmp_path, dimensions):
     assets, _, manifest, active_path, _ = _v2_fixture(tmp_path)
     manifest["decisions"][0]["image_reference"]["source_dimensions"] = dimensions
     with pytest.raises(ValueError, match="source_dimensions"):
