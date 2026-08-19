@@ -30,6 +30,7 @@ from PIL import Image, UnidentifiedImageError
 CANONICAL_INVENTORY_SHA256 = "476013bf863552d4e622f510c39a019fc1549859714edbd1e8b76994d31a0812"
 EXPECTED_SUPPLIER_COUNTS = {"labenze": 462, "requiez": 314}
 MAX_ORIGINAL_BYTES = 8 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 MAX_IMAGE_SIDE = 8192
 MAX_IMAGE_PIXELS = 25_000_000
 
@@ -163,7 +164,10 @@ class CachedHttpClient:
         *,
         source_name: str | None = None,
         resource_kind: str | None = None,
+        max_response_bytes: int = MAX_ORIGINAL_BYTES,
     ) -> HttpResponse:
+        if type(max_response_bytes) is not int or max_response_bytes <= 0:
+            raise ValueError("max_response_bytes debe ser entero positivo")
         if (source_name is None) != (resource_kind is None):
             raise ValueError("source_name y resource_kind deben proporcionarse juntos")
         if source_name is not None:
@@ -177,6 +181,8 @@ class CachedHttpClient:
         path = self._path(url)
         if path.is_file():
             response = self._read(path, url)
+            if len(response.body) > max_response_bytes:
+                raise ValueError("Respuesta HTTP excede el límite solicitado")
             self._validate_final_response_host(response, source_name=source_name, resource_kind=resource_kind)
             return response
         if self.offline:
@@ -188,11 +194,14 @@ class CachedHttpClient:
                     url,
                     source_name=source_name,
                     resource_kind=str(resource_kind),
+                    max_response_bytes=max_response_bytes,
                 )
             else:
                 response = self.transport(url)
             if not isinstance(response, HttpResponse):
                 raise TypeError("transport debe devolver HttpResponse")
+            if len(response.body) > max_response_bytes:
+                raise ValueError("Respuesta HTTP excede el límite solicitado")
             self._validate_final_response_host(response, source_name=source_name, resource_kind=resource_kind)
             last_response = response
             retryable = response.status == 429 or 500 <= response.status <= 599
@@ -1050,6 +1059,8 @@ def download_original(
                 raise ValueError("Original supera 25 Mpx")
             if image.format not in {"PNG", "JPEG", "WEBP"}:
                 raise ValueError("Formato de imagen real no permitido")
+            if getattr(image, "n_frames", 1) != 1:
+                raise ValueError("Original animado no permitido")
             image.verify()
     except (UnidentifiedImageError, OSError) as exc:
         raise ValueError("Imagen original inválida") from exc
@@ -1463,8 +1474,14 @@ SOURCE_HTTP_HOSTS = {
     "cdn.shopify.com",
     "arterio.mx",
     "www.arterio.mx",
+    "nexus-flex.com",
+    "www.nexus-flex.com",
     "infinitidesign.it",
     "www.infinitidesign.it",
+    "media.cylex.mx",
+    "www.officenter.com.mx",
+    "www.segomuebles.com",
+    "umbral-comex.labenze.com",
 }
 
 PRODUCT_PAGE_HOSTS = {
@@ -1479,19 +1496,46 @@ PRODUCT_PAGE_HOSTS = {
     "www.3rin.com.mx",
     "arterio.mx",
     "www.arterio.mx",
+    "nexus-flex.com",
+    "www.nexus-flex.com",
     "infinitidesign.it",
     "www.infinitidesign.it",
 }
 
-IMAGE_HOSTS = SOURCE_HTTP_HOSTS - {"test.labenze.com"}
+DOCUMENT_HOSTS = {
+    "media.cylex.mx",
+    "www.officenter.com.mx",
+    "www.segomuebles.com",
+    "umbral-comex.labenze.com",
+}
+IMAGE_HOSTS = SOURCE_HTTP_HOSTS - DOCUMENT_HOSTS - {"test.labenze.com"}
 
 
-_SHOPIFY_SOURCES = {"nogalbeat.com", "nogalbeatstore.com", "3rin.com.mx"}
+_SHOPIFY_SOURCES = {"nogalbeat.com", "nogalbeatstore.com", "3rin.com.mx", "nexus-flex.com"}
 _SOURCE_ALIASES = {
     "api-productos.requiez.com": "requiez",
     "labenze-legacy-api": "labenze_legacy",
     "arterio.mx": "arterio",
     "infinitidesign.it": "infiniti",
+    "tendence mobili / media.cylex.mx": "tendence_cylex",
+    "officenter.com.mx": "officenter",
+    "segomuebles.com": "segomuebles",
+    "labenze / umbral-comex.labenze.com": "comex_labenze",
+}
+_DOCUMENT_RESOURCES = {
+    "tendence_cylex": (
+        "media.cylex.mx",
+        "/companies/1203/5778/uploadedfiles/12035778_637885105004313129_SL_LABENZE_-_TENDENCE_MOBILI_-_SIN_PRECIO.pdf",
+    ),
+    "officenter": (
+        "www.officenter.com.mx",
+        "/wp-content/uploads/2019/01/LABENZE-CATALOGO-2018-BAJA-ilovepdf-compressed.pdf",
+    ),
+    "segomuebles": ("www.segomuebles.com", "/archivos/labenze.pdf"),
+    "comex_labenze": (
+        "umbral-comex.labenze.com",
+        "/Catalogo_Coleccion_Umbral_ComexLabenze.pdf",
+    ),
 }
 _MAX_PATH_PERCENT_DECODES = 6
 _PERCENT_ESCAPE_RE = re.compile(r"%[0-9A-Fa-f]{2}")
@@ -1588,9 +1632,24 @@ def validate_source_resource_url(url: object, *, source_name: object, resource_k
                 and int(values["page"]) > 0
             )
         elif kind == "product":
-            allowed = host in own_hosts and path.startswith("/products/")
+            query = parse_qsl(parsed.query, keep_blank_values=True)
+            query_allowed = not query or (
+                len(query) == 1
+                and query[0][0].casefold() == "variant"
+                and query[0][1].isdigit()
+                and int(query[0][1]) > 0
+            )
+            allowed = host in own_hosts and bool(
+                re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*", path)
+            ) and query_allowed
         elif kind == "image":
-            allowed = host == "cdn.shopify.com" and path != "/"
+            query = parse_qsl(parsed.query, keep_blank_values=True)
+            query_allowed = not query or (
+                len(query) == 1
+                and query[0][0].casefold() == "v"
+                and query[0][1].isdigit()
+            )
+            allowed = host == "cdn.shopify.com" and path.startswith("/s/files/") and query_allowed
     elif source == "labenze_legacy":
         if kind == "api":
             allowed = host == "test.diagrama.labenze.com" and (
@@ -1621,6 +1680,9 @@ def validate_source_resource_url(url: object, *, source_name: object, resource_k
             allowed = host in own_hosts and bool(page) and (not slug.isdigit() or slug == "22995")
         elif kind == "image":
             allowed = host in own_hosts and path.startswith("/wp-content/uploads/") and path != "/wp-content/uploads/"
+    elif source in _DOCUMENT_RESOURCES and kind == "document":
+        expected_host, expected_path = _DOCUMENT_RESOURCES[source]
+        allowed = host == expected_host and path == expected_path and not parsed.query
 
     if not allowed:
         raise ValueError(
@@ -1704,7 +1766,16 @@ class UrllibTransport:
     def __call__(self, url: str) -> HttpResponse:
         raise ValueError("UrllibTransport requiere source_name y resource_kind mediante fetch()")
 
-    def fetch(self, url: str, *, source_name: str, resource_kind: str) -> HttpResponse:
+    def fetch(
+        self,
+        url: str,
+        *,
+        source_name: str,
+        resource_kind: str,
+        max_response_bytes: int = MAX_ORIGINAL_BYTES,
+    ) -> HttpResponse:
+        if type(max_response_bytes) is not int or max_response_bytes <= 0:
+            raise ValueError("max_response_bytes debe ser entero positivo")
         current_url = str(url)
         for hop in range(self.max_redirects + 1):
             parsed = validate_source_resource_url(
@@ -1747,7 +1818,9 @@ class UrllibTransport:
                     )
                     current_url = next_url
                     continue
-                body = response.read(MAX_ORIGINAL_BYTES + 1)
+                body = response.read(max_response_bytes + 1)
+                if len(body) > max_response_bytes:
+                    raise ValueError("Respuesta HTTP excede el límite solicitado")
                 return HttpResponse(status=status, url=current_url, headers=headers, body=body)
             finally:
                 connection.close()
