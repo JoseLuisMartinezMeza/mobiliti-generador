@@ -6,10 +6,11 @@ import argparse
 import copy
 import hashlib
 import json
+import math
 import re
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from PIL import Image, UnidentifiedImageError
 
@@ -86,11 +87,22 @@ def _is_https_url(value: object) -> bool:
     return parsed.scheme == "https" and bool(parsed.netloc)
 
 
+def _canonical_url(value: object) -> tuple[str, str, int | None, str]:
+    parsed = urlsplit(str(value or "").strip())
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("URL con puerto inválido") from exc
+    if (parsed.scheme.lower(), port) in {("https", 443), ("http", 80)}:
+        port = None
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), port, parsed.path.rstrip("/") or "/"
+
+
 def _validate_product_url(value: object, image_source_url: object, source_kind: str, internal_id: str) -> str:
     product_url = str(value or "").strip()
     if not _is_https_url(product_url):
         raise ValueError(f"product_url inválido para {internal_id}")
-    if product_url == str(image_source_url or "").strip():
+    if _canonical_url(product_url) == _canonical_url(image_source_url):
         raise ValueError(f"product_url no puede confundirse con image_source_url para {internal_id}")
 
     parsed = urlsplit(product_url)
@@ -98,11 +110,15 @@ def _validate_product_url(value: object, image_source_url: object, source_kind: 
     host = parsed.netloc.lower()
     forbidden_segments = ("/buscar", "/search", "/familia", "/family", "/categoria", "/category", "/collection")
     image_extensions = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".avif")
+    search_query_keys = {"q", "query", "search", "s", "buscar", "keyword", "keywords", "term", "terms"}
+    query_keys = {key.casefold() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
     if (
         host.startswith("cdn.")
         or ".cdn." in host
         or path in {"", "/"}
+        or path.endswith("/index.html")
         or any(segment in path for segment in forbidden_segments)
+        or bool(query_keys & search_query_keys)
         or path.endswith(image_extensions)
     ):
         raise ValueError(f"product_url no es una página o ficha exacta para {internal_id}")
@@ -136,6 +152,7 @@ def _foreground_bbox(path: Path, internal_id: str) -> tuple[int, int, int, int, 
     opaque_corners = [pixel for pixel in corners if pixel[3] >= 16]
     if opaque_corners and any(max(pixel[:3]) - min(pixel[:3]) > 16 for pixel in opaque_corners):
         raise ValueError(f"Fondo v2 no blanco o neutro para {internal_id}")
+    transparent_canvas = not opaque_corners
     if opaque_corners:
         background = tuple(round(sum(pixel[channel] for pixel in opaque_corners) / len(opaque_corners)) for channel in range(3))
     else:
@@ -146,7 +163,10 @@ def _foreground_bbox(path: Path, internal_id: str) -> tuple[int, int, int, int, 
     for y in range(height):
         for x in range(width):
             red, green, blue, alpha = image.getpixel((x, y))
-            if alpha < 16 or max(abs(red - background[0]), abs(green - background[1]), abs(blue - background[2])) <= 20:
+            if alpha < 16 or (
+                not transparent_canvas
+                and max(abs(red - background[0]), abs(green - background[1]), abs(blue - background[2])) <= 20
+            ):
                 continue
             foreground_pixels += 1
             left, top = min(left, x), min(top, y)
@@ -176,9 +196,13 @@ def _validate_v2_asset(assets_dir: Path, object_name: str, image_reference: dict
     if not isinstance(dimensions, dict):
         raise ValueError(f"source_dimensions ausentes para {internal_id}")
     try:
-        source_aspect = float(dimensions["width"]) / float(dimensions["height"])
+        source_width = float(dimensions["width"])
+        source_height = float(dimensions["height"])
     except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
         raise ValueError(f"source_dimensions inválidas para {internal_id}") from exc
+    if not all(math.isfinite(value) and value > 0 for value in (source_width, source_height)):
+        raise ValueError(f"source_dimensions inválidas para {internal_id}")
+    source_aspect = source_width / source_height
     final_aspect = bbox_width / bbox_height
     if abs(final_aspect / source_aspect - 1) > MAX_ASPECT_DELTA:
         raise ValueError(f"La relación de aspecto supera 1 % para {internal_id}")
@@ -196,9 +220,11 @@ def _validate_v2_reference(entry: dict, internal_id: str, image_kind: str) -> tu
     reference = entry.get("image_reference")
     if not isinstance(reference, dict):
         raise ValueError(f"image_reference inválida para {internal_id}")
-    if "placeholder" in str(entry.get("reason") or "").casefold():
+    if "placeholder" in str(entry.get("reason") or "").casefold() or "placeholder" in str(entry.get("status") or "").casefold():
         raise ValueError(f"Razón placeholder no permitida para {internal_id}")
-    if entry.get("quality_exception") is not None:
+    if "placeholder" in str(reference.get("status") or "").casefold():
+        raise ValueError(f"image_reference placeholder no permitida para {internal_id}")
+    if entry.get("quality_exception") is not None or reference.get("quality_exception") is not None:
         raise ValueError(f"quality_exception no puede permitir recorte, bordes o deformación para {internal_id}")
     source_kind = str(reference.get("source_kind") or "")
     if source_kind not in VALID_SOURCE_KINDS:

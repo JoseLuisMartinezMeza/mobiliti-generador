@@ -187,6 +187,14 @@ def _png_asset(directory, *, bbox=(256, 256, 767, 767), size=(1024, 1024), suffi
     return _asset(directory, buffer.getvalue(), suffix=suffix)
 
 
+def _transparent_white_png_asset(directory, *, bbox=(256, 256, 767, 767)):
+    image = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+    ImageDraw.Draw(image).rectangle(bbox, fill=(255, 255, 255, 255))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return _asset(directory, buffer.getvalue())
+
+
 def _v2_fixture(tmp_path):
     assets = tmp_path / "catalog-assets"
     assets.mkdir(parents=True)
@@ -469,4 +477,64 @@ def test_v2_rejects_an_asset_over_25_megapixels_before_pixel_analysis(tmp_path):
     image.save(buffer, format="PNG")
     manifest["decisions"][0]["asset"] = _asset(assets, buffer.getvalue(), suffix="png")
     with pytest.raises(ValueError, match="25 Mpx"):
+        _build_v2(tmp_path, manifest, assets, active_path)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda entry: entry.update(status="placeholder"), "placeholder"),
+        (lambda entry: entry["image_reference"].update(status="placeholder"), "placeholder"),
+        (lambda entry: entry.update(quality_exception={"cropping_allowed": True}), "quality_exception"),
+        (lambda entry: entry["image_reference"].update(quality_exception={"edge_contact_allowed": True}), "quality_exception"),
+    ],
+)
+def test_v2_rejects_placeholder_and_quality_exception_at_each_manifest_level(tmp_path, mutate, message):
+    assets, _, manifest, active_path, _ = _v2_fixture(tmp_path)
+    mutate(manifest["decisions"][0])
+    with pytest.raises(ValueError, match=message):
+        _build_v2(tmp_path, manifest, assets, active_path)
+
+
+def test_v2_accepts_a_white_opaque_product_on_a_transparent_canvas(tmp_path):
+    assets, _, manifest, active_path, _ = _v2_fixture(tmp_path)
+    manifest["decisions"][0]["asset"] = _transparent_white_png_asset(assets)
+
+    report = _build_v2(tmp_path, manifest, assets, active_path)
+
+    assert report["status"] == "passed"
+
+
+@pytest.mark.parametrize(
+    ("product_url", "image_source_url"),
+    [
+        ("https://www.labenze.example/productos/silla-exacta?search=silla", None),
+        ("https://www.labenze.example/index.html", None),
+        (
+            "https://www.labenze.example/productos/silla-exacta?utm_campaign=verano",
+            "https://www.labenze.example/productos/silla-exacta?source=imagen",
+        ),
+    ],
+)
+def test_v2_rejects_search_landing_and_canonical_image_source_product_urls(tmp_path, product_url, image_source_url):
+    assets, _, manifest, active_path, _ = _v2_fixture(tmp_path)
+    manifest["decisions"][0]["product_url"] = product_url
+    if image_source_url:
+        manifest["decisions"][0]["image_reference"]["image_source_url"] = image_source_url
+    with pytest.raises(ValueError, match="product_url"):
+        _build_v2(tmp_path, manifest, assets, active_path)
+
+
+@pytest.mark.parametrize(
+    "dimensions",
+    [
+        {"width": -512, "height": 512},
+        {"width": float("nan"), "height": 512},
+        {"width": 512, "height": float("inf")},
+    ],
+)
+def test_v2_rejects_non_positive_or_non_finite_source_dimensions(tmp_path, dimensions):
+    assets, _, manifest, active_path, _ = _v2_fixture(tmp_path)
+    manifest["decisions"][0]["image_reference"]["source_dimensions"] = dimensions
+    with pytest.raises(ValueError, match="source_dimensions"):
         _build_v2(tmp_path, manifest, assets, active_path)
