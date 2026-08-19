@@ -8,6 +8,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 import scripts.promote_verified_catalog_images as promoter
+from scripts.build_verified_catalog_images import build_verified_catalog_images
 from scripts.promote_verified_catalog_images import promote_verified_catalog_images
 
 
@@ -480,22 +481,27 @@ def test_labenze_requiez_keeps_active_db_intact_if_atomic_publish_fails(tmp_path
     assert fixture["staged"].is_file()
 
 
-def test_labenze_requiez_rechecks_active_sha_immediately_before_publish(tmp_path, monkeypatch):
+def test_labenze_requiez_preserves_a_write_between_final_sha_check_and_publish(tmp_path, monkeypatch):
     fixture = _labenze_requiez_fixture(tmp_path)
+    import os
 
-    def write_concurrent_change(path, expected_sha256):
-        assert fixture["backup"].read_bytes() == fixture["active_bytes"]
-        fixture["active_path"].write_bytes(b'{"concurrent": true}')
-        raise ValueError("El dev-store cambió concurrentemente antes de publicar")
+    real_replace = os.replace
+    concurrent_bytes = b'{"concurrent": true}'
 
-    monkeypatch.setattr(promoter, "_assert_active_sha", write_concurrent_change, raising=False)
+    def inject_write_after_final_check(source, destination):
+        if Path(source) == fixture["active_path"]:
+            assert fixture["backup"].read_bytes() == fixture["active_bytes"]
+            fixture["active_path"].write_bytes(concurrent_bytes)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(promoter.os, "replace", inject_write_after_final_check)
     with pytest.raises(ValueError, match="concurrentemente"):
-        _promote_labenze_requiez(fixture)
+        _promote_labenze_requiez(fixture, report_path=tmp_path / "concurrent-report.json")
 
-    assert fixture["active_path"].read_bytes() == b'{"concurrent": true}'
+    assert fixture["active_path"].read_bytes() == concurrent_bytes
 
 
-@pytest.mark.parametrize("missing", ("group", "matrix", "evidence"))
+@pytest.mark.parametrize("missing", ("evidence", "assignments", "source"))
 def test_labenze_requiez_rejects_shared_asset_without_global_v2_equivalence(tmp_path, missing):
     fixture = _labenze_requiez_fixture(tmp_path)
     verified = json.loads(fixture["verified_path"].read_text(encoding="utf-8"))
@@ -504,23 +510,17 @@ def test_labenze_requiez_rejects_shared_asset_without_global_v2_equivalence(tmp_
     requiez_item["internal_id"] = "requiez:one"
     reference = requiez_item["attributes"]["image_reference"]
     labenze_reference = labenze_item["attributes"]["image_reference"]
-    if missing != "group":
-        for candidate in (labenze_reference, reference):
-            candidate["shared_visual_group"] = "serie-compartida"
-            candidate["shared_visual_evidence"] = {
-                "source_url": "https://www.labenze.example/series/serie-compartida",
-                "assigned_variant_ids": ["labenze:one", "requiez:one"],
-            }
-    if missing == "evidence":
-        reference["shared_visual_evidence"]["assigned_variant_ids"] = ["requiez:one"]
-    if missing != "matrix":
-        verified["shared_visual_equivalence_matrix"] = {
-            "serie-compartida": {
-                "variant_internal_ids": ["labenze:one", "requiez:one"],
-                "same_source_url": "https://www.labenze.example/series/serie-compartida",
-                "evidence": "El fabricante asigna la misma imagen a ambas variantes.",
-            }
+    for candidate in (labenze_reference, reference):
+        candidate["shared_visual_evidence"] = {
+            "source_url": "https://www.labenze.example/series/serie-compartida",
+            "assigned_variant_ids": ["labenze:one", "requiez:one"],
         }
+    if missing == "evidence":
+        reference.pop("shared_visual_evidence")
+    elif missing == "assignments":
+        reference["shared_visual_evidence"]["assigned_variant_ids"] = ["requiez:one"]
+    else:
+        reference["shared_visual_evidence"]["source_url"] = "https://www.requiez.example/otra-serie"
     verified["catalog_published_snapshots"]["requiez"]["payload"]["items"] = [requiez_item]
     fixture["verified_path"].write_text(json.dumps(verified), encoding="utf-8")
 
@@ -560,3 +560,171 @@ def test_labenze_requiez_uses_atomic_asset_temp_and_retries_after_partial_copy(t
     )
     assert retry_report["assets"]["copied"] == 1
     assert retry_report["assets"]["already_present"] == 1
+
+
+def test_labenze_requiez_restores_active_after_post_publish_verification_failure(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    report_path = tmp_path / "failed-promotion-report.json"
+    import os
+
+    real_replace = os.replace
+
+    def corrupt_after_publish(source, destination):
+        result = real_replace(source, destination)
+        if Path(source) == fixture["staged"] and Path(destination) == fixture["active_path"]:
+            fixture["active_path"].write_bytes(b"db-corrupto-despues-del-replace")
+        return result
+
+    monkeypatch.setattr(promoter.os, "replace", corrupt_after_publish)
+    with pytest.raises(RuntimeError, match="activo no coincide"):
+        _promote_labenze_requiez(fixture, report_path=report_path)
+
+    assert fixture["active_path"].read_bytes() == fixture["active_bytes"]
+    failed_report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert failed_report["status"] == "failed"
+    assert failed_report["rollback"]["restore_attempted"] is True
+    assert failed_report["rollback"]["restored"] is True
+    assert failed_report["rollback"]["verified"] is True
+    assert failed_report["staging"]["state"] == "published"
+
+
+def test_labenze_requiez_rejects_existing_report_before_any_mutation(tmp_path):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    report_path = tmp_path / "already-exists.json"
+    report_path.write_text("reporte previo", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="reporte ya existe"):
+        _promote_labenze_requiez(fixture, report_path=report_path)
+
+    assert fixture["active_path"].read_bytes() == fixture["active_bytes"]
+    assert not fixture["backup"].exists()
+    assert not fixture["staged"].exists()
+    assert not fixture["target_assets"].exists()
+
+
+def _authentic_shared_v2_fixture(tmp_path):
+    assets = tmp_path / "assets"
+    assets.mkdir(parents=True)
+    asset_name, _ = _v2_asset(assets, (40, 100, 160))
+    active = {
+        "catalog_published_snapshots": {
+            supplier: _snapshot(supplier, [{
+                "internal_id": f"{supplier}:one",
+                "name": "Silla compartida",
+                "price": 200,
+                "image_url": "",
+                "image_kind": "placeholder",
+                "attributes": {"commercial_note": "preservar"},
+            }])
+            for supplier in ("labenze", "requiez")
+        }
+    }
+    active_path = tmp_path / "active.json"
+    active_bytes = json.dumps(active, ensure_ascii=False, indent=2).encode("utf-8")
+    active_path.write_bytes(active_bytes)
+    common_evidence = {
+        "source_url": "https://www.labenze.example/series/silla-compartida",
+        "assigned_variant_ids": ["labenze:one", "requiez:one"],
+    }
+    verified_path = active_path
+    for supplier in ("labenze", "requiez"):
+        reference = {
+            "status": "official_exact",
+            "generated": False,
+            "source_kind": "manufacturer_official",
+            "image_source_url": f"https://media.{supplier}.example/silla.png",
+            "source_locator": f"SKU-{supplier}",
+            "source_dimensions": {"width": 512, "height": 512},
+            "reviewer": "visual.reviewer@mobiliti.mx",
+            "reviewed_at": "2026-08-18T12:00:00Z",
+            "full_product_visible": True,
+            "not_cropped": True,
+            "configuration_supported": True,
+            "approved": True,
+            "shared_visual_evidence": deepcopy(common_evidence),
+        }
+        manifest = {
+            "schema_version": 2,
+            "supplier": supplier,
+            "expected_snapshot_id": f"current-{supplier}",
+            "expected_source_hash": f"hash-{supplier}",
+            "decisions": [{
+                "internal_id": f"{supplier}:one",
+                "name": "Silla compartida",
+                "decision": "retain",
+                "asset": asset_name,
+                "image_kind": "official",
+                "direct_product_reference": True,
+                "reason": "El fabricante demuestra la equivalencia visual.",
+                "product_url": f"https://www.{supplier}.example/productos/silla-compartida",
+                "shared_visual_group": "silla-compartida",
+                "image_reference": reference,
+            }],
+            "shared_visual_equivalence_matrix": {
+                "silla-compartida": {
+                    "variant_internal_ids": ["labenze:one", "requiez:one"],
+                    "same_source_url": common_evidence["source_url"],
+                    "evidence": "La serie oficial usa la misma toma para ambas variantes.",
+                }
+            },
+        }
+        manifest_path = tmp_path / f"manifest-{supplier}.json"
+        output_path = tmp_path / f"verified-{supplier}.json"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        build_verified_catalog_images(
+            active_db_path=verified_path,
+            manifest_path=manifest_path,
+            assets_dir=assets,
+            output_path=output_path,
+        )
+        verified_path = output_path
+    return {
+        "active_path": active_path,
+        "active_bytes": active_bytes,
+        "verified_path": verified_path,
+        "assets": assets,
+        "target_assets": tmp_path / "published-assets",
+        "backup": tmp_path / "before.json",
+        "staged": tmp_path / "staged.json",
+        "sha": hashlib.sha256(active_bytes).hexdigest(),
+    }
+
+
+def test_labenze_requiez_accepts_shared_visual_evidence_persisted_by_builder_v2(tmp_path):
+    fixture = _authentic_shared_v2_fixture(tmp_path)
+
+    report = promote_verified_catalog_images(
+        active_db_path=fixture["active_path"],
+        verified_db_path=fixture["verified_path"],
+        source_assets_dir=fixture["assets"],
+        target_assets_dir=fixture["target_assets"],
+        suppliers=("labenze", "requiez"),
+        backup_path=fixture["backup"],
+        staged_path=fixture["staged"],
+        expected_active_sha256=fixture["sha"],
+    )
+
+    assert report["assets"]["unique_objects"] == 1
+
+
+def test_labenze_requiez_rejects_shared_visual_when_builder_evidence_is_removed(tmp_path):
+    fixture = _authentic_shared_v2_fixture(tmp_path)
+    verified = json.loads(fixture["verified_path"].read_text(encoding="utf-8"))
+    verified["catalog_published_snapshots"]["requiez"]["payload"]["items"][0]["attributes"]["image_reference"].pop(
+        "shared_visual_evidence"
+    )
+    fixture["verified_path"].write_text(json.dumps(verified), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="shared_visual"):
+        promote_verified_catalog_images(
+            active_db_path=fixture["active_path"],
+            verified_db_path=fixture["verified_path"],
+            source_assets_dir=fixture["assets"],
+            target_assets_dir=fixture["target_assets"],
+            suppliers=("labenze", "requiez"),
+            backup_path=fixture["backup"],
+            staged_path=fixture["staged"],
+            expected_active_sha256=fixture["sha"],
+        )
+
+    assert fixture["active_path"].read_bytes() == fixture["active_bytes"]

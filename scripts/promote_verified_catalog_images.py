@@ -17,7 +17,6 @@ from scripts.build_verified_catalog_images import (
     VALID_DECISIONS,
     _validate_v2_asset,
     _validate_v2_reference,
-    _validate_v2_shared_assets,
 )
 
 
@@ -118,6 +117,116 @@ def _copy_asset_atomically(source: Path, target: Path, object_name: str) -> bool
     return True
 
 
+def _validate_persisted_shared_v2_assets(asset_entries: dict[str, list[tuple[str, dict]]]) -> None:
+    """Valida sólo la evidencia que el builder v2 persiste en el catálogo."""
+
+    for object_name, entries in asset_entries.items():
+        if len(entries) < 2:
+            continue
+        internal_ids = {internal_id for internal_id, _ in entries}
+        source_urls: set[str] = set()
+        for internal_id, item in entries:
+            evidence = item["image_reference"].get("shared_visual_evidence")
+            if not isinstance(evidence, dict):
+                raise ValueError(f"Asset compartido sin shared_visual_evidence: {object_name}")
+            source_url = str(evidence.get("source_url") or "").strip()
+            parsed = urlsplit(source_url)
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise ValueError(f"Evidencia shared_visual sin fuente HTTPS: {internal_id}")
+            if set(evidence.get("assigned_variant_ids") or []) != internal_ids:
+                raise ValueError(f"Evidencia shared_visual incompleta para {internal_id}")
+            source_urls.add(source_url)
+        if len(source_urls) != 1:
+            raise ValueError(f"Evidencia shared_visual no coincide para {object_name}")
+
+
+def _validate_report_path(report_path: Path | None) -> Path | None:
+    if report_path is None:
+        return None
+    path = Path(report_path)
+    if path.exists():
+        raise ValueError(f"El reporte ya existe: {path}")
+    if not path.parent.is_dir():
+        raise ValueError(f"El directorio del reporte no existe: {path.parent}")
+    return path
+
+
+def _sha256_if_file(path: Path) -> str | None:
+    return _sha256(path.read_bytes()) if path.is_file() else None
+
+
+def _write_report(report_path: Path | None, report: dict) -> None:
+    if report_path is not None:
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _restore_transaction(
+    active_db_path: Path,
+    transaction_path: Path,
+    expected_sha256: str,
+    rollback: dict,
+) -> bool:
+    rollback["restore_attempted"] = True
+    if active_db_path.exists():
+        rollback.update(restored=False, verified=False, status="preserved_concurrent_active")
+        return False
+    os.replace(transaction_path, active_db_path)
+    restored_sha256 = _sha256(active_db_path.read_bytes())
+    rollback.update(
+        restored=True,
+        verified=restored_sha256 == expected_sha256,
+        restored_sha256=restored_sha256,
+        status="restored" if restored_sha256 == expected_sha256 else "restored_different_bytes",
+    )
+    return rollback["verified"]
+
+
+def _publish_active_transactionally(
+    *,
+    active_db_path: Path,
+    staged_path: Path,
+    before_sha256: str,
+    after_sha256: str,
+    transaction: dict,
+    rollback: dict,
+    staging: dict,
+) -> None:
+    transaction_path = active_db_path.with_name(f".{active_db_path.name}.{uuid.uuid4().hex}.rollback")
+    transaction.update(path=str(transaction_path), state="capturing", sha256=None, failed_publish_path=None)
+    os.replace(active_db_path, transaction_path)
+    transaction["state"] = "captured"
+    captured_sha256 = _sha256(transaction_path.read_bytes())
+    transaction["sha256"] = captured_sha256
+    if active_db_path.exists():
+        rollback.update(status="preserved_concurrent_active", restore_attempted=False, restored=False, verified=False)
+        transaction["state"] = "retained_while_concurrent_active"
+        raise ValueError("El dev-store cambió concurrentemente antes de publicar")
+    if captured_sha256 != before_sha256:
+        restored = _restore_transaction(active_db_path, transaction_path, captured_sha256, rollback)
+        transaction["state"] = "restored_concurrent_bytes" if restored else "restore_failed"
+        raise ValueError("El dev-store cambió concurrentemente antes de publicar")
+
+    try:
+        os.replace(staged_path, active_db_path)
+        staging["state"] = "published"
+    except Exception:
+        restored = _restore_transaction(active_db_path, transaction_path, before_sha256, rollback)
+        transaction["state"] = "restored_to_active" if restored else "restore_failed"
+        raise
+
+    if _sha256(active_db_path.read_bytes()) == after_sha256:
+        transaction["state"] = "retained_verified_rollback"
+        return
+
+    failed_publish_path = active_db_path.with_name(f".{active_db_path.name}.{uuid.uuid4().hex}.failed-publish")
+    transaction.update(state="capturing_failed_publish", failed_publish_path=str(failed_publish_path))
+    os.replace(active_db_path, failed_publish_path)
+    transaction["state"] = "captured_failed_publish"
+    restored = _restore_transaction(active_db_path, transaction_path, before_sha256, rollback)
+    transaction["state"] = "restored_to_active" if restored else "restore_failed"
+    raise RuntimeError("El dev-store activo no coincide con el staging después de publicar")
+
+
 def _validated_v2_asset(source_assets_dir: Path, item: dict, supplier: str) -> tuple[str, Path]:
     """Reutiliza el contrato v2 del builder para una imagen ya verificada."""
 
@@ -175,7 +284,7 @@ def _operational_counts(data: dict) -> dict[str, int]:
     }
 
 
-def promote_verified_catalog_images(
+def _promote_verified_catalog_images(
     *,
     active_db_path: Path,
     verified_db_path: Path,
@@ -185,6 +294,7 @@ def promote_verified_catalog_images(
     backup_path: Path,
     staged_path: Path,
     expected_active_sha256: str | None = None,
+    audit: dict,
 ) -> dict:
     """Promueve solo campos visuales y conserva intacto el resto del dev-store."""
 
@@ -197,6 +307,7 @@ def promote_verified_catalog_images(
 
     active_bytes = active_db_path.read_bytes()
     active_sha = _sha256(active_bytes)
+    audit["before_sha256"] = active_sha
     normalized_suppliers = tuple(str(raw_supplier or "").strip().lower() for raw_supplier in suppliers)
     if not normalized_suppliers or any(not supplier for supplier in normalized_suppliers):
         raise ValueError("Se requiere al menos un proveedor válido")
@@ -295,10 +406,7 @@ def promote_verified_catalog_images(
             )
         report_suppliers[supplier] = supplier_report
 
-    _validate_v2_shared_assets(
-        shared_v2_assets,
-        {"shared_visual_equivalence_matrix": verified.get("shared_visual_equivalence_matrix")},
-    )
+    _validate_persisted_shared_v2_assets(shared_v2_assets)
     required_bytes = sum(source.stat().st_size for source in required_assets.values())
     if required_bytes > MAX_BATCH_ASSET_BYTES:
         raise ValueError("El lote de assets únicos supera 256 MiB")
@@ -309,6 +417,12 @@ def promote_verified_catalog_images(
         _validate_target_asset(target, object_name)
 
     promoted_bytes = json.dumps(promoted, ensure_ascii=False, indent=2).encode("utf-8")
+    audit["after_sha256"] = _sha256(promoted_bytes)
+    audit["suppliers"] = report_suppliers
+    audit["operational_counts"] = {
+        "before": _operational_counts(active),
+        "after": _operational_counts(promoted),
+    }
     _require_staging_same_volume(active_db_path, staged_path)
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     staged_path.parent.mkdir(parents=True, exist_ok=True)
@@ -319,6 +433,7 @@ def promote_verified_catalog_images(
     staging_sha = _sha256(promoted_bytes)
     if _sha256(staged_path.read_bytes()) != staging_sha:
         raise RuntimeError("El staging del dev-store no coincide")
+    audit["staging"].update(state="ready", sha256=staging_sha)
 
     target_assets_dir.mkdir(parents=True, exist_ok=True)
     copied = existing = 0
@@ -330,9 +445,23 @@ def promote_verified_catalog_images(
             existing += 1
 
     _assert_active_sha(active_db_path, active_sha)
-    os.replace(staged_path, active_db_path)
-    if _sha256(active_db_path.read_bytes()) != _sha256(promoted_bytes):
-        raise RuntimeError("El dev-store activo no coincide con el staging")
+    _publish_active_transactionally(
+        active_db_path=active_db_path,
+        staged_path=staged_path,
+        before_sha256=active_sha,
+        after_sha256=staging_sha,
+        transaction=audit["transaction"],
+        rollback=audit["rollback"],
+        staging=audit["staging"],
+    )
+    audit["rollback"].update(
+        status="not_required",
+        restore_attempted=False,
+        restore_performed=False,
+        restored=False,
+        verified=False,
+        backup_verified=_sha256(backup_path.read_bytes()) == active_sha,
+    )
 
     return {
         "status": "passed",
@@ -341,20 +470,14 @@ def promote_verified_catalog_images(
         "backup": str(backup_path),
         "staged": str(staged_path),
         "before_sha256": active_sha,
-        "after_sha256": _sha256(promoted_bytes),
+        "after_sha256": staging_sha,
         "backup_sha256": _sha256(backup_path.read_bytes()),
         "staging_sha256": staging_sha,
         "suppliers": report_suppliers,
-        "operational_counts": {
-            "before": _operational_counts(active),
-            "after": _operational_counts(promoted),
-        },
-        "rollback": {
-            "status": "not_required",
-            "restore_performed": False,
-            "backup_verified": _sha256(backup_path.read_bytes()) == active_sha,
-            "procedure": "Verificar backup_sha256 y publicar el respaldo con os.replace en el volumen activo.",
-        },
+        "operational_counts": audit["operational_counts"],
+        "staging": {**audit["staging"], "exists": staged_path.exists()},
+        "transaction": audit["transaction"],
+        "rollback": audit["rollback"],
         "assets": {
             "required": len(required_assets),
             "unique_objects": len(required_assets),
@@ -363,6 +486,81 @@ def promote_verified_catalog_images(
             "already_present": existing,
         },
     }
+
+
+def promote_verified_catalog_images(
+    *,
+    active_db_path: Path,
+    verified_db_path: Path,
+    source_assets_dir: Path,
+    target_assets_dir: Path,
+    suppliers: tuple[str, ...],
+    backup_path: Path,
+    staged_path: Path,
+    expected_active_sha256: str | None = None,
+    report_path: Path | None = None,
+) -> dict:
+    """Promueve imágenes con respaldo transaccional y reporte auditable opcional."""
+
+    active_db_path = Path(active_db_path)
+    verified_db_path = Path(verified_db_path)
+    source_assets_dir = Path(source_assets_dir)
+    target_assets_dir = Path(target_assets_dir)
+    backup_path = Path(backup_path)
+    staged_path = Path(staged_path)
+    report_path = _validate_report_path(report_path)
+    audit = {
+        "before_sha256": None,
+        "after_sha256": None,
+        "suppliers": {},
+        "operational_counts": {},
+        "staging": {"path": str(staged_path), "state": "not_created", "sha256": None},
+        "transaction": {"path": None, "state": "not_created", "sha256": None, "failed_publish_path": None},
+        "rollback": {
+            "status": "not_required",
+            "restore_attempted": False,
+            "restore_performed": False,
+            "restored": False,
+            "verified": False,
+            "backup_verified": False,
+            "procedure": "Verificar backup_sha256 y publicar el respaldo con os.replace en el volumen activo.",
+        },
+    }
+    try:
+        report = _promote_verified_catalog_images(
+            active_db_path=active_db_path,
+            verified_db_path=verified_db_path,
+            source_assets_dir=source_assets_dir,
+            target_assets_dir=target_assets_dir,
+            suppliers=suppliers,
+            backup_path=backup_path,
+            staged_path=staged_path,
+            expected_active_sha256=expected_active_sha256,
+            audit=audit,
+        )
+    except Exception as exc:
+        failure_report = {
+            "status": "failed",
+            "error": str(exc),
+            "active_db": str(active_db_path),
+            "verified_db": str(verified_db_path),
+            "before_sha256": audit["before_sha256"],
+            "after_sha256": audit["after_sha256"],
+            "backup": {
+                "path": str(backup_path),
+                "exists": backup_path.exists(),
+                "sha256": _sha256_if_file(backup_path),
+            },
+            "staging": {**audit["staging"], "exists": staged_path.exists()},
+            "transaction": audit["transaction"],
+            "rollback": audit["rollback"],
+            "suppliers": audit["suppliers"],
+            "operational_counts": audit["operational_counts"],
+        }
+        _write_report(report_path, failure_report)
+        raise
+    _write_report(report_path, report)
+    return report
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -396,12 +594,8 @@ def main() -> None:
         backup_path=args.backup,
         staged_path=args.staged,
         expected_active_sha256=args.expected_active_sha256,
+        report_path=args.report,
     )
-    if args.report:
-        args.report.parent.mkdir(parents=True, exist_ok=True)
-        if args.report.exists():
-            raise ValueError(f"El reporte ya existe: {args.report}")
-        args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
