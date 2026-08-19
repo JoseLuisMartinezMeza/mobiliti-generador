@@ -210,8 +210,32 @@ def _release_promotion_lock(lock: dict | None) -> None:
     if owner != lock["token"]:
         return
     released_path = lock["path"].with_name(f".{lock['path'].name}.{uuid.uuid4().hex}.released")
-    os.replace(lock["path"], released_path)
-    lock.update(state="released", released_path=str(released_path))
+    try:
+        os.replace(lock["path"], released_path)
+    except OSError as exc:
+        lock.update(
+            state="release_failed",
+            error=f"{type(exc).__name__}: {exc}",
+            blocking_path=str(lock["path"]),
+        )
+        return
+    lock.update(
+        state="released",
+        released_path=str(released_path),
+        receipt={"owner": lock["token"], "released_path": str(released_path)},
+    )
+
+
+def _sync_lock_audit(audit: dict, lock: dict | None) -> None:
+    if lock is None:
+        return
+    audit["lock"].update(
+        {
+            key: value
+            for key, value in lock.items()
+            if key in {"state", "released_path", "receipt", "error", "blocking_path"}
+        }
+    )
 
 
 def _restore_from_backup(
@@ -222,7 +246,13 @@ def _restore_from_backup(
     rollback: dict,
 ) -> bool:
     rollback["restore_attempted"] = True
-    if _sha256_if_file(backup_path) != expected_sha256:
+    observed_backup_sha256 = _sha256_if_file(backup_path)
+    rollback.update(
+        backup_expected_sha256=expected_sha256,
+        backup_observed_sha256=observed_backup_sha256,
+        backup_verified=observed_backup_sha256 == expected_sha256,
+    )
+    if observed_backup_sha256 != expected_sha256:
         rollback.update(restored=False, restore_performed=False, verified=False, status="backup_invalid")
         return False
     transaction_path = active_db_path.with_name(f".{active_db_path.name}.{uuid.uuid4().hex}.rollback")
@@ -265,6 +295,21 @@ def _publish_active_transactionally(
         transaction["state"] = "retained_verified_rollback"
         return
 
+    failed_bytes = active_db_path.read_bytes()
+    failed_sha256 = _sha256(failed_bytes)
+    failed_publish_path = active_db_path.with_name(f".{active_db_path.name}.{uuid.uuid4().hex}.failed-publish")
+    failed_temporary = failed_publish_path.with_name(f".{failed_publish_path.name}.{uuid.uuid4().hex}.tmp")
+    failed_temporary.write_bytes(failed_bytes)
+    if _sha256_if_file(failed_temporary) != failed_sha256:
+        raise RuntimeError("El artefacto failed-publish no coincide byte a byte")
+    os.replace(failed_temporary, failed_publish_path)
+    if _sha256_if_file(failed_publish_path) != failed_sha256:
+        raise RuntimeError("El artefacto failed-publish publicado no coincide")
+    transaction.update(
+        failed_publish_path=str(failed_publish_path),
+        failed_publish_sha256=failed_sha256,
+        state="failed_publish_preserved",
+    )
     _restore_from_backup(active_db_path, backup_path, before_sha256, transaction, rollback)
     raise RuntimeError("El dev-store activo no coincide con el staging después de publicar")
 
@@ -471,7 +516,11 @@ def _promote_verified_catalog_images(
     backup_path.write_bytes(active_bytes)
     if backup_path.read_bytes() != active_bytes:
         raise RuntimeError("El respaldo del dev-store no coincide byte a byte")
-    audit["rollback"]["backup_verified"] = True
+    audit["rollback"].update(
+        backup_verified=True,
+        backup_expected_sha256=active_sha,
+        backup_observed_sha256=active_sha,
+    )
     staged_path.write_bytes(promoted_bytes)
     staging_sha = _sha256(promoted_bytes)
     if _sha256(staged_path.read_bytes()) != staging_sha:
@@ -587,12 +636,10 @@ def promote_verified_catalog_images(
             expected_active_sha256=expected_active_sha256,
             audit=audit,
         )
-        audit["lock"]["state"] = "held_until_report_written"
+        audit["lock"]["state"] = "held_until_release_receipt"
         report["lock"] = audit["lock"]
-        _write_report(report_reservation, report)
-        return report
     except Exception as exc:
-        failure_report = {
+        report = {
             "status": "failed",
             "error": str(exc),
             "active_db": str(active_db_path),
@@ -611,10 +658,19 @@ def promote_verified_catalog_images(
             "suppliers": audit["suppliers"],
             "operational_counts": audit["operational_counts"],
         }
-        _write_report(report_reservation, failure_report)
-        raise
+        error = exc
+    else:
+        error = None
+    try:
+        _write_report(report_reservation, report)
     finally:
         _release_promotion_lock(lock)
+    _sync_lock_audit(audit, lock)
+    report["lock"] = audit["lock"]
+    _write_report(report_reservation, report)
+    if error is not None:
+        raise error
+    return report
 
 
 def _parser() -> argparse.ArgumentParser:

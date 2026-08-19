@@ -589,6 +589,39 @@ def test_labenze_requiez_restores_active_after_post_publish_verification_failure
     assert failed_report["rollback"]["verified"] is True
     assert failed_report["rollback"]["backup_verified"] is True
     assert failed_report["staging"]["state"] == "published"
+    failed_path = Path(failed_report["transaction"]["failed_publish_path"])
+    assert failed_path.read_bytes() == b"db-corrupto-despues-del-replace"
+    assert failed_report["transaction"]["failed_publish_sha256"] == hashlib.sha256(
+        b"db-corrupto-despues-del-replace"
+    ).hexdigest()
+
+
+def test_labenze_requiez_refuses_restore_from_backup_changed_after_validation(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    report_path = tmp_path / "invalid-backup-report.json"
+    import os
+
+    real_replace = os.replace
+    corrupt_bytes = b"db-corrupto-despues-del-replace"
+    changed_backup = b"backup-modificado-concurrentemente"
+
+    def corrupt_active_and_backup(source, destination):
+        result = real_replace(source, destination)
+        if Path(source) == fixture["staged"] and Path(destination) == fixture["active_path"]:
+            fixture["active_path"].write_bytes(corrupt_bytes)
+            fixture["backup"].write_bytes(changed_backup)
+        return result
+
+    monkeypatch.setattr(promoter.os, "replace", corrupt_active_and_backup)
+    with pytest.raises(RuntimeError, match="activo no coincide"):
+        _promote_labenze_requiez(fixture, report_path=report_path)
+
+    failed_report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert fixture["active_path"].read_bytes() == corrupt_bytes
+    assert failed_report["rollback"]["backup_verified"] is False
+    assert failed_report["rollback"]["backup_expected_sha256"] == fixture["sha"]
+    assert failed_report["rollback"]["backup_observed_sha256"] == hashlib.sha256(changed_backup).hexdigest()
+    assert failed_report["rollback"]["restore_performed"] is False
 
 
 def test_labenze_requiez_rejects_existing_report_before_any_mutation(tmp_path):
@@ -649,6 +682,42 @@ def test_labenze_requiez_reserves_report_before_first_mutation(tmp_path, monkeyp
         _promote_labenze_requiez(fixture, report_path=report_path)
 
     assert report_path.is_file()
+
+
+def test_labenze_requiez_persists_lock_release_receipt_after_success(tmp_path):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    report_path = tmp_path / "success-report.json"
+
+    report = _promote_labenze_requiez(fixture, report_path=report_path)
+
+    persisted = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["lock"]["state"] == "released"
+    assert persisted["lock"]["state"] == "released"
+    assert Path(report["lock"]["released_path"]).is_file()
+    assert report["lock"]["receipt"] == persisted["lock"]["receipt"]
+
+
+def test_labenze_requiez_records_lock_release_permission_error_without_failing_success(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    report_path = tmp_path / "release-failed-report.json"
+    import os
+
+    real_replace = os.replace
+
+    def deny_lock_release(source, destination):
+        if Path(source).name.endswith(".promotion.lock"):
+            raise PermissionError("lock todavía abierto")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(promoter.os, "replace", deny_lock_release)
+    report = _promote_labenze_requiez(fixture, report_path=report_path)
+
+    persisted = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "passed"
+    assert report["lock"]["state"] == "release_failed"
+    assert "PermissionError" in report["lock"]["error"]
+    assert Path(report["lock"]["blocking_path"]).is_file()
+    assert persisted["lock"] == report["lock"]
 
 
 def _authentic_shared_v2_fixture(tmp_path):
