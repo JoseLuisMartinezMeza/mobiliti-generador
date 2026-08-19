@@ -924,3 +924,43 @@ def test_script_direct_cli_can_load_task6a_url_policy():
 
     assert result.returncode == 0, result.stderr
     assert "--research-dir" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("target", "payload"),
+    [
+        ("product", "%2525252525250A"),
+        ("product", "%2525252525250D"),
+        ("product", "%25252525252509"),
+        ("product", "%25252525252500"),
+        ("product", "%GG"),
+        ("image_triplet", "%2525252525250A"),
+        ("image_triplet", "%2525252525250D"),
+        ("image_triplet", "%25252525252509"),
+        ("image_triplet", "%25252525252500"),
+        ("image_triplet", "%GG"),
+    ],
+)
+def test_review_rejects_deep_or_malformed_percent_escapes_in_every_url(
+    tmp_path, monkeypatch, target, payload
+):
+    """Profundidad 7 o `%` malformado no puede eludir controles ni redirects."""
+
+    _small_contract(monkeypatch)
+    inputs = _build_inputs(tmp_path)
+    rows = inputs["research_rows"]
+    found = next(row for row in rows if row["internal_id"] == "requiez:rm-9025n-ng")
+    candidate = found["candidates"][0]
+    if target == "product":
+        candidate["product_url"] = (
+            f"https://requiez.com/producto/RM-9025N-NG?x={payload}"
+        )
+    else:
+        url = f"https://requiez.com/img/products/skate/frente.png?x={payload}"
+        candidate["image_source_url"] = url
+        candidate["download"]["requested_url"] = url
+        candidate["download"]["final_url"] = url
+    inputs["research_sha"] = _rewrite_research(inputs, rows)
+
+    with pytest.raises(ValueError, match="percent|escape|control|URL"):
+        _run(inputs, tmp_path / "review")

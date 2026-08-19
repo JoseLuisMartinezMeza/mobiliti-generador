@@ -85,6 +85,9 @@ SOURCE_KIND_POLICY = {
     "arterio.mx": {"authorized_distributor"},
     "infinitidesign.it": {"manufacturer_official"},
 }
+_MAX_URL_PERCENT_DECODES = 6
+_PERCENT_ESCAPE_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+_MALFORMED_PERCENT_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 def build_candidate_id(
@@ -695,25 +698,45 @@ def _pending_review() -> dict[str, object]:
     }
 
 
-def _strict_url_text(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"URL {field} debe ser texto HTTPS sin whitespace exterior")
-    if any(character.isspace() or unicodedata.category(character).startswith("C") for character in value):
-        raise ValueError(f"URL {field} contiene whitespace o control no permitido")
+def _has_forbidden_url_character(value: str) -> bool:
+    return any(
+        character.isspace() or unicodedata.category(character).startswith("C")
+        for character in value
+    )
+
+
+def _validate_percent_encoding(value: str, field: str) -> None:
     decoded = value
+    stabilized = False
     try:
-        for _ in range(6):
+        for _ in range(_MAX_URL_PERCENT_DECODES):
+            if _MALFORMED_PERCENT_RE.search(decoded):
+                raise ValueError(f"URL {field} contiene un escape percent malformado")
             next_decoded = unquote(decoded, errors="strict")
-            if any(
-                character.isspace() or unicodedata.category(character).startswith("C")
-                for character in next_decoded
-            ):
+            if _has_forbidden_url_character(next_decoded):
                 raise ValueError(f"URL {field} contiene control percent-encoded no permitido")
             if next_decoded == decoded:
+                stabilized = True
                 break
             decoded = next_decoded
     except UnicodeDecodeError as exc:
         raise ValueError(f"URL {field} contiene percent-encoding inválido") from exc
+    if not stabilized or _PERCENT_ESCAPE_RE.search(decoded) or "%" in decoded:
+        raise ValueError(f"URL {field} contiene percent-encoding residual o excesivo")
+
+
+def _strict_url_text(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"URL {field} debe ser texto HTTPS sin whitespace exterior")
+    if _has_forbidden_url_character(value):
+        raise ValueError(f"URL {field} contiene whitespace o control no permitido")
+    _validate_percent_encoding(value, field)
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ValueError(f"URL {field} no se puede interpretar") from exc
+    _validate_percent_encoding(parsed.path, f"{field}.path")
+    _validate_percent_encoding(parsed.query, f"{field}.query")
     return value
 
 
