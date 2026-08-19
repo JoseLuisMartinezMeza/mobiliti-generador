@@ -361,6 +361,35 @@ def test_final_plan_alias_is_checked_lexically_before_resolve(
     assert not output.exists()
 
 
+def test_workspace_root_alias_is_checked_lexically_before_resolve(
+    normalizer, workspace: Path, tmp_path: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    alias = tmp_path / "workspace-alias"
+    alias.mkdir()
+    original_resolve = Path.resolve
+    original_reparse_check = normalizer._has_reparse_flag
+
+    def simulated_resolve(path: Path, strict: bool = False) -> Path:
+        if path.absolute() == alias.absolute():
+            return workspace
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", simulated_resolve)
+    monkeypatch.setattr(
+        normalizer,
+        "_has_reparse_flag",
+        lambda path: Path(path).absolute() == alias.absolute() or original_reparse_check(path),
+    )
+    output = workspace / "output-workspace-alias"
+
+    with pytest.raises(normalizer.PlanError, match="workspace.*enlace|workspace.*reparse|alias"):
+        normalizer.normalize_plan(plan, output, alias)
+    assert not output.exists()
+
+
 def test_every_output_parent_ancestor_is_checked_for_reparse(
     normalizer, workspace: Path, monkeypatch
 ):
@@ -381,6 +410,190 @@ def test_every_output_parent_ancestor_is_checked_for_reparse(
     with pytest.raises(normalizer.PlanError, match="ancestro|reparse"):
         normalizer.normalize_plan(plan, output, workspace)
     assert not output.exists()
+
+
+def test_bindings_drift_at_stage_mkdir_blocks_publication_and_preserves_failed_stage(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    replacement = workspace / "replacement.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    _save_image(replacement, (1024, 1024), (120, 120, 880, 880))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    review = workspace / "review.json"
+    output_parent = workspace / "boundary-parent"
+    output_parent.mkdir()
+    output = output_parent / "output"
+    original_mkdir = Path.mkdir
+    original_reparse_check = normalizer._has_reparse_flag
+    boundary = {"fired": False, "parent_reparse": False}
+
+    def mutate_after_stage_mkdir(path: Path, *args, **kwargs):
+        result = original_mkdir(path, *args, **kwargs)
+        if path.name.startswith(".output.staging-") and not boundary["fired"]:
+            boundary["fired"] = True
+            plan.write_text('{"schema_version":1,"entries":[]}\n', encoding="utf-8")
+            review.write_text('{"decision":"changed"}\n', encoding="utf-8")
+            hardlink = workspace / "source-hardlink.png"
+            os.link(source, hardlink)
+            source.write_bytes(replacement.read_bytes())
+            boundary["parent_reparse"] = True
+        return result
+
+    monkeypatch.setattr(Path, "mkdir", mutate_after_stage_mkdir)
+    monkeypatch.setattr(
+        normalizer,
+        "_has_reparse_flag",
+        lambda path: (
+            boundary["parent_reparse"] and Path(path) == output_parent
+        )
+        or original_reparse_check(path),
+    )
+
+    with pytest.raises(normalizer.PlanError, match="drift|binding|cambió"):
+        normalizer.normalize_plan(plan, output, workspace)
+    assert not output.exists()
+    stages = list(output_parent.glob(".output.staging-*"))
+    assert len(stages) == 1
+    assert (stages[0] / "FAILED.json").is_file()
+
+
+def test_parent_reparse_drift_during_stage_write_blocks_publication(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output_parent = workspace / "write-boundary"
+    output_parent.mkdir()
+    output = output_parent / "output"
+    original_write_new = normalizer._write_new
+    original_reparse_check = normalizer._has_reparse_flag
+    boundary = {"fired": False, "parent_reparse": False}
+
+    def mutate_after_stage_write(path: Path, payload: bytes):
+        result = original_write_new(path, payload)
+        if not boundary["fired"]:
+            boundary["fired"] = True
+            boundary["parent_reparse"] = True
+        return result
+
+    monkeypatch.setattr(normalizer, "_write_new", mutate_after_stage_write)
+    monkeypatch.setattr(
+        normalizer,
+        "_has_reparse_flag",
+        lambda path: (
+            boundary["parent_reparse"] and Path(path) == output_parent
+        )
+        or original_reparse_check(path),
+    )
+
+    with pytest.raises(normalizer.PlanError, match="drift|binding|cambió"):
+        normalizer.normalize_plan(plan, output, workspace)
+    assert not output.exists()
+    stages = list(output_parent.glob(".output.staging-*"))
+    assert len(stages) == 1
+    assert (stages[0] / "FAILED.json").is_file()
+
+
+def test_drift_inside_rename_never_publishes_pass_manifest(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    replacement = workspace / "replacement.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    _save_image(replacement, (1024, 1024), (130, 130, 870, 870))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    review = workspace / "review.json"
+    output_parent = workspace / "rename-boundary"
+    output_parent.mkdir()
+    output = output_parent / "output"
+    original_rename = normalizer.os.rename
+    original_reparse_check = normalizer._has_reparse_flag
+    boundary = {"fired": False, "parent_reparse": False}
+
+    def mutate_inside_rename(source_path, destination_path):
+        if not boundary["fired"]:
+            boundary["fired"] = True
+            review.write_text('{"decision":"changed-at-rename"}\n', encoding="utf-8")
+            os.link(source, workspace / "rename-hardlink.png")
+            source.write_bytes(replacement.read_bytes())
+            boundary["parent_reparse"] = True
+        return original_rename(source_path, destination_path)
+
+    monkeypatch.setattr(normalizer.os, "rename", mutate_inside_rename)
+    monkeypatch.setattr(
+        normalizer,
+        "_has_reparse_flag",
+        lambda path: (
+            boundary["parent_reparse"] and Path(path) == output_parent
+        )
+        or original_reparse_check(path),
+    )
+
+    with pytest.raises(normalizer.PlanError, match="drift|binding|cambió"):
+        normalizer.normalize_plan(plan, output, workspace)
+    assert output.is_dir()
+    assert not (output / "manifest.json").exists()
+    assert (output / "FAILED.json").is_file()
+
+
+def test_drift_during_final_manifest_write_quarantines_pass_manifest(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    review = workspace / "review.json"
+    output = workspace / "output-manifest-boundary"
+    original_write_new = normalizer._write_new
+    boundary = {"fired": False}
+
+    def mutate_after_manifest_write(path: Path, payload: bytes):
+        result = original_write_new(path, payload)
+        if path.name == "manifest.json" and not boundary["fired"]:
+            boundary["fired"] = True
+            review.write_text('{"decision":"changed-after-manifest"}\n', encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(normalizer, "_write_new", mutate_after_manifest_write)
+
+    with pytest.raises(normalizer.PlanError, match="drift|binding|cambió"):
+        normalizer.normalize_plan(plan, output, workspace)
+    assert not output.exists()
+    stages = list(workspace.glob(".output-manifest-boundary.staging-*"))
+    assert len(stages) == 1
+    assert not (stages[0] / "manifest.json").exists()
+    assert (stages[0] / "INVALIDATED_PASS_MANIFEST.json").is_file()
+    assert (stages[0] / "FAILED.json").is_file()
+
+
+def test_atomic_rename_observes_complete_manifest_and_receipts_in_stage(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output = workspace / "output-atomic-complete"
+    original_rename = normalizer.os.rename
+    observed = {"complete": False}
+
+    def assert_complete_before_rename(source_path, destination_path):
+        source_path = Path(source_path)
+        if source_path.name.startswith(".output-atomic-complete.staging-"):
+            manifest_path = source_path / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assert all((source_path / row["receipt_path"]).is_file() for row in manifest["entries"])
+            observed["complete"] = True
+        return original_rename(source_path, destination_path)
+
+    monkeypatch.setattr(normalizer.os, "rename", assert_complete_before_rename)
+
+    manifest = normalizer.normalize_plan(plan, output, workspace)
+
+    assert manifest["status"] == "PASS"
+    assert observed["complete"] is True
+    assert (output / "manifest.json").is_file()
 
 
 def test_hardlink_source_is_rejected(normalizer, workspace: Path):
@@ -595,6 +808,39 @@ def test_final_png_over_8_mib_is_rejected(normalizer, workspace: Path):
     assert _receipt(workspace, output, manifest)["failure"]["code"] == "FINAL_BYTES_OVER_8_MIB"
 
 
+def test_aggregate_asset_memory_budget_fails_closed_before_unbounded_accumulation(
+    normalizer, workspace: Path, monkeypatch
+):
+    first = workspace / "first.png"
+    second = workspace / "second.png"
+    _save_image(first, (1024, 1024), (100, 100, 900, 900))
+    _save_image(second, (1024, 1024), (120, 100, 920, 900))
+    entries = [
+        _entry(workspace, first),
+        _entry(
+            workspace,
+            second,
+            internal_id="requiez:test-002",
+            supplier="requiez",
+            sku="TEST-002",
+            product_key="test-002",
+        ),
+    ]
+    plan = _write_plan(workspace, entries)
+    output = workspace / "output-budget"
+    monkeypatch.setattr(normalizer, "MAX_AGGREGATE_ASSET_BYTES", 1, raising=False)
+
+    manifest = normalizer.normalize_plan(plan, output, workspace)
+    receipts = [_receipt(workspace, output, manifest, index) for index in range(2)]
+
+    assert manifest["status"] == "FAILED"
+    assert manifest["summary"] == {"failed": 2, "passed": 0, "total": 2}
+    assert {receipt["failure"]["code"] for receipt in receipts} == {
+        "AGGREGATE_ASSET_MEMORY_BUDGET_EXCEEDED"
+    }
+    assert not (output / "assets").exists() or not list((output / "assets").iterdir())
+
+
 def test_malformed_plan_duplicate_json_keys_and_output_overlap_write_nothing(
     normalizer, workspace: Path
 ):
@@ -654,6 +900,28 @@ def test_mime_magic_animation_and_corrupt_images_fail_closed(normalizer, workspa
         output = workspace / f"output-{index}"
         manifest = normalizer.normalize_plan(plan, output, workspace)
         assert _receipt(workspace, output, manifest)["failure"]["code"] == code
+
+
+def test_nontrivial_exif_orientation_is_rejected_without_implicit_rotation(
+    normalizer, workspace: Path
+):
+    source = workspace / "oriented.jpg"
+    image = Image.new("RGB", (600, 850), "white")
+    for y in range(80, 770):
+        for x in range(50, 550):
+            image.putpixel((x, y), (20, 80, 140))
+    exif = Image.Exif()
+    exif[274] = 6
+    image.save(source, format="JPEG", quality=95, exif=exif)
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output = workspace / "output-oriented"
+
+    manifest = normalizer.normalize_plan(plan, output, workspace)
+    receipt = _receipt(workspace, output, manifest)
+
+    assert manifest["status"] == "FAILED"
+    assert receipt["failure"]["code"] == "SOURCE_EXIF_ORIENTATION_UNSUPPORTED"
+    assert not (output / "assets").exists() or not list((output / "assets").iterdir())
 
 
 def test_decompression_bomb_error_becomes_failed_receipt_instead_of_aborting_batch(
@@ -719,3 +987,56 @@ def test_failed_and_pass_receipts_and_manifest_are_deterministic_and_never_appro
         assert receipt["approved"] is False
         assert receipt["promotion"]["allowed"] is False
         assert all(value is False for value in receipt["mutations"].values())
+
+
+def test_receipts_and_manifest_bind_algorithm_script_and_runtime_provenance(
+    normalizer, workspace: Path
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output = workspace / "output-provenance"
+
+    manifest = normalizer.normalize_plan(plan, output, workspace)
+    receipt = _receipt(workspace, output, manifest)
+    provenance = manifest["provenance"]
+
+    assert receipt["provenance"] == provenance
+    assert provenance["algorithm"] == {
+        "name": "labenze_requiez_visual_candidate_normalizer",
+        "schema_version": 1,
+        "version": "1.0.0",
+        "foreground_gate": "builder_alpha16_corner_delta20_v1",
+    }
+    assert provenance["implementation"]["script_sha256"] == _sha(SCRIPT)
+    assert set(provenance["runtime"]) == {"pillow", "python", "zlib", "zlib_runtime"}
+    assert all(provenance["runtime"].values())
+    assert provenance["limits"] == {
+        "aggregate_asset_memory_bytes": normalizer.MAX_AGGREGATE_ASSET_BYTES
+    }
+
+
+def test_cli_prints_absolute_manifest_path_under_workspace_root(
+    normalizer, workspace: Path, tmp_path: Path, monkeypatch, capsys
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    unrelated_cwd = tmp_path / "unrelated-cwd"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+
+    result = normalizer.main(
+        [
+            "--plan",
+            str(plan),
+            "--output-dir",
+            "cli-output",
+            "--workspace-root",
+            str(workspace),
+        ]
+    )
+
+    assert result == 0
+    printed = Path(capsys.readouterr().out.strip())
+    assert printed == (workspace / "cli-output" / "manifest.json").resolve(strict=True)
