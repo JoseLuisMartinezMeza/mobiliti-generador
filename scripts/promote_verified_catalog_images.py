@@ -144,8 +144,6 @@ def _validate_report_path(report_path: Path | None) -> Path | None:
     if report_path is None:
         return None
     path = Path(report_path)
-    if path.exists():
-        raise ValueError(f"El reporte ya existe: {path}")
     if not path.parent.is_dir():
         raise ValueError(f"El directorio del reporte no existe: {path.parent}")
     return path
@@ -155,29 +153,94 @@ def _sha256_if_file(path: Path) -> str | None:
     return _sha256(path.read_bytes()) if path.is_file() else None
 
 
-def _write_report(report_path: Path | None, report: dict) -> None:
-    if report_path is not None:
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+def _reserve_report_path(report_path: Path | None) -> dict | None:
+    if report_path is None:
+        return None
+    token = uuid.uuid4().hex
+    reservation = {"status": "reserved", "reservation_token": token}
+    try:
+        with report_path.open("x", encoding="utf-8") as reserved:
+            json.dump(reservation, reserved, ensure_ascii=False)
+            reserved.flush()
+            os.fsync(reserved.fileno())
+    except FileExistsError as exc:
+        raise ValueError(f"El reporte ya existe: {report_path}") from exc
+    return {"path": report_path, "token": token}
 
 
-def _restore_transaction(
+def _write_report(reservation: dict | None, report: dict) -> None:
+    if reservation is None:
+        return
+    report_path = reservation["path"]
+    token = reservation["token"]
+    try:
+        current = _read_json(report_path)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"La reserva del reporte no es legible: {report_path}") from exc
+    if current.get("reservation_token") != token:
+        raise RuntimeError(f"La reserva del reporte pertenece a otro proceso: {report_path}")
+    payload = {**report, "reservation_token": token}
+    temporary = report_path.with_name(f".{report_path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    if _read_json(report_path).get("reservation_token") != token:
+        raise RuntimeError(f"La reserva del reporte cambió antes de escribir: {report_path}")
+    os.replace(temporary, report_path)
+
+
+def _acquire_promotion_lock(active_db_path: Path) -> dict:
+    lock_path = active_db_path.with_name(f".{active_db_path.name}.promotion.lock")
+    token = uuid.uuid4().hex
+    try:
+        with lock_path.open("x", encoding="utf-8") as lock:
+            json.dump({"owner": token, "active_db": str(active_db_path)}, lock, ensure_ascii=False)
+            lock.flush()
+            os.fsync(lock.fileno())
+    except FileExistsError as exc:
+        raise ValueError(f"Ya existe una promoción activa para {active_db_path}") from exc
+    return {"path": lock_path, "token": token, "state": "held"}
+
+
+def _release_promotion_lock(lock: dict | None) -> None:
+    if lock is None or not lock["path"].exists():
+        return
+    try:
+        owner = _read_json(lock["path"]).get("owner")
+    except (OSError, ValueError):
+        return
+    if owner != lock["token"]:
+        return
+    released_path = lock["path"].with_name(f".{lock['path'].name}.{uuid.uuid4().hex}.released")
+    os.replace(lock["path"], released_path)
+    lock.update(state="released", released_path=str(released_path))
+
+
+def _restore_from_backup(
     active_db_path: Path,
-    transaction_path: Path,
+    backup_path: Path,
     expected_sha256: str,
+    transaction: dict,
     rollback: dict,
 ) -> bool:
     rollback["restore_attempted"] = True
-    if active_db_path.exists():
-        rollback.update(restored=False, verified=False, status="preserved_concurrent_active")
+    if _sha256_if_file(backup_path) != expected_sha256:
+        rollback.update(restored=False, restore_performed=False, verified=False, status="backup_invalid")
+        return False
+    transaction_path = active_db_path.with_name(f".{active_db_path.name}.{uuid.uuid4().hex}.rollback")
+    transaction.update(path=str(transaction_path), state="preparing_restore", sha256=expected_sha256)
+    shutil.copy2(backup_path, transaction_path)
+    if _sha256_if_file(transaction_path) != expected_sha256:
+        rollback.update(restored=False, restore_performed=False, verified=False, status="rollback_copy_invalid")
         return False
     os.replace(transaction_path, active_db_path)
     restored_sha256 = _sha256(active_db_path.read_bytes())
     rollback.update(
         restored=True,
+        restore_performed=True,
         verified=restored_sha256 == expected_sha256,
         restored_sha256=restored_sha256,
         status="restored" if restored_sha256 == expected_sha256 else "restored_different_bytes",
     )
+    transaction["state"] = "restored_to_active" if rollback["verified"] else "restore_failed"
     return rollback["verified"]
 
 
@@ -185,45 +248,24 @@ def _publish_active_transactionally(
     *,
     active_db_path: Path,
     staged_path: Path,
+    backup_path: Path,
     before_sha256: str,
     after_sha256: str,
     transaction: dict,
     rollback: dict,
     staging: dict,
 ) -> None:
-    transaction_path = active_db_path.with_name(f".{active_db_path.name}.{uuid.uuid4().hex}.rollback")
-    transaction.update(path=str(transaction_path), state="capturing", sha256=None, failed_publish_path=None)
-    os.replace(active_db_path, transaction_path)
-    transaction["state"] = "captured"
-    captured_sha256 = _sha256(transaction_path.read_bytes())
-    transaction["sha256"] = captured_sha256
-    if active_db_path.exists():
-        rollback.update(status="preserved_concurrent_active", restore_attempted=False, restored=False, verified=False)
-        transaction["state"] = "retained_while_concurrent_active"
-        raise ValueError("El dev-store cambió concurrentemente antes de publicar")
-    if captured_sha256 != before_sha256:
-        restored = _restore_transaction(active_db_path, transaction_path, captured_sha256, rollback)
-        transaction["state"] = "restored_concurrent_bytes" if restored else "restore_failed"
-        raise ValueError("El dev-store cambió concurrentemente antes de publicar")
-
     try:
         os.replace(staged_path, active_db_path)
         staging["state"] = "published"
     except Exception:
-        restored = _restore_transaction(active_db_path, transaction_path, before_sha256, rollback)
-        transaction["state"] = "restored_to_active" if restored else "restore_failed"
         raise
 
     if _sha256(active_db_path.read_bytes()) == after_sha256:
         transaction["state"] = "retained_verified_rollback"
         return
 
-    failed_publish_path = active_db_path.with_name(f".{active_db_path.name}.{uuid.uuid4().hex}.failed-publish")
-    transaction.update(state="capturing_failed_publish", failed_publish_path=str(failed_publish_path))
-    os.replace(active_db_path, failed_publish_path)
-    transaction["state"] = "captured_failed_publish"
-    restored = _restore_transaction(active_db_path, transaction_path, before_sha256, rollback)
-    transaction["state"] = "restored_to_active" if restored else "restore_failed"
+    _restore_from_backup(active_db_path, backup_path, before_sha256, transaction, rollback)
     raise RuntimeError("El dev-store activo no coincide con el staging después de publicar")
 
 
@@ -429,6 +471,7 @@ def _promote_verified_catalog_images(
     backup_path.write_bytes(active_bytes)
     if backup_path.read_bytes() != active_bytes:
         raise RuntimeError("El respaldo del dev-store no coincide byte a byte")
+    audit["rollback"]["backup_verified"] = True
     staged_path.write_bytes(promoted_bytes)
     staging_sha = _sha256(promoted_bytes)
     if _sha256(staged_path.read_bytes()) != staging_sha:
@@ -448,6 +491,7 @@ def _promote_verified_catalog_images(
     _publish_active_transactionally(
         active_db_path=active_db_path,
         staged_path=staged_path,
+        backup_path=backup_path,
         before_sha256=active_sha,
         after_sha256=staging_sha,
         transaction=audit["transaction"],
@@ -460,7 +504,7 @@ def _promote_verified_catalog_images(
         restore_performed=False,
         restored=False,
         verified=False,
-        backup_verified=_sha256(backup_path.read_bytes()) == active_sha,
+        backup_verified=True,
     )
 
     return {
@@ -509,6 +553,7 @@ def promote_verified_catalog_images(
     backup_path = Path(backup_path)
     staged_path = Path(staged_path)
     report_path = _validate_report_path(report_path)
+    report_reservation = _reserve_report_path(report_path)
     audit = {
         "before_sha256": None,
         "after_sha256": None,
@@ -516,6 +561,7 @@ def promote_verified_catalog_images(
         "operational_counts": {},
         "staging": {"path": str(staged_path), "state": "not_created", "sha256": None},
         "transaction": {"path": None, "state": "not_created", "sha256": None, "failed_publish_path": None},
+        "lock": {"path": None, "state": "not_acquired"},
         "rollback": {
             "status": "not_required",
             "restore_attempted": False,
@@ -526,7 +572,10 @@ def promote_verified_catalog_images(
             "procedure": "Verificar backup_sha256 y publicar el respaldo con os.replace en el volumen activo.",
         },
     }
+    lock = None
     try:
+        lock = _acquire_promotion_lock(active_db_path)
+        audit["lock"] = {"path": str(lock["path"]), "state": "held"}
         report = _promote_verified_catalog_images(
             active_db_path=active_db_path,
             verified_db_path=verified_db_path,
@@ -538,6 +587,10 @@ def promote_verified_catalog_images(
             expected_active_sha256=expected_active_sha256,
             audit=audit,
         )
+        audit["lock"]["state"] = "held_until_report_written"
+        report["lock"] = audit["lock"]
+        _write_report(report_reservation, report)
+        return report
     except Exception as exc:
         failure_report = {
             "status": "failed",
@@ -553,14 +606,15 @@ def promote_verified_catalog_images(
             },
             "staging": {**audit["staging"], "exists": staged_path.exists()},
             "transaction": audit["transaction"],
+            "lock": audit["lock"],
             "rollback": audit["rollback"],
             "suppliers": audit["suppliers"],
             "operational_counts": audit["operational_counts"],
         }
-        _write_report(report_path, failure_report)
+        _write_report(report_reservation, failure_report)
         raise
-    _write_report(report_path, report)
-    return report
+    finally:
+        _release_promotion_lock(lock)
 
 
 def _parser() -> argparse.ArgumentParser:

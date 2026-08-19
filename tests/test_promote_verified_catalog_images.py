@@ -481,20 +481,21 @@ def test_labenze_requiez_keeps_active_db_intact_if_atomic_publish_fails(tmp_path
     assert fixture["staged"].is_file()
 
 
-def test_labenze_requiez_preserves_a_write_between_final_sha_check_and_publish(tmp_path, monkeypatch):
+def test_labenze_requiez_preserves_a_write_detected_before_final_sha_recheck(tmp_path, monkeypatch):
     fixture = _labenze_requiez_fixture(tmp_path)
-    import os
-
-    real_replace = os.replace
     concurrent_bytes = b'{"concurrent": true}'
+    real_copy = promoter._copy_asset_atomically
+    copies = 0
 
-    def inject_write_after_final_check(source, destination):
-        if Path(source) == fixture["active_path"]:
-            assert fixture["backup"].read_bytes() == fixture["active_bytes"]
+    def write_before_final_recheck(source, destination, object_name):
+        nonlocal copies
+        copied = real_copy(source, destination, object_name)
+        copies += 1
+        if copies == 2:
             fixture["active_path"].write_bytes(concurrent_bytes)
-        return real_replace(source, destination)
+        return copied
 
-    monkeypatch.setattr(promoter.os, "replace", inject_write_after_final_check)
+    monkeypatch.setattr(promoter, "_copy_asset_atomically", write_before_final_recheck)
     with pytest.raises(ValueError, match="concurrentemente"):
         _promote_labenze_requiez(fixture, report_path=tmp_path / "concurrent-report.json")
 
@@ -583,8 +584,10 @@ def test_labenze_requiez_restores_active_after_post_publish_verification_failure
     failed_report = json.loads(report_path.read_text(encoding="utf-8"))
     assert failed_report["status"] == "failed"
     assert failed_report["rollback"]["restore_attempted"] is True
+    assert failed_report["rollback"]["restore_performed"] is True
     assert failed_report["rollback"]["restored"] is True
     assert failed_report["rollback"]["verified"] is True
+    assert failed_report["rollback"]["backup_verified"] is True
     assert failed_report["staging"]["state"] == "published"
 
 
@@ -600,6 +603,52 @@ def test_labenze_requiez_rejects_existing_report_before_any_mutation(tmp_path):
     assert not fixture["backup"].exists()
     assert not fixture["staged"].exists()
     assert not fixture["target_assets"].exists()
+
+
+def test_labenze_requiez_rejects_a_second_cooperative_promoter_before_validation(tmp_path):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    lock_path = fixture["active_path"].with_name(f".{fixture['active_path'].name}.promotion.lock")
+    lock_path.write_text('{"owner": "otro-promotor"}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="promoción activa"):
+        _promote_labenze_requiez(fixture)
+
+    assert fixture["active_path"].read_bytes() == fixture["active_bytes"]
+    assert not fixture["backup"].exists()
+
+
+def test_labenze_requiez_never_renames_active_away_during_publish(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    import os
+
+    real_replace = os.replace
+
+    def reject_removing_active(source, destination):
+        assert Path(source) != fixture["active_path"], "el path activo nunca puede desaparecer"
+        assert fixture["active_path"].exists()
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(promoter.os, "replace", reject_removing_active)
+    _promote_labenze_requiez(fixture)
+
+    assert fixture["active_path"].is_file()
+
+
+def test_labenze_requiez_reserves_report_before_first_mutation(tmp_path, monkeypatch):
+    fixture = _labenze_requiez_fixture(tmp_path)
+    report_path = tmp_path / "reserved-report.json"
+
+    def stop_after_reservation(source, target):
+        reservation = json.loads(report_path.read_text(encoding="utf-8"))
+        assert reservation["status"] == "reserved"
+        assert reservation["reservation_token"]
+        raise OSError("detener tras reservar reporte")
+
+    monkeypatch.setattr(promoter.shutil, "copy2", stop_after_reservation)
+    with pytest.raises(OSError, match="reservar reporte"):
+        _promote_labenze_requiez(fixture, report_path=report_path)
+
+    assert report_path.is_file()
 
 
 def _authentic_shared_v2_fixture(tmp_path):
