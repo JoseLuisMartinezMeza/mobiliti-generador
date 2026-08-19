@@ -706,14 +706,15 @@ def validate_normalized_routing(rows: Sequence[Mapping[str, object]]) -> None:
             for key, value in parse_qsl(urlsplit(product_url).query, keep_blank_values=True)
             if key.casefold() == "variant"
         ]
-        variant_binding = candidate.get("binding") in {
-            "variant_sku_and_image_variant_ids",
-            "variant.featured_image",
-        }
-        if (variant_binding or variant_values) and (
+        declared_variant = candidate.get("variant_id")
+        requires_variant = (
+            declared_variant not in {None, ""}
+            or candidate.get("product_link_verified") is True
+        )
+        if (requires_variant or variant_values) and (
             len(variant_values) != 1
             or not variant_values[0].isdigit()
-            or str(candidate.get("variant_id") or "") != variant_values[0]
+            or str(declared_variant or "") != variant_values[0]
             or candidate.get("product_link_verified") is not True
         ):
             raise ValueError(f"product_link_unverified: {internal_id}")

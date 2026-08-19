@@ -1156,14 +1156,31 @@ def test_cycle_2_shopify_variant_bindings_require_exact_variant_query(intake):
     with pytest.raises(ValueError, match="product_link_unverified"):
         module.validate_normalized_routing([row])
 
-    non_variant = next(
+    requiez = json.loads(
+        json.dumps(
+            next(
+                row
+                for row in intake.normalized_rows
+                if row["supplier"] == "requiez"
+                and row["acquisition_kind"] == "direct_image"
+                and row["candidate"].get("variant_id")
+            )
+        )
+    )
+    requiez["candidate"]["product_url"] = requiez["candidate"]["product_url"].split("?", 1)[0]
+    with pytest.raises(ValueError, match="product_link_unverified"):
+        module.validate_normalized_routing([requiez])
+
+    non_variants = [
         row
         for row in intake.normalized_rows
         if row["acquisition_kind"] == "direct_image"
-        and row["candidate"]["binding"]
-        in {"product_sku_with_direct_product_image", "single_default_variant_single_image"}
-    )
-    module.validate_normalized_routing([non_variant])
+        and "variant=" not in row["candidate"]["product_url"]
+    ]
+    assert len(non_variants) == 6
+    assert all(row["candidate"].get("variant_id") is None for row in non_variants)
+    assert all(row["candidate"].get("product_link_verified") is False for row in non_variants)
+    module.validate_normalized_routing(non_variants)
 
 
 @pytest.mark.parametrize("error", [OSError("socket down"), TimeoutError("timed out")])
