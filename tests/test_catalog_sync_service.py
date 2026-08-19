@@ -844,7 +844,7 @@ def test_sunon_preserves_valid_approved_generated_reference_canonically():
     )])
     candidate = sunon_snapshot(items=[sunon_item(attributes={"color": "blue"})])
 
-    result = catalog_service._preserve_sunon_generated_references(previous, candidate)
+    result = catalog_service._preserve_curated_visuals(previous, candidate)
 
     row = result["items"][0]
     assert row["image_kind"] == "generated_reference"
@@ -869,7 +869,7 @@ def test_sunon_preserves_legacy_approved_reference_without_nested_kind():
     del previous["items"][0]["attributes"]["approved_asset"]["image_kind"]
     candidate = sunon_snapshot()
 
-    result = catalog_service._preserve_sunon_generated_references(previous, candidate)
+    result = catalog_service._preserve_curated_visuals(previous, candidate)
 
     assert result["items"][0]["attributes"]["approved_asset"]["image_kind"] == "generated_reference"
 
@@ -904,7 +904,7 @@ def test_sunon_does_not_inherit_invalid_or_mismatched_reference(
     previous = sunon_snapshot(items=[previous_row])
     candidate = sunon_snapshot(items=[candidate_row])
 
-    result = catalog_service._preserve_sunon_generated_references(previous, candidate)
+    result = catalog_service._preserve_curated_visuals(previous, candidate)
 
     row = result["items"][0]
     assert row["image_kind"] == "placeholder"
@@ -923,7 +923,7 @@ def test_sunon_never_replaces_candidate_official_image():
         attributes={"image_match": {"status": "exact_xlsx"}},
     )])
 
-    result = catalog_service._preserve_sunon_generated_references(previous, candidate)
+    result = catalog_service._preserve_curated_visuals(previous, candidate)
 
     assert result["items"][0]["image_kind"] == "official"
     assert result["items"][0]["image_url"] == "https://example.test/live-sunon.png"
@@ -958,6 +958,275 @@ def test_sunon_sync_stages_preserved_reference_without_image_regression():
         "label": "Imagen de referencia",
         "approved": True,
     }
+
+
+def _curated_item(supplier, *, image_kind="generated_reference", **changes):
+    sha256 = "e" * 64
+    row = item(
+        internal_id=f"{supplier}:chair-1",
+        supplier=supplier,
+        product_key="chair-1",
+        sku=f"{supplier.upper()}-CHAIR-1",
+        name="Silla Uno",
+        description="Silla ejecutiva con brazos",
+        stock="5",
+        base_price_options=[{
+            "id": "black",
+            "name": "Negro",
+            "price_net": "100.000000",
+            "available": True,
+        }],
+        add_on_options=[{
+            "id": "headrest",
+            "name": "Cabecera",
+            "price_net": "20.000000",
+            "available": True,
+            "compatible_base_option_ids": ["black"],
+        }],
+        attributes={
+            "variant": "Respaldo alto",
+            "dimensions": "60 x 60 x 110 cm",
+            "commercial_note": "anterior",
+            "approved_asset": {
+                "bucket": "catalog-assets",
+                "path": f"{sha256}.png",
+                "image_kind": image_kind,
+                "label": "Etiqueta anterior",
+                "approved": True,
+            },
+            "image_reference": {
+                "asset_sha256": sha256,
+                "approved": True,
+                "configuration_supported": True,
+                "full_product_visible": True,
+                "not_cropped": True,
+                "direct_product_reference": True,
+                "image_source_url": "https://media.example.test/chair-1.png",
+            },
+            "source_image_url": "https://media.example.test/chair-1.png",
+            "web_image_quality": {"sha256": sha256, "width": 1200, "height": 1200},
+        },
+        image_url="",
+        image_kind=image_kind,
+        product_url="https://supplier.example.test/products/chair-1",
+    )
+    row.update(changes)
+    return row
+
+
+def _curated_snapshot(supplier, row):
+    return {
+        "supplier": supplier,
+        "source_hash": "a" * 64,
+        "generated_at": "2026-08-18T12:00:00Z",
+        "items": [deepcopy(row)],
+    }
+
+
+def _refresh_item(supplier, *, family=False):
+    row = _curated_item(
+        supplier,
+        image_kind="official" if family else "placeholder",
+        price_net="150.000000",
+        stock="9",
+        product_url="https://supplier.example.test/catalog.pdf#page=7",
+    )
+    row["base_price_options"][0].update(price_net="175.000000", available=False)
+    row["add_on_options"][0].update(price_net="30.000000", available=False)
+    row["attributes"] = {
+        "variant": "Respaldo alto",
+        "dimensions": "60 x 60 x 110 cm",
+        "commercial_note": "nueva",
+    }
+    if family:
+        row["attributes"].update({
+            "image_match": {"status": "family_pdf"},
+            "approved_asset": {
+                "bucket": "catalog-assets",
+                "path": f"{'d' * 64}.png",
+                "image_kind": "official",
+                "label": "Familia PDF",
+                "approved": True,
+            },
+        })
+    return row
+
+
+@pytest.mark.parametrize(
+    "supplier,family",
+    [("labenze", False), ("labenze", True), ("requiez", False), ("requiez", True)],
+)
+def test_curated_visual_survives_lower_priority_refresh_without_stale_commercial_data(
+    supplier, family,
+):
+    previous_row = _curated_item(supplier)
+    candidate_row = _refresh_item(supplier, family=family)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    row = result["items"][0]
+    assert row["image_kind"] == "generated_reference"
+    assert row["image_url"] == ""
+    assert row["product_url"] == "https://supplier.example.test/products/chair-1"
+    assert row["price_net"] == "150.000000"
+    assert row["stock"] == "9"
+    assert row["base_price_options"][0] == {
+        "id": "black",
+        "name": "Negro",
+        "price_net": "175.000000",
+        "available": False,
+    }
+    assert row["attributes"]["commercial_note"] == "nueva"
+    assert "image_match" not in row["attributes"]
+    assert row["attributes"]["approved_asset"] == {
+        "bucket": "catalog-assets",
+        "path": f"{'e' * 64}.png",
+        "image_kind": "generated_reference",
+        "label": "Imagen de referencia",
+        "approved": True,
+    }
+    assert row["attributes"]["image_reference"] == previous_row["attributes"]["image_reference"]
+    assert row["attributes"]["source_image_url"] == previous_row["attributes"]["source_image_url"]
+    assert row["attributes"]["web_image_quality"] == previous_row["attributes"]["web_image_quality"]
+
+
+def _exact_refresh_item(supplier, status, *, approved=True):
+    row = _refresh_item(supplier, family=True)
+    sha256 = "d" * 64
+    row["attributes"]["image_match"] = {
+        "status": status,
+        "asset_sha256": sha256,
+    }
+    row["attributes"]["approved_asset"]["approved"] = approved
+    row["attributes"]["approved_asset"]["label"] = "Exacta nueva"
+    return row
+
+
+@pytest.mark.parametrize(
+    "supplier,status",
+    [("labenze", "exact_pdf"), ("requiez", "exact_xlsx"), ("requiez", "exact_web")],
+)
+def test_approved_exact_official_refresh_always_replaces_prior_curated_visual(
+    supplier, status,
+):
+    previous = _curated_snapshot(supplier, _curated_item(supplier))
+    candidate_row = _exact_refresh_item(supplier, status)
+    candidate = _curated_snapshot(supplier, candidate_row)
+
+    result = catalog_service._preserve_curated_visuals(previous, candidate)
+
+    assert result["items"][0] == candidate_row
+
+
+def test_unapproved_exact_status_cannot_displace_prior_curated_visual():
+    supplier = "labenze"
+    previous = _curated_snapshot(supplier, _curated_item(supplier))
+    candidate = _curated_snapshot(
+        supplier,
+        _exact_refresh_item(supplier, "exact_web", approved=False),
+    )
+
+    result = catalog_service._preserve_curated_visuals(previous, candidate)
+
+    assert result["items"][0]["image_kind"] == "generated_reference"
+    assert result["items"][0]["attributes"]["approved_asset"]["path"] == f"{'e' * 64}.png"
+
+
+@pytest.mark.parametrize("supplier", ["labenze", "requiez"])
+def test_prior_exact_official_visual_never_degrades_to_generated_reference(supplier):
+    previous_row = _curated_item(supplier, image_kind="official")
+    candidate_row = _refresh_item(supplier)
+    candidate_row["image_kind"] = "generated_reference"
+    candidate_row["attributes"]["approved_asset"] = {
+        "bucket": "catalog-assets",
+        "path": f"{'c' * 64}.png",
+        "image_kind": "generated_reference",
+        "label": "Imagen de referencia nueva",
+        "approved": True,
+    }
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    assert result["items"][0]["image_kind"] == "official"
+    assert result["items"][0]["attributes"]["approved_asset"]["path"] == f"{'e' * 64}.png"
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    (
+        "supplier", "internal_id", "product_key", "sku", "name", "description",
+        "variant", "dimensions", "base_option", "add_on_structure",
+    ),
+)
+def test_curated_visual_requires_exact_identity_and_visual_configuration(mismatch):
+    supplier = "labenze"
+    previous_row = _curated_item(supplier)
+    candidate_supplier = supplier
+    candidate_row = _refresh_item(supplier)
+    if mismatch == "supplier":
+        candidate_supplier = "requiez"
+        candidate_row["supplier"] = "requiez"
+    elif mismatch == "internal_id":
+        candidate_row["internal_id"] = "labenze:chair-2"
+    elif mismatch == "product_key":
+        candidate_row["product_key"] = "chair-2"
+    elif mismatch == "sku":
+        candidate_row["sku"] = "LABENZE-CHAIR-2"
+    elif mismatch in {"name", "description"}:
+        candidate_row[mismatch] += " diferente"
+    elif mismatch in {"variant", "dimensions"}:
+        candidate_row["attributes"][mismatch] += " diferente"
+    elif mismatch == "base_option":
+        candidate_row["base_price_options"][0]["name"] = "Gris"
+    else:
+        candidate_row["add_on_options"][0]["compatible_base_option_ids"] = []
+    expected = deepcopy(candidate_row)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(candidate_supplier, candidate_row),
+    )
+
+    assert result["items"][0] == expected
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    (
+        "missing_reference", "reference_hash", "review_flag", "source_url",
+        "approved_asset", "product_url",
+    ),
+)
+def test_incomplete_or_unsafe_prior_visual_metadata_blocks_inheritance(unsafe):
+    supplier = "requiez"
+    previous_row = _curated_item(supplier)
+    if unsafe == "missing_reference":
+        previous_row["attributes"].pop("image_reference")
+    elif unsafe == "reference_hash":
+        previous_row["attributes"]["image_reference"]["asset_sha256"] = "d" * 64
+    elif unsafe == "review_flag":
+        previous_row["attributes"]["image_reference"]["not_cropped"] = False
+    elif unsafe == "source_url":
+        previous_row["attributes"]["image_reference"]["image_source_url"] = "http://unsafe.test/a.png"
+    elif unsafe == "approved_asset":
+        previous_row["attributes"]["approved_asset"]["bucket"] = "untrusted-assets"
+    else:
+        previous_row["product_url"] = ""
+    candidate_row = _refresh_item(supplier)
+    expected = deepcopy(candidate_row)
+
+    result = catalog_service._preserve_curated_visuals(
+        _curated_snapshot(supplier, previous_row),
+        _curated_snapshot(supplier, candidate_row),
+    )
+
+    assert result["items"][0] == expected
 
 
 @pytest.mark.parametrize(

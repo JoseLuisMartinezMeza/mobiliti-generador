@@ -414,7 +414,7 @@ def _run_supplier_sync(
             raise ValueError
         error_code = "snapshot_invalid"
         previous_payload = None if previous is None else _validate_snapshot(previous.payload)
-        candidate = _preserve_sunon_generated_references(previous_payload, candidate)
+        candidate = _preserve_curated_visuals(previous_payload, candidate)
         candidate = _validate_snapshot(candidate, expected_supplier=supplier)
         diff = classify_snapshot_diff(previous_payload, candidate)
         counters.update(_catalog_metrics(candidate, diff))
@@ -528,54 +528,171 @@ def _validate_snapshot(raw, expected_supplier=None):
     return snapshot
 
 
-def _preserve_sunon_generated_references(previous, candidate):
+def _preserve_curated_visuals(previous, candidate):
+    supplier = candidate.get("supplier")
     if (
         previous is None
-        or candidate.get("supplier") != "sunon"
-        or previous.get("supplier") != "sunon"
+        or supplier not in {"sunon", "labenze", "requiez"}
+        or previous.get("supplier") != supplier
     ):
         return candidate
     previous_by_id = {row["internal_id"]: row for row in previous["items"]}
     for row in candidate["items"]:
         prior = previous_by_id.get(row["internal_id"])
-        if not _can_preserve_sunon_generated_reference(prior, row):
+        if not _can_preserve_curated_visual(prior, row):
             continue
         asset = prior["attributes"]["approved_asset"]
-        row["image_kind"] = "generated_reference"
-        row["attributes"] = {
-            **row["attributes"],
-            "approved_asset": {
-                "bucket": "catalog-assets",
-                "path": asset["path"],
-                "image_kind": "generated_reference",
-                "label": "Imagen de referencia",
-                "approved": True,
-            },
+        image_kind = prior["image_kind"]
+        attributes = {
+            key: value for key, value in row["attributes"].items()
+            if key not in {
+                "approved_asset", "image_match", "image_reference",
+                "source_image_url", "web_image_quality",
+            }
         }
+        attributes["approved_asset"] = {
+            "bucket": "catalog-assets",
+            "path": asset["path"],
+            "image_kind": image_kind,
+            "label": (
+                "Imagen oficial verificada"
+                if image_kind == "official"
+                else "Imagen de referencia"
+            ),
+            "approved": True,
+        }
+        for key in ("image_reference", "source_image_url", "web_image_quality"):
+            if key in prior["attributes"]:
+                attributes[key] = json.loads(json.dumps(prior["attributes"][key]))
+        row["image_url"] = ""
+        row["image_kind"] = image_kind
+        row["product_url"] = prior["product_url"]
+        row["attributes"] = attributes
     return candidate
 
 
-def _can_preserve_sunon_generated_reference(previous, candidate):
+def _can_preserve_curated_visual(previous, candidate):
     if (
         not isinstance(previous, dict)
-        or candidate.get("supplier") != "sunon"
-        or previous.get("supplier") != "sunon"
+        or candidate.get("supplier") not in {"sunon", "labenze", "requiez"}
+        or previous.get("supplier") != candidate.get("supplier")
+        or previous.get("internal_id") != candidate.get("internal_id")
         or previous.get("product_key") != candidate.get("product_key")
-        or candidate.get("image_kind") != "placeholder"
+        or previous.get("sku") != candidate.get("sku")
+        or not _same_visual_configuration(previous, candidate)
         or candidate.get("image_url") != ""
-        or previous.get("image_kind") != "generated_reference"
+        or previous.get("image_kind") not in {"official", "generated_reference"}
     ):
+        return False
+    if candidate["supplier"] == "sunon":
+        if candidate.get("image_kind") != "placeholder":
+            return False
+    elif _has_approved_exact_visual(candidate):
         return False
     attributes = previous.get("attributes")
     asset = attributes.get("approved_asset") if isinstance(attributes, dict) else None
-    return (
+    safe_asset = (
         isinstance(asset, dict)
         and asset.get("bucket") == "catalog-assets"
         and isinstance(asset.get("path"), str)
         and re.fullmatch(r"[0-9a-f]{64}\.png", asset["path"]) is not None
         and asset.get("approved") is True
-        and asset.get("image_kind") in {None, "generated_reference"}
+        and asset.get("image_kind") in {None, previous["image_kind"]}
     )
+    if not safe_asset or candidate["supplier"] == "sunon":
+        return safe_asset
+    reference = attributes.get("image_reference")
+    if (
+        asset.get("image_kind") != previous["image_kind"]
+        or not isinstance(reference, dict)
+        or reference.get("asset_sha256") != asset["path"][:-4]
+        or any(
+            reference.get(field) is not True
+            for field in (
+                "approved", "configuration_supported", "full_product_visible",
+                "not_cropped", "direct_product_reference",
+            )
+        )
+        or not _is_secure_visual_url(reference.get("image_source_url"))
+        or not _is_secure_visual_url(previous.get("product_url"))
+    ):
+        return False
+    source_image_url = attributes.get("source_image_url")
+    if source_image_url is not None and not _is_secure_visual_url(source_image_url):
+        return False
+    for quality in (
+        attributes.get("web_image_quality"),
+        reference.get("web_image_quality"),
+        reference.get("asset_quality"),
+    ):
+        if quality is not None and (
+            not isinstance(quality, dict)
+            or quality.get("sha256", asset["path"][:-4]) != asset["path"][:-4]
+        ):
+            return False
+    return True
+
+
+def _has_approved_exact_visual(candidate):
+    if candidate.get("image_kind") != "official":
+        return False
+    attributes = candidate.get("attributes")
+    if not isinstance(attributes, dict):
+        return False
+    image_match = attributes.get("image_match")
+    asset = attributes.get("approved_asset")
+    if not isinstance(image_match, dict) or not isinstance(asset, dict):
+        return False
+    sha256 = image_match.get("asset_sha256")
+    return (
+        image_match.get("status") in {"exact_pdf", "exact_xlsx", "exact_web"}
+        and isinstance(sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", sha256) is not None
+        and asset.get("bucket") == "catalog-assets"
+        and asset.get("path") == f"{sha256}.png"
+        and asset.get("image_kind") == "official"
+        and asset.get("approved") is True
+    )
+
+
+def _same_visual_configuration(previous, candidate):
+    if any(
+        previous.get(field) != candidate.get(field)
+        for field in ("name", "description")
+    ):
+        return False
+    previous_attributes = previous.get("attributes")
+    candidate_attributes = candidate.get("attributes")
+    if not isinstance(previous_attributes, dict) or not isinstance(candidate_attributes, dict):
+        return False
+    if any(
+        previous_attributes.get(field) != candidate_attributes.get(field)
+        for field in ("variant", "dimensions")
+    ):
+        return False
+    return all(
+        _option_structure(previous.get(field)) == _option_structure(candidate.get(field))
+        for field in ("base_price_options", "add_on_options")
+    )
+
+
+def _option_structure(options):
+    if not isinstance(options, list):
+        return None
+    structural = []
+    for option in options:
+        if not isinstance(option, dict):
+            return None
+        value = {
+            key: nested for key, nested in option.items()
+            if key not in {"price_net", "available"}
+        }
+        structural.append(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    return tuple(sorted(structural))
+
+
+def _is_secure_visual_url(value):
+    return isinstance(value, str) and value.startswith("https://")
 
 
 def _identity(snapshot):
