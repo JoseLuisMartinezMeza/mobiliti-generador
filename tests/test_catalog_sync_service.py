@@ -1561,6 +1561,45 @@ def test_shared_generated_asset_with_complete_builder_v2_evidence_preserves_both
     ]
 
 
+def test_one_invalid_v2_member_blocks_the_entire_shared_asset_atomically():
+    supplier = "requiez"
+    previous_rows = [_curated_item(supplier)]
+    previous_rows.append(_second_shared_visual_row(previous_rows[0]))
+    _add_shared_visual_evidence(previous_rows)
+    previous_rows[1]["attributes"]["image_reference"].pop("reviewer")
+    candidate_rows = [_refresh_item(supplier)]
+    candidate_rows.append(_second_shared_visual_row(_refresh_item(supplier, family=True)))
+
+    result = catalog_service._preserve_curated_visuals(
+        _two_item_curated_snapshot(supplier, previous_rows),
+        _two_item_curated_snapshot(supplier, candidate_rows),
+    )
+
+    assert [row["image_kind"] for row in result["items"]] == ["placeholder", "official"]
+    assert result["items"][1]["attributes"]["image_match"]["status"] == "family_pdf"
+
+
+def test_exact_candidate_still_wins_when_its_prior_shared_group_is_invalid():
+    supplier = "labenze"
+    previous_rows = [_curated_item(supplier)]
+    previous_rows.append(_second_shared_visual_row(previous_rows[0]))
+    _add_shared_visual_evidence(previous_rows)
+    previous_rows[1]["attributes"]["image_reference"].pop("reviewer")
+    candidate_rows = [_refresh_item(supplier)]
+    exact_candidate = _second_shared_visual_row(
+        _exact_refresh_item(supplier, "exact_xlsx")
+    )
+    candidate_rows.append(exact_candidate)
+
+    result = catalog_service._preserve_curated_visuals(
+        _two_item_curated_snapshot(supplier, previous_rows),
+        _two_item_curated_snapshot(supplier, candidate_rows),
+    )
+
+    assert result["items"][0]["image_kind"] == "placeholder"
+    assert result["items"][1] == exact_candidate
+
+
 def test_duplicate_exact_importer_visuals_use_exact_contract_not_v2_shared_gate():
     supplier = "labenze"
     previous_rows = [_importer_exact_item(supplier, "exact_pdf")]

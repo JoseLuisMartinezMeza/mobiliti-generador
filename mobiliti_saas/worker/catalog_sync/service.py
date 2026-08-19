@@ -623,7 +623,17 @@ def _valid_shared_visual_group(rows, candidates):
     for row in rows:
         attributes = row.get("attributes")
         reference = attributes.get("image_reference") if isinstance(attributes, dict) else None
-        if not isinstance(reference, dict):
+        asset = attributes.get("approved_asset") if isinstance(attributes, dict) else None
+        if (
+            not isinstance(reference, dict)
+            or not isinstance(asset, dict)
+            or asset.get("bucket") != "catalog-assets"
+            or not isinstance(asset.get("path"), str)
+            or re.fullmatch(r"[0-9a-f]{64}\.png", asset["path"]) is None
+            or asset.get("approved") is not True
+            or asset.get("image_kind") != row.get("image_kind")
+            or not _valid_curated_v2_reference(row, asset)
+        ):
             return False
         evidence = reference.get("shared_visual_evidence")
         assigned = evidence.get("assigned_variant_ids") if isinstance(evidence, dict) else None
