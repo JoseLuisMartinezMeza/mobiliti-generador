@@ -161,6 +161,29 @@ def test_validate_exact_is_content_addressed_deterministic_and_matches_builder_g
     assert ours["occupancy"] == pytest.approx(occupancy)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="regresión específica de rutas Win32")
+def test_windows_long_output_creates_artifact_directories_and_publishes_pass(
+    normalizer, workspace: Path
+):
+    source = workspace / "exact-long-path.png"
+    _save_image(source, (1024, 1024), (100, 200, 900, 800))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    stage_name = f".normalized.staging-{_sha(plan)[:12]}"
+    filler_length = 186 - len(str(workspace)) - len(stage_name) - 2
+    assert 0 < filler_length < 240
+    output_parent = workspace / ("x" * filler_length)
+    output_parent.mkdir()
+    output = output_parent / "normalized"
+    expected_asset = output_parent / stage_name / "assets" / f"{_sha(source)}.png"
+    assert len(str(expected_asset)) == 262
+
+    manifest = normalizer.normalize_plan(plan, output, workspace)
+
+    assert manifest["status"] == "PASS"
+    assert (output / "assets" / f"{_sha(source)}.png").is_file()
+    assert (output / "manifest.json").is_file()
+
+
 def test_padding_uses_smallest_feasible_square_and_copies_pixels_without_resize(
     normalizer, workspace: Path
 ):
@@ -567,6 +590,40 @@ def test_drift_during_final_manifest_write_quarantines_pass_manifest(
     assert not (stages[0] / "manifest.json").exists()
     assert (stages[0] / "INVALIDATED_PASS_MANIFEST.json").is_file()
     assert (stages[0] / "FAILED.json").is_file()
+
+
+def test_unexpected_error_after_manifest_write_preserves_auditable_failed_stage(
+    normalizer, workspace: Path, monkeypatch
+):
+    source = workspace / "source.png"
+    _save_image(source, (1024, 1024), (100, 100, 900, 900))
+    plan = _write_plan(workspace, [_entry(workspace, source)])
+    output = workspace / "output-unexpected-write-error"
+    original_write_new = normalizer._write_new
+
+    def fail_after_manifest_write(path: Path, payload: bytes):
+        result = original_write_new(path, payload)
+        if path.name == "manifest.json":
+            raise OSError("fallo sintético después de escribir manifest")
+        return result
+
+    monkeypatch.setattr(normalizer, "_write_new", fail_after_manifest_write)
+
+    with pytest.raises(normalizer.PlanError, match="escritura|publicación"):
+        normalizer.normalize_plan(plan, output, workspace)
+
+    assert not output.exists()
+    stages = list(workspace.glob(".output-unexpected-write-error.staging-*"))
+    assert len(stages) == 1
+    stage = stages[0]
+    assert (stage / "TRANSACTION_PREPARED.json").is_file()
+    assert not (stage / "manifest.json").exists()
+    assert (stage / "INVALIDATED_PASS_MANIFEST.json").is_file()
+    failed = json.loads((stage / "FAILED.json").read_text(encoding="utf-8"))
+    assert failed["status"] == "FAILED"
+    assert failed["failure"]["code"] == "TRANSACTION_WRITE_FAILED"
+    assert failed["approved"] is False
+    assert failed["promotion"]["allowed"] is False
 
 
 def test_atomic_rename_observes_complete_manifest_and_receipts_in_stage(

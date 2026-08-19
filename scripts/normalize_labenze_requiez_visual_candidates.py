@@ -961,9 +961,21 @@ def _safe_output(
     return output, stage, ancestor_bindings
 
 
+def _filesystem_path(path: Path) -> Path:
+    if os.name != "nt":
+        return path
+    absolute = os.path.abspath(path)
+    if absolute.startswith("\\\\?\\"):
+        return Path(absolute)
+    if absolute.startswith("\\\\"):
+        return Path(f"\\\\?\\UNC\\{absolute[2:]}")
+    return Path(f"\\\\?\\{absolute}")
+
+
 def _write_new(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("xb") as handle:
+    filesystem_path = _filesystem_path(path)
+    filesystem_path.parent.mkdir(parents=True, exist_ok=True)
+    with filesystem_path.open("xb") as handle:
         handle.write(payload)
 
 
@@ -986,7 +998,7 @@ def _artifact_path(directory: Path, relative: str) -> Path:
         raise
     except OSError as exc:
         raise TransactionDrift(f"ancestro de artifact ausente: {relative}") from exc
-    return directory.joinpath(*pure.parts)
+    return _filesystem_path(directory.joinpath(*pure.parts))
 
 
 def _read_artifact_binding(directory: Path, relative: str) -> ArtifactBinding:
@@ -1051,15 +1063,16 @@ def _scan_artifact_tree(directory: Path) -> tuple[set[str], set[str]]:
         for child in children:
             relative = (prefix / child.name).as_posix()
             try:
-                metadata = child.lstat()
-                aliased = child.is_symlink() or _has_reparse_flag(child)
+                filesystem_child = _filesystem_path(child)
+                metadata = filesystem_child.lstat()
+                aliased = filesystem_child.is_symlink() or _has_reparse_flag(filesystem_child)
             except OSError as exc:
                 raise TransactionDrift(f"artifact cambió durante recorrido: {relative}") from exc
             if aliased:
                 raise TransactionDrift(f"artifact usa enlace/reparse: {relative}")
             if stat.S_ISDIR(metadata.st_mode):
                 directories.add(relative)
-                visit(child, prefix / child.name)
+                visit(filesystem_child, prefix / child.name)
             elif stat.S_ISREG(metadata.st_mode):
                 files.add(relative)
             else:
@@ -1165,7 +1178,13 @@ def _write_evidence_marker(root: Path, directory: Path, name: str, payload: dict
         handle.write(_json_bytes(payload))
 
 
-def _write_failed_marker(root: Path, directory: Path, message: str, provenance: dict) -> None:
+def _write_failed_marker(
+    root: Path,
+    directory: Path,
+    message: str,
+    provenance: dict,
+    code: str = "TRANSACTION_BINDING_DRIFT",
+) -> None:
     marker = directory / "FAILED.json"
     if marker.exists():
         return
@@ -1176,7 +1195,7 @@ def _write_failed_marker(root: Path, directory: Path, message: str, provenance: 
         {
             "schema_version": 1,
             "status": "FAILED",
-            "failure": {"code": "TRANSACTION_BINDING_DRIFT", "message": message},
+            "failure": {"code": code, "message": message},
             "approved": False,
             "promotion": {"allowed": False},
             "provenance": provenance,
@@ -1483,13 +1502,29 @@ def normalize_plan(plan_path: Path, output_dir: Path, workspace_root: Path) -> d
         _assert_artifact_tree(output, stage_binding, expected_artifacts)
         assert_stable()
         return manifest
-    except TransactionDrift as exc:
+    except Exception as exc:
+        failure = exc
+        failure_code = "TRANSACTION_BINDING_DRIFT"
+        if not isinstance(exc, TransactionDrift):
+            failure = TransactionDrift(
+                "fallo inesperado durante escritura o publicación: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            failure_code = "TRANSACTION_WRITE_FAILED"
         location = output if published else stage
         if location.is_dir():
             _quarantine_uncommitted_pass_artifacts(root, location)
-            _write_invalidated_marker(root, location, str(exc), provenance)
-            _write_failed_marker(root, location, str(exc), provenance)
-        raise
+            _write_invalidated_marker(root, location, str(failure), provenance)
+            _write_failed_marker(
+                root,
+                location,
+                str(failure),
+                provenance,
+                failure_code,
+            )
+        if failure is exc:
+            raise
+        raise failure from exc
 
 
 def main(argv: list[str] | None = None) -> int:
