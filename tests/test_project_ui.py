@@ -131,8 +131,8 @@ def test_generated_reference_warning_survives_principal_and_complement_round_tri
           const rules = {{min: "1", step: "1", maxDecimals: 0, max: "1000000", integer: true}};
           const principalId = "11111111-1111-4111-8111-111111111111";
           const make = (lineId, role, parentLineId) => model.createMixedCartLine({{
-            catalog: "requiez",
-            identity: {{internal_id: `requiez:${{role}}`, base_option_id: "", add_on_option_ids: []}},
+            catalog: "sonara",
+            identity: {{internal_id: `sonara:${{role}}`, base_option_id: "", add_on_option_ids: []}},
             quantity: "1", quantityRules: rules,
             snapshot: {{name: role, code: role, image_url: "", unit: "PZA",
               availability: "", configuration: "",

@@ -542,17 +542,28 @@ def test_supplier_cart_snapshot_derives_generated_reference_warning_once():
     result = _run_javascript(
         f"{helpers}\n"
         "const derive = cartWarnings({code_status: 'verified', image_kind: "
-        "'generated_reference', warnings: ['Entrega especial']});"
+        "'generated_reference', warnings: [' Imagen  DE\\treferencia ', "
+        "' Entrega especial ', 'Entrega\\tespecial']});"
         "const deduplicated = cartWarnings({code_status: 'verified', image_kind: "
-        "'generated_reference', warnings: [' imagen DE referencia ', "
+        "'generated_reference', warnings: ['Imagen\\u00a0de referencia', "
         "'Entrega especial']});"
-        "console.log(JSON.stringify({derive, deduplicated, generatedCount: "
+        "const nonGenerated = ['official', 'missing', undefined, 'placeholder'].map(image_kind => "
+        "cartWarnings({code_status: 'verified', image_kind, warnings: ["
+        "'Imagen de referencia', ' imagen  DE\\treferencia ', "
+        "'Imagen\\u00a0de referencia', ' Entrega especial ', 'Entrega\\tespecial']}));"
+        "console.log(JSON.stringify({derive, deduplicated, nonGenerated, generatedCount: "
         "deduplicated.filter(value => warningKey(value) === 'imagen de referencia').length}));"
     )
 
     assert result == {
         "derive": ["Entrega especial", "Imagen de referencia"],
-        "deduplicated": ["Imagen de referencia", "Entrega especial"],
+        "deduplicated": ["Entrega especial", "Imagen de referencia"],
+        "nonGenerated": [
+            ["Entrega especial"],
+            ["Entrega especial"],
+            ["Entrega especial"],
+            ["Entrega especial"],
+        ],
         "generatedCount": 1,
     }
 

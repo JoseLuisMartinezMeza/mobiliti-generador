@@ -66,25 +66,51 @@ def test_search_returns_safe_display_price_and_dimensions_without_private_source
 
 
 def test_search_derives_generated_reference_warning_once_with_commercial_status():
-    generated = _supplier_item("requiez", "Silla Requiez", "RQ-1")
+    generated = _supplier_item("sonara", "Silla generada", "GEN-1")
     generated.update({
         "image_kind": "generated_reference",
         "availability_type": "made_to_order",
         "stock": None,
-        "warnings": ["Imagen de referencia", "Imagen de referencia"],
+        "warnings": [
+            "Imagen  DE\treferencia",
+            "Imagen\N{NO-BREAK SPACE}de referencia",
+        ],
+    })
+    official = _supplier_item("sonara", "Silla oficial", "OFF-1")
+    official.update({
+        "image_kind": "official",
+        "warnings": ["Imagen de referencia", " imagen  DE\treferencia "],
+    })
+    missing = _supplier_item("sonara", "Silla sin tipo", "MISS-1")
+    missing.update({
+        "image_kind": "missing",
+        "warnings": ["Imagen\N{NO-BREAK SPACE}de referencia"],
+    })
+    placeholder = _supplier_item("sonara", "Silla placeholder", "PLACE-1")
+    placeholder.update({
+        "image_kind": "placeholder",
+        "warnings": ["Imagen de referencia"],
     })
 
     result = search_catalog_products(
-        {"requiez": {"items": [generated]}},
+        {"sonara": {"items": [generated, official, missing, placeholder]}},
         query="",
-        supplier="requiez",
+        supplier="sonara",
         offset=0,
         limit=20,
     )
 
-    warnings = result["items"][0]["snapshot"]["warnings"]
-    assert warnings == ["Imagen de referencia", "Fabricación por confirmar"]
-    assert warnings.count("Imagen de referencia") == 1
+    warnings = {
+        item["official_code"]: item["snapshot"]["warnings"]
+        for item in result["items"]
+    }
+    assert warnings == {
+        "GEN-1": ["Imagen de referencia", "Fabricación por confirmar"],
+        "OFF-1": [],
+        "MISS-1": [],
+        "PLACE-1": [],
+    }
+    assert warnings["GEN-1"].count("Imagen de referencia") == 1
 
 
 def test_search_quotable_uses_the_cart_contract_for_pending_numeric_and_review_items():

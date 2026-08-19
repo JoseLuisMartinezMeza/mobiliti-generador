@@ -204,8 +204,8 @@ def test_project_display_cache_persists_only_generated_reference_warning():
       };
       const principalId = "11111111-1111-4111-8111-111111111111";
       const principal = createMixedCartLine({
-        catalog: "requiez",
-        identity: {internal_id: "requiez:chair", base_option_id: "", add_on_option_ids: []},
+        catalog: "sonara",
+        identity: {internal_id: "sonara:chair", base_option_id: "", add_on_option_ids: []},
         quantity: "1",
         quantityRules,
         snapshot: {
@@ -217,8 +217,8 @@ def test_project_display_cache_persists_only_generated_reference_warning():
         officialCode: "RQ-1",
       });
       const complement = createMixedCartLine({
-        catalog: "requiez",
-        identity: {internal_id: "requiez:headrest", base_option_id: "", add_on_option_ids: []},
+        catalog: "sonara",
+        identity: {internal_id: "sonara:headrest", base_option_id: "", add_on_option_ids: []},
         quantity: "1",
         quantityRules,
         snapshot: {

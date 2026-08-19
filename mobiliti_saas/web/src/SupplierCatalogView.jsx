@@ -234,23 +234,21 @@ function canAddSupplierItem(item, _supplier, configuredPrice) {
 function warningKey(value) {
   return String(value || "")
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .trim().toLowerCase();
+    .trim().toLowerCase()
+    .replace(/\s+/gu, " ");
 }
 
 function cartWarnings(item) {
   const result = [...(item.warnings || [])]
-    .map((value) => String(value))
-    .filter((value) => !["missing_code", "price_pending"].includes(value.trim().toLowerCase()));
+    .map((value) => String(value).trim())
+    .filter((value) => ![
+      "missing_code", "price_pending", "imagen de referencia",
+    ].includes(warningKey(value)));
   if (item.code_status === "needs_review") result.push("Código por verificar");
   if (pendingPriceContract(item, configuredBasePrice(item, initialConfiguration(item)))) {
     result.push("Precio por confirmar");
   }
-  if (item.image_kind === "generated_reference") {
-    result.forEach((value, index) => {
-      if (warningKey(value) === "imagen de referencia") result[index] = "Imagen de referencia";
-    });
-    result.push("Imagen de referencia");
-  }
+  if (item.image_kind === "generated_reference") result.push("Imagen de referencia");
   const seen = new Set();
   return result.filter((value) => {
     const key = warningKey(value);
