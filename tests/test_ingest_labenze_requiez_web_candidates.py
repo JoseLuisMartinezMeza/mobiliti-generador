@@ -1137,6 +1137,35 @@ def test_cycle_2_routing_rejects_unknown_direct_source_kind(intake):
         module.validate_normalized_routing([row])
 
 
+def test_cycle_2_shopify_variant_bindings_require_exact_variant_query(intake):
+    """Un binding de variante nunca puede degradarse silenciosamente a ficha genérica."""
+
+    module = importlib.import_module("scripts.ingest_labenze_requiez_web_candidates")
+    row = json.loads(
+        json.dumps(
+            next(
+                row
+                for row in intake.normalized_rows
+                if row["acquisition_kind"] == "direct_image"
+                and row["candidate"]["binding"]
+                in {"variant_sku_and_image_variant_ids", "variant.featured_image"}
+            )
+        )
+    )
+    row["candidate"]["product_url"] = row["candidate"]["product_url"].split("?", 1)[0]
+    with pytest.raises(ValueError, match="product_link_unverified"):
+        module.validate_normalized_routing([row])
+
+    non_variant = next(
+        row
+        for row in intake.normalized_rows
+        if row["acquisition_kind"] == "direct_image"
+        and row["candidate"]["binding"]
+        in {"product_sku_with_direct_product_image", "single_default_variant_single_image"}
+    )
+    module.validate_normalized_routing([non_variant])
+
+
 @pytest.mark.parametrize("error", [OSError("socket down"), TimeoutError("timed out")])
 def test_cycle_4_expected_transport_errors_become_terminal_direct_receipts(
     tmp_path, intake, error
