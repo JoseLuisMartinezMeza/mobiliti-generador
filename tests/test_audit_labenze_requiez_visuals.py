@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -37,10 +38,11 @@ def _item(
     asset_name: str | None,
     source_code: str | None = None,
     needs_review: bool = False,
+    internal_id_override: str | None = None,
 ) -> dict:
     code = source_code or f"{'LAB' if supplier == 'labenze' else 'REQ'}-{index:04d}"
     slug = code.casefold().replace("/", "-")
-    internal_id = (
+    internal_id = internal_id_override or (
         f"labenze:review:{slug}:{index:04d}"
         if supplier == "labenze" and needs_review
         else f"{supplier}:{slug}"
@@ -107,6 +109,16 @@ def _synthetic_inputs(tmp_path: Path) -> tuple[dict, dict, Path]:
         "155-19160",
         "155-19170-NAT",
     ]
+    lab_needs_review = [
+        ("155-10420-XXX", "labenze:review:155-10420-xxx:1489741a93de7217494e"),
+        ("155-22700-000", "labenze:review:155-22700-000:bd4d5204d4423966bf16"),
+        ("155-22700-000", "labenze:review:155-22700-000:e30c754d8b6b34f71436"),
+        ("155-22700-000", "labenze:review:155-22700-000:fb9c0eeda6fb7e0cba32"),
+        ("155-23100-BAS", "labenze:review:155-23100-bas:5203792ecf94242158b1"),
+        ("155-23100-BAS", "labenze:review:155-23100-bas:d19c3ee715be140145b3"),
+        ("155-23100-BAS", "labenze:review:155-23100-bas:e27c0da632edbc653034"),
+        ("160-090XX", "labenze:review:160-090xx:098f940e62008e4b561c"),
+    ]
     req_focals = [
         "RM-9025N/NG",
         "RE-1063M",
@@ -123,10 +135,17 @@ def _synthetic_inputs(tmp_path: Path) -> tuple[dict, dict, Path]:
         _item(
             "labenze",
             index,
-            status="exact_pdf" if index < 46 else "family_pdf",
+            status="exact_pdf" if 17 <= index < 63 else "family_pdf",
             asset_name=valid_asset,
-            source_code=(lab_focals[index - 8] if 8 <= index < 8 + len(lab_focals) else None),
+            source_code=(
+                lab_needs_review[index][0]
+                if index < 8
+                else lab_focals[index - 8]
+                if index < 8 + len(lab_focals)
+                else None
+            ),
             needs_review=index < 8,
+            internal_id_override=lab_needs_review[index][1] if index < 8 else None,
         )
         for index in range(462)
     ]
@@ -134,8 +153,20 @@ def _synthetic_inputs(tmp_path: Path) -> tuple[dict, dict, Path]:
         _item(
             "requiez",
             index,
-            status="exact_pdf" if index < 157 else "family_pdf" if index == 157 else "placeholder",
-            asset_name=valid_asset if index <= 157 else None,
+            status=(
+                "placeholder"
+                if index in {1, 2, 3}
+                else "exact_pdf"
+                if index < 157 or 158 <= index < 161
+                else "family_pdf"
+                if index == 157
+                else "placeholder"
+            ),
+            asset_name=(
+                None
+                if index in {1, 2, 3} or index > 160
+                else valid_asset
+            ),
             source_code=req_focals[index] if index < len(req_focals) else None,
         )
         for index in range(314)
@@ -195,6 +226,53 @@ def test_cli_se_puede_invocar_directamente_con_python_314():
     assert "--output-dir" in completed.stdout
 
 
+def test_help_e_import_sintetico_no_dependen_de_importadores_del_catalogo(tmp_path: Path):
+    isolated = tmp_path / "checkout" / "scripts" / SCRIPT.name
+    isolated.parent.mkdir(parents=True)
+    shutil.copyfile(SCRIPT, isolated)
+
+    help_result = subprocess.run(
+        [sys.executable, str(isolated), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    import_result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import importlib.util;"
+                f"s=importlib.util.spec_from_file_location('isolated_audit',r'{isolated}');"
+                "m=importlib.util.module_from_spec(s);"
+                "__import__('sys').modules[s.name]=m;s.loader.exec_module(m);"
+                "print(m.EXPECTED_COUNTS['labenze'])"
+            ),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert help_result.returncode == 0, help_result.stderr
+    assert import_result.returncode == 0, import_result.stderr
+    assert import_result.stdout.strip() == "462"
+
+
+def test_error_explicito_si_los_importadores_reales_no_estan_disponibles(monkeypatch):
+    def unavailable(_name: str):
+        raise ModuleNotFoundError("checkout incompleto")
+
+    monkeypatch.setattr(audit.importlib, "import_module", unavailable)
+
+    with pytest.raises(RuntimeError, match="catalog importers unavailable"):
+        audit.load_catalog_builders()
+
+
 def test_comando_reproducible_cita_rutas_windows_con_espacios():
     command = audit.build_reproducible_command(
         ["C:\\Python314\\python.exe", "scripts/audit.py", "--labenze-pdf", "C:\\Fuentes\\LP Labenze B26.pdf"]
@@ -202,6 +280,51 @@ def test_comando_reproducible_cita_rutas_windows_con_espacios():
 
     assert '"C:\\Fuentes\\LP Labenze B26.pdf"' in command
     assert command.startswith("C:\\Python314\\python.exe scripts/audit.py")
+
+
+def test_output_resuelto_no_puede_contener_ni_quedar_dentro_de_entradas(tmp_path: Path):
+    pdf = tmp_path / "fuentes" / "labenze.pdf"
+    store = tmp_path / "store" / "db.json"
+    assets = tmp_path / "store" / "catalog-assets"
+    pdf.parent.mkdir()
+    store.parent.mkdir()
+    assets.mkdir()
+    pdf.write_bytes(b"%PDF-1.7")
+    store.write_text("{}", encoding="utf-8")
+
+    unsafe = (
+        pdf,
+        pdf / "inventory",
+        assets,
+        assets / "inventory",
+        store.parent,
+        tmp_path,
+    )
+    for output in unsafe:
+        with pytest.raises(ValueError, match="AUDIT_OUTPUT_UNSAFE"):
+            audit.validate_output_path(output, (pdf, store, assets))
+
+    safe = tmp_path / "visual-remediation" / "inventory-20260819T120000Z"
+    assert audit.validate_output_path(safe, (pdf, store, assets)) == safe.resolve()
+
+
+def test_hash_de_arbol_assets_incluye_ruta_relativa_tamano_y_sha(tmp_path: Path):
+    assets = tmp_path / "assets"
+    (assets / "nested").mkdir(parents=True)
+    (assets / "a.png").write_bytes(b"a")
+    (assets / "nested" / "b.png").write_bytes(b"bb")
+    a_sha = "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+    bb_sha = "3b64db95cb55c763391c707108489ae18b4112d783300de38e033b4c98c3deaf"
+    material = (
+        f"a.png\0{1}\0{a_sha}\n"
+        f"nested/b.png\0{2}\0{bb_sha}\n"
+    ).encode("utf-8")
+
+    assert audit.asset_tree_fingerprint(assets) == {
+        "files": 2,
+        "bytes": 3,
+        "sha256": hashlib.sha256(material).hexdigest(),
+    }
 
 
 @pytest.mark.parametrize(
@@ -256,6 +379,15 @@ def test_exporta_776_decisiones_matriz_compartida_y_contact_sheets_sin_aprobar(
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in assets.iterdir()
     }
+    integrity_before = {
+        "assets": {
+            "files": 1,
+            "bytes": next(assets.iterdir()).stat().st_size,
+            "sha256": "tree-before",
+        },
+        "store_sha256": before_store,
+        "pdf_sha256": {"labenze": LABENZE_SHA, "requiez": REQUIEZ_SHA},
+    }
 
     summary = audit.audit_snapshots(
         rebuilt,
@@ -265,6 +397,8 @@ def test_exporta_776_decisiones_matriz_compartida_y_contact_sheets_sin_aprobar(
         input_hashes={"labenze": LABENZE_SHA, "requiez": REQUIEZ_SHA, "store": before_store},
         input_paths={"labenze": "labenze.pdf", "requiez": "requiez.pdf", "store": str(store_path)},
         reproducible_command="python scripts/audit_labenze_requiez_visuals.py --offline",
+        input_integrity_before=integrity_before,
+        post_export_integrity=lambda: json.loads(json.dumps(integrity_before)),
     )
 
     assert summary["counts"] == {
@@ -315,6 +449,10 @@ def test_exporta_776_decisiones_matriz_compartida_y_contact_sheets_sin_aprobar(
         "inventory.jsonl", "inventory.csv", "shared-visual-matrix.json", "summary.json"
     }
     assert summary["input_hashes"]["store"] == before_store
+    assert summary["input_integrity"] == {
+        "before": integrity_before,
+        "after": integrity_before,
+    }
     assert summary["reproducible_command"].endswith("--offline")
     assert hashlib.sha256(store_path.read_bytes()).hexdigest() == before_store
     assert {
@@ -368,6 +506,70 @@ def test_inspecciona_png_hash_bbox_margenes_reglas_y_excepciones_explicitamente(
     assert "asset_missing" in missing["reasons"]
 
 
+def test_foreground_usa_maximo_por_canal_y_transparencia_como_gate_global(tmp_path: Path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    path = assets / "chromatic.png"
+    image = Image.new("RGBA", (100, 100), (255, 255, 255, 255))
+    ImageDraw.Draw(image).rectangle((10, 20, 29, 39), fill=(225, 255, 255, 255))
+    image.putpixel((0, 50), (0, 0, 0, 0))
+    image.save(path, format="PNG")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    target = assets / f"{digest}.png"
+    path.rename(target)
+
+    inspected = audit.inspect_asset(assets, target.name)
+
+    assert inspected["foreground_bbox"] == {
+        "left": 10,
+        "top": 20,
+        "width": 20,
+        "height": 20,
+    }
+    assert inspected["occupancy"] == pytest.approx(0.04)
+    assert inspected["margins"] == {
+        "left": pytest.approx(0.10),
+        "top": pytest.approx(0.20),
+        "right": pytest.approx(0.70),
+        "bottom": pytest.approx(0.60),
+    }
+
+
+@pytest.mark.parametrize(("format_name", "suffix"), (("JPEG", ".jpg"), ("WEBP", ".webp")))
+def test_rechaza_jpeg_webp_aunque_nombre_y_hash_sean_coherentes(
+    tmp_path: Path, format_name: str, suffix: str
+):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    raw = assets / f"raw{suffix}"
+    Image.new("RGB", (32, 32), "navy").save(raw, format=format_name)
+    digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+    coherent = assets / f"{digest}{suffix}"
+    raw.rename(coherent)
+
+    inspected = audit.inspect_asset(assets, coherent.name)
+
+    assert inspected["status"] == "invalid"
+    assert "asset_path_not_png" in inspected["reasons"]
+    assert inspected["mime"] == ""
+
+
+def test_rechaza_bytes_jpeg_disfrazados_con_nombre_png_content_addressed(tmp_path: Path):
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    raw = assets / "raw.jpg"
+    Image.new("RGB", (32, 32), "navy").save(raw, format="JPEG")
+    digest = hashlib.sha256(raw.read_bytes()).hexdigest()
+    disguised = assets / f"{digest}.png"
+    raw.rename(disguised)
+
+    inspected = audit.inspect_asset(assets, disguised.name)
+
+    assert inspected["status"] == "invalid"
+    assert "asset_magic_not_png" in inspected["reasons"]
+    assert inspected["mime"] == ""
+
+
 def test_marca_como_aproximacion_los_rotulos_incrustados_en_el_activo(tmp_path: Path):
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -408,3 +610,28 @@ def test_summary_exige_y_enumera_todos_los_casos_focales(tmp_path: Path):
     assert focal["labenze"]["106-00603-BAT"]["found"] is True
     assert len(focal["labenze"]["ZELIG"]["internal_ids"]) == 8
     assert len(focal["labenze"]["needs_review"]["internal_ids"]) == 8
+
+
+def test_focales_rechazan_swap_semantico_aunque_conserve_conteos_globales(tmp_path: Path):
+    rebuilt, store, assets = _synthetic_inputs(tmp_path)
+    items = store["catalog_published_snapshots"]["requiez"]["payload"]["items"]
+    jun = next(item for item in items if item["internal_id"] == "requiez:re-1063m")
+    crop = next(item for item in items if item["internal_id"] == "requiez:rm-9100-gr")
+    crop_attributes = crop["attributes"]
+    jun["attributes"]["image_match"] = json.loads(json.dumps(crop_attributes["image_match"]))
+    jun["attributes"]["approved_asset"] = json.loads(json.dumps(crop_attributes["approved_asset"]))
+    jun["image_kind"] = "official"
+    crop_attributes.pop("image_match")
+    crop_attributes.pop("approved_asset")
+    crop["image_kind"] = "placeholder"
+
+    with pytest.raises(ValueError, match="AUDIT_FOCAL_CONTRACT"):
+        audit.audit_snapshots(
+            rebuilt,
+            store,
+            assets,
+            tmp_path / "semantic-swap",
+            input_hashes={"labenze": LABENZE_SHA, "requiez": REQUIEZ_SHA, "store": "d" * 64},
+            input_paths={},
+            reproducible_command="synthetic",
+        )

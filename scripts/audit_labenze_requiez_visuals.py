@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib
 import json
 import re
 import subprocess
@@ -16,16 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from mobiliti_saas.worker.catalog_sync.importers.labenze import build_labenze_snapshot
-from mobiliti_saas.worker.catalog_sync.importers.requiez import build_requiez_snapshot
-
 
 EXPECTED_PDF_SHA256 = {
     "labenze": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
@@ -33,7 +30,8 @@ EXPECTED_PDF_SHA256 = {
 }
 EXPECTED_COUNTS = {"labenze": 462, "requiez": 314}
 EXPECTED_MATCH_STATUS = {"exact_pdf": 203, "family_pdf": 417, "placeholder": 156}
-ASSET_NAME = re.compile(r"^[0-9a-f]{64}\.(?:png|jpe?g|webp)$")
+ASSET_NAME = re.compile(r"^[0-9a-f]{64}\.png$")
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 REQUIEZ_FOCALS = (
     "RM-9025N/NG",
     "RE-1063M",
@@ -45,6 +43,41 @@ REQUIEZ_FOCALS = (
     "RE-822/PU/MP",
     "RE-828/PU/PN",
     "RA-28",
+)
+REQUIEZ_JUN_M = (
+    "requiez:re-1063m",
+    "requiez:re-1064m",
+    "requiez:re-1073m",
+)
+REQUIEZ_EXACT_FOCALS = (
+    "requiez:rm-9025n-ng",
+    "requiez:rm-9100-gr",
+    "requiez:rm-9100-ng",
+    "requiez:rm-9101-gr",
+    "requiez:re-822-pu-mp",
+    "requiez:re-828-pu-pn",
+    "requiez:ra-28",
+)
+LABENZE_BAT = "labenze:106-00603-bat"
+LABENZE_ZELIG = (
+    "labenze:155-19100-000",
+    "labenze:155-19110-000",
+    "labenze:155-19120-000",
+    "labenze:155-19130",
+    "labenze:155-19140",
+    "labenze:155-19150",
+    "labenze:155-19160",
+    "labenze:155-19170-nat",
+)
+LABENZE_NEEDS_REVIEW = (
+    "labenze:review:155-10420-xxx:1489741a93de7217494e",
+    "labenze:review:155-22700-000:bd4d5204d4423966bf16",
+    "labenze:review:155-22700-000:e30c754d8b6b34f71436",
+    "labenze:review:155-22700-000:fb9c0eeda6fb7e0cba32",
+    "labenze:review:155-23100-bas:5203792ecf94242158b1",
+    "labenze:review:155-23100-bas:d19c3ee715be140145b3",
+    "labenze:review:155-23100-bas:e27c0da632edbc653034",
+    "labenze:review:160-090xx:098f940e62008e4b561c",
 )
 CONTACT_COLUMNS = 4
 CONTACT_ROWS = 5
@@ -69,6 +102,62 @@ def _sha256_file(path: Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def load_catalog_builders():
+    try:
+        labenze_module = importlib.import_module(
+            "mobiliti_saas.worker.catalog_sync.importers.labenze"
+        )
+        requiez_module = importlib.import_module(
+            "mobiliti_saas.worker.catalog_sync.importers.requiez"
+        )
+        labenze_builder = getattr(labenze_module, "build_labenze_snapshot")
+        requiez_builder = getattr(requiez_module, "build_requiez_snapshot")
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError("catalog importers unavailable") from exc
+    if not callable(labenze_builder) or not callable(requiez_builder):
+        raise RuntimeError("catalog importers unavailable")
+    return labenze_builder, requiez_builder
+
+
+def validate_output_path(output_path: Path, input_paths) -> Path:
+    resolved_output = Path(output_path).resolve()
+    for raw_input in input_paths:
+        resolved_input = Path(raw_input).resolve()
+        if (
+            resolved_output == resolved_input
+            or resolved_output.is_relative_to(resolved_input)
+            or resolved_input.is_relative_to(resolved_output)
+        ):
+            raise ValueError(
+                f"AUDIT_OUTPUT_UNSAFE:{resolved_output}:{resolved_input}"
+            )
+    return resolved_output
+
+
+def asset_tree_fingerprint(assets_dir: Path) -> dict:
+    root = Path(assets_dir).resolve()
+    if not root.is_dir():
+        raise ValueError("AUDIT_ASSETS_MISSING")
+    digest = hashlib.sha256()
+    files = 0
+    total_bytes = 0
+    paths = sorted(
+        (path for path in root.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
+    for path in paths:
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError(f"AUDIT_ASSET_OUTSIDE_ROOT:{path}")
+        relative = path.relative_to(root).as_posix()
+        size = path.stat().st_size
+        file_hash = _sha256_file(path)
+        digest.update(f"{relative}\0{size}\0{file_hash}\n".encode("utf-8"))
+        files += 1
+        total_bytes += size
+    return {"files": files, "bytes": total_bytes, "sha256": digest.hexdigest()}
 
 
 def build_reproducible_command(arguments: list[str]) -> str:
@@ -157,21 +246,46 @@ def _validate_inputs(rebuilt: dict, store: dict, input_hashes: dict[str, str]) -
 def _mask_metrics(image: Image.Image) -> tuple[Image.Image, tuple[int, int, int, int] | None, int]:
     rgba = image.convert("RGBA")
     width, height = rgba.size
-    alpha = rgba.getchannel("A")
-    alpha_extrema = alpha.getextrema()
-    if alpha_extrema[0] < 250:
-        mask = alpha.point(lambda value: 255 if value >= 16 else 0)
+    corners = [
+        rgba.getpixel(point)
+        for point in (
+            (0, 0),
+            (width - 1, 0),
+            (0, height - 1),
+            (width - 1, height - 1),
+        )
+    ]
+    opaque_corners = [pixel for pixel in corners if pixel[3] >= 16]
+    transparent_canvas = not opaque_corners
+    if opaque_corners:
+        background = tuple(
+            round(sum(pixel[channel] for pixel in opaque_corners) / len(opaque_corners))
+            for channel in range(3)
+        )
     else:
-        corners = [
-            rgba.getpixel(point)[:3]
-            for point in ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1))
-        ]
-        background = tuple(round(sum(pixel[channel] for pixel in corners) / 4) for channel in range(3))
-        base = Image.new("RGB", rgba.size, background)
-        difference = ImageChops.difference(rgba.convert("RGB"), base)
-        mask = difference.convert("L").point(lambda value: 255 if value > 20 else 0)
+        background = (255, 255, 255)
+    mask_data = []
+    foreground = 0
+    pixel_data = (
+        rgba.get_flattened_data()
+        if hasattr(rgba, "get_flattened_data")
+        else rgba.getdata()
+    )
+    for red, green, blue, alpha in pixel_data:
+        is_foreground = alpha >= 16 and (
+            transparent_canvas
+            or max(
+                abs(red - background[0]),
+                abs(green - background[1]),
+                abs(blue - background[2]),
+            )
+            > 20
+        )
+        mask_data.append(255 if is_foreground else 0)
+        foreground += int(is_foreground)
+    mask = Image.new("L", rgba.size)
+    mask.putdata(mask_data)
     bbox = mask.getbbox()
-    foreground = sum(mask.histogram()[1:])
     return mask, bbox, foreground
 
 
@@ -257,9 +371,9 @@ def inspect_asset(assets_dir: Path, object_name: str) -> dict:
         "status": "invalid",
         "reasons": [],
     }
-    object_name = str(object_name or "").casefold()
+    object_name = str(object_name or "")
     if not ASSET_NAME.fullmatch(object_name):
-        result["reasons"].append("asset_path_not_content_addressed")
+        result["reasons"].append("asset_path_not_png")
         return result
     path = Path(assets_dir) / object_name
     if not path.is_file():
@@ -273,8 +387,15 @@ def inspect_asset(assets_dir: Path, object_name: str) -> dict:
     result["sha256_valid"] = actual_sha == Path(object_name).stem
     if not result["sha256_valid"]:
         result["reasons"].append("asset_sha256_mismatch")
+        return result
+    if not data.startswith(PNG_MAGIC):
+        result["reasons"].append("asset_magic_not_png")
+        return result
     try:
         with Image.open(path) as probe:
+            if probe.format != "PNG":
+                result["reasons"].append("asset_format_not_png")
+                return result
             probe.verify()
         with Image.open(path) as source:
             source.load()
@@ -283,8 +404,10 @@ def inspect_asset(assets_dir: Path, object_name: str) -> dict:
     except (OSError, UnidentifiedImageError):
         result["reasons"].append("asset_not_pil_image")
         return result
-    mime_by_format = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
-    result["mime"] = mime_by_format.get(str(image_format).upper(), "")
+    if image_format != "PNG":
+        result["reasons"].append("asset_format_not_png")
+        return result
+    result["mime"] = "image/png"
     result["mode"] = image.mode
     result["has_alpha"] = "A" in image.getbands()
     width, height = image.size
@@ -425,22 +548,115 @@ def _inventory_row(supplier: str, item: dict, assets_dir: Path, asset_cache: dic
 
 
 def _focal_cases(rows: list[dict]) -> dict:
-    by_code = {str(row["source_code"]).upper(): row for row in rows}
-    missing = [code for code in REQUIEZ_FOCALS if code not in by_code]
-    lab_replay = by_code.get("106-00603-BAT")
-    zelig = [row for row in rows if row["supplier"] == "labenze" and "ZELIG" in str(row["name"]).upper()]
-    needs_review = [row for row in rows if row["supplier"] == "labenze" and row["code_status"] == "needs_review"]
-    if missing or lab_replay is None or len(zelig) != 8 or len(needs_review) != 8:
-        raise ValueError(
-            "AUDIT_FOCAL_MISSING:"
-            + json.dumps(
-                {"requiez": missing, "106-00603-BAT": lab_replay is not None, "zelig": len(zelig), "needs_review": len(needs_review)},
-                sort_keys=True,
+    by_id = {row["internal_id"]: row for row in rows}
+    errors = []
+
+    def require(
+        internal_id: str,
+        *,
+        supplier: str,
+        status: str,
+        decision: str,
+        assigned: bool,
+        code_status: str,
+    ) -> dict | None:
+        row = by_id.get(internal_id)
+        if row is None:
+            errors.append(f"missing:{internal_id}")
+            return None
+        asset = row["current_asset"]
+        asset_matches = (
+            bool(asset.get("path"))
+            and asset.get("status") == "inspected"
+            and asset.get("mime") == "image/png"
+            and asset.get("sha256_valid") is True
+            if assigned
+            else not asset.get("path") and asset.get("status") == "not_assigned"
+        )
+        expected_image_kind = "official" if assigned else "placeholder"
+        observed = (
+            row["supplier"],
+            row["match_status"],
+            row["initial_decision"],
+            row["code_status"],
+            row["image_kind"],
+            asset_matches,
+        )
+        expected = (
+            supplier,
+            status,
+            decision,
+            code_status,
+            expected_image_kind,
+            True,
+        )
+        if observed != expected:
+            errors.append(f"contract:{internal_id}:{observed!r}")
+        return row
+
+    focal_rows = []
+    for internal_id in REQUIEZ_JUN_M:
+        focal_rows.append(
+            require(
+                internal_id,
+                supplier="requiez",
+                status="placeholder",
+                decision="search_exact",
+                assigned=False,
+                code_status="verified",
             )
         )
+    for internal_id in REQUIEZ_EXACT_FOCALS:
+        focal_rows.append(
+            require(
+                internal_id,
+                supplier="requiez",
+                status="exact_pdf",
+                decision="re_audit_current",
+                assigned=True,
+                code_status="verified",
+            )
+        )
+    lab_replay = require(
+        LABENZE_BAT,
+        supplier="labenze",
+        status="family_pdf",
+        decision="replace_or_rebuild",
+        assigned=True,
+        code_status="verified",
+    )
+    zelig = [
+        require(
+            internal_id,
+            supplier="labenze",
+            status="family_pdf",
+            decision="replace_or_rebuild",
+            assigned=True,
+            code_status="verified",
+        )
+        for internal_id in LABENZE_ZELIG
+    ]
+    needs_review = [
+        require(
+            internal_id,
+            supplier="labenze",
+            status="family_pdf",
+            decision="replace_or_rebuild",
+            assigned=True,
+            code_status="needs_review",
+        )
+        for internal_id in LABENZE_NEEDS_REVIEW
+    ]
+    if errors:
+        raise ValueError("AUDIT_FOCAL_CONTRACT:" + json.dumps(errors, ensure_ascii=True))
+    requiez_rows = {str(row["source_code"]).upper(): row for row in focal_rows}
     return {
         "requiez": {
-            code: {"found": True, "internal_id": by_code[code]["internal_id"], "decision": by_code[code]["initial_decision"]}
+            code: {
+                "found": True,
+                "internal_id": requiez_rows[code]["internal_id"],
+                "decision": requiez_rows[code]["initial_decision"],
+            }
             for code in REQUIEZ_FOCALS
         },
         "labenze": {
@@ -575,11 +791,13 @@ def audit_snapshots(
     input_hashes: dict[str, str],
     input_paths: dict[str, str],
     reproducible_command: str,
+    input_integrity_before: dict | None = None,
+    post_export_integrity=None,
 ) -> dict:
     """Compara snapshots y exporta el baseline sin mutar entradas."""
 
     assets_dir = Path(assets_dir)
-    output_dir = Path(output_dir)
+    output_dir = validate_output_path(Path(output_dir), (assets_dir,))
     if output_dir.exists():
         raise FileExistsError(f"AUDIT_OUTPUT_EXISTS:{output_dir}")
     paired = _validate_inputs(rebuilt, store, input_hashes)
@@ -601,6 +819,17 @@ def audit_snapshots(
     _write_inventory_csv(output_dir / "inventory.csv", rows)
     (output_dir / "shared-visual-matrix.json").write_bytes(_json_bytes(shared))
     contact_sheets = _contact_sheets(rows, assets_dir, output_dir)
+    input_integrity = None
+    if input_integrity_before is not None or post_export_integrity is not None:
+        if input_integrity_before is None or not callable(post_export_integrity):
+            raise ValueError("AUDIT_INPUT_INTEGRITY_CONFIG")
+        input_integrity_after = post_export_integrity()
+        if input_integrity_after != input_integrity_before:
+            raise RuntimeError("AUDIT_INPUT_MUTATED")
+        input_integrity = {
+            "before": input_integrity_before,
+            "after": input_integrity_after,
+        }
     decision_counts = Counter(row["initial_decision"] for row in rows)
     status_counts = Counter(row["match_status"] for row in rows)
     summary = {
@@ -632,6 +861,8 @@ def audit_snapshots(
         "contact_sheets": contact_sheets,
         "reproducible_command": reproducible_command,
     }
+    if input_integrity is not None:
+        summary["input_integrity"] = input_integrity
     artifact_hashes = {
         str(path.relative_to(output_dir)).replace("\\", "/"): _sha256_file(path)
         for path in sorted(output_dir.rglob("*"))
@@ -675,6 +906,22 @@ def _pdf_source(path: Path, supplier: str) -> AuditSourceFile:
     return AuditSourceFile(logical_path, "price_list", None, digest, "application/pdf", path)
 
 
+def _real_input_integrity(
+    labenze_pdf: Path,
+    requiez_pdf: Path,
+    store_path: Path,
+    assets_dir: Path,
+) -> dict:
+    return {
+        "pdf_sha256": {
+            "labenze": _sha256_file(labenze_pdf),
+            "requiez": _sha256_file(requiez_pdf),
+        },
+        "store_sha256": _sha256_file(store_path),
+        "assets": asset_tree_fingerprint(assets_dir),
+    }
+
+
 def run_real_audit(
     labenze_pdf: Path,
     requiez_pdf: Path,
@@ -684,14 +931,27 @@ def run_real_audit(
     *,
     reproducible_command: str,
 ) -> dict:
-    labenze = _pdf_source(Path(labenze_pdf), "labenze")
-    requiez = _pdf_source(Path(requiez_pdf), "requiez")
-    store_path = Path(store_path)
-    assets_dir = Path(assets_dir)
+    labenze_pdf = Path(labenze_pdf).resolve()
+    requiez_pdf = Path(requiez_pdf).resolve()
+    store_path = Path(store_path).resolve()
+    assets_dir = Path(assets_dir).resolve()
+    output_dir = validate_output_path(
+        Path(output_dir),
+        (labenze_pdf, requiez_pdf, store_path, assets_dir),
+    )
+    labenze = _pdf_source(labenze_pdf, "labenze")
+    requiez = _pdf_source(requiez_pdf, "requiez")
     if not store_path.is_file() or not assets_dir.is_dir():
         raise ValueError("AUDIT_STORE_OR_ASSETS_MISSING")
     store_hash = _sha256_file(store_path)
     store = _load_store(store_path)
+    integrity_before = _real_input_integrity(
+        labenze_pdf,
+        requiez_pdf,
+        store_path,
+        assets_dir,
+    )
+    build_labenze_snapshot, build_requiez_snapshot = load_catalog_builders()
     fixed_time = datetime(2026, 8, 19, tzinfo=timezone.utc)
     rebuilt = {
         "labenze": build_labenze_snapshot((labenze,), synced_at=fixed_time),
@@ -710,13 +970,14 @@ def run_real_audit(
             "assets": str(assets_dir.resolve()),
         },
         reproducible_command=reproducible_command,
+        input_integrity_before=integrity_before,
+        post_export_integrity=lambda: _real_input_integrity(
+            labenze_pdf,
+            requiez_pdf,
+            store_path,
+            assets_dir,
+        ),
     )
-    if (
-        _sha256_file(labenze.local_path) != labenze.sha256
-        or _sha256_file(requiez.local_path) != requiez.sha256
-        or _sha256_file(store_path) != store_hash
-    ):
-        raise RuntimeError("AUDIT_INPUT_MUTATED")
     return summary
 
 
