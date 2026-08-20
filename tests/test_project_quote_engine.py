@@ -420,7 +420,9 @@ def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):
             for row in range(1, cotizacion.max_row + 1)
         )
         assert cotizacion["F17"].value == (
-            "=Mobiliti!X14+Mobiliti!X15*2+Mobiliti!X16*3/10"
+            "=Mobiliti!W14"
+            "+Mobiliti!W15*Mobiliti!H15/Mobiliti!H14"
+            "+Mobiliti!W16*Mobiliti!H16/Mobiliti!H14"
         )
         assert cotizacion["A17"].value == "=Mobiliti!D14"
         assert cotizacion["C17"].value == "=Quotation!D9"

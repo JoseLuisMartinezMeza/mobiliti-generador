@@ -3191,7 +3191,7 @@ def test_cotizacion_declares_audited_formula_contract_for_official_f_i() -> None
     assert all("#REF!" not in formula for formula in formulas.values())
 
 
-def test_composed_product_formula_uses_exact_mobiliti_terms() -> None:
+def test_composed_product_formula_uses_row_prices_and_live_quantities() -> None:
     terms = (
         CotizacionPriceTerm(14, Decimal("1"), Decimal("1")),
         CotizacionPriceTerm(15, Decimal("2"), Decimal("1")),
@@ -3204,7 +3204,11 @@ def test_composed_product_formula_uses_exact_mobiliti_terms() -> None:
     )
 
     assert formulas == {
-        "F": "=Mobiliti!X14+Mobiliti!X15*2+Mobiliti!X16*3/10",
+        "F": (
+            "=Mobiliti!W14"
+            "+Mobiliti!W15*Mobiliti!H15/Mobiliti!H14"
+            "+Mobiliti!W16*Mobiliti!H16/Mobiliti!H14"
+        ),
         "I": "=F17-H17",
     }
 

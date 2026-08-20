@@ -550,7 +550,9 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
             for row in quotation_rows
         ] == list(physical_quantities)
         assert cotizacion["F17"].value == (
-            "=Mobiliti!X14+Mobiliti!X15*2+Mobiliti!X16*3/10"
+            "=Mobiliti!W14"
+            "+Mobiliti!W15*Mobiliti!H15/Mobiliti!H14"
+            "+Mobiliti!W16*Mobiliti!H16/Mobiliti!H14"
         )
         assert cotizacion["A17"].value == "=Mobiliti!D14"
         assert cotizacion["C17"].value == f"=Quotation!D{quotation_rows[0]}"
@@ -786,12 +788,18 @@ def test_project_quote_expands_past_16_sections_and_33_components(
     visible_formula_rows = sorted(
         int(coordinate[1:])
         for coordinate, cell in cotizacion.items()
-        if coordinate.startswith("F") and "Mobiliti!X" in _formula(cell)
+        if coordinate.startswith("F")
+        and any(
+            f"Mobiliti!{column}" in _formula(cell)
+            for column in ("W", "X")
+        )
     )
     assert len(visible_formula_rows) == 698
     first_visible_row = visible_formula_rows[0]
     assert _formula(cotizacion[f"F{first_visible_row}"]) == (
-        "Mobiliti!X14+Mobiliti!X15+Mobiliti!X16"
+        "Mobiliti!W14"
+        "+Mobiliti!W15*Mobiliti!H15/Mobiliti!H14"
+        "+Mobiliti!W16*Mobiliti!H16/Mobiliti!H14"
     )
 
 
