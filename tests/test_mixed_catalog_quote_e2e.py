@@ -1231,8 +1231,10 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
         assert audit["F2"].value == 11
         assert audit["O2"].value == manifest["items"][1]["row_hash"]
 
-        mobiliti_row = _rows_with_value(
-            mobiliti, 4, "Alien Task Chair imported-only"
+        mobiliti_row = _ordered_mobiliti_rows_for_product_names(
+            mobiliti,
+            quotation,
+            ["Alien Task Chair imported-only"],
         )[0]
         cotizacion_row = _rows_with_value(
             cotizacion, 1, f"=Mobiliti!D{mobiliti_row}"
@@ -1242,6 +1244,7 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
         edited_row = int(cost_formula.removeprefix("=Quotation!K"))
         assert edited_row != 11
         assert quotation.cell(edited_row, 2).value == "Alien Task Chair imported-only"
+        assert mobiliti.cell(mobiliti_row, 4).value == f"=Quotation!B{edited_row}"
         assert quotation.cell(edited_row, 11).value == 82
         assert mobiliti.cell(mobiliti_row, 16).value == "Centro"
         assert mobiliti.cell(mobiliti_row, 6).value == "Sunon Inc"
@@ -1313,16 +1316,27 @@ def test_explicit_original_does_not_cross_wire_same_row_parser_image(
 
     workbook = load_workbook(output, data_only=False)
     try:
+        assert workbook["Quotation"]["B9"].value == "Silla Offiho"
         original = load_workbook(imported_source, data_only=False)
         try:
-            assert workbook["Quotation"]["B9"].value == original["Quotation"]["B9"].value
+            assert original["Quotation"]["B9"].value == (
+                "DV74 I-Varna II Conference Table"
+            )
         finally:
             original.close()
+        quotation = workbook["Quotation"]
+        mobiliti = workbook["Mobiliti"]
         cotizacion = workbook["Cotizacion"]
-        product_row = next(
-            row
-            for row in range(16, cotizacion.max_row + 1)
-            if cotizacion.cell(row, 1).value == "Silla Offiho"
+        quotation_row = _rows_with_value(quotation, 2, "Silla Offiho")[0]
+        mobiliti_row = _row_for_formula(
+            mobiliti,
+            4,
+            f"=Quotation!B{quotation_row}",
+        )
+        product_row = _row_for_formula(
+            cotizacion,
+            1,
+            f"=Mobiliti!D{mobiliti_row}",
         )
         product_images = [
             image
@@ -1548,10 +1562,11 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
             for key in section["line_ids"]
         ]
         expected_names = [item["name"] for item in ordered_items]
-        mobiliti_rows = [
-            _rows_with_value(mobiliti, 4, name)[0]
-            for name in expected_names
-        ]
+        mobiliti_rows = _ordered_mobiliti_rows_for_product_names(
+            mobiliti,
+            quotation,
+            expected_names,
+        )
         cotizacion_rows = [
             _rows_with_value(cotizacion, 1, f"=Mobiliti!D{row}")[0]
             for row in mobiliti_rows
@@ -1642,10 +1657,9 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
             template_freight_formula,
             origin="H21",
         ).translate_formula(f"H{subtotal + 1}")
-        assert cotizacion.cell(before_tax, 8).value == Translator(
-            template_before_tax_formula,
-            origin="H22",
-        ).translate_formula(f"H{before_tax}")
+        assert cotizacion.cell(before_tax, 8).value == (
+            f"=H{subtotal}+H{subtotal + 1}"
+        )
         assert cotizacion.cell(tax, 8).value == Translator(
             template_tax_formula,
             origin="H23",

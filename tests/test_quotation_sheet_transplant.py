@@ -2737,7 +2737,13 @@ def _destination_with_table_registry(
     destination = XlsxPackage.read(OFFICIAL_TEMPLATE)
     parts = dict(destination.parts)
     content_types = ET.fromstring(parts["[Content_Types].xml"])
+    existing_ids, existing_names = _destination_table_registry(destination)
     for offset, (table_id, table_name) in enumerate(identities, start=1):
+        normalized_name = table_name.casefold()
+        if table_id in existing_ids and normalized_name in existing_names:
+            continue
+        if table_id in existing_ids or normalized_name in existing_names:
+            raise ValueError("Identidad de tabla destino incompatible en fixture")
         part_name = f"xl/tables/destination-table-{offset}.xml"
         table = ET.Element(
             f"{{{MAIN}}}table",
@@ -2783,6 +2789,8 @@ def _destination_with_table_registry(
                 ),
             },
         )
+        existing_ids.add(table_id)
+        existing_names.add(normalized_name)
     parts["[Content_Types].xml"] = _xml_bytes(content_types)
     return replace(destination, parts=parts)
 

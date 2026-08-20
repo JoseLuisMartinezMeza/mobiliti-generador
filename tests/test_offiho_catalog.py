@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 import hashlib
 import json
+import re
 
 import pytest
 from openpyxl import load_workbook
@@ -16,6 +17,16 @@ from scripts.build_offiho_catalog import extract_offiho_identity
 from scripts.build_offiho_catalog import match_official_product
 from scripts.build_offiho_catalog import parse_inventory_xls
 from scripts.build_offiho_catalog import parse_pdf_price_index
+
+
+def _cotizacion_description_sources(workbook):
+    quotation = workbook["Quotation"]
+    resolved = []
+    for (cell,) in workbook["Cotizacion"].iter_rows(min_col=3, max_col=3):
+        match = re.fullmatch(r"=Quotation!D([1-9][0-9]*)", str(cell.value or ""))
+        if match is not None:
+            resolved.append((cell, quotation.cell(int(match.group(1)), 4)))
+    return resolved
 
 
 def fake_runtime_catalog(
@@ -125,9 +136,8 @@ def test_offiho_description_reaches_cart_and_quotation_workbook(tmp_path):
     generate_online_quote(output, final_output, {"tipo_cambio": "20"})
     final = load_workbook(final_output, read_only=True)
     assert any(
-        description in str(cell.value or "")
-        for row in final["Cotizacion"].iter_rows()
-        for cell in row
+        description in str(source.value or "")
+        for _cell, source in _cotizacion_description_sources(final)
     )
     final.close()
 
@@ -207,7 +217,8 @@ def test_offiho_cart_uses_inventory_key_when_variant_name_is_blank(tmp_path):
 
     final = load_workbook(final_path, read_only=True)
     assert final["Quotation"]["B9"].value == "VESPER NEGRA"
-    assert "modelo VESPER NEGRA" in final["Cotizacion"]["C17"].value
+    assert final["Cotizacion"]["C17"].value == "=Quotation!D9"
+    assert "modelo VESPER NEGRA" in final["Quotation"]["D9"].value
     final.close()
     with pytest.raises(ValueError, match="Cantidad invalida"):
         build_offiho_cart_payload(
@@ -817,9 +828,8 @@ def test_offiho_missing_price_warns_in_temporary_and_final_workbooks(tmp_path):
     generate_online_quote(source, output, {"tipo_cambio": "20"})
     final = load_workbook(output, data_only=False)
     assert any(
-        "ADVERTENCIA: PRECIO POR CONFIRMAR" in str(cell.value or "")
-        for row in final["Cotizacion"].iter_rows()
-        for cell in row
+        "ADVERTENCIA: PRECIO POR CONFIRMAR" in str(source_cell.value or "")
+        for _cell, source_cell in _cotizacion_description_sources(final)
     )
     assert any(
         cell.value == 0
@@ -848,9 +858,8 @@ def test_offiho_warning_survives_online_quote_generation(tmp_path):
     wb = load_workbook(output, data_only=False)
     assert {"Cotizacion", "Mobiliti", "Quotation"}.issubset(wb.sheetnames)
     assert any(
-        "ADVERTENCIA: PRODUCTO AGOTADO" in str(cell.value or "")
-        for row in wb["Cotizacion"].iter_rows()
-        for cell in row
+        "ADVERTENCIA: PRODUCTO AGOTADO" in str(source.value or "")
+        for _cell, source in _cotizacion_description_sources(wb)
     )
     wb.close()
 
@@ -873,17 +882,17 @@ def test_offiho_insufficient_warning_preserves_available_quantity_in_final_quote
 
     wb = load_workbook(output, data_only=False)
     warning_cells = [
-        str(cell.value or "")
-        for row in wb["Cotizacion"].iter_rows()
-        for cell in row
-        if "ADVERTENCIA: EXISTENCIA INSUFICIENTE" in str(cell.value or "").upper()
+        str(source.value or "")
+        for _cell, source in _cotizacion_description_sources(wb)
+        if "ADVERTENCIA: EXISTENCIA INSUFICIENTE"
+        in str(source.value or "").upper()
     ]
     assert warning_cells
     assert "DISPONIBLE 2" in warning_cells[0].upper()
     wb.close()
 
 
-def test_final_cotizacion_fills_only_warning_descriptions_yellow(tmp_path):
+def test_final_cotizacion_links_only_warning_descriptions_from_quotation(tmp_path):
     from mobiliti_saas.quote_engine.offiho_catalog import (
         OffihoCatalogItem,
         build_offiho_cart_payload,
@@ -927,22 +936,37 @@ def test_final_cotizacion_fills_only_warning_descriptions_yellow(tmp_path):
 
     workbook = load_workbook(output, data_only=False)
     sheet = workbook["Cotizacion"]
-    warning_cells = [cell for cell in sheet["C"] if "ADVERTENCIA:" in str(cell.value or "").upper()]
+    description_sources = _cotizacion_description_sources(workbook)
+    warning_cells = [
+        (cell, source)
+        for cell, source in description_sources
+        if "ADVERTENCIA:" in str(source.value or "").upper()
+    ]
     assert len(warning_cells) == 3
-    for code in ("OHE-501", "OHE-502", "OHE-503"):
-        cell = next(cell for cell in warning_cells if code in str(cell.value or ""))
-        assert cell.fill.fill_type == "solid"
-        assert cell.fill.fgColor.rgb.endswith("FFF2CC")
-    both = next(cell for cell in warning_cells if "OHE-503" in str(cell.value or ""))
-    assert "ADVERTENCIA: PRODUCTO AGOTADO" in both.value
-    assert "ADVERTENCIA: PRECIO POR CONFIRMAR" in both.value
+    quotation = workbook["Quotation"]
+    warning_by_name = {
+        quotation.cell(source.row, 2).value: (cell, source)
+        for cell, source in warning_cells
+    }
+    assert set(warning_by_name) == {
+        "AGOTADO",
+        "PRECIO PENDIENTE",
+        "AGOTADO SIN PRECIO",
+    }
+    for cell, source in warning_by_name.values():
+        assert cell.value == f"=Quotation!D{source.row}"
+    _both_cell, both_source = warning_by_name["AGOTADO SIN PRECIO"]
+    assert "ADVERTENCIA: PRODUCTO AGOTADO" in both_source.value
+    assert "ADVERTENCIA: PRECIO POR CONFIRMAR" in both_source.value
 
-    normal = next(cell for cell in sheet["C"] if "OHE-504" in str(cell.value or ""))
-    assert not (
-        normal.fill.fill_type == "solid"
-        and str(normal.fill.fgColor.rgb or "").endswith("FFF2CC")
+    normal_cell, normal_source = next(
+        pair
+        for pair in description_sources
+        if quotation.cell(pair[1].row, 2).value == "NORMAL"
     )
-    category = next(cell for cell in sheet["A"] if cell.value == "=Quotation!A8")
+    assert normal_cell.value == f"=Quotation!D{normal_source.row}"
+    assert "ADVERTENCIA:" not in str(normal_source.value or "").upper()
+    category = next(cell for cell in sheet["A"] if cell.value == "Offiho")
     assert not (
         category.fill.fill_type == "solid"
         and str(category.fill.fgColor.rgb or "").endswith("FFF2CC")

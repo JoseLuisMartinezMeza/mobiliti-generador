@@ -1020,20 +1020,29 @@ def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
         and (formula := _formula(cell)).startswith("Mobiliti!D")
     )
     assert len(visible_name_rows) == 115
-    referenced_price_rows = Counter(
+    referenced_x_rows = Counter(
         int(row)
         for formula in cotizacion_formulas
         for row in re.findall(r"Mobiliti!X\$?(\d+)", formula)
     )
-    assert set(layout.item_rows) <= set(referenced_price_rows)
-    assert any(
-        set(layout.item_rows[:3])
-        <= {
-            int(row)
-            for row in re.findall(r"Mobiliti!X\$?(\d+)", formula)
-        }
+    referenced_w_rows = Counter(
+        int(row)
         for formula in cotizacion_formulas
+        for row in re.findall(r"Mobiliti!W\$?(\d+)", formula)
     )
+    compound_rows = layout.item_rows[:3]
+    assert set(layout.item_rows[3:]) <= set(referenced_x_rows)
+    assert set(compound_rows) <= set(referenced_w_rows)
+    assert set(layout.item_rows) <= (
+        set(referenced_x_rows) | set(referenced_w_rows)
+    )
+    assert (
+        f"Mobiliti!W{compound_rows[0]}"
+        f"+Mobiliti!W{compound_rows[1]}"
+        f"*Mobiliti!H{compound_rows[1]}/Mobiliti!H{compound_rows[0]}"
+        f"+Mobiliti!W{compound_rows[2]}"
+        f"*Mobiliti!H{compound_rows[2]}/Mobiliti!H{compound_rows[0]}"
+    ) in cotizacion_formulas
     _assert_subtotals_cover_all_items(
         package,
         layout,

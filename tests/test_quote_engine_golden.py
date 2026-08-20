@@ -63,6 +63,15 @@ def money(value: Decimal) -> Decimal:
     return value.quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
+def _mobiliti_row_for_quotation_row(mobiliti, quotation_row: int) -> int:
+    formula = f"=Quotation!B{quotation_row}"
+    return next(
+        row
+        for row in range(1, mobiliti.max_row + 1)
+        if mobiliti.cell(row, 4).value == formula
+    )
+
+
 def reference_totals(rows: list[tuple[Decimal, Decimal, Decimal]]):
     subtotal = Decimal("0")
     for price, quantity, discount in rows:
@@ -389,17 +398,13 @@ def test_supplier_final_workbook_uses_official_template_and_frozen_price_contrac
     # El paquete oficial, no el writer legacy, gobierna B4, K4/K6 y las
     # fórmulas visibles; J contiene el único costo congelado por producto.
     assert cot["B4"].value is None
-    mobiliti_row = next(
-        row
-        for row in range(1, mobiliti.max_row + 1)
-        if mobiliti.cell(row, 4).value == "Producto de prueba"
-    )
+    mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, 9)
     product_row = next(
         row
         for row in range(1, cot.max_row + 1)
         if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
     )
-    assert mobiliti.cell(mobiliti_row, 6).value == "ALMA"
+    assert mobiliti.cell(mobiliti_row, 6).value == "Alma - Exterior"
     assert mobiliti.cell(mobiliti_row, 10).value == "=Quotation!K9"
     assert quotation["K9"].value == pytest.approx(123.46)
     assert mobiliti["K4"].value is False
@@ -446,15 +451,11 @@ def test_mixed_final_workbook_uses_official_formulas_and_one_frozen_cost_per_ite
         assert wb.sheetnames.count("Quotation") == 1
         cot = wb["Cotizacion"]
         mobiliti = wb["Mobiliti"]
-        # Las identidades se materializan como texto y Cotizacion referencia X;
-        # ya no se prueban fórmulas ROUND ni enlaces directos a Quotation.
+        # Las identidades conservan referencias vivas Quotation -> Mobiliti y
+        # Cotizacion referencia el precio físico X de cada fila Mobiliti.
         product_row_map = []
         for source_row in (9, 10):
-            product_name = wb["Quotation"].cell(source_row, 2).value
-            mobiliti_row = next(
-                row for row in range(1, mobiliti.max_row + 1)
-                if mobiliti.cell(row, 4).value == product_name
-            )
+            mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, source_row)
             cot_row = next(
                 row for row in range(1, cot.max_row + 1)
                 if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
@@ -527,11 +528,9 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
             for row in range(8, quotation.max_row + 1)
             if quotation.cell(row, 2).value == "Silla KUN configurable"
         )
-        alma_name = quotation.cell(alma_source_row, 2).value
-        mobiliti_row = next(
-            row
-            for row in range(1, mobiliti.max_row + 1)
-            if mobiliti.cell(row, 4).value == alma_name
+        mobiliti_row = _mobiliti_row_for_quotation_row(
+            mobiliti,
+            alma_source_row,
         )
         cot_row = next(
             row
@@ -557,7 +556,7 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
         assert quotation.cell(alma_source_row, 11).value == pytest.approx(5274.35)
         assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
         assert mobiliti.cell(mobiliti_row, 24).value == (
-            f"=(W{mobiliti_row}*H{mobiliti_row})"
+            f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row})"
         )
         assert cot.cell(cot_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
         assert wb["Quotation_Data"].sheet_state == "veryHidden"
@@ -575,11 +574,7 @@ def test_standard_workbook_keeps_official_provider_header_and_formulas(tmp_path)
     wb = load_workbook(output, data_only=False)
     cot = wb["Cotizacion"]
     mobiliti = wb["Mobiliti"]
-    mobiliti_row = next(
-        row
-        for row in range(1, mobiliti.max_row + 1)
-        if mobiliti.cell(row, 4).value == "Producto de prueba"
-    )
+    mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, 9)
     product_row = next(
         row
         for row in range(1, cot.max_row + 1)
@@ -602,7 +597,9 @@ def test_standard_workbook_keeps_official_provider_header_and_formulas(tmp_path)
         for column in (4, 5, 6, 8, 10, 11, 16)
     )
     assert str(mobiliti.cell(unused_row, 23).value).startswith("=IF(")
-    assert mobiliti.cell(unused_row, 24).value == f"=(W{unused_row}*H{unused_row})"
+    assert mobiliti.cell(unused_row, 24).value == (
+        f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{unused_row})"
+    )
     assert mobiliti["K4"].value is False
     assert getattr(mobiliti["K6"].value, "text", None) == '=_FV(J6,"High")'
     assert wb["Quotation_Data"].sheet_state == "veryHidden"

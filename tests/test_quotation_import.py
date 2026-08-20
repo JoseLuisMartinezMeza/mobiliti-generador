@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date
 from io import BytesIO
 from pathlib import Path
 import struct
@@ -240,6 +241,7 @@ def test_normalize_imported_items_uses_selected_currency_and_allowed_overrides(i
             }
         ],
         discount_percent="40",
+        today=date(2026, 7, 21),
     )
 
     assert rows[0]["original_unit_price"] == "82.000000"
@@ -357,6 +359,7 @@ def test_normalize_imported_items_allows_payload_currency_when_original_row_has_
         quote_currency="MXN",
         rate_rows=[{"currency": "USD", "mxn_per_unit": "18.50", "effective_date": "2026-07-21"}],
         discount_percent="0",
+        today=date(2026, 7, 21),
     )
 
     assert rows[0]["original_currency"] == "USD"
