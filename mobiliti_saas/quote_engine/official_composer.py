@@ -242,7 +242,7 @@ class CotizacionMetadata:
 
 @dataclass(frozen=True)
 class CotizacionPriceTerm:
-    """Término racional que enlaza un precio visible con ``Mobiliti!X``."""
+    """Término racional que enlaza un precio visible con una fila Mobiliti."""
 
     mobiliti_row: int
     numerator: Decimal = Decimal("1")
@@ -283,6 +283,13 @@ class CotizacionFormulaContract:
         parts = ["="]
         formula_length = 1
         expected_f_tokens: list[tuple[str, str, str]] = []
+        composed = len(price_terms) > 1
+        principal_row = price_terms[0].mobiliti_row
+        if composed and (
+            price_terms[0].numerator != 1
+            or price_terms[0].denominator != 1
+        ):
+            raise ValueError("Principal de precio compuesto inválido")
         for index, term in enumerate(price_terms):
             if index:
                 formula_length = _append_bounded_formula(
@@ -291,14 +298,44 @@ class CotizacionFormulaContract:
                     formula_length,
                 )
                 expected_f_tokens.append((Token.OP_IN, "", "+"))
-            reference = f"Mobiliti!X{term.mobiliti_row}"
+            price_column = "W" if composed else "X"
+            reference = f"Mobiliti!{price_column}{term.mobiliti_row}"
             formula_length = _append_bounded_formula(
                 parts,
                 reference,
                 formula_length,
             )
             expected_f_tokens.append((Token.OPERAND, Token.RANGE, reference))
-            if term.numerator != 1:
+            if composed and index:
+                quantity_reference = f"Mobiliti!H{term.mobiliti_row}"
+                formula_length = _append_bounded_formula(
+                    parts,
+                    f"*{quantity_reference}",
+                    formula_length,
+                )
+                expected_f_tokens.extend(
+                    (
+                        (Token.OP_IN, "", "*"),
+                        (Token.OPERAND, Token.RANGE, quantity_reference),
+                    )
+                )
+                principal_quantity_reference = f"Mobiliti!H{principal_row}"
+                formula_length = _append_bounded_formula(
+                    parts,
+                    f"/{principal_quantity_reference}",
+                    formula_length,
+                )
+                expected_f_tokens.extend(
+                    (
+                        (Token.OP_IN, "", "/"),
+                        (
+                            Token.OPERAND,
+                            Token.RANGE,
+                            principal_quantity_reference,
+                        ),
+                    )
+                )
+            elif term.numerator != 1:
                 numerator = _excel_decimal(term.numerator)
                 formula_length = _append_bounded_formula(
                     parts,
@@ -311,7 +348,7 @@ class CotizacionFormulaContract:
                         (Token.OPERAND, Token.NUMBER, numerator),
                     )
                 )
-            if term.denominator != 1:
+            if not composed and term.denominator != 1:
                 denominator = _excel_decimal(term.denominator)
                 formula_length = _append_bounded_formula(
                     parts,
@@ -1744,6 +1781,14 @@ _COTIZACION_PRICE_TERM = re.compile(
     rf"(?:\*(?P<numerator>{_COTIZACION_POSITIVE_DECIMAL}))?"
     rf"(?:/(?P<denominator>{_COTIZACION_POSITIVE_DECIMAL}))?"
 )
+_COTIZACION_COMPOSED_PRINCIPAL = re.compile(
+    r"Mobiliti!W(?P<row>[1-9][0-9]*)"
+)
+_COTIZACION_COMPOSED_COMPLEMENT = re.compile(
+    r"Mobiliti!W(?P<row>[1-9][0-9]*)"
+    r"\*Mobiliti!H(?P<quantity_row>[1-9][0-9]*)"
+    r"/Mobiliti!H(?P<principal_row>[1-9][0-9]*)"
+)
 _COTIZACION_DESCRIPTION_FORMULA = re.compile(
     r"=Quotation!D(?P<row>[1-9][0-9]*)\Z"
 )
@@ -1771,18 +1816,39 @@ def _cotizacion_price_terms_from_formula(
 ) -> tuple[CotizacionPriceTerm, ...]:
     if not isinstance(formula, str) or not formula:
         raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
+    raw_terms = formula.split("+")
     terms: list[CotizacionPriceTerm] = []
-    for raw_term in formula.split("+"):
-        match = _COTIZACION_PRICE_TERM.fullmatch(raw_term)
-        if match is None:
+    principal_match = _COTIZACION_COMPOSED_PRINCIPAL.fullmatch(raw_terms[0])
+    if principal_match is not None:
+        principal_row = int(principal_match.group("row"))
+        if len(raw_terms) == 1:
             raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
-        terms.append(
-            CotizacionPriceTerm(
-                int(match.group("row")),
-                Decimal(match.group("numerator") or "1"),
-                Decimal(match.group("denominator") or "1"),
+        terms.append(CotizacionPriceTerm(principal_row))
+        for raw_term in raw_terms[1:]:
+            match = _COTIZACION_COMPOSED_COMPLEMENT.fullmatch(raw_term)
+            if (
+                match is None
+                or match.group("row") != match.group("quantity_row")
+                or int(match.group("principal_row")) != principal_row
+            ):
+                raise ValueError(
+                    "Cotizacion no cumple el contrato exacto de fórmulas"
+                )
+            terms.append(CotizacionPriceTerm(int(match.group("row"))))
+    else:
+        for raw_term in raw_terms:
+            match = _COTIZACION_PRICE_TERM.fullmatch(raw_term)
+            if match is None:
+                raise ValueError(
+                    "Cotizacion no cumple el contrato exacto de fórmulas"
+                )
+            terms.append(
+                CotizacionPriceTerm(
+                    int(match.group("row")),
+                    Decimal(match.group("numerator") or "1"),
+                    Decimal(match.group("denominator") or "1"),
+                )
             )
-        )
     result = tuple(terms)
     expected = CotizacionFormulaContract().product_formulas(
         target_row=1,
