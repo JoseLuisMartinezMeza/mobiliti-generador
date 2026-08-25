@@ -198,6 +198,18 @@ def test_same_name_uses_price_from_largest_quantity_and_totals_that_price():
         assert _cell(output, f"Y{row}").findtext(f"{{{MAIN}}}f") == (
             f"(X{row}*H{row})"
         )
+        assert _cell(output, f"AB{row}").findtext(f"{{{MAIN}}}f") == (
+            f"X{row}*AA{row}"
+        )
+        assert _cell(output, f"AC{row}").findtext(f"{{{MAIN}}}f") == (
+            f'IF(AA{row}>Z{row},"ERROR",(X{row}-AB{row}))'
+        )
+        assert _cell(output, f"AD{row}").findtext(f"{{{MAIN}}}f") == (
+            f"AC{row}*H{row}"
+        )
+        assert _cell(output, f"AE{row}").findtext(f"{{{MAIN}}}f") == (
+            f'IF(A{row + 1}=TRUE,MAX(0,1-(AF{row}/X{row})),"NA")'
+        )
 
 
 def test_project_cost_references_the_final_quotation_row_instead_of_freezing_a_number():

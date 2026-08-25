@@ -466,7 +466,7 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
         assert cot.cell(imported_cot, 7).value == f"=$G${tarkett_cot}"
         for row in (tarkett_mob, alma_mob, imported_mob):
             assert mobiliti.cell(row, 27).value == f"=Cotizacion!G${tarkett_cot}"
-            assert mobiliti.cell(row, 28).value == f"=W{row}*AA{row}"
+            assert mobiliti.cell(row, 28).value == f"=X{row}*AA{row}"
         assert cot.cell(tarkett_cot, 6).value == f"=Mobiliti!X{tarkett_mob}"
         assert cot.cell(alma_cot, 6).value == f"=Mobiliti!X{alma_mob}"
         assert cot.cell(imported_cot, 6).value == f"=Mobiliti!X{imported_mob}"
@@ -753,7 +753,7 @@ def test_mixed_lumbro_accessories_are_selective_and_use_frozen_rate(
                 lumbro_prices[code].price_mxn,
                 mxn_rate,
             )
-            assert mobiliti.cell(row, 28).value == f"=W{row}*AA{row}"
+            assert mobiliti.cell(row, 28).value == f"=X{row}*AA{row}"
         parent_cot = _row_for_formula(cot, 1, "=Quotation!B9")
         assert cot.cell(parent_cot, 6).value == f"=Mobiliti!X{parent_mob}"
         for offset, row in enumerate(automatic_rows, start=1):
@@ -1128,7 +1128,7 @@ def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets
                 2.68 if source_row == 9 else 0.01
             )
             assert mobiliti.cell(mobiliti_row, 28).value == (
-                f"=W{mobiliti_row}*AA{mobiliti_row}"
+                f"=X{mobiliti_row}*AA{mobiliti_row}"
             )
             assert mobiliti.cell(mobiliti_row, 23).value.startswith(
                 f'=IF(F{mobiliti_row}="Offiho",J{mobiliti_row},'

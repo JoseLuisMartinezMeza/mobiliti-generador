@@ -1320,7 +1320,7 @@ def verify_output_contract(
     first_product_row = row_map.sections[0].product_start
     last_product_row = row_map.last_product_row
     for target_row in row_map.item_rows:
-        for column in ("W", "X", "Y"):
+        for column in ("W", "X", "Y", "AB", "AC", "AD", "AE"):
             if _formula_in_root(mobiliti, f"{column}{target_row}") is None:
                 raise ValueError(f"Fórmula oficial Mobiliti!{column}{target_row} ausente")
         x_formula = _formula_in_root(mobiliti, f"X{target_row}") or ""
@@ -1339,6 +1339,23 @@ def verify_output_contract(
             f"(X{target_row}*H{target_row})"
         ):
             raise ValueError(f"Importe uniforme Mobiliti!Y{target_row} desactualizado")
+        expected_downstream = {
+            "AB": f"X{target_row}*AA{target_row}",
+            "AC": (
+                f'IF(AA{target_row}>Z{target_row},"ERROR",'
+                f"(X{target_row}-AB{target_row}))"
+            ),
+            "AD": f"AC{target_row}*H{target_row}",
+            "AE": (
+                f"IF(A{target_row + 1}=TRUE,MAX(0,"
+                f'1-(AF{target_row}/X{target_row})),"NA")'
+            ),
+        }
+        for column, expected_formula in expected_downstream.items():
+            if _formula_in_root(mobiliti, f"{column}{target_row}") != expected_formula:
+                raise ValueError(
+                    f"Cadena uniforme Mobiliti!{column}{target_row} desactualizada"
+                )
         price = _cell_in_root(mobiliti, f"J{target_row}")
         if price is None:
             raise ValueError(f"Mobiliti!J{target_row} no contiene un costo")

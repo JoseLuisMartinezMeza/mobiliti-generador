@@ -568,6 +568,15 @@ def _set_uniform_product_price_formulas(
             f"$D${first_row}:$D${last_row},D{target_row}))"
         ),
         25: f"(X{target_row}*H{target_row})",
+        28: f"X{target_row}*AA{target_row}",
+        29: (
+            f'IF(AA{target_row}>Z{target_row},"ERROR",'
+            f"(X{target_row}-AB{target_row}))"
+        ),
+        31: (
+            f"IF(A{target_row + 1}=TRUE,MAX(0,"
+            f'1-(AF{target_row}/X{target_row})),"NA")'
+        ),
     }
     for column, formula_text in formulas.items():
         cell = _find_cell(row, column)

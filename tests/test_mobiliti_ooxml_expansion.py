@@ -1301,6 +1301,18 @@ def test_all_product_rows_keep_styles_and_used_unused_rows_match_official_formul
                         )
                     elif column == 25:
                         expected = f"(X{row_number}*H{row_number})"
+                    elif column == 28:
+                        expected = f"X{row_number}*AA{row_number}"
+                    elif column == 29:
+                        expected = (
+                            f'IF(AA{row_number}>Z{row_number},"ERROR",'
+                            f"(X{row_number}-AB{row_number}))"
+                        )
+                    elif column == 31:
+                        expected = (
+                            f"IF(A{row_number + 1}=TRUE,MAX(0,"
+                            f'1-(AF{row_number}/X{row_number})),"NA")'
+                        )
                     else:
                         expected = _derive_official_formula(
                             source_coordinate,
