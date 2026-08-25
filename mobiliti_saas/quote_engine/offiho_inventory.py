@@ -387,8 +387,25 @@ def parse_offiho_inventory(path: str | Path) -> tuple[list[dict[str, Any]], dict
         }
         existing = by_inventory_key.get(inventory_key)
         if existing is not None:
-            if existing == item:
+            same_commercial_data = all(
+                existing[field] == item[field]
+                for field in (
+                    "inventory_key",
+                    "code",
+                    "name",
+                    "variant",
+                    "unit",
+                    "pieces_per_box",
+                    "unit_price",
+                    "price_source",
+                )
+            )
+            if same_commercial_data:
                 audit["duplicate_row_count"] += 1
+                existing["available_quantity"] = max(
+                    existing["available_quantity"],
+                    item["available_quantity"],
+                )
                 continue
             raise ValueError(f"La clave {inventory_key} aparece con datos distintos")
         by_inventory_key[inventory_key] = item

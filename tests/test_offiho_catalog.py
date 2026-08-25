@@ -1049,8 +1049,8 @@ class _DuplicateWorkbook:
 
 class _ConflictingSheet(_DuplicateSheet):
     def cell_value(self, row, column):
-        if row == 7 and column == 2:
-            return 251
+        if row == 7 and column == 4:
+            return 8000
         return super().cell_value(row, column)
 
 

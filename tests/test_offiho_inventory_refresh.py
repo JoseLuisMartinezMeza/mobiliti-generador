@@ -89,6 +89,28 @@ def test_runtime_parser_matches_legacy_inventory_values_on_checked_in_workbook()
     }
 
 
+def test_runtime_parser_keeps_highest_stock_for_duplicate_key_with_same_commercial_data(tmp_path):
+    from mobiliti_saas.quote_engine.offiho_inventory import parse_offiho_inventory
+
+    path = tmp_path / "existencias.xls"
+    path.write_text(
+        """<html><table>
+        <tr><th>CODIGO</th><th>Existencia</th><th>Piezas por Caja</th><th>Precio Lista 1</th></tr>
+        <tr><td>ARO CROMADO CROMADO</td><td>1772</td><td>0</td><td>699</td></tr>
+        <tr><td>ARO CROMADO CROMADO</td><td>0</td><td>0</td><td>699</td></tr>
+        </table></html>""",
+        encoding="utf-8",
+    )
+
+    items, audit = parse_offiho_inventory(path)
+
+    assert len(items) == 1
+    assert items[0]["available_quantity"] == 1772
+    assert audit["source_row_count"] == 2
+    assert audit["duplicate_row_count"] == 1
+    assert audit["unique_item_count"] == 1
+
+
 @pytest.mark.parametrize(
     ("inventory_key", "expected_name", "expected_variant"),
     [
