@@ -61,6 +61,8 @@ _SYNC_SUPPLIERS = {
     "lauco",
     "idelika",
     "conceptos",
+    "labenze",
+    "requiez",
 }
 
 

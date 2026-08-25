@@ -9,6 +9,10 @@ from mobiliti_saas.worker.catalog_sync import load_source_config
 SOURCES_PATH = Path("mobiliti_saas/worker/catalog_sync/sources.json")
 
 
+def _source(rows, supplier):
+    return next(row for row in rows if row["supplier"] == supplier)
+
+
 def test_idelika_official_pdf_sources_are_pinned_for_traceability():
     idelika = {source.supplier: source for source in load_source_config(SOURCES_PATH)}["idelika"]
 
@@ -50,8 +54,8 @@ def test_idelika_official_pdf_sources_are_pinned_for_traceability():
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda rows: rows[-2]["files"][0].pop("mime_type"),
-        lambda rows: rows[-2]["files"][1].update(mime_type="application/pdfx"),
+        lambda rows: _source(rows, "idelika")["files"][0].pop("mime_type"),
+        lambda rows: _source(rows, "idelika")["files"][1].update(mime_type="application/pdfx"),
     ],
     ids=["mime-omitted", "mime-incorrect"],
 )

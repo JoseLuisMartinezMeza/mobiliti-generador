@@ -140,8 +140,8 @@ token solo se lee del entorno y nunca se imprime.
 
 La sincronizacion queda desactivada si `CATALOG_SYNC_ENABLED` no esta activo o
 si `CATALOG_ENABLED_SUPPLIERS` esta vacio/invalido. Los identificadores
-permitidos son `cr-global`, `sonara`, `sunon`, `alma`, `lumbro`, `jome` y
-`lauco`; la base de datos aplica
+permitidos son `cr-global`, `sonara`, `sunon`, `alma`, `lumbro`, `jome`,
+`lauco`, `idelika`, `conceptos`, `labenze` y `requiez`; la base de datos aplica
 el intervalo de seis horas y reclama primero los runs manuales. Antes de cada
 claim, un RPC atomico cierra como `failed` los runs `running` de proveedores
 habilitados cuyo lease fijo de 45 minutos vencio.

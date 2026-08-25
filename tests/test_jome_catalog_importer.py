@@ -1,6 +1,7 @@
 import hashlib
 import importlib
 import io
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -164,6 +165,36 @@ def test_builder_jome_produce_snapshot_publico_y_assets_aprobados(jome_documents
     assert ma02["attributes"]["provenance"]["declared_currency"] == "USD"
     assert build.assets_by_sha256
     assert build.bindings[0].image_kind == "official"
+
+
+def test_jome_28m_variant_inherits_the_official_image_from_its_base_code(jome_documents):
+    module = _jome_module()
+    raw = module.import_jome_catalog(
+        jome_documents,
+        synced_at=datetime(2026, 7, 25, tzinfo=timezone.utc),
+    )
+    base = deepcopy(_item(raw, "MA02", "estructuras"))
+    variant = deepcopy(base)
+    variant.update(
+        identity="estructuras:operativo:mesas:ma02-28m:120-x-60-cm:99",
+        code="MA02-28M",
+    )
+    variant.pop("image")
+    assets = module._available_assets(tuple(module._validated_documents(jome_documents).values()))
+
+    items, selected_assets, bindings = module._public_items([base, variant], assets)
+    by_source_code = {item["attributes"]["source_code"]: item for item in items}
+
+    assert by_source_code["MA02-28M"]["image_kind"] == "official"
+    assert (
+        by_source_code["MA02-28M"]["attributes"]["approved_asset"]["path"]
+        == by_source_code["MA02"]["attributes"]["approved_asset"]["path"]
+    )
+    assert len(selected_assets) == 1
+    assert {binding.internal_id for binding in bindings} == {
+        base["identity"],
+        variant["identity"],
+    }
 
 
 def test_builder_jome_se_expone_desde_el_paquete_de_importadores(jome_documents):

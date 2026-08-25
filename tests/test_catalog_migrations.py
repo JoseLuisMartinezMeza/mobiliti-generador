@@ -27,8 +27,9 @@ SQL_FILES = (BOOTSTRAP,)
 EXPECTED_SUPPLIERS = (
     "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
     "idelika", "conceptos",
+    "labenze", "requiez",
 )
-MIXED_CATALOG_COUNT = 11
+MIXED_CATALOG_COUNT = 13
 MIXED_CATALOGS = ("tarkett", "offiho", *EXPECTED_SUPPLIERS)
 SUPPLIER_ALLOWLIST_CONTEXTS = (
     ("catalog sources", "CREATE TABLE IF NOT EXISTS saas_catalog_sources"),
@@ -88,7 +89,7 @@ def test_jome_lauco_migration_replaces_both_reservation_rpcs_safely():
     assert "RETURN NEXT" in catalog
 
     mixed = _function_definition(bootstrap, "saas_reserve_mixed_cart")
-    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 11" in mixed
+    assert "jsonb_array_length(p_groups) NOT BETWEEN 0 AND 13" in mixed
     assert "'jome','lauco'" in mixed
     assert "jsonb_array_length(v_group -> 'items') = 0" in mixed
     assert "IF v_total_lines = 0 THEN RETURN '[]'::JSONB; END IF;" in mixed
@@ -304,9 +305,9 @@ def test_supplier_allowlist_helper_handles_supplier_operands_and_ignores_false_p
     sql = """
         -- p_supplier IN ('cr-global', 'sonara', 'sunon', 'alma')
         /* p_supplier = ANY(ARRAY['cr-global','sonara','sunon','alma']::TEXT[]) */
-        category IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos')
-        OR other_supplier IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos')
-        OR 'supplier IN (''cr-global'', ''sonara'', ''sunon'', ''alma'', ''lumbro'', ''jome'', ''lauco'', ''idelika'', ''conceptos'')' = 'example'
+        category IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos', 'labenze', 'requiez')
+        OR other_supplier IN ('cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos', 'labenze', 'requiez')
+        OR 'supplier IN (''cr-global'', ''sonara'', ''sunon'', ''alma'', ''lumbro'', ''jome'', ''lauco'', ''idelika'', ''conceptos'', ''labenze'', ''requiez'')' = 'example'
         p_supplier IN (
             'cr-global'::TEXT,
             'sonara',
@@ -316,14 +317,16 @@ def test_supplier_allowlist_helper_handles_supplier_operands_and_ignores_false_p
             'jome',
             'lauco',
             'idelika',
-            'conceptos'
+            'conceptos',
+            'labenze',
+            'requiez'
         )
         OR enabled_supplier.value NOT IN (
             'cr-global'::public.supplier_code,
-            'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos'
+            'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos', 'labenze', 'requiez'
         )
         OR p_supplier = ANY(ARRAY[
-            'cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos'
+            'cr-global', 'sonara', 'sunon', 'alma', 'lumbro', 'jome', 'lauco', 'idelika', 'conceptos', 'labenze', 'requiez'
         ]::public.supplier_code[])
     """
 
@@ -349,18 +352,18 @@ def test_supplier_array_cardinality_guards_allow_nine_and_reject_invalid_inputs(
         guards = _supplier_cardinality_guards(sql)
 
         assert len(guards) == 2
-        assert guards == [(1, 9), (1, 9)]
+        assert guards == [(1, 11), (1, 11)]
         for function_name in (
             "saas_recover_stale_catalog_sync_runs",
             "saas_claim_next_catalog_sync",
         ):
             function_sql = _function_sql(sql, function_name)
-            assert _supplier_cardinality_guards(function_sql) == [(1, 9)]
+            assert _supplier_cardinality_guards(function_sql) == [(1, 11)]
             assert "COUNT(DISTINCT value) FROM UNNEST(p_enabled_suppliers)" in function_sql
             assert _supplier_allowlists(function_sql) == [EXPECTED_SUPPLIERS]
 
         assert all(minimum <= len(EXPECTED_SUPPLIERS) <= maximum for minimum, maximum in guards)
-        assert all(10 > maximum for _, maximum in guards)
+        assert all(12 > maximum for _, maximum in guards)
 
 
 def test_forward_idelika_conceptos_migration_widens_contracts_without_destructive_table_work():

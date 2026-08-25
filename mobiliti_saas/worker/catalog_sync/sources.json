@@ -95,5 +95,23 @@
     "files": [
       {"path": "SPEC GUIDES 2026/CONCEPTOS/Spec guide - Conceptos - Sofas - CdMx - Gdl - Qro - 2021.xlsx", "kind": "spec_guide", "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "drive_item_id": "01DHXXN76XWGQOWSKX2RDL5YG6GTS355BO"}
     ]
+  },
+  {
+    "supplier": "labenze",
+    "label": "Labenze",
+    "adapter": "labenze",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "LABENZE/LP Labenze B26.pdf", "kind": "price_list", "mime_type": "application/pdf", "drive_item_id": "01DHXXN77SAPUFK56QHVBLKXH7BBV7DOL7", "sha256": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3"}
+    ]
+  },
+  {
+    "supplier": "requiez",
+    "label": "Requiez",
+    "adapter": "requiez",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "REQUIEZ/Lista de precios A-26.pdf", "kind": "price_list", "mime_type": "application/pdf", "drive_item_id": "01DHXXN74NDZ6P4EL3B5CI2G2HFZ47ISNT", "sha256": "7f3281d1965c67a234bac55112800067019ad471f835de59ff758e759eca56ba"}
+    ]
   }
 ]

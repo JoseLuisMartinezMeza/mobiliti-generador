@@ -10,7 +10,9 @@ const SUPPLIERS = [
   ["jome", "JOME"],
   ["lauco", "Lauco"],
   ["idelika", "IDÉLIKA"],
-  ["conceptos", "Conceptos"]
+  ["conceptos", "Conceptos"],
+  ["labenze", "Labenze"],
+  ["requiez", "Requiez"]
 ];
 
 function formatDate(value) {

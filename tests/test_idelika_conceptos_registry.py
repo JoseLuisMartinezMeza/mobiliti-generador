@@ -5,6 +5,7 @@ from mobiliti_saas.worker.catalog_sync.service import ADAPTERS, _SUPPLIERS
 EXPECTED_SUPPLIERS = (
     "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
     "idelika", "conceptos",
+    "labenze", "requiez",
 )
 
 
@@ -17,6 +18,7 @@ def test_executable_adapters_use_the_approved_snapshot_builders():
     assert tuple(ADAPTERS) == (
         "cr_global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
         "idelika", "conceptos",
+        "labenze", "requiez",
     )
     assert ADAPTERS["idelika"].__name__ == "build_idelika_snapshot_with_assets"
     assert ADAPTERS["conceptos"].__name__ == "build_conceptos_snapshot_with_assets"

@@ -1134,10 +1134,12 @@ def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets
                 f'=IF(F{mobiliti_row}="Offiho",J{mobiliti_row},'
             )
             assert mobiliti.cell(mobiliti_row, 24).value == (
-                f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row})"
+                f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row},"
+                f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
+                f"$D$14:$D$571,D{mobiliti_row}))"
             )
             assert mobiliti.cell(mobiliti_row, 25).value == (
-                f"=(W{mobiliti_row}*H{mobiliti_row})"
+                f"=(X{mobiliti_row}*H{mobiliti_row})"
             )
     finally:
         wb.close()

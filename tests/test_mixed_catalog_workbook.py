@@ -812,6 +812,39 @@ def test_catalog_warning_merge_keeps_each_semantic_warning_once():
     assert description.count("Validar acabado manualmente") == 1
 
 
+def test_lumbro_quotation_omits_internal_notes_and_unknown_availability_only():
+    common = {
+        "description": "Multicontacto LIDO con 3 puertos",
+        "configuration": "Standard",
+        "availability_type": "unknown",
+        "attributes": {
+            "product_notes": [
+                "NOTA: SE PUEDEN MODIFICAR LAS CONEXIONES CON PRECIO ESPECIAL"
+            ]
+        },
+    }
+
+    lumbro_description, _ = _description_for_item(
+        {**common, "catalog": "lumbro", "supplier": "Lumbro"},
+        "LIDO.OP-INT",
+        "",
+        Decimal("1"),
+    )
+    alma_description, _ = _description_for_item(
+        {**common, "catalog": "alma", "supplier": "ALMA"},
+        "ALMA-1",
+        "",
+        Decimal("1"),
+    )
+
+    assert "Multicontacto LIDO con 3 puertos" in lumbro_description
+    assert "Standard" in lumbro_description
+    assert "Notas:" not in lumbro_description
+    assert "Disponibilidad: por confirmar" not in lumbro_description
+    assert "Notas: NOTA: SE PUEDEN MODIFICAR" in alma_description
+    assert "Disponibilidad: por confirmar" in alma_description
+
+
 def test_legacy_supplier_sku_fallback_keeps_a_to_k_and_image_anchor(monkeypatch, tmp_path):
     png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -1111,6 +1144,25 @@ def test_catalog_downloader_validates_real_png_before_writing(monkeypatch, tmp_p
 
     assert result == tmp_path / "VALID.png"
     assert result.read_bytes() == body
+
+
+def test_catalog_downloader_normalizes_webp_to_png_for_xlsx(monkeypatch, tmp_path):
+    url = "https://www.offiho.com/valid.webp"
+    stream = BytesIO()
+    Image.new("RGBA", (3, 2), (0, 128, 255, 128)).save(stream, format="WEBP")
+    _stub_catalog_image_transport(
+        monkeypatch,
+        {url: (stream.getvalue(), "image/webp")},
+    )
+
+    result = catalog_cart._download_catalog_image(
+        url, tmp_path, "WEBP", "offiho_cart"
+    )
+
+    assert result == tmp_path / "WEBP.png"
+    assert result.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(result) as image:
+        assert image.format == "PNG"
 
 
 def test_catalog_downloader_reads_exact_published_dev_asset_without_network(

@@ -1031,16 +1031,13 @@ def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
         for row in re.findall(r"Mobiliti!W\$?(\d+)", formula)
     )
     compound_rows = layout.item_rows[:3]
-    assert set(layout.item_rows[3:]) <= set(referenced_x_rows)
-    assert set(compound_rows) <= set(referenced_w_rows)
-    assert set(layout.item_rows) <= (
-        set(referenced_x_rows) | set(referenced_w_rows)
-    )
+    assert not referenced_w_rows
+    assert set(layout.item_rows) <= set(referenced_x_rows)
     assert (
-        f"Mobiliti!W{compound_rows[0]}"
-        f"+Mobiliti!W{compound_rows[1]}"
+        f"Mobiliti!X{compound_rows[0]}"
+        f"+Mobiliti!X{compound_rows[1]}"
         f"*Mobiliti!H{compound_rows[1]}/Mobiliti!H{compound_rows[0]}"
-        f"+Mobiliti!W{compound_rows[2]}"
+        f"+Mobiliti!X{compound_rows[2]}"
         f"*Mobiliti!H{compound_rows[2]}/Mobiliti!H{compound_rows[0]}"
     ) in cotizacion_formulas
     _assert_subtotals_cover_all_items(

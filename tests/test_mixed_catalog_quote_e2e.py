@@ -1263,7 +1263,7 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
         wb.close()
 
 
-def test_explicit_original_does_not_cross_wire_same_row_parser_image(
+def test_explicit_original_preserves_native_catalog_image_without_cross_wiring(
     monkeypatch,
     tmp_path,
 ):
@@ -1308,7 +1308,10 @@ def test_explicit_original_does_not_cross_wire_same_row_parser_image(
     generate_quote(
         parser_source,
         output,
-        _mixed_import_metadata(payload, "MXN"),
+        {
+            **_mixed_import_metadata(payload, "MXN"),
+            "image_provider": "pillow",
+        },
         WORKER_TEMPLATE,
         original_quotation_path=imported_source,
         quotation_data_rows=quotation_data_rows(payload),
@@ -1496,14 +1499,12 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
     assert hashlib.sha256(imported_source.read_bytes()).hexdigest() == source_hash_before
     template_workbook = load_workbook(WORKER_TEMPLATE, data_only=False)
     try:
-        template_x_formula = template_workbook["Mobiliti"]["X14"].value
         template_freight_formula = template_workbook["Cotizacion"]["H21"].value
         template_before_tax_formula = template_workbook["Cotizacion"]["H22"].value
         template_tax_formula = template_workbook["Cotizacion"]["H23"].value
         template_total_formula = template_workbook["Cotizacion"]["H24"].value
     finally:
         template_workbook.close()
-    assert isinstance(template_x_formula, str) and template_x_formula.startswith("=")
     assert isinstance(template_freight_formula, str)
     assert isinstance(template_before_tax_formula, str)
     assert isinstance(template_tax_formula, str)
@@ -1611,10 +1612,9 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
             assert mobiliti.cell(mobiliti_row, 16).value == canonical.region
             assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
             assert mobiliti.cell(mobiliti_row, 24).value == (
-                Translator(
-                    template_x_formula,
-                    origin="X14",
-                ).translate_formula(f"X{mobiliti_row}")
+                f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row},"
+                f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
+                f"$D$14:$D$571,D{mobiliti_row}))"
             )
             assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
             assert cotizacion.cell(cotizacion_row, 8).value == (
@@ -2037,7 +2037,9 @@ def _assert_task9_final_workbook(
         assert mobiliti.cell(mobiliti_row, 16).value == record["region"]
         assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
         assert mobiliti.cell(mobiliti_row, 24).value == (
-            f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row})"
+            f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row},"
+            f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
+            f"$D$14:$D$571,D{mobiliti_row}))"
         )
         quantity_match = re.fullmatch(
             r"=Quotation!H([1-9][0-9]*)",

@@ -34,6 +34,8 @@ from .importers import (
     build_lauco_snapshot_with_assets,
     build_idelika_snapshot_with_assets,
     build_conceptos_snapshot_with_assets,
+    build_labenze_snapshot_with_assets,
+    build_requiez_snapshot_with_assets,
     build_sonara_snapshot_with_assets,
     build_sunon_snapshot_with_assets,
 )
@@ -66,6 +68,7 @@ _GRAPH_METHODS = ("iter_delta", "download_content")
 _SUPPLIERS = (
     "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
     "idelika", "conceptos",
+    "labenze", "requiez",
 )
 ADAPTERS = {
     "cr_global": build_cr_global_snapshot_with_assets,
@@ -77,6 +80,8 @@ ADAPTERS = {
     "lauco": build_lauco_snapshot_with_assets,
     "idelika": build_idelika_snapshot_with_assets,
     "conceptos": build_conceptos_snapshot_with_assets,
+    "labenze": build_labenze_snapshot_with_assets,
+    "requiez": build_requiez_snapshot_with_assets,
 }
 CATALOG_EXIT_WORKED = 0
 CATALOG_EXIT_FAILED = 1
@@ -331,6 +336,7 @@ def _run_supplier_sync(
                 or any(character not in "0123456789abcdef" for character in downloaded.sha256)
             ):
                 raise ValueError
+            _validate_pinned_source_hash(config, path, downloaded.sha256)
             counters["downloaded_files"] += 1
             local_paths[graph_row.id] = downloaded.path
             same_content = next(
@@ -372,6 +378,7 @@ def _run_supplier_sync(
         if not dry_run:
             active_rows = repository.list_latest_files(source.id, allowed_paths)
             working = _working_state(active_rows, source.id, set(allowed_paths))
+            _validate_pinned_source_hashes(config, working)
         for row in working.values():
             if row.drive_item_id in local_paths:
                 continue
@@ -1087,6 +1094,26 @@ def _working_state(rows, source_id, allowed_paths):
     return state
 
 
+def _validate_pinned_source_hash(
+    config: SupplierSourceConfig,
+    path: str,
+    actual_sha256: str,
+) -> None:
+    configured = next((row for row in config.files if row.path == path), None)
+    if configured is None or (
+        configured.sha256 is not None and configured.sha256 != actual_sha256
+    ):
+        raise ValueError
+
+
+def _validate_pinned_source_hashes(
+    config: SupplierSourceConfig,
+    working: dict[str, _WorkingFile],
+) -> None:
+    for row in working.values():
+        _validate_pinned_source_hash(config, row.path, row.sha256)
+
+
 def _working_file(row):
     return _WorkingFile(
         row.drive_item_id, row.path, row.e_tag, row.size_bytes, row.sha256,
@@ -1232,6 +1259,7 @@ def _asset_metrics(candidate, build: CatalogSnapshotBuildLike):
         "merged_xlsx": 0,
         "family_xlsx": 0,
         "exact_pdf": 0,
+        "family_pdf": 0,
         "exact_web": 0,
         "model_web": 0,
     }
@@ -1279,6 +1307,7 @@ def _asset_metrics(candidate, build: CatalogSnapshotBuildLike):
         "image_merged_xlsx": statuses["merged_xlsx"],
         "image_family_xlsx": statuses["family_xlsx"],
         "image_exact_pdf": statuses["exact_pdf"],
+        "image_family_pdf": statuses["family_pdf"],
         "image_exact_web": statuses["exact_web"],
         "image_model_web": statuses["model_web"],
     }

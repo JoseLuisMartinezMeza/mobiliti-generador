@@ -167,6 +167,7 @@ OFFIHO_CATALOG_DB_ENABLED = _env_bool("OFFIHO_CATALOG_DB_ENABLED", bool(os.envir
 OFFIHO_CATALOG_DB_TTL_SECONDS = max(30, int(os.environ.get("OFFIHO_CATALOG_DB_TTL_SECONDS", "300")))
 CATALOG_SUPPLIER_ORDER = (
     "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco", "idelika", "conceptos",
+    "labenze", "requiez",
 )
 CATALOG_SUPPLIER_LABELS = {
     "cr-global": "CR Global",
@@ -178,7 +179,12 @@ CATALOG_SUPPLIER_LABELS = {
     "lauco": "Lauco",
     "idelika": "IDÉLIKA",
     "conceptos": "Conceptos",
+    "labenze": "Labenze",
+    "requiez": "Requiez",
 }
+CATALOG_PAGE_MAX_ITEMS = 50
+CATALOG_PAGE_DEFAULT_ITEMS = 24
+MAX_CATALOG_PAGE_BYTES = 512 * 1024
 
 
 def _canonical_enabled_catalog_suppliers(values) -> tuple[str, ...]:
@@ -2792,8 +2798,34 @@ def _hydrate_catalog_asset_urls(payload: dict) -> dict:
         attributes = item.get("attributes")
         if not isinstance(attributes, dict):
             continue
+        review = attributes.pop("canonical_review_overlay", None)
         asset = attributes.get("approved_asset")
         attributes.pop("image_match", None)
+        if DEV_MODE and isinstance(review, dict):
+            attributes.pop("approved_asset", None)
+            review_asset = review.get("asset")
+            valid_review_asset = (
+                isinstance(review.get("bundle"), str)
+                and bool(review["bundle"].strip())
+                and review.get("selected") is False
+                and review.get("approved") is False
+                and review.get("promoted") is False
+                and isinstance(review_asset, dict)
+                and review_asset.get("review_only") is True
+                and review_asset.get("bucket") == CATALOG_ASSET_BUCKET
+                and review_asset.get("image_kind") in {"official", "generated_reference"}
+            )
+            if valid_review_asset:
+                try:
+                    item["image_url"] = _catalog_asset_public_url(str(review_asset.get("path") or ""))
+                except ValueError:
+                    valid_review_asset = False
+            if valid_review_asset:
+                item["image_kind"] = review_asset["image_kind"]
+            else:
+                item["image_url"] = ""
+                item["image_kind"] = "placeholder"
+            continue
         if not isinstance(asset, dict) or asset.get("approved") is not True:
             continue
         if asset.get("bucket") != CATALOG_ASSET_BUCKET:
@@ -3042,39 +3074,238 @@ def _catalog_reservation_totals(rows: list[dict]) -> tuple[dict[str, Decimal], s
     return totals, reserved_by_others
 
 
-def _supplier_catalog_response(supplier: str, usuario_id: int) -> dict:
-    catalog = load_supplier_catalog_data(_load_supplier_catalog_cached(supplier), expected_supplier=supplier)
+def _catalog_page_bytes(payload: dict) -> bytes:
+    try:
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise RuntimeError("Pagina de catalogo invalida") from exc
+
+
+def _ensure_catalog_page_size(payload: dict) -> dict:
+    if len(_catalog_page_bytes(payload)) > MAX_CATALOG_PAGE_BYTES:
+        raise RuntimeError(
+            f"Pagina de catalogo excede {MAX_CATALOG_PAGE_BYTES} bytes"
+        )
+    return payload
+
+
+def _bounded_catalog_search_response(payload: dict, *, offset: int) -> dict:
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("items"), list)
+        or type(payload.get("total")) is not int
+        or payload["total"] < 0
+        or type(offset) is not int
+        or offset < 0
+    ):
+        raise RuntimeError("Pagina de catalogo invalida")
+    if len(_catalog_page_bytes(payload)) <= MAX_CATALOG_PAGE_BYTES:
+        return payload
+
+    items = payload["items"]
+    lower = 1
+    upper = len(items)
+    bounded = None
+    while lower <= upper:
+        count = (lower + upper) // 2
+        candidate = {
+            **payload,
+            "items": items[:count],
+            "next_offset": (
+                offset + count if offset + count < payload["total"] else None
+            ),
+        }
+        if len(_catalog_page_bytes(candidate)) <= MAX_CATALOG_PAGE_BYTES:
+            bounded = candidate
+            lower = count + 1
+        else:
+            upper = count - 1
+    if bounded is None:
+        raise RuntimeError(
+            f"Pagina de catalogo excede {MAX_CATALOG_PAGE_BYTES} bytes"
+        )
+    return bounded
+
+
+def _catalog_page_text(value: object, field: str, maximum: int) -> str:
+    if not isinstance(value, str) or len(value) > maximum or any(
+        unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+        for character in value
+    ):
+        raise ValueError(f"{field} invalido")
+    return value.strip()
+
+
+def _fold_catalog_page_text(value: object) -> str:
+    return " ".join(
+        "".join(
+            character
+            for character in unicodedata.normalize("NFKD", str(value or ""))
+            if not unicodedata.combining(character)
+        ).casefold().split()
+    )
+
+
+def _supplier_catalog_response(
+    supplier: str,
+    usuario_id: int,
+    *,
+    query: str = "",
+    brand: str = "",
+    collection: str = "",
+    availability: str = "",
+    offset: int = 0,
+    limit: int = CATALOG_PAGE_DEFAULT_ITEMS,
+) -> dict:
+    query = _catalog_page_text(query, "q", 160)
+    brand = _catalog_page_text(brand, "brand", 1_000)
+    collection = _catalog_page_text(collection, "collection", 1_000)
+    availability = _catalog_page_text(availability, "availability", 32)
+    if availability not in {"", "stocked", "made_to_order", "out", "unknown"}:
+        raise ValueError("availability invalido")
+    if type(offset) is not int or offset < 0:
+        raise ValueError("offset invalido")
+    if type(limit) is not int or not 1 <= limit <= CATALOG_PAGE_MAX_ITEMS:
+        raise ValueError("limit invalido")
+
+    catalog = load_supplier_catalog_data(
+        _load_supplier_catalog_cached(supplier), expected_supplier=supplier
+    )
     totals, reserved_by_others = _catalog_reservation_totals(
         db_catalog_reservation_summary(supplier, usuario_id)
     )
-    items = []
+    all_brands: set[str] = set()
+    all_collections: set[str] = set()
+    groups: dict[str, list[dict]] = {}
+    needle = _fold_catalog_page_text(query)
     for source_item in catalog["items"]:
         item = deepcopy(source_item)
         item["collection"] = resolve_catalog_collection(supplier, item)
-        reserved = totals.get(item["internal_id"], Decimal(0)) if item["availability_type"] == "stocked" else Decimal(0)
         try:
-            stock = Decimal(str(item["stock"])) if item["stock"] is not None else None
+            available_stock = (
+                Decimal(str(item["stock"])) if item["stock"] is not None else None
+            )
         except (InvalidOperation, TypeError, ValueError):
-            stock = None
-        item.update(
-            {
-                "reserved_quantity": _display_number(reserved),
-                "reserved_by_others": item["internal_id"] in reserved_by_others,
-                "is_out_of_stock": item["availability_type"] == "stocked" and stock is not None and stock <= 0,
-            }
+            available_stock = None
+        item["is_out_of_stock"] = (
+            item["availability_type"] == "stocked"
+            and available_stock is not None
+            and available_stock <= 0
         )
-        items.append(item)
-    return {
-        "supplier": supplier,
-        "source_hash": catalog["source_hash"],
-        "generated_at": catalog["generated_at"],
-        "total": len(items),
-        "items": items,
-    }
+        if item.get("brand"):
+            all_brands.add(item["brand"])
+        if item.get("collection"):
+            all_collections.add(item["collection"])
+        if brand and item.get("brand") != brand:
+            continue
+        if collection and item.get("collection") != collection:
+            continue
+        if availability == "out" and item.get("is_out_of_stock") is not True:
+            continue
+        if availability == "stocked" and (
+            item.get("availability_type") != "stocked"
+            or item.get("is_out_of_stock") is True
+        ):
+            continue
+        if availability in {"made_to_order", "unknown"} and (
+            item.get("availability_type") != availability
+        ):
+            continue
+        group_key = str(item.get("product_key") or item["internal_id"])
+        groups.setdefault(group_key, []).append(item)
+
+    filtered_groups = []
+    for group_items in groups.values():
+        if needle and not any(
+            needle in _fold_catalog_page_text(
+                " ".join(
+                    (
+                        str(item.get("sku") or ""),
+                        str(item.get("name") or ""),
+                        str(item.get("description") or ""),
+                        str(item.get("brand") or ""),
+                        str(item.get("collection") or ""),
+                        json.dumps(
+                            item.get("attributes") or {},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                    )
+                )
+            )
+            for item in group_items
+        ):
+            continue
+        filtered_groups.append(group_items)
+
+    selected_groups = filtered_groups[offset:offset + limit]
+
+    def build_page(page_groups: list[list[dict]]) -> dict:
+        items = []
+        for group_items in page_groups:
+            for source_item in group_items:
+                item = deepcopy(source_item)
+                reserved = (
+                    totals.get(item["internal_id"], Decimal(0))
+                    if item["availability_type"] == "stocked"
+                    else Decimal(0)
+                )
+                try:
+                    stock = (
+                        Decimal(str(item["stock"]))
+                        if item["stock"] is not None
+                        else None
+                    )
+                except (InvalidOperation, TypeError, ValueError):
+                    stock = None
+                item.update(
+                    {
+                        "reserved_quantity": _display_number(reserved),
+                        "reserved_by_others": item["internal_id"] in reserved_by_others,
+                        "is_out_of_stock": (
+                            item["availability_type"] == "stocked"
+                            and stock is not None
+                            and stock <= 0
+                        ),
+                    }
+                )
+                items.append(item)
+        consumed_groups = len(page_groups)
+        return {
+            "supplier": supplier,
+            "source_hash": catalog["source_hash"],
+            "generated_at": catalog["generated_at"],
+            "total": sum(len(group) for group in filtered_groups),
+            "product_total": len(filtered_groups),
+            "offset": offset,
+            "next_offset": (
+                offset + consumed_groups
+                if offset + consumed_groups < len(filtered_groups)
+                else None
+            ),
+            "brands": sorted(all_brands, key=lambda value: (_fold_catalog_page_text(value), value)),
+            "collections": sorted(
+                all_collections, key=lambda value: (_fold_catalog_page_text(value), value)
+            ),
+            "items": items,
+        }
+
+    return _ensure_catalog_page_size(build_page(selected_groups))
 
 
 def _catalog_search_snapshots(usuario_id: int, supplier: str | None) -> dict:
-    suppliers = (supplier,) if supplier is not None else MIXED_CATALOG_ORDER
+    if supplier is None:
+        suppliers = ("tarkett", "offiho", *_enabled_catalog_suppliers())
+    elif supplier in {"tarkett", "offiho"}:
+        suppliers = (supplier,)
+    else:
+        suppliers = (_require_enabled_catalog_supplier(supplier),)
     snapshots = {}
     for catalog in suppliers:
         if catalog == "tarkett":
@@ -3082,7 +3313,7 @@ def _catalog_search_snapshots(usuario_id: int, supplier: str | None) -> dict:
         elif catalog == "offiho":
             snapshots[catalog] = _offiho_catalog_response(usuario_id)
         else:
-            snapshots[catalog] = _supplier_catalog_response(catalog, usuario_id)
+            snapshots[catalog] = _load_supplier_catalog_cached(catalog)
     return snapshots
 
 
@@ -5696,10 +5927,11 @@ def catalog_search(
         clean_supplier = supplier.strip().lower() if supplier is not None else None
         _require_active_subscription(current_user["id"])
         snapshots = _catalog_search_snapshots(current_user["id"], clean_supplier)
-        return search_catalog_products(
+        result = search_catalog_products(
             snapshots, query=q, supplier=clean_supplier, collection=collection,
             offset=parsed_offset, limit=parsed_limit,
         )
+        return _bounded_catalog_search_response(result, offset=parsed_offset)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -5709,11 +5941,35 @@ def catalog_search(
 
 
 @app.get("/catalogs/{supplier}")
-def supplier_catalog(supplier: str, current_user: dict = Depends(get_current_user)):
+def supplier_catalog(
+    supplier: str,
+    q: str = "",
+    brand: str = "",
+    collection: str = "",
+    availability: str = "",
+    offset: str = "0",
+    limit: str = str(CATALOG_PAGE_DEFAULT_ITEMS),
+    current_user: dict = Depends(get_current_user),
+):
     supplier = _require_enabled_catalog_supplier(supplier)
     try:
+        parsed_offset = _catalog_search_integer(offset, "offset", 0)
+        parsed_limit = _catalog_search_integer(
+            limit, "limit", 1, CATALOG_PAGE_MAX_ITEMS
+        )
         _require_active_subscription(current_user["id"])
-        return _supplier_catalog_response(supplier, current_user["id"])
+        return _supplier_catalog_response(
+            supplier,
+            current_user["id"],
+            query=q,
+            brand=brand,
+            collection=collection,
+            availability=availability,
+            offset=parsed_offset,
+            limit=parsed_limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail="Catalogo publicado no disponible") from exc
 

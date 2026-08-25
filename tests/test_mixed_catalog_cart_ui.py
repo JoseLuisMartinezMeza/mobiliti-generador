@@ -1438,6 +1438,8 @@ def test_catalog_list_is_frozen_and_complete():
             "lauco",
             "idelika",
             "conceptos",
+            "labenze",
+            "requiez",
         ],
         "mutation": "TypeError",
     }

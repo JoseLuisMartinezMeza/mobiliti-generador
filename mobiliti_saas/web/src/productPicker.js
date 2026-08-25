@@ -10,6 +10,8 @@ export const CATALOG_OPTIONS = Object.freeze([
   {value: "lauco", label: "Lauco"},
   {value: "idelika", label: "IDÉLIKA"},
   {value: "conceptos", label: "Conceptos"},
+  {value: "labenze", label: "Labenze"},
+  {value: "requiez", label: "Requiez"},
 ]);
 
 const CATALOG_LABELS = new Map(CATALOG_OPTIONS.map((option) => [option.value, option.label]));

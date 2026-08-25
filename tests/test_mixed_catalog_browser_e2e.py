@@ -404,6 +404,55 @@ def test_project_survives_reload_and_supports_replacements_and_complements(
         context.close()
 
 
+def test_configurable_project_picker_keeps_confirmation_visible_and_adds_lauco_alma(
+    vite_url, browser
+):
+    stub = ApiStub([])
+    stub.enable_project_routes(project_id=PROJECT_ID)
+    context, page = new_page(
+        browser, {"width": 1600, "height": 900}, stub, vite_url
+    )
+
+    def add_product(query, base_option_id=None):
+        page.get_by_role("button", name="Agregar producto", exact=True).click()
+        picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Buscar producto", exact=True).fill(query)
+        result = picker.locator(".project-picker-result", has_text=query).first
+        result.wait_for(state="visible")
+        result.click()
+        if base_option_id is not None:
+            picker.get_by_label("Configuración base", exact=True).select_option(
+                base_option_id
+            )
+        confirm = picker.get_by_role(
+            "button", name="Agregar al Proyecto", exact=True
+        )
+        box = confirm.bounding_box()
+        assert box is not None
+        assert box["y"] + box["height"] <= page.viewport_size["height"]
+        confirm.click()
+        picker.wait_for(state="hidden")
+        page.locator(".project-autosave-status.saved").wait_for(state="visible")
+
+    try:
+        page.goto(vite_url)
+        create_active_project(page, "QA selectores Lauco ALMA")
+        assert page.get_by_role(
+            "button", name="Datos de cotización", exact=True
+        ).is_visible()
+
+        add_product("A4 1.5PRAM", "lauco:a4-1-5pram:82")
+        assert page.locator(".project-principal", has_text="A4 1.5PRAM").count() == 1
+
+        add_product("kun:kt8605b63cer:1cc19505cd61d72c")
+        assert page.locator(".project-principal").count() == 2
+        assert stub.saved_project["payload"]["lines"][0]["catalog"] == "lauco"
+        assert stub.saved_project["payload"]["lines"][1]["catalog"] == "alma"
+        assert stub.unexpected_requests == []
+    finally:
+        context.close()
+
+
 def test_project_section_controls_persist_the_complete_reordered_sections(
     vite_url, browser
 ):
@@ -932,6 +981,62 @@ class ApiStub:
                         "availability": "Disponible",
                         "configuration": "",
                         "warnings": [],
+                    },
+                }, {
+                    "catalog": "lauco",
+                    "collection": "A",
+                    "quotable": True,
+                    "official_code": "A4 1.5PRAM",
+                    "identity": {
+                        "internal_id": "lauco:a4-1-5pram:82",
+                        "base_option_id": "",
+                        "add_on_option_ids": [],
+                    },
+                    "base_options": [{
+                        "id": "lauco:a4-1-5pram:82",
+                        "name": "Tapiz Grado 1",
+                        "price_net": "26400.000000",
+                    }, {
+                        "id": "lauco:a4-1-5pram:83",
+                        "name": "Tapiz Grado 2",
+                        "price_net": "33520.000000",
+                    }],
+                    "snapshot": {
+                        "name": "A4 1.5PRAM",
+                        "code": "A4 1.5PRAM",
+                        "collection": "A",
+                        "image_url": IMPORT_PREVIEW_IMAGE,
+                        "availability": "Fabricación por confirmar",
+                        "configuration": "",
+                        "warnings": ["Fabricación por confirmar"],
+                    },
+                }, {
+                    "catalog": "alma",
+                    "collection": "BAGEL",
+                    "quotable": True,
+                    "official_code": "kun:kt8605b63cer:1cc19505cd61d72c",
+                    "identity": {
+                        "internal_id": "alma:kun:variant:1cc19505cd61d72c97a3",
+                        "base_option_id": "base-v1-c6",
+                        "add_on_option_ids": [],
+                    },
+                    "base_options": [{
+                        "id": "base-v1-c6",
+                        "name": "Sin cojín Aluminio: Aspecto de teca",
+                        "price_net": "325.582375",
+                    }],
+                    "snapshot": {
+                        "name": (
+                            "BAGEL Rectangular Coffee Table Base: Alu in teaklook "
+                            "Ceramic Top: JK-4 / JK-11 / Calacata Gold / "
+                            "Travertino Romano / Jenny Grey"
+                        ),
+                        "code": "kun:kt8605b63cer:1cc19505cd61d72c",
+                        "collection": "BAGEL",
+                        "image_url": IMPORT_PREVIEW_IMAGE,
+                        "availability": "Fabricación por confirmar",
+                        "configuration": "Sin cojín Aluminio: Aspecto de teca",
+                        "warnings": ["Fabricación por confirmar"],
                     },
                 }]
                 params = parse_qs(parsed.query)

@@ -12,6 +12,7 @@ from uuid import UUID
 import pytest
 from PIL import Image
 import mobiliti_saas.worker.catalog_sync.service as catalog_service
+from mobiliti_saas.worker.catalog_sync import SupplierFileConfig, SupplierSourceConfig
 
 from mobiliti_saas.worker.catalog_sync.importers.alma import (
     AlmaAssetBinding,
@@ -412,6 +413,39 @@ def test_expired_delta_full_crawl_replaces_old_id_before_staging_candidate():
     )
 
 
+def test_pinned_hash_allows_delta_to_replace_an_old_active_version(monkeypatch):
+    old = source_file(e_tag='"etag-1"', sha256="b" * 64)
+    repo = FakeRepository(active=(old,))
+    graph = FakeGraph((graph_item(e_tag='"etag-2"'),), sha256="c" * 64)
+    pinned = SupplierSourceConfig(
+        supplier="alma",
+        label="ALMA",
+        adapter="alma",
+        root_path=ROOT_PATH,
+        files=(
+            SupplierFileConfig(
+                path=ALMA_ONE,
+                kind="spec_guide",
+                sha256="c" * 64,
+            ),
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "load_source_config", lambda _path: (pinned,))
+    captured = []
+
+    result = call(
+        repo,
+        graph,
+        lambda files: captured.append(files)
+        or snapshot(source_hash="c" * 64, items=[item(price_net="101.000000")]),
+    )
+
+    assert result.status == "awaiting_approval"
+    assert any(entry[0] == "download_content" for entry in graph.calls)
+    assert captured[0][0].sha256 == "c" * 64
+    assert repo.active["graph-1"].sha256 == "c" * 64
+
+
 def _track_run_directories(monkeypatch, tmp_path):
     real_temporary_directory = catalog_service.tempfile.TemporaryDirectory
     created = []
@@ -620,6 +654,8 @@ def test_due_runner_claims_at_most_one_run_and_uses_explicit_registry(monkeypatc
         "lauco",
         "idelika",
         "conceptos",
+        "labenze",
+        "requiez",
     }
     assert ADAPTERS["cr_global"].__name__ == "build_cr_global_snapshot_with_assets"
     assert ADAPTERS["sonara"].__name__ == "build_sonara_snapshot_with_assets"
@@ -628,6 +664,8 @@ def test_due_runner_claims_at_most_one_run_and_uses_explicit_registry(monkeypatc
     assert ADAPTERS["lauco"].__name__ == "build_lauco_snapshot_with_assets"
     assert ADAPTERS["idelika"].__name__ == "build_idelika_snapshot_with_assets"
     assert ADAPTERS["conceptos"].__name__ == "build_conceptos_snapshot_with_assets"
+    assert ADAPTERS["labenze"].__name__ == "build_labenze_snapshot_with_assets"
+    assert ADAPTERS["requiez"].__name__ == "build_requiez_snapshot_with_assets"
     assert run_due_once() == "no_changes"
     assert seen[0] == ("recover", ("alma", "sunon"))
     assert seen[1] == ("claim", ("alma", "sunon"))
@@ -636,7 +674,9 @@ def test_due_runner_claims_at_most_one_run_and_uses_explicit_registry(monkeypatc
     assert seen[2][4]["adapters"] is ADAPTERS
 
 
-@pytest.mark.parametrize("supplier", ["lumbro", "idelika", "conceptos"])
+@pytest.mark.parametrize(
+    "supplier", ["lumbro", "idelika", "conceptos", "labenze", "requiez"]
+)
 def test_due_scheduler_accepts_generic_supplier_allowlist(monkeypatch, supplier):
     monkeypatch.setenv("CATALOG_SYNC_ENABLED", "true")
     monkeypatch.setenv("CATALOG_ENABLED_SUPPLIERS", supplier)
@@ -2162,6 +2202,21 @@ def test_generic_exact_pdf_sidecar_uploads_before_stage():
     names = call_names(repo)
     assert names.index("store_catalog_asset_if_absent") < names.index("stage_candidate")
     assert metrics(result)["image_exact_pdf"] == 1
+
+
+def test_generic_family_pdf_sidecar_uploads_and_reports_its_own_metric():
+    build = _generic_sidecar(
+        snapshot(source_hash="c" * 64),
+        match_status="family_pdf",
+    )
+    repo = FakeRepository(active=(source_file(),), published_snapshot=published())
+
+    result = call(repo, FakeGraph(), lambda files: build)
+
+    assert result.status == "awaiting_approval"
+    names = call_names(repo)
+    assert names.index("store_catalog_asset_if_absent") < names.index("stage_candidate")
+    assert metrics(result)["image_family_pdf"] == 1
 
 
 @pytest.mark.parametrize(

@@ -98,6 +98,7 @@ CANONICAL_COTIZACION_TOTAL_SPAN = (
     CANONICAL_COTIZACION_TOTAL_ROW - CANONICAL_COTIZACION_TOTAL_START
 )
 CANONICAL_COTIZACION_TERMS_START = 28
+CANONICAL_COTIZACION_CURRENCY_TERM_ROW = 33
 CANONICAL_COTIZACION_PRINT_END = 76
 CANONICAL_MOBILITI_TOTAL_ROW = 573
 CANONICAL_MOBILITI_AUX_START = 574
@@ -226,6 +227,7 @@ class CotizacionMetadata:
     phone: str = ""
     address: str = ""
     business_name: str = ""
+    quote_currency: str = ""
 
     def __post_init__(self) -> None:
         for value in (
@@ -238,6 +240,8 @@ class CotizacionMetadata:
             self.business_name,
         ):
             _validate_text(value, allow_empty=True)
+        if self.quote_currency not in {"", "MXN", "USD", "EUR"}:
+            raise ValueError("Moneda de Cotizacion inválida")
 
 
 @dataclass(frozen=True)
@@ -298,7 +302,7 @@ class CotizacionFormulaContract:
                     formula_length,
                 )
                 expected_f_tokens.append((Token.OP_IN, "", "+"))
-            price_column = "W" if composed else "X"
+            price_column = "X"
             reference = f"Mobiliti!{price_column}{term.mobiliti_row}"
             formula_length = _append_bounded_formula(
                 parts,
@@ -536,6 +540,7 @@ class CotizacionSheetMutation:
     product_mobiliti_rows: tuple[tuple[int, ...], ...] = ()
     composer_variant: str = "official"
     section_subtotal_rows: tuple[int, ...] = ()
+    quote_currency: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.xml, bytes):
@@ -566,6 +571,8 @@ class CotizacionSheetMutation:
             raise TypeError("Filas Mobiliti por producto Cotizacion inválidas")
         if self.composer_variant not in {"official", "sunon_cdmx_v1c"}:
             raise ValueError("Variante de compositor Cotizacion inválida")
+        if self.quote_currency not in {"", "MXN", "USD", "EUR"}:
+            raise ValueError("Moneda de mutación Cotizacion inválida")
         if (
             not isinstance(self.section_subtotal_rows, tuple)
             or not all(
@@ -951,6 +958,26 @@ class CotizacionSheetEditor:
             for number, row in sorted(rows.items())
             if number >= CANONICAL_COTIZACION_TERMS_START
         ]
+        if metadata.quote_currency:
+            currency_name = {
+                "MXN": "Pesos Mexicanos",
+                "USD": "Dólares Estadounidenses",
+                "EUR": "Euros",
+            }[metadata.quote_currency]
+            target = CANONICAL_COTIZACION_CURRENCY_TERM_ROW + total_delta
+            currency_row = next(
+                row for row in terms_rows if int(row.attrib["r"]) == target
+            )
+            _set_inline_string(
+                currency_row,
+                f"A{target}",
+                (
+                    f"a. Esta cotización se encuentra en {currency_name}, "
+                    f"{metadata.quote_currency}. En caso de que el pago se efectúe "
+                    "en una moneda diferente a la de este documento, se tomará como "
+                    "referencia el tipo de cambio bancario."
+                ),
+            )
         sidecars = _sidecar_cells(rows, first_row=16, first_sidecar_column=11)
         rebuilt = preserved_headers + dynamic_rows + terms_rows
         _apply_sidecars(rebuilt, sidecars)
@@ -975,6 +1002,7 @@ class CotizacionSheetEditor:
             ),
             composer_variant=composer_variant,
             section_subtotal_rows=tuple(section_subtotal_rows),
+            quote_currency=metadata.quote_currency,
         )
 
     def _write_metadata(self, metadata: CotizacionMetadata) -> None:
@@ -1289,21 +1317,28 @@ def verify_output_contract(
     mobiliti = ET.fromstring(package.parts[package.sheet_part("Mobiliti")])
     if _formula_in_root(mobiliti, "K6") is None:
         raise ValueError("La fórmula oficial Mobiliti!K6 fue eliminada")
+    first_product_row = row_map.sections[0].product_start
+    last_product_row = row_map.last_product_row
     for target_row in row_map.item_rows:
-        for column in ("W", "X"):
+        for column in ("W", "X", "Y"):
             if _formula_in_root(mobiliti, f"{column}{target_row}") is None:
                 raise ValueError(f"Fórmula oficial Mobiliti!{column}{target_row} ausente")
         x_formula = _formula_in_root(mobiliti, f"X{target_row}") or ""
-        if "MINIFS(" in x_formula and any(
-            expected not in x_formula
-            for expected in (
-                f"$W$14:$W${row_map.last_product_row}",
-                f"$D$14:$D${row_map.last_product_row}",
-            )
-        ):
+        expected_x_formula = (
+            f"_xlfn.MINIFS($W${first_product_row}:$W${last_product_row},"
+            f"$D${first_product_row}:$D${last_product_row},D{target_row},"
+            f"$H${first_product_row}:$H${last_product_row},"
+            f"_xlfn.MAXIFS($H${first_product_row}:$H${last_product_row},"
+            f"$D${first_product_row}:$D${last_product_row},D{target_row}))"
+        )
+        if x_formula != expected_x_formula:
             raise ValueError(
-                f"Rangos globales Mobiliti!X{target_row} desactualizados"
+                f"Precio uniforme Mobiliti!X{target_row} desactualizado"
             )
+        if _formula_in_root(mobiliti, f"Y{target_row}") != (
+            f"(X{target_row}*H{target_row})"
+        ):
+            raise ValueError(f"Importe uniforme Mobiliti!Y{target_row} desactualizado")
         price = _cell_in_root(mobiliti, f"J{target_row}")
         if price is None:
             raise ValueError(f"Mobiliti!J{target_row} no contiene un costo")
@@ -1457,6 +1492,7 @@ def merge_cotizacion_product_images(
         product_mobiliti_rows=mutation.product_mobiliti_rows,
         composer_variant=mutation.composer_variant,
         section_subtotal_rows=mutation.section_subtotal_rows,
+        quote_currency=mutation.quote_currency,
     )
 
 
@@ -1782,10 +1818,10 @@ _COTIZACION_PRICE_TERM = re.compile(
     rf"(?:/(?P<denominator>{_COTIZACION_POSITIVE_DECIMAL}))?"
 )
 _COTIZACION_COMPOSED_PRINCIPAL = re.compile(
-    r"Mobiliti!W(?P<row>[1-9][0-9]*)"
+    r"Mobiliti!X(?P<row>[1-9][0-9]*)"
 )
 _COTIZACION_COMPOSED_COMPLEMENT = re.compile(
-    r"Mobiliti!W(?P<row>[1-9][0-9]*)"
+    r"Mobiliti!X(?P<row>[1-9][0-9]*)"
     r"\*Mobiliti!H(?P<quantity_row>[1-9][0-9]*)"
     r"/Mobiliti!H(?P<principal_row>[1-9][0-9]*)"
 )
@@ -1818,7 +1854,11 @@ def _cotizacion_price_terms_from_formula(
         raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
     raw_terms = formula.split("+")
     terms: list[CotizacionPriceTerm] = []
-    principal_match = _COTIZACION_COMPOSED_PRINCIPAL.fullmatch(raw_terms[0])
+    principal_match = (
+        _COTIZACION_COMPOSED_PRINCIPAL.fullmatch(raw_terms[0])
+        if len(raw_terms) > 1
+        else None
+    )
     if principal_match is not None:
         principal_row = int(principal_match.group("row"))
         if len(raw_terms) == 1:
@@ -1935,7 +1975,10 @@ def _validate_exact_cotizacion_surface(
         field: _exact_inline_text(_require_root_cell(candidate, coordinate), coordinate)
         for field, coordinate in metadata_coordinates.items()
     }
-    metadata = CotizacionMetadata(**metadata_values)
+    metadata = CotizacionMetadata(
+        **metadata_values,
+        quote_currency=mutation.quote_currency,
+    )
 
     sections: list[CotizacionSection] = []
     current_title: str | None = None
@@ -2166,6 +2209,7 @@ def _validate_exact_cotizacion_surface(
         or expected.product_rows != mutation.product_rows
         or expected.composer_variant != mutation.composer_variant
         or expected.section_subtotal_rows != mutation.section_subtotal_rows
+        or expected.quote_currency != mutation.quote_currency
     ):
         raise ValueError("Cotizacion no cumple el contrato exacto de layout")
     expected_root = _worksheet_root(expected.xml, "Cotizacion")

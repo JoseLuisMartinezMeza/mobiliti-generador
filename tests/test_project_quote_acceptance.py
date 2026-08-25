@@ -550,9 +550,9 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
             for row in quotation_rows
         ] == list(physical_quantities)
         assert cotizacion["F17"].value == (
-            "=Mobiliti!W14"
-            "+Mobiliti!W15*Mobiliti!H15/Mobiliti!H14"
-            "+Mobiliti!W16*Mobiliti!H16/Mobiliti!H14"
+            "=Mobiliti!X14"
+            "+Mobiliti!X15*Mobiliti!H15/Mobiliti!H14"
+            "+Mobiliti!X16*Mobiliti!H16/Mobiliti!H14"
         )
         assert cotizacion["A17"].value == "=Mobiliti!D14"
         assert cotizacion["C17"].value == f"=Quotation!D{quotation_rows[0]}"
@@ -797,9 +797,9 @@ def test_project_quote_expands_past_16_sections_and_33_components(
     assert len(visible_formula_rows) == 698
     first_visible_row = visible_formula_rows[0]
     assert _formula(cotizacion[f"F{first_visible_row}"]) == (
-        "Mobiliti!W14"
-        "+Mobiliti!W15*Mobiliti!H15/Mobiliti!H14"
-        "+Mobiliti!W16*Mobiliti!H16/Mobiliti!H14"
+        "Mobiliti!X14"
+        "+Mobiliti!X15*Mobiliti!H15/Mobiliti!H14"
+        "+Mobiliti!X16*Mobiliti!H16/Mobiliti!H14"
     )
 
 
@@ -823,22 +823,21 @@ def _excel_acceptance_surface(
     for row in sorted(selected_rows):
         for column in ("W", "X"):
             coordinate = f"{column}{row}"
-            expected = translate_formula(
-                f"={_formula(official_mobiliti[f'{column}14'])}",
-                origin=f"{column}14",
-                target=coordinate,
-                sheet="Mobiliti",
-            )
             if column == "X":
-                expected = re.sub(
-                    r"\$W\$14:\$W\$\d+",
-                    f"$W$14:$W${result.layout.last_product_row}",
-                    expected,
+                last_row = result.layout.last_product_row
+                expected = (
+                    f"=_xlfn.MINIFS($W$14:$W${last_row},"
+                    f"$D$14:$D${last_row},D{row},"
+                    f"$H$14:$H${last_row},"
+                    f"_xlfn.MAXIFS($H$14:$H${last_row},"
+                    f"$D$14:$D${last_row},D{row}))"
                 )
-                expected = re.sub(
-                    r"\$D\$14:\$D\$\d+",
-                    f"$D$14:$D${result.layout.last_product_row}",
-                    expected,
+            else:
+                expected = translate_formula(
+                    f"={_formula(official_mobiliti[f'{column}14'])}",
+                    origin=f"{column}14",
+                    target=coordinate,
+                    sheet="Mobiliti",
                 )
             actual = f"={_formula(mobiliti[coordinate])}"
             assert actual == expected

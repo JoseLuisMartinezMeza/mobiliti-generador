@@ -822,6 +822,10 @@ textarea:focus {
   padding: 0 26px 26px;
 }
 
+.clients-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .admin-row {
   grid-template-columns: 24px 1fr auto;
 }
@@ -1110,8 +1114,12 @@ textarea:focus {
 }
 
 .project-picker-actions {
+  position: sticky;
+  z-index: 1;
+  bottom: 0;
   padding: 16px 24px 22px;
   border-top: 1px solid var(--line);
+  background: var(--surface);
   justify-content: flex-end;
 }
 

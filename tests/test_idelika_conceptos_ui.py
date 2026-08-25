@@ -48,13 +48,17 @@ def test_idelika_and_conceptos_are_exposed_after_lauco_with_exact_labels():
     main = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
     options = run_picker("console.log(JSON.stringify(picker.CATALOG_OPTIONS));")
 
-    assert options[-3:] == [
+    assert options[-5:] == [
         {"value": "lauco", "label": "Lauco"},
         {"value": "idelika", "label": "IDÉLIKA"},
         {"value": "conceptos", "label": "Conceptos"},
+        {"value": "labenze", "label": "Labenze"},
+        {"value": "requiez", "label": "Requiez"},
     ]
     assert main.index('["lauco", "Lauco"') < main.index('["idelika", "IDÉLIKA"')
     assert main.index('["idelika", "IDÉLIKA"') < main.index('["conceptos", "Conceptos"')
+    assert main.index('["conceptos", "Conceptos"') < main.index('["labenze", "Labenze"')
+    assert main.index('["labenze", "Labenze"') < main.index('["requiez", "Requiez"')
 
 
 def test_project_picker_renders_generic_idelika_and_conceptos_product_details():
@@ -148,7 +152,7 @@ def test_project_picker_selection_reaches_cart_for_pending_idelika_and_configura
         "missingQuotableCanConfirm": False,
         "falseQuotableCanConfirm": False,
         "invalidCanConfirm": False,
-        "invalidTarget": "SelecciÃ³n de catÃ¡logo invÃ¡lida",
+        "invalidTarget": "Selección de catálogo inválida",
         "pending": {
             "catalog": "idelika",
             "code": "",

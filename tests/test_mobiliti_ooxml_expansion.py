@@ -306,6 +306,11 @@ def test_seventeenth_section_extends_official_x_global_product_ranges():
         f"$D$14:$D${mutation.row_map.last_product_row}"
         in formula.text
     )
+    assert (
+        f"$H$14:$H${mutation.row_map.last_product_row}"
+        in formula.text
+    )
+    assert "_xlfn.MAXIFS(" in formula.text
 
 
 def test_validations_and_conditional_formatting_reach_twentieth_section(tmp_path):
@@ -1284,11 +1289,24 @@ def test_all_product_rows_keep_styles_and_used_unused_rows_match_official_formul
                         f"{row_number}"
                     )
                     actual = target_cells[column].find(f"{{{MAIN}}}f").text
-                    expected = _derive_official_formula(
-                        source_coordinate,
-                        target_coordinate,
-                        mutation.row_map,
-                    )[1:]
+                    if column == 24:
+                        first_product_row = mutation.row_map.sections[0].product_start
+                        last_product_row = mutation.row_map.last_product_row
+                        expected = (
+                            f"_xlfn.MINIFS($W${first_product_row}:$W${last_product_row},"
+                            f"$D${first_product_row}:$D${last_product_row},D{row_number},"
+                            f"$H${first_product_row}:$H${last_product_row},"
+                            f"_xlfn.MAXIFS($H${first_product_row}:$H${last_product_row},"
+                            f"$D${first_product_row}:$D${last_product_row},D{row_number}))"
+                        )
+                    elif column == 25:
+                        expected = f"(X{row_number}*H{row_number})"
+                    else:
+                        expected = _derive_official_formula(
+                            source_coordinate,
+                            target_coordinate,
+                            mutation.row_map,
+                        )[1:]
                     assert _formula_token_signature("=" + actual) == (
                         _formula_token_signature("=" + expected)
                     )

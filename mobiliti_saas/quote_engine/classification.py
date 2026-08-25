@@ -54,16 +54,9 @@ def clasificar_producto(product_name: str, dictionary: dict) -> str:
     default = config.get("default_category", "OTRO")
     product_norm = normalizar_texto(product_name, quitar_acentos=normalize_accents)
 
-    ordered_terms: list[tuple[int, str, str]] = []
-    for category, data in dictionary.get("categorias", {}).items():
-        for term in data.get("terminos", []):
-            term_norm = normalizar_texto(term, quitar_acentos=normalize_accents)
-            ordered_terms.append((len(term_norm), term_norm, category))
-    ordered_terms.sort(reverse=True)
-
-    for _, term_norm, category in ordered_terms:
-        if term_norm and term_norm in product_norm:
-            return category
+    exact_category = _classify_exact(product_norm, dictionary, normalize_accents)
+    if exact_category:
+        return exact_category
 
     if RAPIDFUZZ_AVAILABLE:
         flat_terms = _flat_terms(dictionary)
@@ -82,27 +75,108 @@ def load_category_dictionary(product_names: list[str] | None = None) -> dict:
     return enrich_dictionary_with_aliases(dictionary, product_names)
 
 
-def classify_product_name(product_name: str, dictionary: dict) -> str:
-    return clasificar_producto(product_name, dictionary)
+def classify_product_name(
+    product_name: str,
+    dictionary: dict,
+    *,
+    description: object = "",
+    source_category: object = "",
+    supplier: object = "",
+) -> str:
+    supplier_text = normalizar_texto(supplier)
+    if re.search(r"(?:^|[^a-z0-9])lumbro(?:[^a-z0-9]|$)", supplier_text):
+        return "Multicontactos"
+    if re.search(r"(?:^|[^a-z0-9])tarkett(?:[^a-z0-9]|$)", supplier_text):
+        tarkett_text = normalizar_texto(
+            " ".join(str(value or "") for value in (product_name, description, source_category))
+        )
+        if re.search(
+            r"(?:^|[^a-z0-9])(?:aislante|desso|alfombra|loseta|piso|ultrabond|ambienta|aurea|ecomute)(?:[^a-z0-9]|$)",
+            tarkett_text,
+        ):
+            return "Terminados"
+
+    normalize_accents = dictionary.get("config", {}).get("normalizar_acentos", True)
+    default = dictionary.get("config", {}).get("default_category", "OTRO")
+    matched_default = False
+    for value in (product_name, description, source_category):
+        text = normalizar_texto(value, quitar_acentos=normalize_accents)
+        category = _classify_exact(
+            text,
+            dictionary,
+            normalize_accents,
+            excluded_category=default,
+        )
+        if category:
+            return category
+        matched_default = matched_default or (
+            _classify_exact(text, dictionary, normalize_accents) == default
+        )
+
+    if matched_default:
+        return default
+    return default
+
+
+def _classify_exact(
+    text: str,
+    dictionary: dict,
+    normalize_accents: bool,
+    *,
+    excluded_category: str | None = None,
+) -> str | None:
+    ordered_terms: list[tuple[int, str, str]] = []
+    for category, data in dictionary.get("categorias", {}).items():
+        for term in data.get("terminos", []):
+            term_norm = normalizar_texto(term, quitar_acentos=normalize_accents)
+            ordered_terms.append((len(term_norm), term_norm, category))
+    ordered_terms.sort(reverse=True)
+
+    for _, term_norm, category in ordered_terms:
+        if (
+            category != excluded_category
+            and term_norm
+            and re.search(
+                rf"(?<![a-z0-9]){re.escape(term_norm)}(?![a-z0-9])",
+                text,
+            )
+        ):
+            return category
+    return None
 
 
 def enrich_dictionary_with_aliases(dictionary: dict, product_names: list[str]) -> dict:
     enriched = deepcopy(dictionary)
     for product_name in product_names:
-        _learn_category_alias(enriched, product_name)
+        _learn_category_alias(
+            enriched,
+            product_name,
+            classification_dictionary=dictionary,
+        )
     return enriched
 
 
-def _learn_category_alias(dictionary: dict, product_name: str) -> None:
+def _learn_category_alias(
+    dictionary: dict,
+    product_name: str,
+    *,
+    classification_dictionary: dict | None = None,
+) -> None:
     if not product_name:
         return
 
-    category = clasificar_producto(product_name, dictionary)
-    default_category = dictionary.get("config", {}).get("default_category", "OTRO")
-    if category == default_category:
+    base_dictionary = classification_dictionary or dictionary
+    normalize_accents = base_dictionary.get("config", {}).get("normalizar_acentos", True)
+    category = _classify_exact(
+        normalizar_texto(product_name, quitar_acentos=normalize_accents),
+        base_dictionary,
+        normalize_accents,
+    )
+    default_category = base_dictionary.get("config", {}).get("default_category", "OTRO")
+    if category is None or category == default_category:
         return
 
-    alias = _extract_category_alias(product_name, category, dictionary)
+    alias = _extract_category_alias(product_name, category, base_dictionary)
     if not alias:
         return
 

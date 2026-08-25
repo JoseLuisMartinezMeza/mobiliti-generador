@@ -32,14 +32,15 @@ def test_conceptos_sofas_official_xlsx_source_is_pinned():
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda rows: rows[-1]["files"][0].pop("mime_type"),
-        lambda rows: rows[-1]["files"][0].update(mime_type="application/pdf"),
+        lambda source_file: source_file.pop("mime_type"),
+        lambda source_file: source_file.update(mime_type="application/pdf"),
     ],
     ids=["mime-omitted", "mime-incorrect"],
 )
 def test_conceptos_source_requires_a_matching_explicit_mime_type(tmp_path, mutate):
     rows = json.loads(SOURCES_PATH.read_text(encoding="utf-8"))
-    mutate(rows)
+    conceptos = next(row for row in rows if row["supplier"] == "conceptos")
+    mutate(conceptos["files"][0])
     path = tmp_path / "sources.json"
     path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
 

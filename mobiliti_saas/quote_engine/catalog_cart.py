@@ -310,6 +310,11 @@ def _description_for_item(
     parts = [
         str(item.get("description", "") or "").strip(),
         *(str(value or "").strip() for value in extra_description_parts),
+        (
+            f"Coleccion: {str(item.get('collection') or '').strip()}"
+            if str(item.get("collection") or "").strip()
+            else ""
+        ),
         f"{code_label}: {code}" if code else "",
     ]
     configuration = str(item.get("configuration") or "").strip()
@@ -325,8 +330,12 @@ def _description_for_item(
     warranty = str(attributes.get("warranty") or "").strip()
     if warranty:
         parts.append(f"Garantia: {warranty}")
+    is_lumbro = (
+        str(item.get("catalog") or item.get("supplier") or "").strip().casefold()
+        == "lumbro"
+    )
     product_notes = attributes.get("product_notes")
-    if isinstance(product_notes, list):
+    if not is_lumbro and isinstance(product_notes, list):
         notes = [str(value).strip() for value in product_notes if str(value).strip()]
         if notes:
             parts.append(f"Notas: {'; '.join(notes)}")
@@ -336,7 +345,7 @@ def _description_for_item(
         parts.append(f"Entrega: {lead_time}")
     elif availability_type == "made_to_order":
         parts.append("Entrega: Sobre pedido")
-    if availability_type == "unknown":
+    if availability_type == "unknown" and not is_lumbro:
         parts.append("Disponibilidad: por confirmar")
     availability = _availability_bucket_summary(item, attributes)
     if availability:
@@ -504,7 +513,7 @@ def _add_local_catalog_image(
                 or not isinstance(content_type, str)
             ):
                 return
-            _validated_catalog_image_suffix(data, content_type)
+            data, _suffix = _workbook_catalog_image_payload(data, content_type)
             stream = BytesIO(data)
             _anchor_catalog_image(ws, row, stream)
             return
@@ -562,7 +571,7 @@ def _download_catalog_image(
                 ".jpeg": "image/jpeg",
                 ".webp": "image/webp",
             }.get(local_source.suffix.lower(), "")
-            suffix = _validated_catalog_image_suffix(data, content_type)
+            data, suffix = _workbook_catalog_image_payload(data, content_type)
             safe_key = re.sub(
                 r"[^A-Za-z0-9_-]+", "_", destination_key or code or "producto"
             )
@@ -589,7 +598,7 @@ def _download_catalog_image(
             data = response.read(MAX_IMAGE_BYTES + 1)
         if not data or len(data) > MAX_IMAGE_BYTES:
             return None
-        suffix = _validated_catalog_image_suffix(data, content_type)
+        data, suffix = _workbook_catalog_image_payload(data, content_type)
         safe_key = re.sub(
             r"[^A-Za-z0-9_-]+", "_", destination_key or code or "producto"
         )
@@ -623,6 +632,20 @@ def _validated_catalog_image_suffix(data: bytes, content_type: str) -> str:
         except (Image.DecompressionBombWarning, UnidentifiedImageError):
             raise
     return CATALOG_IMAGE_FORMATS[image_format][1]
+
+
+def _workbook_catalog_image_payload(data: bytes, content_type: str) -> tuple[bytes, str]:
+    suffix = _validated_catalog_image_suffix(data, content_type)
+    if suffix != ".webp":
+        return data, suffix
+    with Image.open(BytesIO(data)) as image:
+        normalized = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+        stream = BytesIO()
+        normalized.save(stream, format="PNG")
+    payload = stream.getvalue()
+    if not payload or len(payload) > MAX_IMAGE_BYTES:
+        raise ValueError("Imagen WEBP normalizada fuera del limite permitido")
+    return payload, ".png"
 
 
 def _allowed_image_hosts(source_type: str) -> frozenset[str]:

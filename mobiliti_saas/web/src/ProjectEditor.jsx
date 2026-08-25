@@ -40,16 +40,16 @@ const CUSTOMER_FIELDS = Object.freeze([
   ["Proyecto *", "proyecto", "text"],
   ["Cliente *", "cliente", "text"],
   ["Correo *", "correo", "email"],
-  ["TelÃ©fono *", "telefono", "tel"],
-  ["DirecciÃ³n *", "direccion", "text"],
-  ["RazÃ³n social *", "razon_social", "text"],
+  ["Teléfono *", "telefono", "tel"],
+  ["Dirección *", "direccion", "text"],
+  ["Razón social *", "razon_social", "text"],
 ]);
 
 const AUTOSAVE_COPY = Object.freeze({
   saving: "Guardando",
   saved: "Guardado",
   pending: "Cambios pendientes",
-  conflict: "Conflicto de ediciÃ³n",
+  conflict: "Conflicto de edición",
 });
 
 function defaultConcept(index) {
@@ -139,7 +139,7 @@ function QuantityEditor({line, disabled, onCommit}) {
       setDraft(quantity);
       setError("");
     } catch (failure) {
-      setError(failure.message || "Cantidad invÃ¡lida");
+      setError(failure.message || "Cantidad inválida");
     }
   }
 
@@ -196,7 +196,7 @@ function ComplementCard({
       </div>
       <div className="project-complement-copy">
         <strong>+ {child.snapshot.name}</strong>
-        <small>{child.officialCode} Â· {presentationProvider(child)}</small>
+        <small>{child.officialCode} · {presentationProvider(child)}</small>
         <ImageReferenceBadge warnings={child.snapshot.warnings} />
         <ImportedFields
           line={child}
@@ -300,7 +300,7 @@ export default function ProjectEditor({
 
   function confirmRemoval(children) {
     return !children.length
-      || window.confirm(`Este cambio retirarÃ¡ ${children.length} complemento(s). Â¿Continuar?`);
+      || window.confirm(`Este cambio retirará ${children.length} complemento(s). ¿Continuar?`);
   }
 
   function confirmPicker(selection) {
@@ -350,7 +350,7 @@ export default function ProjectEditor({
     if (!pendingComplement.quantityMode) {
       setPendingComplement((current) => ({
         ...current,
-        error: "Elige cÃ³mo se calcularÃ¡ la cantidad.",
+        error: "Elige cómo se calculará la cantidad.",
       }));
       return;
     }
@@ -366,7 +366,7 @@ export default function ProjectEditor({
     } catch (failure) {
       setPendingComplement((current) => ({
         ...current,
-        error: failure.message || "Cantidad invÃ¡lida.",
+        error: failure.message || "Cantidad inválida.",
       }));
     }
   }
@@ -375,7 +375,7 @@ export default function ProjectEditor({
     try {
       commitLines(updateMixedCartQuantity(lines, key, quantity));
     } catch (failure) {
-      setError(failure.message || "Cantidad invÃ¡lida.");
+      setError(failure.message || "Cantidad inválida.");
     }
   }
 
@@ -418,7 +418,7 @@ export default function ProjectEditor({
     try {
       await onGenerateQuote(project);
     } catch (failure) {
-      setError(failure.message || "No se pudo generar la cotizaciÃ³n.");
+      setError(failure.message || "No se pudo generar la cotización.");
     } finally {
       setGenerating(false);
     }
@@ -448,14 +448,14 @@ export default function ProjectEditor({
           disabled={disabled || !principals.length || autosave?.status !== "saved"}
           onClick={generateQuote}
         >
-          {generating ? "Generando cotizaciÃ³nâ€¦" : "Generar cotizaciÃ³n"}
+          {generating ? "Generando cotización…" : "Generar cotización"}
         </button>
       </header>
 
       {autosave?.status === "conflict" ? (
         <div className="project-conflict" role="alert">
-          <strong>El Proyecto cambiÃ³ en otra sesiÃ³n.</strong>
-          <span>Vuelve a Proyectos y abre la versiÃ³n mÃ¡s reciente antes de continuar.</span>
+          <strong>El Proyecto cambió en otra sesión.</strong>
+          <span>Vuelve a Proyectos y abre la versión más reciente antes de continuar.</span>
         </div>
       ) : null}
       {error ? <p className="error-line" role="alert">{error}</p> : null}
@@ -475,7 +475,7 @@ export default function ProjectEditor({
           aria-selected={activeTab === "quote"}
           onClick={() => setActiveTab("quote")}
         >
-          Datos de cotizaciÃ³n
+          Datos de cotización
         </button>
       </nav>
 
@@ -492,7 +492,7 @@ export default function ProjectEditor({
                 <header className="project-editor-section-header">
                   <span>{sectionIndex + 1}-</span>
                   <input
-                    aria-label={`Concepto de la secciÃ³n ${sectionIndex + 1}`}
+                    aria-label={`Concepto de la sección ${sectionIndex + 1}`}
                     maxLength={120}
                     value={section.concept}
                     disabled={disabled}
@@ -576,7 +576,7 @@ export default function ProjectEditor({
                           </div>
                           <div className="project-line-copy">
                             <strong>{line.snapshot.name}</strong>
-                            <small>{line.officialCode} Â· {presentationProvider(line)}</small>
+                            <small>{line.officialCode} · {presentationProvider(line)}</small>
                             {line.snapshot.configuration ? <span>{line.snapshot.configuration}</span> : null}
                             <ImageReferenceBadge warnings={line.snapshot.warnings} />
                             <ImportedFields
@@ -606,7 +606,7 @@ export default function ProjectEditor({
                               Bajar
                             </button>
                             <select
-                              aria-label={`Mover ${line.snapshot.name} a otra secciÃ³n`}
+                              aria-label={`Mover ${line.snapshot.name} a otra sección`}
                               value={section.id}
                               disabled={disabled || sections.length === 1}
                               onChange={(event) => commitLines(
@@ -685,7 +685,7 @@ export default function ProjectEditor({
                       </article>
                     );
                   })}
-                  {!sectionLines.length ? <p className="projects-empty">Esta secciÃ³n no tiene productos.</p> : null}
+                  {!sectionLines.length ? <p className="projects-empty">Esta sección no tiene productos.</p> : null}
                 </div>
 
                 {sectionIndex === sections.length - 1 ? (
@@ -702,7 +702,7 @@ export default function ProjectEditor({
                       sections: closeMixedCartSection(sections, lines),
                     })}
                   >
-                    Cerrar secciÃ³n y abrir otra
+                    Cerrar sección y abrir otra
                   </button>
                 ) : null}
               </section>
@@ -728,7 +728,7 @@ export default function ProjectEditor({
             </label>
           ))}
           <label>
-            <span>Moneda de cotizaciÃ³n</span>
+            <span>Moneda de cotización</span>
             <select
               value={quoteFields.quote_currency || "MXN"}
               disabled={disabled}
@@ -835,7 +835,7 @@ export default function ProjectEditor({
                   error: "",
                 }))}
               />
-              <small>Este producto del selector usa cantidad entera, mÃ­nimo 1 e incremento 1.</small>
+              <small>Este producto del selector usa cantidad entera, mínimo 1 e incremento 1.</small>
             </label>
             <div className="project-complement-impact">
               <strong>Impacto</strong>

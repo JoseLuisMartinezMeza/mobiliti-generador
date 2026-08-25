@@ -74,7 +74,7 @@ $processes += Start-HiddenProcess `
     CORS_ORIGINS = "http://127.0.0.1:$WebPort"
     MOBILITI_DEV_PUBLIC_BASE_URL = "http://127.0.0.1:$ApiPort"
     MOBILITI_DEV_WEB_BASE_URL = "http://127.0.0.1:$WebPort"
-    CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos"
+    CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos,labenze,requiez"
   }
 
 $processes += Start-HiddenProcess `
@@ -86,7 +86,7 @@ $processes += Start-HiddenProcess `
     MOBILITI_DEV_MODE = "1"
     QUOTE_ENGINE = "python"
     WORKER_STALE_MINUTES = "30"
-    CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos"
+    CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos,labenze,requiez"
   }
 
 $processes += Start-HiddenProcess `

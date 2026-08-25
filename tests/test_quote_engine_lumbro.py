@@ -97,6 +97,52 @@ def test_load_lumbro_prices_preserves_source_row_reference():
     assert prices["LIDO.OP-INT"].price_mxn > 0
 
 
+def test_automatic_lumbro_lines_attach_the_reference_image_to_future_quotes():
+    item = QuoteItem(
+        tipo="producto",
+        row=9,
+        nombre="DU688-Lido Ejecutivo",
+        cantidad=1,
+        precio=100,
+    )
+
+    lines, _ = engine._official_presentation_lines(
+        (item,),
+        {},
+        TEMPLATE,
+        _load_lumbro_prices(TEMPLATE),
+        {},
+    )
+    accessory = next(line for line in lines if line.parent_item_key is not None)
+
+    assert accessory.name == "MULT-LIDO-INT"
+    assert accessory.image_content == engine.LUMBRO_ACCESSORY_IMAGE.read_bytes()
+    assert accessory.image_content_type == "image/png"
+
+
+def test_lauco_cub_hive_uses_the_reviewed_reference_when_catalog_has_no_image():
+    item = QuoteItem(
+        tipo="producto",
+        row=9,
+        nombre="CUB HIVE",
+        descripcion="Cubiculo modular hexagonal tipo panal",
+        proveedor="Lauco",
+        cantidad=1,
+        precio=100,
+    )
+
+    lines, _ = engine._official_presentation_lines(
+        (item,),
+        {},
+        TEMPLATE,
+        _load_lumbro_prices(TEMPLATE),
+        {},
+    )
+
+    assert lines[0].image_content == engine.CUB_HIVE_REFERENCE_IMAGE.read_bytes()
+    assert lines[0].image_content_type == "image/png"
+
+
 def test_exchange_rate_prefers_explicit_metadata(monkeypatch):
     monkeypatch.setattr(engine, "_fetch_usd_mxn_exchange_rate", lambda: 17.25)
 

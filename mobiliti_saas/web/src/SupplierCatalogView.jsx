@@ -13,59 +13,14 @@ import {
 } from "lucide-react";
 import { createMixedCartLine } from "./mixedCart.js";
 import {
-  filterCatalogVariantGroups,
   productBaseConfigurationLabel,
   productPriceLabel,
   productVariantConfiguration,
 } from "./productPicker.js";
 
-const SUPPLIER_CACHE_VERSION = "v2";
 const SUPPLIER_PAGE_SIZE = 24;
 const QUANTITY_SCALE = 1000000;
 const QUANTITY_LIMIT_MICROUNITS = 1000000 * QUANTITY_SCALE;
-
-function catalogCacheKey(userId, supplier, source_hash) {
-  return `supplier-catalog:${SUPPLIER_CACHE_VERSION}:${userId}:${supplier}:${source_hash}`;
-}
-
-function catalogPointerKey(userId, supplier) {
-  return `supplier-catalog:${SUPPLIER_CACHE_VERSION}:${userId}:${supplier}:current`;
-}
-
-function readCatalogCache(userId, supplier) {
-  try {
-    const sourceHash = sessionStorage.getItem(catalogPointerKey(userId, supplier));
-    if (!sourceHash) return null;
-    const cached = JSON.parse(sessionStorage.getItem(catalogCacheKey(userId, supplier, sourceHash)) || "null");
-    if (cached?.supplier === supplier && cached?.source_hash === sourceHash && Array.isArray(cached.items)) {
-      return cached;
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function writeCatalogCache(userId, supplier, data) {
-  try {
-    const key = catalogCacheKey(userId, supplier, data.source_hash);
-    sessionStorage.setItem(key, JSON.stringify(data));
-    sessionStorage.setItem(catalogPointerKey(userId, supplier), data.source_hash);
-  } catch {
-    // The live response remains usable when session storage is unavailable.
-  }
-}
-
-function clearCatalogCache(userId, supplier) {
-  try {
-    const pointer = catalogPointerKey(userId, supplier);
-    const sourceHash = sessionStorage.getItem(pointer);
-    if (sourceHash) sessionStorage.removeItem(catalogCacheKey(userId, supplier, sourceHash));
-    sessionStorage.removeItem(pointer);
-  } catch {
-    // Storage can be unavailable in privacy-restricted browser sessions.
-  }
-}
 
 function normalizeText(value) {
   return String(value || "")
@@ -337,20 +292,23 @@ export default function SupplierCatalogView({
     async function loadCatalog() {
       setLoading(true);
       setError("");
-      const cached = readCatalogCache(userId, supplier);
-      if (cached && active) setCatalog(cached);
       try {
+        const params = new URLSearchParams({
+          q: query,
+          brand,
+          collection,
+          availability,
+          offset: String((page - 1) * SUPPLIER_PAGE_SIZE),
+          limit: String(SUPPLIER_PAGE_SIZE),
+        });
         const registryData = await request("/catalogs");
-        const data = await request(`/catalogs/${supplier}`);
+        const data = await request(`/catalogs/${supplier}?${params.toString()}`);
         if (!active) return;
         setRegistry(registryData.suppliers || []);
         setCatalog(data);
-        writeCatalogCache(userId, supplier, data);
       } catch (loadError) {
         if (active) {
-          setError(cached
-            ? "No se pudo actualizar el catalogo. Se muestran datos guardados; los apartados pueden estar desactualizados."
-            : loadError.message || "No se pudo cargar el catalogo");
+          setError(loadError.message || "No se pudo cargar el catalogo");
         }
       } finally {
         if (active) setLoading(false);
@@ -360,37 +318,18 @@ export default function SupplierCatalogView({
     return () => {
       active = false;
     };
-  }, [request, reloadKey, supplier, userId]);
+  }, [availability, brand, collection, page, query, request, reloadKey, supplier, userId]);
 
   useEffect(() => {
     setPage(1);
   }, [query, brand, collection, availability, supplier]);
 
   const groups = useMemo(() => groupCatalogItems(catalog?.items || []), [catalog]);
-  const brands = useMemo(
-    () => Array.from(new Set((catalog?.items || []).map((item) => item.brand).filter(Boolean))).sort(),
-    [catalog]
-  );
-  const collections = useMemo(
-    () => Array.from(new Set((catalog?.items || []).map((item) => item.collection).filter(Boolean))).sort(),
-    [catalog]
-  );
-
-  const filteredGroups = useMemo(() => {
-    return filterCatalogVariantGroups(groups, {
-      query,
-      brand,
-      collection,
-      availability,
-    });
-  }, [availability, brand, collection, groups, query]);
-
-  const pageCount = Math.max(1, Math.ceil(filteredGroups.length / SUPPLIER_PAGE_SIZE));
-  const visibleGroups = filteredGroups.slice((page - 1) * SUPPLIER_PAGE_SIZE, page * SUPPLIER_PAGE_SIZE);
-  const filteredVariantCount = filteredGroups.reduce(
-    (total, group) => total + group.matchingVariants.length,
-    0
-  );
+  const brands = Array.isArray(catalog?.brands) ? catalog.brands : [];
+  const collections = Array.isArray(catalog?.collections) ? catalog.collections : [];
+  const visibleGroups = groups.map((group) => ({...group, matchingVariants: group.variants}));
+  const pageCount = Math.max(1, Math.ceil((catalog?.product_total || 0) / SUPPLIER_PAGE_SIZE));
+  const filteredVariantCount = catalog?.total || 0;
   function activeVariant(group) {
     const candidates = group.matchingVariants || group.variants;
     const selectedId = selectedVariantByProduct[group.product_key];
@@ -486,7 +425,7 @@ export default function SupplierCatalogView({
           <h2>{label}</h2>
           <p>
             {catalog
-              ? `${groups.length} productos agrupados - ${catalog.total ?? catalog.items.length} variantes`
+              ? `${catalog.product_total ?? groups.length} productos agrupados - ${catalog.total ?? catalog.items.length} variantes`
               : "Catalogo de proveedor"}
             {catalog?.generated_at ? ` - ${new Date(catalog.generated_at).toLocaleString("es-MX")}` : ""}
           </p>
@@ -496,7 +435,6 @@ export default function SupplierCatalogView({
             className="ghost-action"
             type="button"
             onClick={() => {
-              clearCatalogCache(userId, supplier);
               setReloadKey((value) => value + 1);
             }}
           >
@@ -550,7 +488,7 @@ export default function SupplierCatalogView({
             <option value="out">Agotado</option>
           </select>
         </label>
-        <strong>{filteredGroups.length} productos - {filteredVariantCount} variantes visibles</strong>
+        <strong>{catalog?.product_total || 0} productos - {filteredVariantCount} variantes visibles</strong>
       </div>
 
       <div className="supplier-catalog-layout">
@@ -787,7 +725,7 @@ export default function SupplierCatalogView({
               <ChevronLeft size={17} /> Pagina anterior
             </button>
             <span>Pagina {page} de {pageCount}</span>
-            <button type="button" disabled={page >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
+            <button type="button" disabled={catalog?.next_offset == null} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
               Pagina siguiente <ChevronRight size={17} />
             </button>
           </nav>

@@ -53,7 +53,7 @@ export function createProjectPickerTarget(selection) {
     || "",
   ).trim();
   if (!selection?.catalog || !selection?.identity || !technicalKey) {
-    throw new Error("SelecciÃ³n de catÃ¡logo invÃ¡lida");
+    throw new Error("Selección de catálogo inválida");
   }
   const snapshot = selection.snapshot || {};
   return {
@@ -78,7 +78,7 @@ export function createProjectPickerTarget(selection) {
 
 function decimalParts(value) {
   if (typeof value !== "string" || !/^(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)) {
-    throw new Error("Cantidad decimal invÃ¡lida");
+    throw new Error("Cantidad decimal inválida");
   }
   const [integer, fraction = ""] = value.split(".");
   return {
@@ -101,13 +101,13 @@ export function multiplyProjectQuantity(left, right) {
 }
 
 export function projectMixedQuoteLines(lines) {
-  if (!Array.isArray(lines)) throw new Error("LÃ­neas de Proyecto invÃ¡lidas");
+  if (!Array.isArray(lines)) throw new Error("Líneas de Proyecto inválidas");
   const parentById = new Map(lines.map((line) => [line.lineId, line]));
   return lines.map((line) => {
     if (line.role !== "complement") return {...line};
     const parent = parentById.get(line.parentLineId);
     if (!parent || parent.role !== "principal") {
-      throw new Error("Padre de complemento invÃ¡lido");
+      throw new Error("Padre de complemento inválido");
     }
     if (line._projectQuantityProjected === true) {
       return {...line, sectionId: parent.sectionId};

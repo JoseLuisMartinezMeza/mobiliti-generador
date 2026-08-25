@@ -491,6 +491,14 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
     tmp_path,
 ):
     api_index, quote_worker = isolated_quote_runtime
+    selected = next(
+        item
+        for item in representative_lumbro_snapshot["items"]
+        if item["internal_id"] == SELECTED_INTERNAL_ID
+    )
+    selected["attributes"]["product_notes"] = [
+        "NOTA: SE PUEDEN MODIFICAR LAS CONEXIONES CON PRECIO ESPECIAL"
+    ]
     loaded = load_supplier_catalog_data(
         representative_lumbro_snapshot,
         expected_supplier="lumbro",
@@ -509,10 +517,12 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         api_index,
     )
     client = TestClient(api_index.app)
+    body = _quote_body(SELECTED_INTERNAL_ID)
+    body["image_provider"] = "pillow"
     accepted = client.post(
         "/catalogs/lumbro/quote",
         headers=_auth_headers(api_index),
-        json=_quote_body(SELECTED_INTERNAL_ID),
+        json=body,
     )
     assert accepted.status_code == 200
     assert len(state["created"]) == len(state["uploaded"]) == len(state["queued"]) == 1
@@ -529,6 +539,9 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
     assert line["tax_rate"] == "0.160000"
     assert line["source_reference"] == INTERCONNECTION_SOURCE
     assert line["image_kind"] == "generated_reference"
+    assert line["attributes"]["product_notes"] == [
+        "NOTA: SE PUEDEN MODIFICAR LAS CONEXIONES CON PRECIO ESPECIAL"
+    ]
     assert Decimal(line["line_total"]) * Decimal(line["tax_rate"]) == Decimal("960.96000000")
     assert all(item["internal_id"] != BARCELONA_REVIEW_ID for item in payload["items"])
 
@@ -573,6 +586,8 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         assert "SKU: MULT-LIDO-INT" in quotation["E9"].value
         assert "Unidad: PZA" in quotation["E9"].value
         assert "Imagen de referencia" in quotation["E9"].value
+        assert "Notas:" not in quotation["D9"].value
+        assert "Disponibilidad: por confirmar" not in quotation["D9"].value
         assert quotation["F9"].value == "420 x 160 mm"
         assert quotation["H9"].value == 2
         assert isinstance(quotation["H9"].value, int)
@@ -589,6 +604,18 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         assert cotizacion["B7"].value == "'=Proyecto Lumbro E2E"
         assert cotizacion.cell(product_row, 7).value == 0
         assert cotizacion.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
+        product_images = [
+            image
+            for image in cotizacion._images
+            if image.anchor._from.row + 1 == product_row
+        ]
+        assert len(product_images) == 1
+        with Image.open(BytesIO(product_images[0]._data())) as generated_image:
+            with Image.open(local_image) as native_image:
+                assert generated_image.size == native_image.size
+                assert generated_image.convert("RGBA").tobytes() == (
+                    native_image.convert("RGBA").tobytes()
+                )
         iva_rows = [
             row
             for row in range(product_row + 1, cotizacion.max_row + 1)

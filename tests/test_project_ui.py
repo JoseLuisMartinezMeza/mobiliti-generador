@@ -16,7 +16,7 @@ PICKER_MODULE = Path("mobiliti_saas/web/src/productPicker.js").resolve().as_uri(
 def test_project_editor_has_tabs_and_line_actions():
     source = Path("mobiliti_saas/web/src/ProjectEditor.jsx").read_text(encoding="utf-8")
     for copy in (
-        "Productos", "Datos de cotizaciÃ³n", "Cambiar producto",
+        "Productos", "Datos de cotización", "Cambiar producto",
         "Cambiar todos los iguales", "Agregar complemento",
         "Guardando", "Guardado", "Cambios pendientes",
     ):
@@ -100,7 +100,20 @@ def test_project_editor_composes_existing_model_operations_and_picker_contexts()
     for mode in ('"add"', '"replace-one"', '"replace-all"', '"complement"'):
         assert f"openPicker({mode}" in source
     assert "<ProductPickerDialog" in source
-    assert "window.confirm(`Este cambio retirarÃ¡ ${children.length} complemento(s). Â¿Continuar?`)" in source
+    assert "window.confirm(`Este cambio retirará ${children.length} complemento(s). ¿Continuar?`)" in source
+
+
+def test_project_workspace_visible_copy_has_no_mojibake():
+    sources = [
+        Path("mobiliti_saas/web/src/ProjectEditor.jsx"),
+        Path("mobiliti_saas/web/src/MixedCartDrawer.jsx"),
+        Path("mobiliti_saas/web/src/ProjectsView.jsx"),
+        Path("mobiliti_saas/web/src/projectWorkspace.js"),
+        Path("mobiliti_saas/web/src/main.jsx"),
+    ]
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        assert not any(marker in text for marker in ("Ã", "Â", "â")), path
 
 
 def test_project_editor_renders_direct_complements_and_quantity_modes():
@@ -1131,6 +1144,8 @@ def test_product_picker_uses_catalog_contract_for_supplier_choices_and_image_fal
             "lauco",
             "idelika",
             "conceptos",
+            "labenze",
+            "requiez",
         ],
         "alma": "ALMA",
         "imageWhenLoaded": True,

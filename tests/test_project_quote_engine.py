@@ -420,9 +420,9 @@ def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):
             for row in range(1, cotizacion.max_row + 1)
         )
         assert cotizacion["F17"].value == (
-            "=Mobiliti!W14"
-            "+Mobiliti!W15*Mobiliti!H15/Mobiliti!H14"
-            "+Mobiliti!W16*Mobiliti!H16/Mobiliti!H14"
+            "=Mobiliti!X14"
+            "+Mobiliti!X15*Mobiliti!H15/Mobiliti!H14"
+            "+Mobiliti!X16*Mobiliti!H16/Mobiliti!H14"
         )
         assert cotizacion["A17"].value == "=Mobiliti!D14"
         assert cotizacion["C17"].value == "=Quotation!D9"
@@ -517,6 +517,7 @@ def test_official_image_improvement_changes_only_cotizacion_projection():
         PRINCIPAL_ID,
         description="Principal",
         quantity="1",
+        origin="imported",
         image_content=source.getvalue(),
         image_content_type="image/jpeg",
     )
@@ -540,12 +541,12 @@ def test_official_image_improvement_changes_only_cotizacion_projection():
         assert result.getpixel((0, 0)) == (255, 255, 255)
 
 
-def test_official_image_improvement_removes_shadow_only_for_imported_lines(monkeypatch):
+def test_official_image_improvement_only_processes_quotation_images(monkeypatch):
     calls = []
 
     def fake_improve(content, content_type, **options):
         calls.append((content, content_type, options["remove_shadow"]))
-        return content, content_type
+        return content + b"-processed", "image/png"
 
     monkeypatch.setattr(engine, "improve_product_image_bytes", fake_improve)
     imported = _line(
@@ -555,23 +556,65 @@ def test_official_image_improvement_removes_shadow_only_for_imported_lines(monke
         origin="imported",
         image_content=b"imported",
     )
-    catalog = _line(
+    quotation = _line(
         PER_UNIT_ID,
-        description="Catálogo",
+        description="Quotation directa",
         quantity="1",
-        origin="sunon",
-        image_content=b"catalog",
+        origin="quotation",
+        image_content=b"quotation",
+    )
+    lumbro = _line(
+        FIXED_ID,
+        description="Catálogo Lumbro",
+        quantity="1",
+        origin="lumbro",
+        image_content=b"lumbro-native",
+    )
+    offiho = _line(
+        "offiho-native",
+        description="Catálogo Offiho",
+        quantity="1",
+        origin="offiho",
+        image_content=b"offiho-native",
     )
 
-    engine._improve_official_cotizacion_images(
-        (imported, catalog),
+    improved = engine._improve_official_cotizacion_images(
+        (imported, quotation, lumbro, offiho),
         {"image_provider": "pillow", "image_background": "white"},
     )
 
     assert calls == [
         (b"imported", "image/png", True),
-        (b"catalog", "image/png", False),
+        (b"quotation", "image/png", True),
     ]
+    assert improved[0].image_content == b"imported-processed"
+    assert improved[1].image_content == b"quotation-processed"
+    assert improved[2] is lumbro
+    assert improved[3] is offiho
+
+
+def test_official_image_improvement_uses_storage_efficient_resolution(monkeypatch):
+    sizes = []
+
+    def fake_improve(content, content_type, **options):
+        sizes.append(options["min_size"])
+        return content, content_type
+
+    monkeypatch.setattr(engine, "improve_product_image_bytes", fake_improve)
+    line = _line(
+        PRINCIPAL_ID,
+        description="Importado",
+        quantity="1",
+        origin="imported",
+        image_content=b"imported",
+    )
+
+    engine._improve_official_cotizacion_images(
+        (line,),
+        {"image_provider": "pillow", "image_background": "white"},
+    )
+
+    assert sizes == [550]
 
 
 def test_official_image_improvement_falls_back_to_original_invalid_bytes():
@@ -579,6 +622,7 @@ def test_official_image_improvement_falls_back_to_original_invalid_bytes():
         PRINCIPAL_ID,
         description="Principal",
         quantity="1",
+        origin="imported",
         image_content=b"invalid",
         image_content_type="image/png",
     )

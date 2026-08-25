@@ -74,6 +74,8 @@ SUPPLIER_LABELS = {
     "lauco": "Lauco",
     "idelika": "IDÉLIKA",
     "conceptos": "Conceptos",
+    "labenze": "Labenze",
+    "requiez": "Requiez",
 }
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -1114,7 +1116,7 @@ def convert_validated_payload(
         raise RuntimeError("El convertidor produjo una fuente insegura")
     converted_bytes = _read_regular_file_once(
         converted_input,
-        max_bytes=MAX_IMPORTED_SOURCE_BYTES,
+        max_bytes=MAX_QUOTE_OUTPUT_MB * 1024 * 1024,
     )
     _validate_xlsx_mime(converted_bytes)
     return converted_input

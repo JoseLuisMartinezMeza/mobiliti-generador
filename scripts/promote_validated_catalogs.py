@@ -32,6 +32,10 @@ SUPPLIERS = (
     "lumbro",
     "jome",
     "lauco",
+    "idelika",
+    "conceptos",
+    "labenze",
+    "requiez",
 )
 ASSET_NAME = re.compile(r"^[0-9a-f]{64}[.](?:png|jpg|jpeg|webp)$")
 CONTENT_TYPES = {
@@ -119,7 +123,7 @@ def _upload_asset(object_name: str, local_path: Path) -> str:
             raise RuntimeError(f"No se pudo subir {object_name}") from None
         verify = Request(
             (
-                f"{base_url}/storage/v1/object/authenticated/"
+                f"{base_url}/storage/v1/object/public/"
                 f"catalog-assets/{encoded_name}"
             ),
             headers={

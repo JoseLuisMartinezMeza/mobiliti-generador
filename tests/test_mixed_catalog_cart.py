@@ -1110,7 +1110,36 @@ def test_mixed_cart_preserves_per_line_discount_audit_by_price_mode(mixed_catalo
         "lauco": "0.000000",
         "idelika": "0.000000",
         "conceptos": "0.000000",
+        "labenze": "0.000000",
+        "requiez": "0.000000",
     }
+
+
+def test_mixed_supplier_line_preserves_collection_and_system_as_hidden_semantic_context(
+    mixed_catalogs,
+    rate_rows,
+):
+    item = mixed_catalogs["jome"]["items"][0]
+    item.update(
+        name="Cuerpo en 28mm frenes en 16mm",
+        description="Cuerpo en 28mm frenes en 16mm",
+        collection="cm alto",
+    )
+    item["attributes"] = {"system": "Credenzas"}
+
+    payload = build_mixed_catalog_cart_payload(
+        [{"catalog": "jome", "internal_id": item["internal_id"], "quantity": "1"}],
+        catalogs=mixed_catalogs,
+        rate_rows=rate_rows,
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+
+    line = payload["groups"][0]["items"][0]
+    assert line["description"] == (
+        "Cuerpo en 28mm frenes en 16mm | Coleccion: cm alto Credenzas"
+    )
 
 
 def test_mixed_cart_rejects_non_sixteen_percent_tax(mixed_catalogs, rate_rows):
@@ -1157,6 +1186,8 @@ def test_mixed_line_projection_has_exact_contract_for_each_family(frozen_mixed_p
         ("lauco", "Lauco"),
         ("idelika", "IDÉLIKA"),
         ("conceptos", "Conceptos"),
+        ("labenze", "Labenze"),
+        ("requiez", "Requiez"),
     ):
         expected = deepcopy(expected_by_catalog["lumbro"])
         expected.update({

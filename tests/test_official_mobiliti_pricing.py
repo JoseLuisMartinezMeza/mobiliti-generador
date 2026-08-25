@@ -131,7 +131,7 @@ def _binding(
         ("100.000000", "1.000000", Decimal("100.00")),
     ],
 )
-def test_frozen_cost_is_written_once_and_official_pricing_formulas_survive(
+def test_frozen_cost_keeps_raw_price_and_applies_uniform_sale_price(
     original, rate, expected
 ):
     row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
@@ -158,15 +158,46 @@ def test_frozen_cost_is_written_once_and_official_pricing_formulas_survive(
     assert _formula_signature(_cell(output, "W14")) == _formula_signature(
         _cell(official, "W14")
     )
-    assert _formula_signature(_cell(output, "X14")) == _formula_signature(
-        _cell(official, "X14")
-    )
+    assert "_xlfn.MAXIFS(" in _cell(output, "X14").findtext(f"{{{MAIN}}}f")
+    assert _cell(output, "Y14").findtext(f"{{{MAIN}}}f") == "(X14*H14)"
     assert ET.tostring(_cell(output, "K6")) == ET.tostring(_cell(official, "K6"))
 
     # La fila amarilla sin producto conserva las fórmulas oficiales y no recibe costo.
     assert _cell(output, "J15").find(f"{{{MAIN}}}v") is None
     assert _cell(output, "W15").find(f"{{{MAIN}}}f") is not None
     assert _cell(output, "X15").find(f"{{{MAIN}}}f") is not None
+
+
+def test_same_name_uses_price_from_largest_quantity_and_totals_that_price():
+    needs = [
+        SectionNeed("large", "SILLAS 60", 1),
+        SectionNeed("small", "SILLAS 12", 1),
+    ]
+    row_map = plan_mobiliti_layout(needs)
+    large_row, small_row = row_map.item_rows
+    writes = [
+        MobilitiCellWrite(f"D{large_row}", "text", "CHT85SW H2 Task Chair"),
+        MobilitiCellWrite(f"H{large_row}", "number", Decimal("60")),
+        MobilitiCellWrite(f"D{small_row}", "text", "CHT85SW H2 Task Chair"),
+        MobilitiCellWrite(f"H{small_row}", "number", Decimal("12")),
+    ]
+
+    mutation = build_mobiliti_sheet(_official_xml(), needs, writes)
+    output = ET.fromstring(mutation.xml)
+    last_row = row_map.last_product_row
+
+    for row in (large_row, small_row):
+        x_formula = _cell(output, f"X{row}").findtext(f"{{{MAIN}}}f")
+        assert x_formula == (
+            f"_xlfn.MINIFS($W$14:$W${last_row},"
+            f"$D$14:$D${last_row},D{row},"
+            f"$H$14:$H${last_row},"
+            f"_xlfn.MAXIFS($H$14:$H${last_row},"
+            f"$D$14:$D${last_row},D{row}))"
+        )
+        assert _cell(output, f"Y{row}").findtext(f"{{{MAIN}}}f") == (
+            f"(X{row}*H{row})"
+        )
 
 
 def test_project_cost_references_the_final_quotation_row_instead_of_freezing_a_number():

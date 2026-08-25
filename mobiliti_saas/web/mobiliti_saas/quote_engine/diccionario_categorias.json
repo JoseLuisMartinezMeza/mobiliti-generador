@@ -40,10 +40,25 @@
 				"mesh chair",
 				"leather chair",
 				"executive chair",
+				"dining side chair",
+				"dining chair",
+				"dining armchair",
+				"side chair",
+				"sillon gerencial",
+				"sillon ejecutivo",
+				"sillon operativo",
+				"sillon de trabajo",
 				"sillon de oficina",
 				"butaca",
 				"armchair",
-				"fauteuil"
+				"fauteuil",
+				"alufsen",
+				"vanto",
+				"brazos fijos operativas",
+				"brazos-fijos-operativas",
+				"juego de brazos ajustables",
+				"kit de base de tapiz para asiento",
+				"kit de base de tapiz asiento"
 			]
 		},
 		"Mesas de Apoyo": {
@@ -75,6 +90,7 @@
 				"tray table",
 				"mesa de centro",
 				"mesa de cafe",
+				"mesa de polipropileno",
 				"mesa de esquina",
 				"mesa de rincon",
 				"corner table",
@@ -83,7 +99,13 @@
 				"bar counter",
 				"high table",
 				"standing table",
-				"breakout table"
+				"breakout table",
+				"tequila base alta",
+				"base de mesa alta",
+				"160-05535",
+				"base central combinada",
+				"base central combiada",
+				"base central corta"
 			]
 		},
 		"Escritorios-WorkStation": {
@@ -112,7 +134,11 @@
 				"work bench",
 				"banco de trabajo",
 				"work table",
-				"office desk",
+        "office desk",
+        "private office desk",
+        "private offices desk",
+        "employee desk",
+				"staff desk",
 				"computer desk",
 				"manager desk",
 				"secretary desk",
@@ -163,11 +189,12 @@
 				"maal izq",
 				"maal derecho",
 				"pax",
-				"plazas",
 				"usuarios",
 				"puestos",
 				"workstation",
-				"workstations"
+				"workstations",
+				"estructura de altura ajustable electrica",
+				"estructuras 1 leg"
 			]
 		},
 		"Sillones": {
@@ -223,8 +250,23 @@
 				"sectional sofa",
 				"lounge chair",
 				"lounge seating",
+				"meridienne",
+				"chaise meridienne",
+				"one seater",
+				"two seater",
+				"three seater",
+				"1 seater",
+				"2 seater",
+				"3 seater",
+				"2-seat left arm module",
+				"2-seat right arm module",
+				"left arm module",
+				"right arm module",
+				"lounge armchair",
 				"sillon de visita",
-				"silla de descanso"
+				"silla de descanso",
+				"extension module",
+				"modulo individual de extension"
 			]
 		},
 		"Mesas de Juntas": {
@@ -247,6 +289,9 @@
 				"round table",
 				"seminar table",
 				"training table",
+				"mesa de capacitacion",
+				"mesas de capacitacion",
+				"mesa plegable para capacitacion",
 				"collaborative table",
 				"team table",
 				"huddle table",
@@ -277,6 +322,7 @@
 				"cabinets",
 				"storage cabinet",
 				"credenza",
+				"credenzas",
 				"armario",
 				"wardrobe",
 				"closet",
@@ -313,6 +359,7 @@
 				"filing cabinet",
 				"file cabinet",
 				"mobile pedestal",
+				"mobile pedestal files",
 				"mobile cabinet",
 				"drawer unit",
 				"under-desk drawer",
@@ -359,7 +406,9 @@
 				"telephone booth",
 				"capsula",
 				"capsula acustica",
-				"cabina de privacidad"
+				"cabina de privacidad",
+				"cubiculo modular",
+				"cub hive"
 			]
 		},
 		"Multicontactos": {
@@ -388,6 +437,12 @@
 				"charging hub",
 				"power grommet",
 				"cable management",
+				"jumper electrico",
+				"jumper de interconexion",
+				"modulo de interconexion",
+				"interconexion",
+				"cable interconexion",
+				"caja de fusibles",
 				"wire manager",
 				"regleta",
 				"zocalo",
@@ -416,10 +471,19 @@
 				"kit",
 				"set",
 				"bundle",
-				"hardware",
-				"fitting",
-				"fixture",
+        "hardware",
+        "fitting",
+        "fixture",
+        "podium",
+        "podio",
+        "lectern",
+        "atril",
 				"instalacion",
+				"aislante",
+				"desso",
+				"alfombra",
+				"loseta",
+				"piso",
 				"otro",
 				"varios"
 			]
@@ -444,7 +508,11 @@
 				"footstool",
 				"step stool",
 				"bar stool",
+				"barstool",
+				"barstools",
 				"counter stool",
+				"counterstool",
+				"counterstools",
 				"kitchen stool",
 				"backless stool",
 				"saddle stool",
@@ -465,6 +533,10 @@
 				"banco de madera",
 				"banco metalico",
 				"banco tapizado"
+				,"banca"
+				,"bancas"
+				,"banca italiana"
+				,"pigreco"
 			]
 		},
 		"Cocineta": {
@@ -507,6 +579,7 @@
 			"score": 90,
 			"terminos": [
 				"pizarron",
+				"pintarron",
 				"pizarrones",
 				"pizarra",
 				"pizarras",

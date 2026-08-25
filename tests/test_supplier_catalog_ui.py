@@ -22,6 +22,8 @@ CATALOG_TABS = (
     ("lauco", "Lauco"),
     ("idelika", "IDÉLIKA"),
     ("conceptos", "Conceptos"),
+    ("labenze", "Labenze"),
+    ("requiez", "Requiez"),
 )
 SUPPLIER_VIEW_PROPS = (
     "supplier",
@@ -149,27 +151,17 @@ def test_supplier_catalog_ui_static_contracts_are_present():
     assert "/catalogs/${supplier}/quote" not in component
     assert "onAddCartLine(createMixedCartLine" in component
 
-    assert re.search(
-        r"\b\w*CACHE_VERSION\b\s*=\s*(?:[\"']v?\d+[\"']|\d+)",
-        component,
-        re.IGNORECASE,
-    )
-    assert re.search(
-        r"`(?=[^`]*(?:CACHE_VERSION|cacheVersion))(?=[^`]*userId)"
-        r"(?=[^`]*supplier)(?=[^`]*(?:source_hash|sourceHash))[^`]+`",
-        component,
-        re.IGNORECASE,
-    )
-    assert "sessionStorage.getItem" in component
-    assert "sessionStorage.setItem" in component
-    assert "apartados pueden estar desactualizados" in visible_text.lower()
+    assert "sessionStorage" not in component
+    assert "new URLSearchParams" in component
+    assert "offset: String((page - 1) * SUPPLIER_PAGE_SIZE)" in component
+    assert "limit: String(SUPPLIER_PAGE_SIZE)" in component
+    assert "catalog?.next_offset" in component
 
     for label in ("Buscar", "Marca", "Coleccion", "Disponibilidad"):
         assert label in visible_text
     for field in ("brand", "collection", "availability_type"):
         assert field in component
     assert re.search(r"\b[A-Z][A-Z0-9_]*PAGE_SIZE\s*=\s*24\b", component)
-    assert ".slice(" in component
     assert "Pagina anterior" in visible_text
     assert "Pagina siguiente" in visible_text
     assert re.search(r"<img\b(?=[^>]*\bloading=[\"']lazy[\"'])[^>]*>", component, re.DOTALL)
@@ -463,13 +455,13 @@ def test_supplier_cards_fail_closed_when_price_or_currency_is_pending():
     assert "cartBusy" in component
 
 
-def test_alma_supplier_ui_invalidates_legacy_cache_and_names_both_configuration_axes():
+def test_alma_supplier_ui_uses_server_pages_and_names_both_configuration_axes():
     component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
     picker = Path("mobiliti_saas/web/src/productPicker.js").read_text(encoding="utf-8")
     visible_text = _ascii_text(component)
 
-    assert 'SUPPLIER_CACHE_VERSION = "v2"' in component
-    assert "filterCatalogVariantGroups" in component
+    assert "sessionStorage" not in component
+    assert "new URLSearchParams" in component
     assert "productVariantConfiguration" in component
     assert "productBaseConfigurationLabel" in component
     assert "Acabado / material del aro" in visible_text
@@ -653,7 +645,10 @@ def test_catalog_admin_panel_static_contracts_are_present():
     assert re.search(r"import\s+CatalogAdminPanel\s+from\s+[\"']\./CatalogAdminPanel", main)
     assert "session.usuario?.es_admin" in main
     assert "<CatalogAdminPanel" in main
-    assert re.search(r"\(view === \"admin\" \|\| view === \"clientes\"\) && isAdmin", main)
+    assert "function ClientsView" in main
+    assert re.search(r'view === "clientes"\s*&&\s*isAdmin\s*\?\s*<ClientsView', main)
+    assert re.search(r'view === "admin"\s*&&\s*isAdmin\s*\?\s*<AdminView', main)
+    assert not re.search(r'\(view === "admin" \|\| view === "clientes"\)', main)
     for endpoint in (
         "/admin/catalog-sync-runs",
         "/admin/catalog-sync/${supplier}",
@@ -675,14 +670,16 @@ def test_catalog_admin_panel_static_contracts_are_present():
     assert _has_css_rule(styles, ("catalog-admin",), "display: grid")
 
 
-def test_catalog_admin_exposes_idelika_and_conceptos_after_lauco():
+def test_catalog_admin_exposes_labenze_and_requiez_after_conceptos():
     panel = Path("mobiliti_saas/web/src/CatalogAdminPanel.jsx").read_text(encoding="utf-8")
     suppliers = re.findall(r'\["([^"]+)", "([^"]+)"\]', panel)
 
-    assert suppliers[-3:] == [
+    assert suppliers[-5:] == [
         ("lauco", "Lauco"),
         ("idelika", "IDÉLIKA"),
         ("conceptos", "Conceptos"),
+        ("labenze", "Labenze"),
+        ("requiez", "Requiez"),
     ]
 
 

@@ -27,6 +27,7 @@ _REQUIRED = (
 _SUPPLIERS = {
     "cr-global", "sonara", "sunon", "alma", "lumbro", "jome", "lauco",
     "idelika", "conceptos",
+    "labenze", "requiez",
 }
 _KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 

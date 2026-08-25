@@ -19,6 +19,10 @@ const CATALOG_LABELS = Object.freeze({
   lumbro: "Lumbro",
   jome: "JOME",
   lauco: "Lauco",
+  idelika: "IDÉLIKA",
+  conceptos: "Conceptos",
+  labenze: "Labenze",
+  requiez: "Requiez",
 });
 
 const CUSTOMER_FIELDS = Object.freeze([
@@ -666,7 +670,7 @@ export default function MixedCartDrawer({
     saving: "Guardando",
     saved: "Guardado",
     pending: "Cambios pendientes",
-    conflict: "Conflicto de ediciÃ³n",
+    conflict: "Conflicto de edición",
   };
 
   return (
@@ -699,7 +703,7 @@ export default function MixedCartDrawer({
           <strong>{projectName || "Proyecto sin guardar"}</strong>
           <span>{principalCount} producto(s) principal(es)</span>
           <span>{complementCount} complemento(s)</span>
-          <span>{occupiedSections || sections.length} secciÃ³n(es)</span>
+          <span>{occupiedSections || sections.length} sección(es)</span>
           <small role="status">{autosaveCopy[autosave?.status] || "Cambios pendientes"}</small>
         </div>
         <button

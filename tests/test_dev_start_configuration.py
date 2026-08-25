@@ -3,7 +3,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEV_START_SCRIPT = PROJECT_ROOT / "scripts" / "dev-start.ps1"
-ALL_GENERIC_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos"
+ALL_GENERIC_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos,labenze,requiez"
 
 
 def test_dev_start_enables_every_generic_catalog_for_api_and_worker():

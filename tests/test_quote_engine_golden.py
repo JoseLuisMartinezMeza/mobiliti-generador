@@ -452,7 +452,7 @@ def test_mixed_final_workbook_uses_official_formulas_and_one_frozen_cost_per_ite
         cot = wb["Cotizacion"]
         mobiliti = wb["Mobiliti"]
         # Las identidades conservan referencias vivas Quotation -> Mobiliti y
-        # Cotizacion referencia el precio físico X de cada fila Mobiliti.
+        # Cotizacion referencia el precio físico W de cada fila Mobiliti.
         product_row_map = []
         for source_row in (9, 10):
             mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, source_row)
@@ -543,7 +543,7 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
         description = str(quotation.cell(alma_source_row, 4).value)
         for expected in (
             "Silla ejecutiva configurable",
-            "Powder coated aluminium",
+            "aluminio con recubrimiento en polvo",
             "Cushion A+",
             "Sobre pedido",
             "Imagen de referencia",
@@ -556,7 +556,9 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
         assert quotation.cell(alma_source_row, 11).value == pytest.approx(5274.35)
         assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
         assert mobiliti.cell(mobiliti_row, 24).value == (
-            f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row})"
+            f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row},"
+            f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
+            f"$D$14:$D$571,D{mobiliti_row}))"
         )
         assert cot.cell(cot_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
         assert wb["Quotation_Data"].sheet_state == "veryHidden"
@@ -598,7 +600,9 @@ def test_standard_workbook_keeps_official_provider_header_and_formulas(tmp_path)
     )
     assert str(mobiliti.cell(unused_row, 23).value).startswith("=IF(")
     assert mobiliti.cell(unused_row, 24).value == (
-        f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{unused_row})"
+        f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{unused_row},"
+        f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
+        f"$D$14:$D$571,D{unused_row}))"
     )
     assert mobiliti["K4"].value is False
     assert getattr(mobiliti["K6"].value, "text", None) == '=_FV(J6,"High")'
@@ -644,7 +648,7 @@ def test_visual_golden_references_are_intact():
         assert len(cot.merged_cells.ranges) >= 65
         assert cot["B4"].value is None
         assert cot["D17"].value == "=Quotation!E9"
-        assert str(cot["F17"].value).startswith("=Mobiliti!W")
+        assert str(cot["F17"].value).startswith("=Mobiliti!X")
         assert (cot.row_dimensions[17].height or 0) >= 300
         wb.close()
 

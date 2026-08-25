@@ -2,6 +2,7 @@ import importlib.util
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.error import HTTPError
 from uuid import UUID
 
 
@@ -98,3 +99,40 @@ def test_asset_upload_with_anon_key_sends_authorized_rest_secret(monkeypatch, tm
     assert module._upload_asset(object_name, source) == object_name
     assert captured["timeout"] == 30
     assert captured["request"].get_header("X-mobiliti-rest-secret") == "deployment-secret"
+
+
+def test_existing_public_asset_is_verified_by_content_hash(monkeypatch, tmp_path):
+    module = _module()
+    content = b"existing-catalog-image"
+    object_name = f"{hashlib.sha256(content).hexdigest()}.webp"
+    source = tmp_path / object_name
+    source.write_bytes(content)
+    urls = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return content
+
+    def fake_urlopen(request, timeout):
+        urls.append(request.full_url)
+        if len(urls) == 1:
+            raise HTTPError(request.full_url, 409, "Conflict", {}, None)
+        assert timeout == 30
+        return Response()
+
+    monkeypatch.setenv("SUPABASE_URL", "https://abcdefghijklmnopqrst.supabase.co")
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "publishable-key")
+    monkeypatch.setenv("MOBILITI_REST_SECRET", "deployment-secret")
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+
+    assert module._upload_asset(object_name, source) == object_name
+    assert urls[1].endswith(f"/storage/v1/object/public/catalog-assets/{object_name}")

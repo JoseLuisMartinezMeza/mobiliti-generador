@@ -134,7 +134,7 @@ MIXED_MONEY_FORMATS = {
 }
 MIXED_CATALOG_ORDER = (
     "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro",
-    "jome", "lauco", "idelika", "conceptos",
+    "jome", "lauco", "idelika", "conceptos", "labenze", "requiez",
 )
 MIXED_CATALOG_LABELS = {
     "tarkett": "Tarkett",
@@ -148,6 +148,8 @@ MIXED_CATALOG_LABELS = {
     "lauco": "Lauco",
     "idelika": "IDÉLIKA",
     "conceptos": "Conceptos",
+    "labenze": "Labenze",
+    "requiez": "Requiez",
 }
 MIXED_CATALOG_BASE_CURRENCIES = {
     "tarkett": "MXN",
@@ -161,6 +163,8 @@ MIXED_CATALOG_BASE_CURRENCIES = {
     "lauco": "MXN",
     "idelika": "MXN",
     "conceptos": "MXN",
+    "labenze": "MXN",
+    "requiez": "MXN",
 }
 MIXED_RATE_FIELDS = {
     "catalog",
@@ -245,6 +249,7 @@ LUMBRO_PROVIDER_CATEGORY = "Importado"
 LUMBRO_PROVIDER_MAX_DISCOUNT = 0.5
 LUMBRO_ACCESSORY_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_multicontacto_blanco.png"
 LUMBRO_WORKSTATION_IMAGE = Path(__file__).resolve().parent / "assets" / "lumbro_workstation_multiusuario.png"
+CUB_HIVE_REFERENCE_IMAGE = Path(__file__).resolve().parent / "assets" / "cub_hive_reference.png"
 OFFICIAL_TEMPLATE_PATH = (
     Path(__file__).resolve().parents[1]
     / "worker"
@@ -1797,7 +1802,17 @@ def _write_cotizacion(
 
         _copy_row_style(ws, 17, current_row)
         _clear_row(ws, current_row)
-        category = classify_product_name(str(item.nombre or ""), category_dictionary)
+        category = classify_product_name(
+            str(item.nombre or ""),
+            category_dictionary,
+            description=item.descripcion,
+            source_category=item.categoria,
+            supplier=(
+                item.proveedor
+                or metadata.get("catalog_supplier")
+                or metadata.get("catalog_supplier_label")
+            ),
+        )
         category_by_quote_row[item.row] = category
         user_count_by_quote_row[item.row] = _detect_user_count(item)
         ws.cell(current_row, 1).value = _formula("Quotation", f"B{item.row}")
@@ -2422,6 +2437,12 @@ def _official_presentation_lines(
         str(metadata.get("catalog_supplier_label") or "Sunon Inc").strip()
         or "Sunon Inc"
     )
+    source_type = str(metadata.get("source_type") or "").strip().lower()
+    single_catalog_origin = {
+        "tarkett_cart": "tarkett",
+        "offiho_cart": "offiho",
+        "supplier_cart": str(metadata.get("catalog_supplier") or "").strip().lower(),
+    }.get(source_type, "")
     groups = _official_source_groups(items)
     lines: list[_OfficialPresentationLine] = []
     needs: list[SectionNeed] = []
@@ -2432,7 +2453,16 @@ def _official_presentation_lines(
         section_start = len(lines)
         for item in products:
             category = classify_product_name(
-                str(item.nombre or ""), category_dictionary
+                str(item.nombre or ""),
+                category_dictionary,
+                description=item.descripcion,
+                source_category=item.categoria,
+                supplier=(
+                    item.proveedor
+                    or single_catalog_origin
+                    or metadata.get("catalog_supplier")
+                    or provider_default
+                ),
             )
             provider = (
                 safe_excel_text(item.proveedor)
@@ -2453,6 +2483,22 @@ def _official_presentation_lines(
                 else ""
             )
             image_payload = image_payloads.get(item.row)
+            item_supplier = str(
+                item.proveedor
+                or single_catalog_origin
+                or metadata.get("catalog_supplier")
+                or ""
+            ).strip().casefold()
+            if (
+                image_payload is None
+                and str(item.nombre or "").strip().casefold() == "cub hive"
+                and item_supplier == "lauco"
+                and CUB_HIVE_REFERENCE_IMAGE.exists()
+            ):
+                image_payload = (
+                    CUB_HIVE_REFERENCE_IMAGE.read_bytes(),
+                    "image/png",
+                )
             line = _OfficialPresentationLine(
                 item_key=f"quotation:{item.row}",
                 section_id=section_id,
@@ -2474,7 +2520,11 @@ def _official_presentation_lines(
                 original_cost=original,
                 frozen_rate=rate,
                 converted_cost=converted,
-                origin="imported" if imported else "quotation",
+                origin=(
+                    "imported"
+                    if imported
+                    else single_catalog_origin or "quotation"
+                ),
                 source_row=item.row if imported else None,
                 upstream_row_hash=upstream_hash,
                 image_content=image_payload[0] if image_payload is not None else None,
@@ -2495,6 +2545,25 @@ def _official_presentation_lines(
                 )
                 if _uses_mixed_catalog_prices(metadata)
                 else Decimal("1")
+            )
+            lumbro_image_path = _lumbro_accessory_image_path(
+                metadata,
+                category,
+                _detect_user_count(item),
+            )
+            lumbro_image_content = (
+                lumbro_image_path.read_bytes()
+                if lumbro_image_path is not None
+                else None
+            )
+            lumbro_image_type = (
+                "image/png"
+                if lumbro_image_path is not None
+                and lumbro_image_path.suffix.casefold() == ".png"
+                else "image/jpeg"
+                if lumbro_image_path is not None
+                and lumbro_image_path.suffix.casefold() in {".jpg", ".jpeg"}
+                else None
             )
             for accessory_index, (code, quantity) in enumerate(accessories, start=1):
                 price_ref = lumbro_prices.get(code)
@@ -2531,6 +2600,10 @@ def _official_presentation_lines(
                         source_row=None,
                         upstream_row_hash="",
                         parent_item_key=line.item_key,
+                        image_content=(
+                            lumbro_image_content if lumbro_image_type else None
+                        ),
+                        image_content_type=lumbro_image_type,
                     )
                 )
         needs.append(
@@ -3269,6 +3342,7 @@ def _build_official_cotizacion(
             phone=safe_excel_text(metadata.get("telefono", "")),
             address=safe_excel_text(metadata.get("direccion", "")),
             business_name=safe_excel_text(metadata.get("razon_social", "")),
+            quote_currency=_official_quote_currency(metadata),
         ),
         sections=sections,
         composer_variant=composer_variant,
@@ -3280,7 +3354,7 @@ def _improve_official_cotizacion_images(
     lines: Sequence[_OfficialPresentationLine],
     metadata: Mapping[str, Any],
 ) -> tuple[_OfficialPresentationLine, ...]:
-    """Mejora sólo la proyección visual de Cotizacion y conserva Quotation."""
+    """Mejora imágenes de Quotation sólo en Cotizacion; preserva catálogos."""
 
     image_keys = {
         "image_provider",
@@ -3314,7 +3388,11 @@ def _improve_official_cotizacion_images(
 
     improved: list[_OfficialPresentationLine] = []
     for line in lines:
-        if line.image_content is None or line.image_content_type is None:
+        if (
+            line.origin not in {"imported", "quotation"}
+            or line.image_content is None
+            or line.image_content_type is None
+        ):
             improved.append(line)
             continue
         try:
@@ -3322,9 +3400,9 @@ def _improve_official_cotizacion_images(
                 line.image_content,
                 line.image_content_type,
                 background=background,
-                min_size=900,
+                min_size=550,
                 cleanup_strength=cleanup_strength,
-                remove_shadow=line.origin == "imported",
+                remove_shadow=True,
             )
         except (OSError, ValueError):
             improved.append(line)
@@ -3877,7 +3955,7 @@ def _augment_quotation_drawing(
         return {}, {}
     drawings = sheet_root.findall(f"{{{_SHEET_NS}}}drawing")
     if not drawings:
-        if images:
+        if images and any(line.item is not None for _, line in images):
             raise ValueError(
                 "Quotation original sin dibujo reutilizable para agregar imagenes"
             )

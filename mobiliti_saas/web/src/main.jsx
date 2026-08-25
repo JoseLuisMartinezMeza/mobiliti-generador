@@ -473,7 +473,9 @@ function Sidebar({ view, setView, isAdmin, onLogout }) {
     ["jome", "JOME", PackageSearch],
     ["lauco", "Lauco", PackageSearch],
     ["idelika", "IDÉLIKA", PackageSearch],
-    ["conceptos", "Conceptos", PackageSearch]
+    ["conceptos", "Conceptos", PackageSearch],
+    ["labenze", "Labenze", PackageSearch],
+    ["requiez", "Requiez", PackageSearch]
   ];
   return (
     <aside className="sidebar">
@@ -1820,6 +1822,57 @@ function HistoryView({ jobs, onDownload, onRetry, onDelete, downloadState, delet
   );
 }
 
+function ClientsView({ token }) {
+  const { request } = useApi(token);
+  const [users, setUsers] = useState([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    request("/admin/usuarios")
+      .then((data) => {
+        if (active) setUsers(Array.isArray(data) ? data : []);
+      })
+      .catch((failure) => {
+        if (active) setError(failure.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [request]);
+
+  const clients = users.filter((user) => !user.es_admin);
+  return (
+    <section className="main-card full">
+      <div className="card-head">
+        <h2>Clientes</h2>
+        <p>Consulta las cuentas de clientes registradas.</p>
+      </div>
+      {error ? <div className="error-line">{error}</div> : null}
+      <div className="admin-grid clients-grid">
+        <div>
+          <h3>Clientes registrados</h3>
+          {loading ? <p className="empty">Cargando clientes…</p> : null}
+          {!loading && !clients.length ? <p className="empty">No hay clientes registrados.</p> : null}
+          {clients.map((client) => (
+            <div className="admin-row" key={client.id}>
+              <UserRound size={18} />
+              <span>{client.nombre || client.email}</span>
+              <em>{client.activo === false ? "Inactivo" : client.empresa || "Activo"}</em>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function AdminView({ token }) {
   const { request } = useApi(token);
   const [users, setUsers] = useState([]);
@@ -2751,7 +2804,9 @@ function App() {
     jome: "JOME",
     lauco: "Lauco",
     idelika: "IDÉLIKA",
-    conceptos: "Conceptos"
+    conceptos: "Conceptos",
+    labenze: "Labenze",
+    requiez: "Requiez"
   };
 
   function blockExternalProjectEntry(pendingDraft = null) {
@@ -3144,7 +3199,7 @@ function App() {
       )
       : view === "project-editor"
         ? projectLoadState.status === "loading"
-          ? <section className="project-editor-loading" role="status">Cargando Proyectoâ€¦</section>
+          ? <section className="project-editor-loading" role="status">Cargando Proyecto…</section>
           : projectLoadState.status === "failed"
             ? (
               <section className="project-editor-loading">
@@ -3175,9 +3230,11 @@ function App() {
             ? <OffihoView token={session.access_token} userId={session.usuario?.id} cartLines={mixedCart} onAddCartLine={addMixedCartLine} onOpenCart={openMixedCart} cartBusy={mixedQuoteBusy} />
             : Object.hasOwn(supplierLabels, view)
               ? <SupplierCatalogView key={view} supplier={view} label={supplierLabels[view]} request={request} userId={session.usuario?.id} onAddCartLine={addMixedCartLine} onOpenCart={openMixedCart} cartLineCount={mixedCart.length} cartBusy={mixedQuoteBusy} />
-        : (view === "admin" || view === "clientes") && isAdmin
-          ? <AdminView token={session.access_token} />
-          : quoteForm;
+        : view === "clientes" && isAdmin
+          ? <ClientsView token={session.access_token} />
+          : view === "admin" && isAdmin
+            ? <AdminView token={session.access_token} />
+            : quoteForm;
 
   return (
     <div className="app-shell">

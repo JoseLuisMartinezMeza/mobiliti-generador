@@ -171,6 +171,8 @@ def test_catalog_collection_never_leaves_an_allowed_supplier_without_a_group():
         "lauco",
         "idelika",
         "conceptos",
+        "labenze",
+        "requiez",
     )
 
     assert {
@@ -188,6 +190,8 @@ def test_catalog_collection_never_leaves_an_allowed_supplier_without_a_group():
         "lauco": "Producto",
         "idelika": "Otros",
         "conceptos": "Otros Conceptos",
+        "labenze": "Otros",
+        "requiez": "Otros",
     }
 
 

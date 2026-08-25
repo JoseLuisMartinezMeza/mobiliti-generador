@@ -10,6 +10,8 @@ export const MIXED_CATALOGS = Object.freeze([
   "lauco",
   "idelika",
   "conceptos",
+  "labenze",
+  "requiez",
 ]);
 
 export const MAX_MIXED_CART_SECTIONS = 32;

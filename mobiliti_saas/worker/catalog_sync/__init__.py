@@ -14,6 +14,8 @@ _ADAPTERS = {
     "lauco": "lauco",
     "idelika": "idelika",
     "conceptos": "conceptos",
+    "labenze": "labenze",
+    "requiez": "requiez",
 }
 _MIME_TYPES = {
     ".pdf": "application/pdf",
@@ -24,7 +26,9 @@ _EXTENSIONS = set(_MIME_TYPES)
 _KINDS = {"catalog", "inventory", "price_list", "spec_guide"}
 _ROOT_PATH = "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES"
 _GRAPH_ITEM_ID_RE = re.compile(r"^[A-Za-z0-9]{34}$")
-_MIME_REQUIRED_SUPPLIERS = {"idelika", "conceptos"}
+_MIME_REQUIRED_SUPPLIERS = {"idelika", "conceptos", "labenze", "requiez"}
+_HASH_REQUIRED_SUPPLIERS = {"labenze", "requiez"}
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,7 @@ class SupplierFileConfig:
     brand: str | None = None
     drive_item_id: str | None = None
     mime_type: str | None = None
+    sha256: str | None = None
 
     @property
     def name(self) -> str:
@@ -206,6 +211,36 @@ _FIRST_WAVE_ALLOWLIST = (
             ),
         ),
     ),
+    SupplierSourceConfig(
+        supplier="labenze",
+        label="Labenze",
+        adapter="labenze",
+        root_path=_ROOT_PATH,
+        files=(
+            SupplierFileConfig(
+                "LABENZE/LP Labenze B26.pdf",
+                "price_list",
+                drive_item_id="01DHXXN77SAPUFK56QHVBLKXH7BBV7DOL7",
+                mime_type="application/pdf",
+                sha256="c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+            ),
+        ),
+    ),
+    SupplierSourceConfig(
+        supplier="requiez",
+        label="Requiez",
+        adapter="requiez",
+        root_path=_ROOT_PATH,
+        files=(
+            SupplierFileConfig(
+                "REQUIEZ/Lista de precios A-26.pdf",
+                "price_list",
+                drive_item_id="01DHXXN74NDZ6P4EL3B5CI2G2HFZ47ISNT",
+                mime_type="application/pdf",
+                sha256="7f3281d1965c67a234bac55112800067019ad471f835de59ff758e759eca56ba",
+            ),
+        ),
+    ),
 )
 
 
@@ -215,10 +250,15 @@ def _string(value: object, field: str) -> str:
     return value
 
 
-def _file_config(raw: object, *, require_mime_type: bool = False) -> SupplierFileConfig:
+def _file_config(
+    raw: object,
+    *,
+    require_mime_type: bool = False,
+    require_sha256: bool = False,
+) -> SupplierFileConfig:
     if (
         not isinstance(raw, dict)
-        or set(raw) - {"path", "kind", "brand", "drive_item_id", "mime_type"}
+        or set(raw) - {"path", "kind", "brand", "drive_item_id", "mime_type", "sha256"}
         or {"path", "kind"} - set(raw)
     ):
         raise ValueError("Invalid source file")
@@ -245,12 +285,18 @@ def _file_config(raw: object, *, require_mime_type: bool = False) -> SupplierFil
     mime_type = raw.get("mime_type")
     if mime_type is not None:
         mime_type = _string(mime_type, "source MIME type")
+    sha256 = raw.get("sha256")
+    if sha256 is not None and (
+        not isinstance(sha256, str) or _SHA256_RE.fullmatch(sha256) is None
+    ):
+        raise ValueError("Invalid source SHA-256")
     file = SupplierFileConfig(
         path=path,
         kind=kind,
         brand=brand,
         drive_item_id=drive_item_id,
         mime_type=mime_type,
+        sha256=sha256,
     )
     if file.extension not in _EXTENSIONS:
         raise ValueError("Unsupported source extension")
@@ -259,6 +305,8 @@ def _file_config(raw: object, *, require_mime_type: bool = False) -> SupplierFil
         file.mime_type is not None and file.mime_type != expected_mime_type
     ):
         raise ValueError("Invalid source MIME type")
+    if require_sha256 and file.sha256 is None:
+        raise ValueError("Source SHA-256 is required")
     return file
 
 
@@ -286,7 +334,11 @@ def load_source_config(path: Path) -> tuple[SupplierSourceConfig, ...]:
         if not isinstance(raw_files, list) or not raw_files:
             raise ValueError("Supplier files are required")
         source_files = tuple(
-            _file_config(file, require_mime_type=supplier in _MIME_REQUIRED_SUPPLIERS)
+            _file_config(
+                file,
+                require_mime_type=supplier in _MIME_REQUIRED_SUPPLIERS,
+                require_sha256=supplier in _HASH_REQUIRED_SUPPLIERS,
+            )
             for file in raw_files
         )
         if len({file.path for file in source_files}) != len(source_files) or any(

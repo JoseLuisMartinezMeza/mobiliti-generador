@@ -2191,6 +2191,41 @@ def test_prepare_generator_input_reads_cart_json_once(monkeypatch, tmp_path):
     assert reads == [source]
 
 
+def test_generated_catalog_workbook_uses_output_limit_not_import_limit(
+    monkeypatch, tmp_path
+):
+    source = tmp_path / "input.json"
+    payload = {"source_type": "offiho_cart", "items": []}
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    seen = {}
+
+    monkeypatch.setattr(
+        quote_worker,
+        "_convert_offiho_cart_to_quotation",
+        lambda source_json, output_xlsx, cart_payload: _write_minimal_parser_xlsx(
+            output_xlsx
+        ),
+    )
+
+    def record_limit(path, *, max_bytes):
+        seen["max_bytes"] = max_bytes
+        return path.read_bytes()
+
+    monkeypatch.setattr(quote_worker, "_read_regular_file_once", record_limit)
+
+    output = quote_worker.convert_validated_payload(
+        "offiho_cart",
+        payload,
+        source,
+        tmp_path,
+        None,
+    )
+
+    assert output.name == "quotation_from_offiho.xlsx"
+    assert seen["max_bytes"] == quote_worker.MAX_QUOTE_OUTPUT_MB * 1024 * 1024
+    assert seen["max_bytes"] > quote_worker.MAX_IMPORTED_SOURCE_BYTES
+
+
 def test_process_job_downloads_input_from_job_storage_provider(monkeypatch):
     client = FakeClient()
     client.claim_input_path = "users/7/jobs/job-1/input.json"

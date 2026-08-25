@@ -10,7 +10,7 @@ from vercel_deploy.api import index as dev_api
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SOURCES_PATH = PROJECT_ROOT / "mobiliti_saas" / "worker" / "catalog_sync" / "sources.json"
-ALL_GENERIC_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos"
+ALL_GENERIC_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos,labenze,requiez"
 
 
 def test_source_registry_and_due_scheduler_accept_all_nine_suppliers(monkeypatch):

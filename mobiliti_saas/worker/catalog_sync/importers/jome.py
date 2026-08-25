@@ -297,6 +297,16 @@ def _available_assets(documents: tuple[object, ...]) -> dict[str, ImageAsset]:
 
 def _public_items(raw_items: list[dict], assets: dict[str, ImageAsset] | None):
     code_counts = Counter(item["code"].casefold() for item in raw_items)
+    source_images = {
+        (
+            row["subcatalog"],
+            row["system"].casefold(),
+            row["code"].casefold(),
+            row["dimensions"].casefold(),
+        ): row["image"]
+        for row in raw_items
+        if row.get("image") is not None
+    }
     items = []
     bindings = []
     selected_assets: dict[str, ImageAsset] = {}
@@ -320,6 +330,15 @@ def _public_items(raw_items: list[dict], assets: dict[str, ImageAsset] | None):
         warnings = []
         image_kind = "placeholder"
         image = row.get("image")
+        if image is None and code.casefold().endswith("-28m"):
+            image = source_images.get(
+                (
+                    row["subcatalog"],
+                    row["system"].casefold(),
+                    code[:-4].casefold(),
+                    row["dimensions"].casefold(),
+                )
+            )
         if image is not None and assets is not None:
             asset = assets.get(image["sha256"])
             if asset is not None:

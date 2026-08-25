@@ -157,8 +157,8 @@ def test_idelika_y_conceptos_participan_en_busqueda_proyecto_y_cotizacion_mixta(
     assert {supplier: EXPECTED_SUPPLIER_BASE_CURRENCY[supplier] for supplier in catalogs} == {
         "idelika": "MXN", "conceptos": "MXN",
     }
-    assert MIXED_CATALOG_ORDER[-2:] == ("idelika", "conceptos")
-    assert ENGINE_MIXED_CATALOG_ORDER[-2:] == ("idelika", "conceptos")
+    assert MIXED_CATALOG_ORDER[-4:-2] == ("idelika", "conceptos")
+    assert ENGINE_MIXED_CATALOG_ORDER[-4:-2] == ("idelika", "conceptos")
 
     search = search_catalog_products(catalogs, query="silla", supplier=None, offset=0, limit=20)
     assert [item["catalog"] for item in search["items"]] == ["idelika", "idelika", "conceptos"]

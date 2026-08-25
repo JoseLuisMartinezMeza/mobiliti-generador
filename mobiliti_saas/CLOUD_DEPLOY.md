@@ -242,7 +242,8 @@ Variables adicionales del worker, documentadas solo por nombre:
 - `CATALOG_ASSET_PUBLIC_BASE_URL`
 
 Los proveedores habilitables son `cr-global`, `sonara`, `sunon`, `alma`,
-`lumbro`, `jome` y `lauco`. El valor vacío mantiene todos los catálogos
+`lumbro`, `jome`, `lauco`, `idelika`, `conceptos`, `labenze` y `requiez`.
+El valor vacío mantiene todos los catálogos
 deshabilitados; configura solo una lista CSV de estos identificadores, sin
 duplicados ni espacios.
 

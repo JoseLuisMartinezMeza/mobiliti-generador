@@ -49,12 +49,13 @@ from .tarkett_catalog import build_tarkett_cart_payload
 MIXED_CATALOG_CART_SOURCE_TYPE = "mixed_catalog_cart"
 MIXED_CATALOG_ORDER = (
     "tarkett", "offiho", "cr-global", "sonara", "sunon", "alma", "lumbro",
-    "jome", "lauco", "idelika", "conceptos",
+    "jome", "lauco", "idelika", "conceptos", "labenze", "requiez",
 )
 MIXED_CATALOG_LABELS = {
     "tarkett": "Tarkett", "offiho": "Offiho", "cr-global": "CR Global",
     "sonara": "Sonara", "sunon": "Sunon", "alma": "ALMA", "lumbro": "Lumbro",
     "jome": "JOME", "lauco": "Lauco", "idelika": "IDÉLIKA", "conceptos": "Conceptos",
+    "labenze": "Labenze", "requiez": "Requiez",
 }
 MIXED_GROUP_SOURCE_TYPES = {
     "tarkett": "tarkett_cart",
@@ -68,11 +69,13 @@ MIXED_GROUP_SOURCE_TYPES = {
     "lauco": "supplier_cart",
     "idelika": "supplier_cart",
     "conceptos": "supplier_cart",
+    "labenze": "supplier_cart",
+    "requiez": "supplier_cart",
 }
 MIXED_EXPECTED_BASE_CURRENCY = {
     "tarkett": "MXN", "offiho": "MXN", "cr-global": "MXN", "sonara": "MXN",
     "sunon": "USD", "alma": "USD", "lumbro": "MXN", "jome": "MXN",
-    "lauco": "MXN", "idelika": "MXN", "conceptos": "MXN",
+    "lauco": "MXN", "idelika": "MXN", "conceptos": "MXN", "labenze": "MXN", "requiez": "MXN",
 }
 MIXED_QUOTE_CURRENCIES = frozenset({"MXN", "USD", "EUR"})
 MAX_MIXED_CATALOG_LINES = XLSX_MAX_ROWS - MOBILITI_RESERVED_ROWS_AFTER_TOTAL
@@ -595,17 +598,29 @@ def _supplier_line(
     stock = _six(raw["stock"]) if availability == "stocked" else None
     quantity = _six(raw["quantity"])
     price_pending = raw["unit_price_base"] is None
+    attributes = deepcopy(raw.get("attributes") or {})
+    description = str(raw.get("description") or "")
+    semantic_context = " ".join(
+        value
+        for value in (
+            str(raw.get("collection") or "").strip(),
+            str(attributes.get("system") or "").strip(),
+        )
+        if value
+    )
+    if description and semantic_context:
+        description = f"{description} | Coleccion: {semantic_context}"
     line = {
         "line_id": browser["line_id"],
         "canonical_key": mixed_cart_key(browser), "catalog": catalog, "supplier": MIXED_CATALOG_LABELS[catalog],
-        "code": str(raw.get("sku") or ""), "name": str(raw["name"]), "description": str(raw.get("description") or ""), "unit": str(raw["unit"]),
+        "code": str(raw.get("sku") or ""), "name": str(raw["name"]), "description": description, "unit": str(raw["unit"]),
         "quantity": quantity, "unit_price": None if price_pending else str(raw["unit_price"]), "discount_percent": "0.000000",
         "original_currency": str(raw["base_currency"]), "original_unit_price": None if price_pending else str(raw["unit_price_base"]),
         "frozen_exchange_rate": None if price_pending else str(payload["exchange_rate"]), "source_reference": str(raw["source_reference"]),
         "price_mode": "pending" if price_pending else "net", "auto_electrification": False, "tax_rate": str(raw["tax_rate"]),
         "image_url": str(raw.get("image_url") or ""), "product_url": str(raw.get("product_url") or ""),
         "code_status": str(raw["code_status"]), "configuration": str(raw.get("configuration") or ""),
-        "attributes": deepcopy(raw.get("attributes") or {}), "variant": "", "availability_type": availability,
+        "attributes": attributes, "variant": "", "availability_type": availability,
         "available_quantity": stock, "stock": stock, "lead_time": str(raw.get("lead_time") or ""),
         "price_source": "missing" if price_pending or Decimal(str(raw["unit_price_base"])) <= 0 else "catalog",
         "stock_status": "",

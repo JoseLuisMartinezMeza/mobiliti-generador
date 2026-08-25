@@ -411,7 +411,12 @@ def _minimal_request(output: Path) -> ComposeRequest:
     return _request_for_sections(output, (1,))
 
 
-def _request_for_sections(output: Path, section_sizes: tuple[int, ...]) -> ComposeRequest:
+def _request_for_sections(
+    output: Path,
+    section_sizes: tuple[int, ...],
+    *,
+    quote_currency: str = "",
+) -> ComposeRequest:
     contract = load_template_contract(CONTRACT_PATH)
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     needs = [
@@ -476,6 +481,7 @@ def _request_for_sections(output: Path, section_sizes: tuple[int, ...]) -> Compo
             phone="33 0000 0000",
             address="Guadalajara, Jalisco",
             business_name="Cliente SA de CV",
+            quote_currency=quote_currency,
         ),
         sections=tuple(cotizacion_sections),
     )
@@ -681,6 +687,51 @@ def test_cotizacion_clears_contamination_uses_master_discount_and_keeps_terms(
         candidate,
         start=28 + delta,
         end=76 + delta,
+    )
+
+
+@pytest.mark.parametrize(
+    ("currency", "currency_name"),
+    (("MXN", "Pesos Mexicanos"), ("USD", "Dólares Estadounidenses"), ("EUR", "Euros")),
+)
+def test_cotizacion_commercial_terms_follow_the_selected_quote_currency(
+    tmp_path: Path,
+    currency: str,
+    currency_name: str,
+) -> None:
+    request = _request_for_sections(
+        tmp_path / f"terms-{currency.lower()}.xlsx",
+        (1,),
+        quote_currency=currency,
+    )
+    worksheet = ET.fromstring(request.cotizacion.xml)
+    terms_currency_row = 33 + request.cotizacion.terms_row_delta
+    text = _cell_scalar(worksheet, f"A{terms_currency_row}")
+
+    assert currency_name in text
+    assert f"{currency}." in text
+    assert "UDS" not in text
+
+
+def test_selected_quote_currency_is_part_of_the_allowlisted_mutation_contract(
+    tmp_path: Path,
+) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _request_for_sections(
+        tmp_path / "terms-mxn-allowlisted.xlsx",
+        (1,),
+        quote_currency="MXN",
+    )
+
+    mutation = build_allowlisted_mutation(base, request)
+    worksheet = ET.fromstring(
+        mutation.replacements[base.sheet_part("Cotizacion")]
+    )
+    terms_currency_row = 33 + request.cotizacion.terms_row_delta
+
+    assert "Pesos Mexicanos, MXN." in _cell_scalar(
+        worksheet,
+        f"A{terms_currency_row}",
     )
 
 
@@ -3162,7 +3213,7 @@ def test_output_contract_rejects_unexpected_defined_name(tmp_path: Path) -> None
         )
 
 
-def test_cotizacion_declares_audited_formula_contract_for_official_f_i() -> None:
+def test_cotizacion_contract_uses_uniform_price_from_largest_quantity() -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
     assert _cell(source, "F17").findtext(f"{{{MAIN}}}f") == "Mobiliti!X14"
@@ -3205,9 +3256,9 @@ def test_composed_product_formula_uses_row_prices_and_live_quantities() -> None:
 
     assert formulas == {
         "F": (
-            "=Mobiliti!W14"
-            "+Mobiliti!W15*Mobiliti!H15/Mobiliti!H14"
-            "+Mobiliti!W16*Mobiliti!H16/Mobiliti!H14"
+            "=Mobiliti!X14"
+            "+Mobiliti!X15*Mobiliti!H15/Mobiliti!H14"
+            "+Mobiliti!X16*Mobiliti!H16/Mobiliti!H14"
         ),
         "I": "=F17-H17",
     }

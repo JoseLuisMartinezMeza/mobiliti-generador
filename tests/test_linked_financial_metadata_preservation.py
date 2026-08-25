@@ -59,7 +59,11 @@ def test_minimal_composition_preserves_linked_usd_mxn_metadata_and_pricing_formu
     )
     assert _formula_payload(_cell(composed, "K6"))[1] == '_FV(J6,"High")'
 
-    for coordinate in ("W14", "X14"):
-        assert _formula_payload(_cell(composed, coordinate)) == _formula_payload(
-            _cell(official, coordinate)
-        )
+    assert _formula_payload(_cell(composed, "W14")) == _formula_payload(
+        _cell(official, "W14")
+    )
+    assert _formula_payload(_cell(composed, "X14"))[1] == (
+        "_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D14,"
+        "$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,$D$14:$D$571,D14))"
+    )
+    assert _formula_payload(_cell(composed, "Y14"))[1] == "(X14*H14)"

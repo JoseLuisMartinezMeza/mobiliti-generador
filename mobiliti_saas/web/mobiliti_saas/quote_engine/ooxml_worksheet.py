@@ -542,11 +542,40 @@ def clone_formula_row(
     )
     if presentation_row is not None:
         _copy_row_presentation(clone, presentation_row)
+    _set_uniform_product_price_formulas(clone, target_row, row_map)
     provider = _find_cell(clone, 6)
     yellow_reference = _find_cell(clone, 8)
     if provider is None or yellow_reference is None or "s" not in yellow_reference.attrib:
         raise ValueError(f"La fila Mobiliti {target_row} no contiene estilo de producto")
     provider.set("s", yellow_reference.attrib["s"])
+
+
+def _set_uniform_product_price_formulas(
+    row: ET.Element,
+    target_row: int,
+    row_map: MobilitiRowMap,
+) -> None:
+    """Usa el precio de la mayor cantidad para cada nombre de producto."""
+
+    first_row = row_map.sections[0].product_start
+    last_row = row_map.last_product_row
+    formulas = {
+        24: (
+            f"_xlfn.MINIFS($W${first_row}:$W${last_row},"
+            f"$D${first_row}:$D${last_row},D{target_row},"
+            f"$H${first_row}:$H${last_row},"
+            f"_xlfn.MAXIFS($H${first_row}:$H${last_row},"
+            f"$D${first_row}:$D${last_row},D{target_row}))"
+        ),
+        25: f"(X{target_row}*H{target_row})",
+    }
+    for column, formula_text in formulas.items():
+        cell = _find_cell(row, column)
+        if cell is None:
+            coordinate = f"{get_column_letter(column)}{target_row}"
+            raise ValueError(f"La fila Mobiliti no contiene {coordinate}")
+        _clear_cell(cell)
+        ET.SubElement(cell, f"{{{MAIN}}}f").text = formula_text
 
 
 def clone_subtotal_row(
