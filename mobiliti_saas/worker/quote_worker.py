@@ -109,6 +109,10 @@ from mobiliti_saas.quote_engine.template_profiles import (  # noqa: E402
     DEFAULT_TEMPLATE_PROFILE_ID,
     resolve_template_profile,
 )
+from mobiliti_saas.quote_engine.local_files import (  # noqa: E402
+    local_files_preserved,
+    temporary_directory,
+)
 
 
 @dataclass(frozen=True)
@@ -696,7 +700,7 @@ class LocalDevClient:
         dest.write_bytes(source.read_bytes())
 
     def storage_delete(self, object_path: str) -> None:
-        self._storage_file(object_path).unlink(missing_ok=True)
+        raise PermissionError("La preservación local no permite borrar archivos de storage")
 
     def storage_delete_from_provider(self, object_path: str, provider: str | None) -> None:
         self.storage_delete(object_path)
@@ -1364,6 +1368,8 @@ def _validate_job_input_reference(job: dict) -> None:
 
 
 def _cleanup_completed_import_source(client: SupabaseClient, final_job: dict) -> bool:
+    if local_files_preserved():
+        return False
     metadata = final_job.get("metadata") or {}
     imported = metadata.get("import_source") if isinstance(metadata, dict) else None
     if not isinstance(imported, dict):
@@ -1565,6 +1571,8 @@ def _cleanup_unpersisted_attempt_output(
     job: dict,
     output_path: str,
 ) -> bool:
+    if local_files_preserved():
+        return False
     if not _is_exact_attempt_output(job, output_path):
         print(f"WARN: ruta de output de intento invalida; se conserva {output_path}")
         return False
@@ -1794,8 +1802,14 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
         started_at=worker_started_at,
     )
 
-    with tempfile.TemporaryDirectory(prefix="mobiliti-quote-") as tmp:
+    with temporary_directory(prefix="mobiliti-quote-") as tmp:
         tmp_dir = Path(tmp)
+        if local_files_preserved():
+            job["metadata"] = {
+                **(job.get("metadata") or {}),
+                "local_files_preserved": True,
+                "local_work_dir": str(tmp_dir.resolve()),
+            }
         local_input = tmp_dir / f"input{_input_extension_for_job(job)}"
         local_output = tmp_dir / "output.xlsx"
         started_at = time.perf_counter()
@@ -1875,6 +1889,8 @@ def process_job(client: SupabaseClient, job: dict) -> dict | None:
                 raise WorkerCompletionFailed(
                     "No se pudo confirmar durablemente la finalizacion"
                 ) from completion_error
+            if local_files_preserved():
+                return [completed]
             try:
                 _cleanup_completed_import_source(client, job)
             except Exception as exc:
@@ -2021,7 +2037,7 @@ def sync_offiho_catalog_if_due(client, *, force: bool = False) -> bool:
     else:
         base_payload = _fallback_offiho_catalog_payload()
 
-    with tempfile.TemporaryDirectory(prefix="mobiliti-offiho-") as temp_dir:
+    with temporary_directory(prefix="mobiliti-offiho-") as temp_dir:
         inventory_path = Path(temp_dir) / "existencias.xls"
         downloaded = download_offiho_inventory(inventory_path)
         refreshed = refresh_offiho_catalog_from_file(
@@ -2041,10 +2057,21 @@ def sync_offiho_catalog_if_due(client, *, force: bool = False) -> bool:
     return True
 
 
-def run_once() -> bool:
+def run_once(*, job_id: str | None = None) -> bool:
+    if job_id and not DEV_MODE:
+        raise RuntimeError("La selección de una prueba sólo está habilitada en modo local")
     client = LocalDevClient() if DEV_MODE else (PostgresClient() if DATABASE_URL else SupabaseClient())
-    recover_stale_jobs(client)
-    job = fetch_next_job(client)
+    if job_id:
+        rows = client.rest("GET", "/saas_quote_jobs", params={
+            "id": f"eq.{job_id}", "status": "eq.queued", "limit": "1",
+        })
+        job = rows[0] if rows else None
+        if not job:
+            print(f"La prueba {job_id} no está en cola; no se procesó otro job.")
+            return False
+    else:
+        recover_stale_jobs(client)
+        job = fetch_next_job(client)
     if not job:
         did_work = sync_tarkett_catalog_if_due(client)
         if not did_work:
@@ -2057,13 +2084,30 @@ def run_once() -> bool:
     return True
 
 
+def _block_local_file_deletion(event, args) -> None:
+    if event in {"os.remove", "os.rmdir", "shutil.rmtree"}:
+        raise PermissionError(f"Preservación local: borrado bloqueado ({event}): {args[0]}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Worker de cotizaciones Mobiliti")
     parser.add_argument("--once", action="store_true", help="Procesa un solo job y termina")
+    parser.add_argument("--job-id", type=lambda value: str(uuid.UUID(value)),
+                        help="Con --once, procesa únicamente esta prueba local en cola")
     args = parser.parse_args()
+    if args.job_id and (not args.once or not DEV_MODE):
+        parser.error("--job-id requiere --once y MOBILITI_DEV_MODE=1")
+    if DEV_MODE:
+        local_runtime = temporary_directory(prefix="runtime-")
+        tempfile.tempdir = local_runtime.name
+        sys.addaudithook(_block_local_file_deletion)
+        print(f"Preservación local activa; temporales retenidos en {local_runtime.name}")
 
     if args.once:
-        run_once()
+        if args.job_id:
+            run_once(job_id=args.job_id)
+        else:
+            run_once()
         return
 
     print("Worker Mobiliti iniciado.")

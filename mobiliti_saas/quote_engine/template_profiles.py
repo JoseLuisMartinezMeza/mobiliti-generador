@@ -11,7 +11,7 @@ OFFICIAL_TEMPLATE_PROFILE_ID: Final = "official_2026_gdl"
 SUNON_CDMX_TEMPLATE_PROFILE_ID: Final = "sunon_cdmx_v1c"
 DEFAULT_TEMPLATE_PROFILE_ID: Final = OFFICIAL_TEMPLATE_PROFILE_ID
 OFFICIAL_TEMPLATE_CONTRACT_SHA256: Final = (
-    "25f79e3ae533aa8f560be3e80586c19993ea65c0a07c500eb458738f9915b251"
+    "7df7df6d13168b95ea665f68d8ac7dbc7697044e281debf161f87cf283fd097d"
 )
 SUNON_CDMX_TEMPLATE_CONTRACT_SHA256: Final = (
     "4c150193ce0c59de68f1091741d82b0ddf3fc439c1966ca31f35d92a336a0247"
@@ -51,7 +51,7 @@ _TEMPLATES_DIR: Final = _mobiliti_package_root() / "worker" / "templates"
 
 _OFFICIAL_PROFILE: Final = TemplateProfile(
     id=OFFICIAL_TEMPLATE_PROFILE_ID,
-    display_name="Formato Cotización 2026 GDL (1)",
+    display_name="Formato Cotización 2026 (1)",
     template_path=_TEMPLATES_DIR / "Formato Cotizacion 2026 Oficial.xlsx",
     contract_path=(
         _TEMPLATES_DIR / "formato-cotizacion-2026-oficial.contract.json"
@@ -61,6 +61,8 @@ _OFFICIAL_PROFILE: Final = TemplateProfile(
     aliases=(
         "Formato Cotizacion 2026 GDL (1).xlsx",
         "Formato Cotización 2026 GDL (1)",
+        "Formato Cotizacion 2026 (1).xlsx",
+        "Formato Cotización 2026 (1)",
         "Formato Cotizacion 2026 Oficial.xlsx",
         "Plantilla Corporativa Mobiliti 2025",
     ),

@@ -198,8 +198,9 @@ def write_official_currency_selector(
     editor: WorksheetEditor,
     quote_currency: str,
     delivery_place: str,
+    discount: Decimal | None = None,
 ) -> None:
-    """Escribe exclusivamente el selector oficial ``K4`` y el texto ``K8``."""
+    """Escribe únicamente los selectores firmados del layout activo."""
 
     if not isinstance(editor, WorksheetEditor):
         raise TypeError("Editor Mobiliti inválido")
@@ -207,7 +208,25 @@ def write_official_currency_selector(
         raise TypeError("Moneda de cotización inválida")
     if quote_currency not in QUOTE_CURRENCIES:
         raise ValueError("Moneda de cotización inválida")
-    safe_place = _safe_k8_text(delivery_place)
+    safe_place = _safe_delivery_text(delivery_place)
+    if editor.layout.id == "v17":
+        writes = [
+            MobilitiCellWrite("P4", "boolean", quote_currency != "MXN"),
+        ]
+        if discount is not None:
+            # El porcentaje admite seis decimales; su fracción necesita ocho.
+            validated_discount = _numeric_contract(
+                discount,
+                "descuento global",
+                positive=False,
+                scale_limit=NUMERIC_18_6_SCALE + 2,
+                integral_digits_limit=NUMERIC_18_6_INTEGRAL_DIGITS,
+            )
+            if validated_discount > 1:
+                raise ValueError("descuento global debe estar entre cero y uno")
+            writes.append(MobilitiCellWrite("AD13", "number", validated_discount))
+        editor.set_typed_values(tuple(writes))
+        return
 
     editor.set_typed_values(
         (
@@ -300,18 +319,20 @@ def _converted_cost(original: Decimal, rate: Decimal) -> Decimal:
         raise ValueError("Costo convertido excede NUMERIC(18,2)") from error
 
 
-def _safe_k8_text(value: object) -> str:
+def _safe_delivery_text(value: object) -> str:
     if not isinstance(value, str):
-        raise TypeError("K8 requiere texto")
+        raise TypeError("Lugar de entrega requiere texto")
     text = unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
     if any(unicodedata.category(character) == "Cf" for character in text):
-        raise ValueError("K8 contiene caracteres invisibles o de formato inseguros")
+        raise ValueError(
+            "Lugar de entrega contiene caracteres invisibles o de formato inseguros"
+        )
     if text.lstrip()[:1] in {"=", "+", "-", "@"}:
         text = "'" + text
     if any(not _is_xml_10_character(ord(character)) for character in text):
-        raise ValueError("K8 contiene caracteres inválidos para XML 1.0")
+        raise ValueError("Lugar de entrega contiene caracteres inválidos para XML 1.0")
     if len(text) > MAX_EXCEL_CELL_TEXT_LENGTH:
-        raise ValueError("K8 excede el límite de 32767 caracteres de Excel")
+        raise ValueError("Lugar de entrega excede el límite de 32767 caracteres de Excel")
     return text
 
 

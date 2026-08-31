@@ -101,6 +101,8 @@ OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationship
 PACKAGE_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 XDR = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
 CHART = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+X14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+XM = "http://schemas.microsoft.com/office/excel/2006/main"
 
 
 def _write_engine_source(
@@ -444,7 +446,8 @@ def _request_for_sections(
                         "number",
                         Decimal(global_position).quantize(Decimal("0.01")),
                     ),
-                    MobilitiCellWrite(f"P{target_row}", "text", "Centro"),
+                    MobilitiCellWrite(f"P{target_row}", "number", Decimal("0")),
+                    MobilitiCellWrite(f"S{target_row}", "text", "Centro"),
                 )
             )
             products.append(
@@ -482,6 +485,7 @@ def _request_for_sections(
             address="Guadalajara, Jalisco",
             business_name="Cliente SA de CV",
             quote_currency=quote_currency,
+            delivery_place="CDMX",
         ),
         sections=tuple(cotizacion_sections),
     )
@@ -511,25 +515,33 @@ def test_calc_chain_prunes_mutated_sheets_and_forces_full_recalculation(
 
     calc_part = official_composer_module._calc_chain_part(base)
     assert calc_part is not None
-    cotizacion_sheet_id = official_composer_module._workbook_sheet_id(
-        base, "Cotizacion"
+    mutated_sheet_names = (
+        "Cotizacion",
+        "Mobiliti",
+        "Fletes",
+        "Estrategia Comercial ",
+        "Control Administrativo",
     )
-    mobiliti_sheet_id = official_composer_module._workbook_sheet_id(base, "Mobiliti")
+    mutated_sheet_ids = {
+        official_composer_module._workbook_sheet_id(base, sheet_name)
+        for sheet_name in mutated_sheet_names
+    }
     cotizacion_part = base.sheet_part("Cotizacion")
     formula_coordinates = _worksheet_formula_coordinates(
         mutation.replacements[cotizacion_part]
     )
     assert len(formula_coordinates) == len(set(formula_coordinates))
-    assert {"P21", "L121"}.issubset(formula_coordinates)
-    assert _calc_chain_coordinates_for_sheet(
-        mutation.replacements[calc_part],
-        cotizacion_sheet_id,
-    ) == []
-    assert _calc_chain_coordinates_for_sheet(
-        mutation.replacements[calc_part],
-        mobiliti_sheet_id,
-    ) == []
-    mutated_sheet_ids = {cotizacion_sheet_id, mobiliti_sheet_id}
+    subtotal_row = request.cotizacion.total_row - 4
+    assert {
+        f"M{subtotal_row}",
+        f"N{subtotal_row + 2}",
+        f"A{90 + request.cotizacion.terms_row_delta}",
+    }.issubset(formula_coordinates)
+    for sheet_id in mutated_sheet_ids:
+        assert _calc_chain_coordinates_for_sheet(
+            mutation.replacements[calc_part],
+            sheet_id,
+        ) == []
     assert _calc_chain_entries_except_sheets(
         mutation.replacements[calc_part],
         mutated_sheet_ids,
@@ -580,7 +592,8 @@ def test_composer_preserves_protected_official_package_and_updates_dependents(
 
     assert audit.unexpected_changed_parts == frozenset()
     result = XlsxPackage.read(output)
-    assert result.sheet_state("Fletes") == "visible"
+    assert result.sheet_state("Fletes") == "hidden"
+    assert result.sheet_state("Control Administrativo") == "visible"
     assert result.sheet_state("Quotation_Data") == "veryHidden"
     with pytest.raises(KeyError):
         result.sheet_state("sheep")
@@ -595,7 +608,7 @@ def test_composer_preserves_protected_official_package_and_updates_dependents(
     workbook = ET.fromstring(result.parts["xl/workbook.xml"])
     assert len(
         workbook.findall(f"{{{MAIN}}}definedNames/{{{MAIN}}}definedName")
-    ) == 29
+    ) == 31
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     for prefix in request.contract.protected_prefixes:
         for name, payload in base.parts.items():
@@ -604,12 +617,12 @@ def test_composer_preserves_protected_official_package_and_updates_dependents(
     assert _cell_formula(result, "Fletes", "D19") == (
         f"=Mobiliti!H{request.mobiliti.row_map.total_row}"
     )
-    assert _cell_formula(result, "Estrategia Comercial ", "D59") == (
+    assert _cell_formula(result, "Estrategia Comercial ", "B70") == (
         f"=Cotizacion!H{request.cotizacion.total_row}"
     )
 
 
-def test_composer_restores_flete_routes_from_flete_routes(
+def test_composer_preserves_v17_flete_region_table(
     tmp_path: Path,
 ) -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
@@ -620,12 +633,17 @@ def test_composer_restores_flete_routes_from_flete_routes(
     fletes = ET.fromstring(
         mutation.replacements[base.sheet_part("Fletes")]
     )
-    for row, (origin, destination) in engine_module.FLETE_ROUTES.items():
-        assert _cell_scalar(fletes, f"A{row}") == origin
-        assert _cell_scalar(fletes, f"C{row}") == destination
+    official = ET.fromstring(base.parts[base.sheet_part("Fletes")])
+    for row in range(45, 56):
+        for column in ("A", "B"):
+            assert official_composer_module._xml_signature(
+                _cell(fletes, f"{column}{row}")
+            ) == official_composer_module._xml_signature(
+                _cell(official, f"{column}{row}")
+            )
 
 
-def test_composer_populates_missing_flete_and_installation_categories(
+def test_composer_extends_v17_flete_and_installation_tables(
     tmp_path: Path,
 ) -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
@@ -636,27 +654,35 @@ def test_composer_populates_missing_flete_and_installation_categories(
     fletes = ET.fromstring(
         mutation.replacements[base.sheet_part("Fletes")]
     )
-    assert _cell_scalar(fletes, "I8") == "Escritorios-WorkStation"
-    assert _cell_scalar(fletes, "M8") == "Escritorios-WorkStation"
-    expected = {
-        16: ("Bancos", Decimal("0.2"), Decimal("56")),
-        17: ("Cocineta", Decimal("0.2"), Decimal("1790")),
-        18: ("Pizarrones", Decimal("0.2"), Decimal("210")),
-    }
-    for row, (category, factor, installation) in expected.items():
-        assert _cell_scalar(fletes, f"I{row}") == category
-        assert Decimal(_cell_scalar(fletes, f"J{row}")) == factor
-        assert _cell_formula_in_root(fletes, f"K{row}") == (
-            f"=IF(Mobiliti!$K$4=TRUE,"
-            f"((J{row}/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
-            f"(J{row}/$J$21)*Mobiliti!$P$9)"
+    official = ET.fromstring(base.parts[base.sheet_part("Fletes")])
+    for coordinate in ("K6", "N6", "K15", "N17"):
+        assert _cell_formula_in_root(fletes, coordinate) == (
+            _cell_formula_in_root(official, coordinate)
         )
+    expected = {
+        18: ("Bancos", "56"),
+        19: ("Cocineta", "1790"),
+        20: ("Pizarrones", "210"),
+        21: ("Escritorios-WorkStation", "980"),
+    }
+    for row, (category, installation) in expected.items():
         assert _cell_scalar(fletes, f"M{row}") == category
         assert _cell_formula_in_root(fletes, f"N{row}") == (
-            f"=IF(Mobiliti!$K$4=TRUE,"
-            f"({format(installation, 'f')}/Mobiliti!$K$6),"
-            f"{format(installation, 'f')})"
+            f"=IF(Mobiliti!$P$4=TRUE,({installation}/Mobiliti!$P$6),"
+            f"{installation})"
         )
+        assert _cell_scalar(fletes, f"Q{row}") == category
+        assert _cell_scalar(fletes, f"R{row}") == "2"
+
+    workbook = ET.fromstring(mutation.replacements["xl/workbook.xml"])
+    defined_names = {
+        item.attrib.get("name"): item.text
+        for item in workbook.findall(
+            f"{{{MAIN}}}definedNames/{{{MAIN}}}definedName"
+        )
+    }
+    assert defined_names["Tabla_Instalacion"] == "Fletes!$M$6:$N$21"
+    assert defined_names["Tabla_Factor"] == "Fletes!$Q$6:$R$21"
 
 
 def test_cotizacion_clears_contamination_uses_master_discount_and_keeps_terms(
@@ -670,9 +696,8 @@ def test_cotizacion_clears_contamination_uses_master_discount_and_keeps_terms(
 
     first_discount = _cell(candidate, f"G{first_row}")
     second_discount = _cell(candidate, f"G{second_row}")
-    assert first_discount.find(f"{{{MAIN}}}f") is None
-    assert Decimal(first_discount.findtext(f"{{{MAIN}}}v")) == Decimal("0.30")
-    assert second_discount.findtext(f"{{{MAIN}}}f") == f"$G${first_row}"
+    assert first_discount.findtext(f"{{{MAIN}}}f") == "ROUND(Mobiliti!$AD$13,2)"
+    assert second_discount.findtext(f"{{{MAIN}}}f") == "ROUND(Mobiliti!$AD$13,2)"
     for row in (first_row, second_row):
         assert _cell(candidate, f"A{row}").attrib["t"] == "inlineStr"
         assert _cell(candidate, f"C{row}").attrib["t"] == "inlineStr"
@@ -683,11 +708,41 @@ def test_cotizacion_clears_contamination_uses_master_discount_and_keeps_terms(
         )
 
     delta = request.cotizacion.terms_row_delta
-    assert _terms_signature(official, start=28, end=76) == _terms_signature(
+    assert _terms_signature(official, start=45, end=63) == _terms_signature(
         candidate,
-        start=28 + delta,
-        end=76 + delta,
+        start=45 + delta,
+        end=63 + delta,
     )
+    assert _cell_scalar(candidate, f"D{64 + delta}") == "CDMX"
+    assert _terms_signature(official, start=65, end=93) == _terms_signature(
+        candidate,
+        start=65 + delta,
+        end=93 + delta,
+    )
+
+
+def test_delivery_dropdown_and_mobiliti_reference_follow_dynamic_terms(
+    tmp_path: Path,
+) -> None:
+    request = _request_for_sections(tmp_path / "dynamic-delivery.xlsx", (2,))
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+
+    mutation = build_allowlisted_mutation(base, request)
+
+    assert request.cotizacion.terms_row_delta == -18
+    cotizacion = ET.fromstring(
+        mutation.replacements[base.sheet_part("Cotizacion")]
+    )
+    mobiliti = ET.fromstring(
+        mutation.replacements[base.sheet_part("Mobiliti")]
+    )
+    validation = cotizacion.find(f".//{{{X14}}}dataValidation")
+    assert validation is not None
+    assert validation.findtext(f"{{{XM}}}sqref") == "D46"
+    assert validation.findtext(
+        f"{{{X14}}}formula1/{{{XM}}}f"
+    ) == "Fletes!$A$46:$A$55"
+    assert _cell_formula_in_root(mobiliti, "P8") == "=Cotizacion!$D$46"
 
 
 @pytest.mark.parametrize(
@@ -705,7 +760,7 @@ def test_cotizacion_commercial_terms_follow_the_selected_quote_currency(
         quote_currency=currency,
     )
     worksheet = ET.fromstring(request.cotizacion.xml)
-    terms_currency_row = 33 + request.cotizacion.terms_row_delta
+    terms_currency_row = 50 + request.cotizacion.terms_row_delta
     text = _cell_scalar(worksheet, f"A{terms_currency_row}")
 
     assert currency_name in text
@@ -727,7 +782,7 @@ def test_selected_quote_currency_is_part_of_the_allowlisted_mutation_contract(
     worksheet = ET.fromstring(
         mutation.replacements[base.sheet_part("Cotizacion")]
     )
-    terms_currency_row = 33 + request.cotizacion.terms_row_delta
+    terms_currency_row = 50 + request.cotizacion.terms_row_delta
 
     assert "Pesos Mexicanos, MXN." in _cell_scalar(
         worksheet,
@@ -756,7 +811,7 @@ def test_composer_handles_twenty_sections_and_one_hundred_product_section(
     assert f"${request.mobiliti.row_map.last_product_row}" in (
         _cell(estrategia, "B7").findtext(f"{{{MAIN}}}f") or ""
     )
-    assert _cell_formula(package, "Estrategia Comercial ", "D59") == (
+    assert _cell_formula(package, "Estrategia Comercial ", "B70") == (
         f"=Cotizacion!H{request.cotizacion.total_row}"
     )
 
@@ -888,8 +943,9 @@ def test_composer_preserves_static_drawing_and_adds_safe_product_png(
     assert result_drawing == base_drawing
     base_root = ET.fromstring(base.parts[base_drawing])
     result_root = ET.fromstring(result.parts[result_drawing])
-    assert len(list(base_root)) == 5
-    assert len(list(result_root)) == len(list(base_root)) + 1
+    assert len(list(base_root)) == 19
+    assert len(result_root.findall(f"{{{XDR}}}twoCellAnchor")) == 5
+    assert len(result_root.findall(f"{{{XDR}}}oneCellAnchor")) == 1
     product_anchor = result_root.findall(f"{{{XDR}}}oneCellAnchor")[-1]
     assert product_anchor.findtext(f"{{{XDR}}}from/{{{XDR}}}row") == str(
         request.cotizacion.product_rows[0] - 1
@@ -1337,11 +1393,13 @@ def test_active_engine_references_visible_quotation_and_mobiliti_fields(
         assert mobiliti["D14"].value == "=Quotation!B9"
         assert mobiliti["H14"].value == "=Quotation!H9"
         assert mobiliti["J14"].value == "=Quotation!K9"
-        assert mobiliti["K14"].value == "=Quotation!I9"
+        assert mobiliti["P14"].value == "=Quotation!I9"
+        assert mobiliti["S14"].value == "Centro"
         assert mobiliti["D15"].value == "=Quotation!B10"
         assert mobiliti["H15"].value == "=Quotation!H10"
         assert mobiliti["J15"].value == "=Quotation!K10"
-        assert mobiliti["K15"].value == "=Quotation!I10"
+        assert mobiliti["P15"].value == "=Quotation!I10"
+        assert mobiliti["S15"].value == "Centro"
         assert cotizacion["A17"].value == "=Mobiliti!D14"
         assert cotizacion["A18"].value == "=Mobiliti!D15"
         assert cotizacion["C17"].value == "=Quotation!D9"
@@ -1354,7 +1412,7 @@ def test_active_engine_references_visible_quotation_and_mobiliti_fields(
         workbook.close()
 
 
-def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
+def test_active_engine_keeps_only_requested_products_and_explicit_accessories(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "workstation.xlsx"
@@ -1368,6 +1426,13 @@ def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
                 "quantity": 1,
                 "price": 1000,
             },
+            {
+                "name": "MULT-LIDO-INT",
+                "description": "Multicontacto elegido expresamente",
+                "dimension": "245 x 102 x 60 mm",
+                "quantity": 3,
+                "price": 125,
+            },
         ),
         category="Workstations",
     )
@@ -1380,11 +1445,10 @@ def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
         cotizacion = workbook["Cotizacion"]
         expected_names = (
             "Workstation 2 pax",
-            "LIDO.OP-INT",
-            "JUMP-1.5M",
-            "CAJA-FUS",
+            "MULT-LIDO-INT",
         )
         rows_by_name = {name: [] for name in expected_names}
+        actual_names = []
         for row in range(16, cotizacion.max_row + 1):
             product_formula = cotizacion.cell(row, 1).value
             if (
@@ -1394,16 +1458,18 @@ def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
                 continue
             mobiliti_row = int(product_formula.removeprefix("=Mobiliti!D"))
             product_name = _mobiliti_product_name(workbook, mobiliti_row)
+            actual_names.append(product_name)
             if product_name in rows_by_name:
                 rows_by_name[product_name].append(row)
+        assert actual_names == list(expected_names)
         assert all(len(rows) == 1 for rows in rows_by_name.values())
 
         visible_rows = tuple(rows_by_name[name][0] for name in expected_names)
         mobiliti_rows = []
         for row in visible_rows:
             formula = cotizacion.cell(row, 6).value
-            assert isinstance(formula, str) and formula.startswith("=Mobiliti!X")
-            mobiliti_rows.append(int(formula.removeprefix("=Mobiliti!X")))
+            assert isinstance(formula, str) and formula.startswith("=Mobiliti!AA")
+            mobiliti_rows.append(int(formula.removeprefix("=Mobiliti!AA")))
             assert cotizacion.cell(row, 10).value == f"=E{row}*I{row}"
         assert len(set(mobiliti_rows)) == len(expected_names)
 
@@ -1424,16 +1490,16 @@ def test_active_engine_renders_each_lumbro_accessory_once_and_includes_its_cost(
             for row in range(2, audit.max_row + 1)
         ]
         assert len(canonical) == len(expected_names)
-        parent_key = str(canonical[0][0])
-        for code, row, mobiliti_row in zip(
-            expected_names[1:],
-            canonical[1:],
-            mobiliti_rows[1:],
+        assert [row[4] for row in canonical] == ["quotation", "quotation"]
+        assert not any(":lumbro:" in str(row[0]) for row in canonical)
+        assert workbook["Quotation"]["B10"].value == "MULT-LIDO-INT"
+        assert workbook["Quotation"]["H10"].value == 3
+        assert workbook["Quotation"]["K10"].value == 125
+        for row, mobiliti_row in zip(
+            canonical,
+            mobiliti_rows,
             strict=True,
         ):
-            assert parent_key in str(row[0])
-            assert code in str(row[0])
-            assert row[1] == canonical[0][1]
             cost_formula = workbook["Mobiliti"].cell(mobiliti_row, 10).value
             assert isinstance(cost_formula, str)
             assert re.fullmatch(r"=Quotation!K[1-9][0-9]*", cost_formula)
@@ -1911,7 +1977,14 @@ def test_active_engine_uses_one_audited_source_snapshot_after_preflight(
         for name, payload in result.parts.items()
         if name.startswith("xl/media/quote_product_")
     ]
-    assert product_media == [original_media]
+    assert len(product_media) == 1
+    assert product_media[0] != original_media
+    with Image.open(BytesIO(product_media[0])) as processed:
+        rendered = processed.convert("RGB")
+        assert rendered.getpixel(
+            (rendered.width // 2, rendered.height // 2)
+        ) == (15, 90, 170)
+        assert rendered.getpixel((0, 0)) == (15, 90, 170)
     assert replacement_media not in product_media
 
 
@@ -2418,6 +2491,7 @@ def test_estrategia_translation_never_rewrites_reference_like_string_literals() 
             ET.tostring(root, encoding="utf-8", xml_declaration=True),
             row_map,
             30,
+            variant="official_v17",
         )
     )
     result = _cell(translated, "B7").findtext(f"{{{MAIN}}}f")
@@ -2430,11 +2504,11 @@ def test_estrategia_subtotal_translation_only_changes_range_tokens() -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     part = base.sheet_part("Estrategia Comercial ")
     root = ET.fromstring(base.parts[part])
-    formula = _cell(root, "D59").find(f"{{{MAIN}}}f")
+    formula = _cell(root, "B68").find(f"{{{MAIN}}}f")
     assert formula is not None
     formula.text = (
-        'IF("Cotizacion!H25"="literal",0,'
-        'IF(B61=0,C61,B61*Cotizacion!H24))'
+        'IF("Cotizacion!H39"="literal",0,'
+        'IF(B61=0,C61,B61*Cotizacion!H41))'
     )
     row_map = plan_mobiliti_layout([SectionNeed("large", "Large", 100)])
 
@@ -2443,10 +2517,11 @@ def test_estrategia_subtotal_translation_only_changes_range_tokens() -> None:
             ET.tostring(root, encoding="utf-8", xml_declaration=True),
             row_map,
             30,
+            variant="official_v17",
         )
     )
-    result = _cell(translated, "D59").findtext(f"{{{MAIN}}}f")
-    assert '"Cotizacion!H25"' in result
+    result = _cell(translated, "B68").findtext(f"{{{MAIN}}}f")
+    assert '"Cotizacion!H39"' in result
     assert "B61*Cotizacion!H30" in result
 
 
@@ -3216,12 +3291,12 @@ def test_output_contract_rejects_unexpected_defined_name(tmp_path: Path) -> None
 def test_cotizacion_contract_uses_uniform_price_from_largest_quantity() -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
-    assert _cell(source, "F17").findtext(f"{{{MAIN}}}f") == "Mobiliti!X14"
+    assert _cell(source, "F17").findtext(f"{{{MAIN}}}f") == "Mobiliti!AA14"
     assert _cell(source, "F17").findtext(f"{{{MAIN}}}v") == "0"
-    assert _cell(source, "I17").find(f"{{{MAIN}}}f") is None
-    assert _cell(source, "I17").find(f"{{{MAIN}}}v") is None
+    assert _cell(source, "I17").findtext(f"{{{MAIN}}}f") == "F17-H17"
+    assert _cell(source, "I17").findtext(f"{{{MAIN}}}v") == "0"
 
-    contract = official_composer_module.CotizacionFormulaContract()
+    contract = official_composer_module.CotizacionFormulaContract("AA")
     product = CotizacionProduct(
         item_key="legacy-price-term",
         name="Silla",
@@ -3236,7 +3311,7 @@ def test_cotizacion_contract_uses_uniform_price_from_largest_quantity() -> None:
     )
 
     assert formulas == {
-        "F": "=Mobiliti!X14",
+        "F": "=Mobiliti!AA14",
         "I": "=F17-H17",
     }
     assert all("#REF!" not in formula for formula in formulas.values())

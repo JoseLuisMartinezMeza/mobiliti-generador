@@ -757,7 +757,7 @@ export default function ProjectEditor({
                 quoteFields: {...quoteFields, descuento: event.target.value},
               })}
             />
-            <small>El primer producto controla el descuento de todos los productos en Excel.</small>
+            <small>El descuento global se aplica según las fórmulas y el redondeo de la plantilla seleccionada.</small>
           </label>
           <label>
             <span>Plantilla de cotización</span>

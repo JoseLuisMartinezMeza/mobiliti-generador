@@ -9,7 +9,6 @@ import ipaddress
 import os
 import re
 import socket
-import tempfile
 import unicodedata
 import urllib.request
 import warnings
@@ -20,6 +19,8 @@ from openpyxl.drawing.image import Image as XlsxImage
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image, UnidentifiedImageError
+
+from .local_files import local_files_preserved, save_quotation_workbook, temporary_directory
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -144,7 +145,7 @@ def create_catalog_quotation_workbook(
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp_context = None
     if image_dir is None:
-        tmp_context = tempfile.TemporaryDirectory(prefix="catalog_images_")
+        tmp_context = temporary_directory(prefix="catalog_images_")
         images_root = Path(tmp_context.name)
     else:
         images_root = Path(image_dir)
@@ -173,13 +174,13 @@ def create_catalog_quotation_workbook(
             )
 
         _set_column_widths(ws)
-        wb.save(output)
+        save_quotation_workbook(wb, output)
     finally:
         try:
             if wb is not None:
                 wb.close()
         finally:
-            if tmp_context is not None:
+            if tmp_context is not None and not local_files_preserved():
                 tmp_context.cleanup()
     return output
 

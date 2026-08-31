@@ -155,17 +155,19 @@ def test_frozen_cost_keeps_raw_price_and_applies_uniform_sale_price(
     assert j14.attrib.get("t") is None
     assert j14.find(f"{{{MAIN}}}f") is None
     assert Decimal(j14.findtext(f"{{{MAIN}}}v")) == expected
-    assert _formula_signature(_cell(output, "W14")) == _formula_signature(
-        _cell(official, "W14")
+    assert _formula_signature(_cell(output, "Z14")) == _formula_signature(
+        _cell(official, "Z14")
     )
-    assert "_xlfn.MAXIFS(" in _cell(output, "X14").findtext(f"{{{MAIN}}}f")
-    assert _cell(output, "Y14").findtext(f"{{{MAIN}}}f") == "(X14*H14)"
-    assert ET.tostring(_cell(output, "K6")) == ET.tostring(_cell(official, "K6"))
+    assert "_xlfn.MAXIFS(" in _cell(output, "AA14").findtext(f"{{{MAIN}}}f")
+    assert _cell(output, "AB14").findtext(f"{{{MAIN}}}f") == (
+        "IFERROR(AA14*H14,0)"
+    )
+    assert ET.tostring(_cell(output, "P6")) == ET.tostring(_cell(official, "P6"))
 
     # La fila amarilla sin producto conserva las fórmulas oficiales y no recibe costo.
     assert _cell(output, "J15").find(f"{{{MAIN}}}v") is None
-    assert _cell(output, "W15").find(f"{{{MAIN}}}f") is not None
-    assert _cell(output, "X15").find(f"{{{MAIN}}}f") is not None
+    assert _cell(output, "Z15").find(f"{{{MAIN}}}f") is not None
+    assert _cell(output, "AA15").find(f"{{{MAIN}}}f") is not None
 
 
 def test_same_name_uses_price_from_largest_quantity_and_totals_that_price():
@@ -187,28 +189,30 @@ def test_same_name_uses_price_from_largest_quantity_and_totals_that_price():
     last_row = row_map.last_product_row
 
     for row in (large_row, small_row):
-        x_formula = _cell(output, f"X{row}").findtext(f"{{{MAIN}}}f")
-        assert x_formula == (
-            f"_xlfn.MINIFS($W$14:$W${last_row},"
+        uniform_formula = _cell(output, f"AA{row}").findtext(f"{{{MAIN}}}f")
+        assert uniform_formula == (
+            f"IF(Z{row}>=Y{row},"
+            f"_xlfn.MINIFS($Z$14:$Z${last_row},"
             f"$D$14:$D${last_row},D{row},"
             f"$H$14:$H${last_row},"
             f"_xlfn.MAXIFS($H$14:$H${last_row},"
-            f"$D$14:$D${last_row},D{row}))"
-        )
-        assert _cell(output, f"Y{row}").findtext(f"{{{MAIN}}}f") == (
-            f"(X{row}*H{row})"
+            f"$D$14:$D${last_row},D{row})),"
+            '"NO SE ESTA RESPETANDO EL MARGEN")'
         )
         assert _cell(output, f"AB{row}").findtext(f"{{{MAIN}}}f") == (
-            f"X{row}*AA{row}"
-        )
-        assert _cell(output, f"AC{row}").findtext(f"{{{MAIN}}}f") == (
-            f'IF(AA{row}>Z{row},"ERROR",(X{row}-AB{row}))'
-        )
-        assert _cell(output, f"AD{row}").findtext(f"{{{MAIN}}}f") == (
-            f"AC{row}*H{row}"
+            f"IFERROR(AA{row}*H{row},0)"
         )
         assert _cell(output, f"AE{row}").findtext(f"{{{MAIN}}}f") == (
-            f'IF(A{row + 1}=TRUE,MAX(0,1-(AF{row}/X{row})),"NA")'
+            f"IFERROR(AA{row}*AD{row},0)"
+        )
+        assert _cell(output, f"AF{row}").findtext(f"{{{MAIN}}}f") == (
+            f'IF($E$5>$E$6,"ERROR",AA{row}-AE{row})'
+        )
+        assert _cell(output, f"AG{row}").findtext(f"{{{MAIN}}}f") == (
+            f"AF{row}*H{row}"
+        )
+        assert _cell(output, f"AH{row}").findtext(f"{{{MAIN}}}f") == (
+            f'IF(A{row + 1}=TRUE,MAX(0,1-(AI{row}/Z{row})),"NA")'
         )
 
 
@@ -539,10 +543,10 @@ def test_currency_selector_rejects_every_currency_outside_the_closed_set(currenc
         pytest.param("x" * 32_768, id="oversized"),
     ],
 )
-def test_currency_selector_rejects_unsafe_or_oversized_k8_text(delivery_place):
+def test_currency_selector_rejects_unsafe_or_oversized_delivery_text(delivery_place):
     editor = WorksheetEditor.from_xml(_official_xml())
 
-    with pytest.raises((TypeError, ValueError), match="K8"):
+    with pytest.raises((TypeError, ValueError), match="Lugar de entrega"):
         write_official_currency_selector(editor, "MXN", delivery_place)
 
 
@@ -563,32 +567,32 @@ def test_currency_selector_rejects_invisible_formula_prefixes(invisible):
     editor = WorksheetEditor.from_xml(_official_xml())
     before = editor.to_xml()
 
-    with pytest.raises(ValueError, match="K8.*invisible"):
+    with pytest.raises(ValueError, match="Lugar de entrega.*invisible"):
         write_official_currency_selector(editor, "MXN", invisible)
 
     assert editor.to_xml() == before
 
 
-def test_currency_selector_rechecks_k8_limit_after_formula_neutralization():
+def test_currency_selector_rechecks_delivery_limit_after_formula_neutralization():
     editor = WorksheetEditor.from_xml(_official_xml())
     before = editor.to_xml()
     maximum_length_formula = "=" + ("x" * 32_766)
 
-    with pytest.raises(ValueError, match="K8.*32767"):
+    with pytest.raises(ValueError, match="Lugar de entrega.*32767"):
         write_official_currency_selector(editor, "MXN", maximum_length_formula)
 
     assert editor.to_xml() == before
 
 
-def test_currency_selector_is_atomic_when_k8_destination_is_absent():
+def test_currency_selector_is_atomic_when_p4_destination_is_absent():
     editor = WorksheetEditor.from_xml(_official_xml())
-    row = editor.require_row(8)
-    k8 = row.find(f"{{{MAIN}}}c[@r='K8']")
-    assert k8 is not None
-    row.remove(k8)
+    row = editor.require_row(4)
+    p4 = row.find(f"{{{MAIN}}}c[@r='P4']")
+    assert p4 is not None
+    row.remove(p4)
     before = editor.to_xml()
 
-    with pytest.raises(ValueError, match="K8"):
+    with pytest.raises(ValueError, match="P4"):
         write_official_currency_selector(editor, "MXN", "Guadalajara")
 
     assert editor.to_xml() == before
@@ -617,7 +621,7 @@ def test_task7_sources_are_strict_utf8_without_mojibake():
     ("currency", "expected_boolean"),
     [("MXN", "0"), ("USD", "1"), ("EUR", "1")],
 )
-def test_currency_selector_writes_only_k4_and_safe_inline_k8_idempotently(
+def test_currency_selector_writes_only_p4_and_global_discount_idempotently(
     currency, expected_boolean
 ):
     editor = WorksheetEditor.from_xml(_official_xml())
@@ -626,20 +630,28 @@ def test_currency_selector_writes_only_k4_and_safe_inline_k8_idempotently(
         for cell in editor.root.findall(f".//{{{MAIN}}}c")
     }
 
-    write_official_currency_selector(editor, currency, " =NORTE & SUR ")
+    write_official_currency_selector(
+        editor,
+        currency,
+        " =NORTE & SUR ",
+        Decimal("0.4"),
+    )
     once = editor.to_xml()
-    write_official_currency_selector(editor, currency, " =NORTE & SUR ")
+    write_official_currency_selector(
+        editor,
+        currency,
+        " =NORTE & SUR ",
+        Decimal("0.4"),
+    )
     twice = editor.to_xml()
     output = ET.fromstring(twice)
 
     assert once == twice
-    k4 = _cell(output, "K4")
-    assert k4.attrib["t"] == "b"
-    assert k4.findtext(f"{{{MAIN}}}v") == expected_boolean
-    k8 = _cell(output, "K8")
-    assert k8.attrib["t"] == "inlineStr"
-    assert k8.findtext(f"{{{MAIN}}}is/{{{MAIN}}}t") == "' =NORTE & SUR "
-    assert _cell(output, "K6").find(f"{{{MAIN}}}f") is not None
+    p4 = _cell(output, "P4")
+    assert p4.attrib["t"] == "b"
+    assert p4.findtext(f"{{{MAIN}}}v") == expected_boolean
+    assert Decimal(_cell(output, "AD13").findtext(f"{{{MAIN}}}v")) == Decimal("0.4")
+    assert _cell(output, "P6").find(f"{{{MAIN}}}f") is not None
 
     after = {
         cell.attrib["r"]: ET.tostring(cell)
@@ -648,7 +660,7 @@ def test_currency_selector_writes_only_k4_and_safe_inline_k8_idempotently(
     changed = {
         coordinate for coordinate in before if before[coordinate] != after[coordinate]
     }
-    assert changed <= {"K4", "K8"}
-    assert "K8" in changed
-    for forbidden in ("J6", "K6", "W14", "X14"):
+    assert changed <= {"P4", "AD13"}
+    assert changed == ({"P4", "AD13"} if expected_boolean == "0" else {"AD13"})
+    for forbidden in ("J6", "P6", "Z14", "AA14"):
         assert after[forbidden] == before[forbidden]

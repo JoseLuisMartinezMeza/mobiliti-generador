@@ -600,7 +600,7 @@ function LegacyMixedProjectEditor({
               value={form.descuento}
               onChange={(event) => onFieldChange("descuento", event.target.value)}
             />
-            <small>El primer producto controla el descuento de todos los productos en Excel.</small>
+            <small>El descuento global se aplica según las fórmulas y el redondeo de la plantilla seleccionada.</small>
           </label>
           {error ? <div className="error-line" role="alert">{error}</div> : null}
           {draftSubmissionError ? <div className="error-line" role="alert">{draftSubmissionError}</div> : null}

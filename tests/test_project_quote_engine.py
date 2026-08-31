@@ -420,9 +420,9 @@ def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):
             for row in range(1, cotizacion.max_row + 1)
         )
         assert cotizacion["F17"].value == (
-            "=Mobiliti!X14"
-            "+Mobiliti!X15*Mobiliti!H15/Mobiliti!H14"
-            "+Mobiliti!X16*Mobiliti!H16/Mobiliti!H14"
+            "=Mobiliti!AA14"
+            "+Mobiliti!AA15*Mobiliti!H15/Mobiliti!H14"
+            "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H14"
         )
         assert cotizacion["A17"].value == "=Mobiliti!D14"
         assert cotizacion["C17"].value == "=Quotation!D9"
@@ -505,7 +505,7 @@ def test_project_projection_keeps_ordered_images_separate():
     ]
 
 
-def test_official_image_improvement_changes_only_cotizacion_projection():
+def test_official_image_improvement_uses_cleanup_defaults_without_metadata():
     source = BytesIO()
     source_image = Image.new("RGB", (80, 60), (232, 232, 232))
     ImageDraw.Draw(source_image).rectangle(
@@ -524,11 +524,7 @@ def test_official_image_improvement_changes_only_cotizacion_projection():
 
     improved = engine._improve_official_cotizacion_images(
         (line,),
-        {
-            "image_provider": "pillow",
-            "image_background": "white",
-            "image_cleanup_strength": "balanced",
-        },
+        {},
     )
 
     assert line.image_content == source.getvalue()

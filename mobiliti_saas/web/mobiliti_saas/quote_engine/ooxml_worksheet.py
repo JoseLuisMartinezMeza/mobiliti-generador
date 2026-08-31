@@ -25,11 +25,9 @@ MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 X14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 XM = "http://schemas.microsoft.com/office/excel/2006/main"
 XML = "http://www.w3.org/XML/1998/namespace"
-TABLE_LAST_COLUMN = 35  # AI
 CANONICAL_TOTAL_ROW = 573
 CANONICAL_AUXILIARY_START = 574
 CANONICAL_AUXILIARY_END = 610
-INPUT_COLUMNS = frozenset((4, 5, 6, 8, 10, 11, 16))
 CANONICAL_SUBTOTAL_ROWS = tuple(range(47, 573, 35))
 XLSX_MAX_ROW = 1_048_576
 XLSX_MAX_COLUMN = 16_384
@@ -60,6 +58,30 @@ class MobilitiCellWrite:
     coordinate: str
     kind: Literal["number", "text", "boolean", "formula"]
     value: Decimal | str | bool
+
+
+@dataclass(frozen=True)
+class MobilitiLayoutContract:
+    """Coordenadas firmadas de cada generación de la hoja Mobiliti."""
+
+    id: Literal["legacy", "v17"]
+    table_last_column: int
+    total_last_column: int
+    input_columns: frozenset[int]
+
+
+LEGACY_MOBILITI_LAYOUT = MobilitiLayoutContract(
+    id="legacy",
+    table_last_column=35,  # AI
+    total_last_column=36,  # AJ
+    input_columns=frozenset((4, 5, 6, 8, 10, 11, 16)),
+)
+V17_MOBILITI_LAYOUT = MobilitiLayoutContract(
+    id="v17",
+    table_last_column=38,  # AL
+    total_last_column=37,  # AK
+    input_columns=frozenset((4, 5, 6, 8, 10, 16, 19)),
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +156,18 @@ class FormulaIndex:
         )[1:]
 
 
+def _detect_mobiliti_layout(root: ET.Element) -> MobilitiLayoutContract:
+    """Falla cerrada si el XML no tiene una de las dos firmas conocidas."""
+
+    p6 = root.find(f".//{{{MAIN}}}c[@r='P6']/{{{MAIN}}}f")
+    if p6 is not None and p6.text == 'IF(P4=TRUE,_FV(J6,"Price"),0)':
+        return V17_MOBILITI_LAYOUT
+    k6 = root.find(f".//{{{MAIN}}}c[@r='K6']/{{{MAIN}}}f")
+    if k6 is not None and k6.text == '_FV(J6,"High")':
+        return LEGACY_MOBILITI_LAYOUT
+    raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
+
+
 class WorksheetEditor:
     """Editor estrecho sobre un ``worksheet`` SpreadsheetML existente."""
 
@@ -144,6 +178,7 @@ class WorksheetEditor:
         if self.sheet_data is None:
             raise ValueError("Mobiliti no contiene sheetData")
         _validate_worksheet_structure(self.sheet_data)
+        self.layout = _detect_mobiliti_layout(root)
         self.formulas = FormulaIndex(self.sheet_data)
 
     @classmethod
@@ -175,22 +210,25 @@ class WorksheetEditor:
         source_row: int,
         row_map: MobilitiRowMap,
         *,
-        last_column: int = TABLE_LAST_COLUMN,
+        last_column: int | None = None,
         product_range: tuple[int, int] | None = None,
         clear_input_formulas: bool = False,
     ) -> ET.Element:
+        effective_last_column = (
+            self.layout.table_last_column if last_column is None else last_column
+        )
         existing = self.row(target_row)
         sidecar = []
         if existing is not None:
             sidecar = [
                 deepcopy(cell)
                 for cell in existing.findall(f"{{{MAIN}}}c")
-                if _cell_column(cell) > last_column
+                if _cell_column(cell) > effective_last_column
             ]
         clone = deepcopy(source)
         clone.set("r", str(target_row))
         for cell in list(clone.findall(f"{{{MAIN}}}c")):
-            if _cell_column(cell) > last_column:
+            if _cell_column(cell) > effective_last_column:
                 clone.remove(cell)
                 continue
             _move_cell(
@@ -201,6 +239,7 @@ class WorksheetEditor:
                 product_range=product_range,
                 clear_input_formulas=clear_input_formulas,
                 formula_index=self.formulas,
+                input_columns=self.layout.input_columns,
             )
         for cell in sidecar:
             clone.append(cell)
@@ -226,6 +265,7 @@ class WorksheetEditor:
                 target_row=target_row,
                 row_map=row_map,
                 formula_index=self.formulas,
+                input_columns=self.layout.input_columns,
             )
         if existing is not None:
             self.sheet_data.remove(existing)
@@ -323,7 +363,7 @@ def apply_mobiliti_layout(editor: WorksheetEditor, row_map: MobilitiRowMap) -> N
     if row_map.total_row != CANONICAL_TOTAL_ROW:
         canonical_total = editor.require_row(CANONICAL_TOTAL_ROW)
         for cell in list(canonical_total.findall(f"{{{MAIN}}}c")):
-            if _cell_column(cell) <= 36:  # El bloque total oficial llega hasta AJ.
+            if _cell_column(cell) <= editor.layout.total_last_column:
                 canonical_total.remove(cell)
     target_rows = {
         row
@@ -334,7 +374,7 @@ def apply_mobiliti_layout(editor: WorksheetEditor, row_map: MobilitiRowMap) -> N
         number = int(row.attrib["r"])
         if 13 <= number <= CANONICAL_TOTAL_ROW and number not in target_rows:
             for cell in list(row.findall(f"{{{MAIN}}}c")):
-                if _cell_column(cell) <= TABLE_LAST_COLUMN:
+                if _cell_column(cell) <= editor.layout.table_last_column:
                     row.remove(cell)
         if CANONICAL_AUXILIARY_START <= number <= CANONICAL_AUXILIARY_END:
             editor.sheet_data.remove(row)
@@ -350,7 +390,10 @@ def _translate_static_structural_formulas(
         if row_number > CANONICAL_TOTAL_ROW:
             continue
         for cell in row.findall(f"{{{MAIN}}}c"):
-            if row_number >= 13 and _cell_column(cell) <= TABLE_LAST_COLUMN:
+            if (
+                row_number >= 13
+                and _cell_column(cell) <= editor.layout.table_last_column
+            ):
                 continue
             formula = cell.find(f"{{{MAIN}}}f")
             if formula is None:
@@ -542,7 +585,12 @@ def clone_formula_row(
     )
     if presentation_row is not None:
         _copy_row_presentation(clone, presentation_row)
-    _set_uniform_product_price_formulas(clone, target_row, row_map)
+    _set_uniform_product_price_formulas(
+        clone,
+        target_row,
+        row_map,
+        editor.layout,
+    )
     provider = _find_cell(clone, 6)
     yellow_reference = _find_cell(clone, 8)
     if provider is None or yellow_reference is None or "s" not in yellow_reference.attrib:
@@ -554,30 +602,52 @@ def _set_uniform_product_price_formulas(
     row: ET.Element,
     target_row: int,
     row_map: MobilitiRowMap,
+    layout: MobilitiLayoutContract,
 ) -> None:
     """Usa el precio de la mayor cantidad para cada nombre de producto."""
 
     first_row = row_map.sections[0].product_start
     last_row = row_map.last_product_row
-    formulas = {
-        24: (
-            f"_xlfn.MINIFS($W${first_row}:$W${last_row},"
-            f"$D${first_row}:$D${last_row},D{target_row},"
-            f"$H${first_row}:$H${last_row},"
-            f"_xlfn.MAXIFS($H${first_row}:$H${last_row},"
-            f"$D${first_row}:$D${last_row},D{target_row}))"
-        ),
-        25: f"(X{target_row}*H{target_row})",
-        28: f"X{target_row}*AA{target_row}",
-        29: (
-            f'IF(AA{target_row}>Z{target_row},"ERROR",'
-            f"(X{target_row}-AB{target_row}))"
-        ),
-        31: (
-            f"IF(A{target_row + 1}=TRUE,MAX(0,"
-            f'1-(AF{target_row}/X{target_row})),"NA")'
-        ),
-    }
+    if layout.id == "v17":
+        formulas = {
+            27: (
+                f"IF(Z{target_row}>=Y{target_row},"
+                f"_xlfn.MINIFS($Z${first_row}:$Z${last_row},"
+                f"$D${first_row}:$D${last_row},D{target_row},"
+                f"$H${first_row}:$H${last_row},"
+                f"_xlfn.MAXIFS($H${first_row}:$H${last_row},"
+                f"$D${first_row}:$D${last_row},D{target_row})),"
+                '"NO SE ESTA RESPETANDO EL MARGEN")'
+            ),
+            28: f"IFERROR(AA{target_row}*H{target_row},0)",
+            31: f"IFERROR(AA{target_row}*AD{target_row},0)",
+            32: f'IF($E$5>$E$6,"ERROR",AA{target_row}-AE{target_row})',
+            33: f"AF{target_row}*H{target_row}",
+            34: (
+                f"IF(A{target_row + 1}=TRUE,MAX(0,"
+                f'1-(AI{target_row}/Z{target_row})),"NA")'
+            ),
+        }
+    else:
+        formulas = {
+            24: (
+                f"_xlfn.MINIFS($W${first_row}:$W${last_row},"
+                f"$D${first_row}:$D${last_row},D{target_row},"
+                f"$H${first_row}:$H${last_row},"
+                f"_xlfn.MAXIFS($H${first_row}:$H${last_row},"
+                f"$D${first_row}:$D${last_row},D{target_row}))"
+            ),
+            25: f"(X{target_row}*H{target_row})",
+            28: f"X{target_row}*AA{target_row}",
+            29: (
+                f'IF(AA{target_row}>Z{target_row},"ERROR",'
+                f"(X{target_row}-AB{target_row}))"
+            ),
+            31: (
+                f"IF(A{target_row + 1}=TRUE,MAX(0,"
+                f'1-(AF{target_row}/X{target_row})),"NA")'
+            ),
+        }
     for column, formula_text in formulas.items():
         cell = _find_cell(row, column)
         if cell is None:
@@ -627,7 +697,7 @@ def clone_total_row(
         canonical_row,
         CANONICAL_TOTAL_ROW,
         row_map,
-        last_column=36,
+        last_column=editor.layout.total_last_column,
     )
     for cell in clone.findall(f"{{{MAIN}}}c"):
         formula = cell.find(f"{{{MAIN}}}f")
@@ -655,7 +725,7 @@ def clear_mobiliti_input_cells(editor: WorksheetEditor, row_map: MobilitiRowMap)
     for section in row_map.sections:
         for row_number in range(section.product_start, section.product_start + section.capacity):
             row = editor.require_row(row_number)
-            for column in INPUT_COLUMNS:
+            for column in editor.layout.input_columns:
                 cell = _find_cell(row, column)
                 if cell is not None:
                     _clear_cell(cell)
@@ -674,7 +744,7 @@ def apply_mobiliti_cell_writes(
             raise ValueError(f"Coordenada Mobiliti inválida: {write.coordinate!r}")
         column = column_index_from_string(match.group(1))
         row_number = int(match.group(2))
-        if row_number not in product_rows or column not in INPUT_COLUMNS:
+        if row_number not in product_rows or column not in editor.layout.input_columns:
             raise ValueError(f"Escritura fuera de inputs Mobiliti: {write.coordinate}")
         _validate_write_value(write.kind, write.value)
         validated.append((write, row_number))
@@ -862,6 +932,7 @@ def _move_cell(
     product_range: tuple[int, int] | None = None,
     clear_input_formulas: bool = False,
     formula_index: FormulaIndex,
+    input_columns: frozenset[int],
 ) -> None:
     column = get_column_letter(_cell_column(cell))
     origin = cell.attrib.get("r", f"{column}{source_row}")
@@ -870,7 +941,7 @@ def _move_cell(
     formula = cell.find(f"{{{MAIN}}}f")
     if formula is None:
         return
-    if clear_input_formulas and _cell_column(cell) in INPUT_COLUMNS:
+    if clear_input_formulas and _cell_column(cell) in input_columns:
         _clear_cell(cell)
         return
     formula_type = formula.attrib.get("t")
@@ -1026,7 +1097,7 @@ def _structural_reference(
             if item is not None
         }
         if (
-            columns in ({"D"}, {"W"})
+            len(columns) == 1
             and all(
                 item is not None
                 and item.group("column").startswith("$")
@@ -1129,6 +1200,27 @@ def _translate_total_formula(
         source_references.append(token.value)
     ascending = list(CANONICAL_SUBTOTAL_ROWS)
     descending = list(reversed(CANONICAL_SUBTOTAL_ROWS))
+    if not reference_indices and any(
+        (
+            (match := _RANGE_REFERENCE.fullmatch(token.value)) is not None
+            and match.group("last") is not None
+            and all(
+                endpoint is not None
+                for endpoint in (
+                    _CELL_REFERENCE.fullmatch(match.group("first")),
+                    _CELL_REFERENCE.fullmatch(match.group("last")),
+                )
+            )
+            and [
+                int(_CELL_REFERENCE.fullmatch(match.group("first")).group("row")),
+                int(_CELL_REFERENCE.fullmatch(match.group("last")).group("row")),
+            ]
+            == [14, 571]
+        )
+        for token in tokens
+        if token.type == "OPERAND" and token.subtype == "RANGE"
+    ):
+        return translated
     if len(reference_indices) != len(CANONICAL_SUBTOTAL_ROWS) or source_rows not in (
         ascending,
         descending,
@@ -1383,14 +1475,15 @@ def _replace_merges(
             preserved.append(deepcopy(merge))
             continue
         min_col, min_row, max_col, max_row = bounds
-        cross_boundary = min_col <= TABLE_LAST_COLUMN < max_col
+        cross_boundary = min_col <= editor.layout.table_last_column < max_col
         canonical_total = (
-            min_row == max_row == CANONICAL_TOTAL_ROW and max_col <= 36
+            min_row == max_row == CANONICAL_TOTAL_ROW
+            and max_col <= editor.layout.total_last_column
         )
         dynamic_table = (
             min_row >= 13
             and max_row <= CANONICAL_TOTAL_ROW
-            and min_col <= TABLE_LAST_COLUMN
+            and min_col <= editor.layout.table_last_column
             and not cross_boundary
         )
         auxiliary = min_row >= CANONICAL_AUXILIARY_START and max_row <= CANONICAL_AUXILIARY_END
@@ -1404,7 +1497,14 @@ def _replace_merges(
             else ((48, section.section_row), (82, section.subtotal_row))
         )
         for source_row, target_row in templates:
-            generated.extend(_row_merges(canonical.merges, source_row, target_row, TABLE_LAST_COLUMN))
+            generated.extend(
+                _row_merges(
+                    canonical.merges,
+                    source_row,
+                    target_row,
+                    editor.layout.table_last_column,
+                )
+            )
         product_source = 14 if index == 0 else 49
         for target_row in range(
             section.product_start, section.product_start + section.capacity
@@ -1414,7 +1514,7 @@ def _replace_merges(
                     canonical.merges,
                     product_source,
                     target_row,
-                    TABLE_LAST_COLUMN,
+                    editor.layout.table_last_column,
                 )
             )
     generated.extend(
@@ -1422,7 +1522,7 @@ def _replace_merges(
             canonical.merges,
             CANONICAL_TOTAL_ROW,
             row_map.total_row,
-            36,
+            editor.layout.total_last_column,
         )
     )
     for merge in canonical.merges:

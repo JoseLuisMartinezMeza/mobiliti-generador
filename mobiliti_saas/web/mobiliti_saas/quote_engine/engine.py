@@ -58,7 +58,6 @@ from .mobiliti_layout import (
 from .mobiliti_pricing import (
     PricingRowBinding,
     build_mobiliti_pricing_writes,
-    lumbro_frozen_cost,
     write_official_currency_selector,
 )
 from .ooxml_package import (
@@ -205,6 +204,33 @@ EXCHANGE_RATE_CACHE_SECONDS = 60 * 60
 EXCHANGE_RATE_CACHE_PATH = Path(os.environ.get("TEMP", "/tmp")) / "mobiliti_usd_mxn_rate.json"
 DEFAULT_DISCOUNT_PERCENT = 40.0
 DEFAULT_MOBILITI_REGION = "Centro"
+V17_DELIVERY_ALIASES = {
+    "jalisco": "Jalisco",
+    "guadalajara": "ZMG",
+    "zmg": "ZMG",
+    "cdmx": "CDMX",
+    "mexico city": "CDMX",
+    "ciudad de mexico": "CDMX",
+    "ciudad de méxico": "CDMX",
+    "monterrey": "Nuevo León",
+    "nuevo leon": "Nuevo León",
+    "nuevo león": "Nuevo León",
+    "tijuana": "Baja California Norte",
+    "baja california norte": "Baja California Norte",
+    "baja california sur": "Baja California Sur",
+    "merida, yucatan": "Yucatán",
+    "mérida, yucatán": "Yucatán",
+    "yucatan": "Yucatán",
+    "yucatán": "Yucatán",
+    "queretaro": "Querétaro",
+    "querétaro": "Querétaro",
+    "state of mexico": "EDO México",
+    "estado de mexico": "EDO México",
+    "estado de méxico": "EDO México",
+    "edo mexico": "EDO México",
+    "edo méxico": "EDO México",
+    "guanajuato": "Guanajuato",
+}
 DEFAULT_SUNON_LOOKUP_LIMIT = 40
 DEFAULT_SUNON_LOOKUP_TIMEOUT_SECONDS = 6
 DEFAULT_SUNON_LOOKUP_BUDGET_SECONDS = 180
@@ -233,13 +259,6 @@ MOBILITI_SUBTOTAL_FILL_RGB = "FF404040"
 MOBILITI_SECTION_FILL_RGB = "FF3E2500"
 MOBILITI_SECTION_TRAILING_FILL_RGB = "FF262626"
 MOBILITI_SECTION_TEXT_RGB = "FFFFFFFF"
-LUMBRO_PRICE_ROWS = {
-    "MULT-LIDO-INT": 348,
-    "LIDO.OP-INT": 380,
-    "JUMP-1.5M": 396,
-    "CAJA-FUS": 406,
-}
-LUMBRO_CATEGORY = "Multicontactos"
 LUMBRO_PROVIDER = "Lumbro CH"
 LUMBRO_LEGACY_PROVIDER = "Lumbro"
 LUMBRO_PROVIDER_CODE = "P00720"
@@ -291,12 +310,6 @@ class MobilitiSectionLayout:
     product_start: int
     capacity: int
     subtotal_row: int
-
-
-@dataclass(frozen=True)
-class LumbroPriceRef:
-    row: int
-    price_mxn: float
 
 
 @dataclass(frozen=True)
@@ -476,36 +489,6 @@ def _detect_user_count(item: QuoteItem) -> int | None:
     for pattern in patterns:
         matches.extend(int(match) for match in re.findall(pattern, text))
     return max(matches) if matches else None
-
-
-def _item_quantity(item: QuoteItem) -> int:
-    return max(1, int(math.ceil(_num(item.cantidad, 1))))
-
-
-def _lumbro_accessories_for_item(item: QuoteItem, category: str) -> list[tuple[str, int]]:
-    quantity = _item_quantity(item)
-    users_per_item = _detect_user_count(item)
-
-    if category == "Escritorios-WorkStation":
-        if users_per_item:
-            total_users = users_per_item * quantity
-            fuse_count = math.ceil(total_users / 8) * 2
-            return [
-                ("LIDO.OP-INT", total_users),
-                ("JUMP-1.5M", total_users),
-                ("CAJA-FUS", fuse_count),
-            ]
-        return [("MULT-LIDO-INT", quantity)]
-
-    if category == "Mesas de Juntas":
-        total_users = (users_per_item or 4) * quantity
-        multicontacts = max(1, math.ceil(total_users / 4))
-        return [
-            ("MULT-LIDO-INT", multicontacts),
-            ("JUMP-1.5M", multicontacts + 1),
-        ]
-
-    return []
 
 
 def _copy_cell_style(src, dst) -> None:
@@ -1196,26 +1179,6 @@ def _set_cotizacion_image_column_px(
     ws.column_dimensions[column].width = max(1.0, (float(pixel_width) - 5) / 7)
 
 
-def _load_lumbro_prices(template_path: str | Path | None) -> dict[str, LumbroPriceRef]:
-    if not template_path:
-        return {}
-    path = Path(template_path)
-    if not path.exists():
-        return {}
-
-    wb = load_workbook(path, data_only=True, keep_links=False)
-    try:
-        if "SPEC-GUIDE-LUMBRO" not in wb.sheetnames:
-            return {}
-        ws = wb["SPEC-GUIDE-LUMBRO"]
-        prices: dict[str, LumbroPriceRef] = {}
-        for code, row in LUMBRO_PRICE_ROWS.items():
-            prices[code] = LumbroPriceRef(row=row, price_mxn=_num(ws.cell(row, 5).value, 0))
-        return prices
-    finally:
-        wb.close()
-
-
 def _first_product_row(items: list[QuoteItem]) -> int:
     return next((item.row for item in items if item.tipo == "producto"), 9)
 
@@ -1288,6 +1251,7 @@ def _item_discount_literal(item: QuoteItem, metadata: dict[str, Any]) -> str:
 
 
 def _item_auto_electrification(item: QuoteItem, metadata: dict[str, Any]) -> bool:
+    """Valida el campo legado del payload; ya no habilita inserción de accesorios."""
     if _uses_mixed_catalog_prices(metadata):
         if not isinstance(item.electrificacion_automatica, bool):
             raise ValueError("Politica de electrificacion mixta invalida")
@@ -2425,10 +2389,9 @@ def _source_product_images(source: Path | bytes) -> dict[int, tuple[bytes, str]]
 def _official_presentation_lines(
     items: Sequence[QuoteItem],
     metadata: dict[str, Any],
-    source_path: Path,
-    lumbro_prices: Mapping[str, LumbroPriceRef],
     image_payloads: Mapping[int, tuple[bytes, str]],
 ) -> tuple[tuple[_OfficialPresentationLine, ...], tuple[SectionNeed, ...]]:
+    """Presenta solo productos de entrada, incluidos los accesorios explícitos."""
     product_items = [item for item in items if item.tipo == "producto"]
     category_dictionary = load_category_dictionary(
         [str(item.nombre or "") for item in product_items]
@@ -2531,81 +2494,6 @@ def _official_presentation_lines(
                 image_content_type=image_payload[1] if image_payload is not None else None,
             )
             lines.append(line)
-
-            if not _item_auto_electrification(item, metadata):
-                continue
-            accessories = _lumbro_accessories_for_item(item, category)
-            if not accessories:
-                continue
-            lumbro_rate = (
-                _official_decimal(
-                    _mixed_auto_electrification_rate(metadata),
-                    "Tipo congelado Lumbro",
-                    positive=True,
-                )
-                if _uses_mixed_catalog_prices(metadata)
-                else Decimal("1")
-            )
-            lumbro_image_path = _lumbro_accessory_image_path(
-                metadata,
-                category,
-                _detect_user_count(item),
-            )
-            lumbro_image_content = (
-                lumbro_image_path.read_bytes()
-                if lumbro_image_path is not None
-                else None
-            )
-            lumbro_image_type = (
-                "image/png"
-                if lumbro_image_path is not None
-                and lumbro_image_path.suffix.casefold() == ".png"
-                else "image/jpeg"
-                if lumbro_image_path is not None
-                and lumbro_image_path.suffix.casefold() in {".jpg", ".jpeg"}
-                else None
-            )
-            for accessory_index, (code, quantity) in enumerate(accessories, start=1):
-                price_ref = lumbro_prices.get(code)
-                if price_ref is None:
-                    raise ValueError(f"Precio oficial Lumbro ausente: {code}")
-                original_lumbro = _official_decimal(
-                    price_ref.price_mxn,
-                    f"Precio oficial Lumbro {code}",
-                ).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
-                lines.append(
-                    _OfficialPresentationLine(
-                        item_key=(
-                            f"{line.item_key}:lumbro:{accessory_index}:{code}"
-                        ),
-                        section_id=section_id,
-                        section_title=section_title,
-                        item=None,
-                        name=code,
-                        description="Accesorio de electrificacion Lumbro",
-                        dimensions="",
-                        m3=Decimal("0"),
-                        quantity=Decimal(quantity),
-                        category=LUMBRO_CATEGORY,
-                        provider=LUMBRO_PROVIDER,
-                        region=DEFAULT_MOBILITI_REGION,
-                        original_currency="MXN",
-                        original_cost=original_lumbro,
-                        frozen_rate=lumbro_rate,
-                        converted_cost=lumbro_frozen_cost(
-                            original_lumbro,
-                            lumbro_rate,
-                        ),
-                        origin="lumbro",
-                        source_row=None,
-                        upstream_row_hash="",
-                        parent_item_key=line.item_key,
-                        image_content=(
-                            lumbro_image_content if lumbro_image_type else None
-                        ),
-                        image_content_type=lumbro_image_type,
-                    )
-                )
         needs.append(
             SectionNeed(
                 section_id,
@@ -2887,6 +2775,44 @@ def _official_dimension_write(coordinate: str, value: str) -> MobilitiCellWrite:
     return MobilitiCellWrite(coordinate, "number", number)
 
 
+def _official_template_variant(base: XlsxPackage) -> str:
+    try:
+        base.sheet_part(CDMX_LUMBRO_SHEET)
+    except KeyError:
+        pass
+    else:
+        return "sunon_cdmx_v1c"
+    try:
+        base.sheet_part("Control Administrativo")
+    except KeyError:
+        return "official"
+    return "official_v17"
+
+
+def _official_delivery_place(
+    metadata: Mapping[str, Any],
+    *,
+    variant: str,
+) -> str:
+    requested = safe_excel_text(
+        metadata.get("lugar_entrega")
+        or metadata.get("delivery_place")
+        or DEFAULT_DELIVERY_PLACE
+    )
+    normalized = " ".join(requested.split()).casefold()
+    if variant == "official_v17":
+        place = V17_DELIVERY_ALIASES.get(normalized)
+    else:
+        places = {
+            " ".join(destination.split()).casefold(): destination
+            for _origin, destination in FLETE_ROUTES.values()
+        }
+        place = places.get(normalized)
+    if place is None:
+        raise ValueError(f"Lugar de entrega no soportado: {requested}")
+    return place
+
+
 def _build_official_mobiliti(
     base: XlsxPackage,
     lines: Sequence[_OfficialPresentationLine],
@@ -2901,6 +2827,12 @@ def _build_official_mobiliti(
         raise ValueError("Presentacion Mobiliti inconsistente")
     writes: list[MobilitiCellWrite] = []
     bindings: list[PricingRowBinding] = []
+    base_editor = WorksheetEditor.from_xml(
+        base.parts[base.sheet_part("Mobiliti")]
+    )
+    volume_column, region_column = (
+        ("P", "S") if base_editor.layout.id == "v17" else ("K", "P")
+    )
     for position, (line, target_row) in enumerate(
         zip(lines, row_map.item_rows, strict=True),
         start=1,
@@ -2925,11 +2857,15 @@ def _build_official_mobiliti(
                     f"=Quotation!H{quotation_row}",
                 ),
                 MobilitiCellWrite(
-                    f"K{target_row}",
+                    f"{volume_column}{target_row}",
                     "formula",
                     f"=Quotation!I{quotation_row}",
                 ),
-                MobilitiCellWrite(f"P{target_row}", "text", line.region),
+                MobilitiCellWrite(
+                    f"{region_column}{target_row}",
+                    "text",
+                    line.region,
+                ),
             )
         )
         bindings.append(
@@ -2955,27 +2891,16 @@ def _build_official_mobiliti(
         writes,
     )
     editor = WorksheetEditor.from_xml(mutation.xml)
-    requested_delivery_place = safe_excel_text(
-        metadata.get("lugar_entrega")
-        or metadata.get("delivery_place")
-        or DEFAULT_DELIVERY_PLACE
+    composer_variant = _official_template_variant(base)
+    delivery_place = _official_delivery_place(
+        metadata,
+        variant=composer_variant,
     )
-    delivery_places = {
-        " ".join(destination.split()).casefold(): destination
-        for _origin, destination in FLETE_ROUTES.values()
-    }
-    delivery_place = delivery_places.get(
-        " ".join(requested_delivery_place.split()).casefold()
-    )
-    if delivery_place is None:
-        raise ValueError(
-            "Lugar de entrega no soportado para Mobiliti!K8: "
-            f"{requested_delivery_place}"
-        )
     write_official_currency_selector(
         editor,
         _official_quote_currency(metadata),
         delivery_place,
+        _mixed_metadata_discount_fraction(metadata),
     )
     return MobilitiSheetMutation(editor.to_xml(), mutation.row_map)
 
@@ -3046,7 +2971,7 @@ def _legacy_cotizacion_sections(
         metadata.get("description_language", metadata.get("idioma_descripcion", "es"))
     )
     section_order: OrderedDict[str, tuple[str, list[CotizacionProduct]]] = OrderedDict()
-    discount = Decimal(str(_discount_rate(metadata)))
+    discount = _mixed_metadata_discount_fraction(metadata)
     for line in lines:
         title, products = section_order.setdefault(
             line.section_id,
@@ -3134,7 +3059,7 @@ def _project_cotizacion_sections(
             metadata.get("idioma_descripcion", "es"),
         )
     )
-    discount = Decimal(str(_discount_rate(metadata)))
+    discount = _mixed_metadata_discount_fraction(metadata)
     consumed: set[str] = set()
     consumed_lumbro: set[str] = set()
     accessories_by_parent: dict[str, list[_OfficialPresentationLine]] = {}
@@ -3318,12 +3243,7 @@ def _build_official_cotizacion(
     metadata: dict[str, Any],
     quotation_rows: Mapping[str, int],
 ):
-    try:
-        base.sheet_part(CDMX_LUMBRO_SHEET)
-    except KeyError:
-        composer_variant = "official"
-    else:
-        composer_variant = "sunon_cdmx_v1c"
+    composer_variant = _official_template_variant(base)
     cotizacion_lines = _improve_official_cotizacion_images(lines, metadata)
     sections = _project_cotizacion_sections(
         cotizacion_lines,
@@ -3343,6 +3263,10 @@ def _build_official_cotizacion(
             address=safe_excel_text(metadata.get("direccion", "")),
             business_name=safe_excel_text(metadata.get("razon_social", "")),
             quote_currency=_official_quote_currency(metadata),
+            delivery_place=_official_delivery_place(
+                metadata,
+                variant=composer_variant,
+            ),
         ),
         sections=sections,
         composer_variant=composer_variant,
@@ -3356,18 +3280,6 @@ def _improve_official_cotizacion_images(
 ) -> tuple[_OfficialPresentationLine, ...]:
     """Mejora imágenes de Quotation sólo en Cotizacion; preserva catálogos."""
 
-    image_keys = {
-        "image_provider",
-        "proveedor_imagen",
-        "image_cleanup_strength",
-        "limpieza_imagen",
-        "image_background",
-        "fondo_imagen",
-        "image_prompt",
-        "prompt_imagen",
-    }
-    if not any(key in metadata for key in image_keys):
-        return tuple(lines)
     background = str(
         metadata.get("image_background", metadata.get("fondo_imagen", "white"))
     ).strip().lower()
@@ -5252,7 +5164,6 @@ def generate_quote(
         _contract_path_for_template(official_template)
     )
     base = XlsxPackage.read(official_template)
-    lumbro_prices = _load_lumbro_prices(official_template)
     if original_quotation_path is _ARGUMENT_OMITTED:
         original_source: Path | None = source_path
         normalized_original: bytes | None = normalized_source
@@ -5272,8 +5183,6 @@ def generate_quote(
     lines, needs = _official_presentation_lines(
         items,
         metadata,
-        source_path,
-        lumbro_prices,
         image_payloads,
     )
     if handed_off_rows is None:

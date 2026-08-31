@@ -30,6 +30,7 @@ from xml.etree import ElementTree as ET
 from openpyxl.formula.tokenizer import Token, Tokenizer, TokenizerError
 from openpyxl.utils.cell import column_index_from_string, get_column_letter
 
+from .local_files import local_files_preserved
 from .mobiliti_layout import MobilitiRowMap, SectionNeed
 from .ooxml_formula import translate_formula
 from .ooxml_package import (
@@ -61,6 +62,8 @@ from .quotation_sheets import (
 
 
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+X14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+XM = "http://schemas.microsoft.com/office/excel/2006/main"
 REL = OFFICE_DOCUMENT_RELATIONSHIPS
 PKG_REL = PACKAGE_RELATIONSHIPS
 CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
@@ -100,6 +103,58 @@ CANONICAL_COTIZACION_TOTAL_SPAN = (
 CANONICAL_COTIZACION_TERMS_START = 28
 CANONICAL_COTIZACION_CURRENCY_TERM_ROW = 33
 CANONICAL_COTIZACION_PRINT_END = 76
+
+
+@dataclass(frozen=True)
+class CotizacionLayoutContract:
+    """Filas y columnas firmadas de cada plantilla Cotizacion compatible."""
+
+    variant: str
+    total_start: int
+    total_row: int
+    terms_start: int
+    currency_term_row: int
+    delivery_term_row: int | None
+    print_end: int
+    price_column: str
+    global_discount: bool = False
+
+    @property
+    def total_span(self) -> int:
+        return self.total_row - self.total_start
+
+
+LEGACY_COTIZACION_LAYOUT = CotizacionLayoutContract(
+    variant="official",
+    total_start=CANONICAL_COTIZACION_TOTAL_START,
+    total_row=CANONICAL_COTIZACION_TOTAL_ROW,
+    terms_start=CANONICAL_COTIZACION_TERMS_START,
+    currency_term_row=CANONICAL_COTIZACION_CURRENCY_TERM_ROW,
+    delivery_term_row=None,
+    print_end=CANONICAL_COTIZACION_PRINT_END,
+    price_column="X",
+)
+V17_COTIZACION_LAYOUT = CotizacionLayoutContract(
+    variant="official_v17",
+    total_start=37,
+    total_row=41,
+    terms_start=45,
+    currency_term_row=50,
+    delivery_term_row=64,
+    print_end=93,
+    price_column="AA",
+    global_discount=True,
+)
+
+
+def _cotizacion_layout(variant: str) -> CotizacionLayoutContract:
+    if variant == "official_v17":
+        return V17_COTIZACION_LAYOUT
+    if variant in {"official", "sunon_cdmx_v1c"}:
+        return LEGACY_COTIZACION_LAYOUT
+    raise ValueError("Variante de compositor Cotizacion inválida")
+
+
 CANONICAL_MOBILITI_TOTAL_ROW = 573
 CANONICAL_MOBILITI_AUX_START = 574
 CANONICAL_MOBILITI_AUX_END = 610
@@ -117,6 +172,12 @@ FLETE_CATEGORY_ROWS = {
     17: ("Cocineta", Decimal("0.2"), Decimal("1790")),
     18: ("Pizarrones", Decimal("0.2"), Decimal("210")),
 }
+V17_FLETE_LOOKUP_ROWS = {
+    18: ("Bancos", Decimal("56")),
+    19: ("Cocineta", Decimal("1790")),
+    20: ("Pizarrones", Decimal("210")),
+    21: ("Escritorios-WorkStation", Decimal("980")),
+}
 FLETE_CATEGORY_LABEL_ROWS = {8: "Escritorios-WorkStation"}
 _COTIZACION_IMAGE_CELL_WIDTH_EMU = 5_019_675
 _COTIZACION_IMAGE_CELL_HEIGHT_EMU = 4_408_170
@@ -129,6 +190,14 @@ CDMX_LUMBRO_FIRST_PRODUCT_ROW = 4
 CDMX_LUMBRO_MIN_END_ROW = 28
 CDMX_LUMBRO_LAST_COLUMN = 16
 _CELL = re.compile(r"(?P<column>[A-Z]{1,3})(?P<row>[1-9][0-9]*)\Z")
+_TRANSLATABLE_RANGE_TOKEN = re.compile(
+    r"(?:(?:'(?:[^']|'')+'|[^'!]+)!)?"
+    r"(?:\$?[A-Z]{1,3}\$?[1-9][0-9]*"
+    r"(?::\$?[A-Z]{1,3}\$?[1-9][0-9]*)?"
+    r"|\$?[A-Z]{1,3}:\$?[A-Z]{1,3}"
+    r"|\$?[1-9][0-9]*:\$?[1-9][0-9]*)\Z",
+    re.IGNORECASE,
+)
 _SAFE_IMAGE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,180}\Z")
 _DANGEROUS_IMPORTED_FUNCTIONS = frozenset(
     {
@@ -228,6 +297,7 @@ class CotizacionMetadata:
     address: str = ""
     business_name: str = ""
     quote_currency: str = ""
+    delivery_place: str = ""
 
     def __post_init__(self) -> None:
         for value in (
@@ -238,6 +308,7 @@ class CotizacionMetadata:
             self.phone,
             self.address,
             self.business_name,
+            self.delivery_place,
         ):
             _validate_text(value, allow_empty=True)
         if self.quote_currency not in {"", "MXN", "USD", "EUR"}:
@@ -268,6 +339,12 @@ class CotizacionPriceTerm:
 @dataclass(frozen=True)
 class CotizacionFormulaContract:
     """Contrato tipado para enlazar F con Mobiliti y conservar la fórmula I."""
+
+    price_column: str = "X"
+
+    def __post_init__(self) -> None:
+        if self.price_column not in {"X", "AA"}:
+            raise ValueError("Columna de precio Cotizacion inválida")
 
     def product_formulas(
         self,
@@ -302,8 +379,7 @@ class CotizacionFormulaContract:
                     formula_length,
                 )
                 expected_f_tokens.append((Token.OP_IN, "", "+"))
-            price_column = "X"
-            reference = f"Mobiliti!{price_column}{term.mobiliti_row}"
+            reference = f"Mobiliti!{self.price_column}{term.mobiliti_row}"
             formula_length = _append_bounded_formula(
                 parts,
                 reference,
@@ -569,7 +645,11 @@ class CotizacionSheetMutation:
             )
         ):
             raise TypeError("Filas Mobiliti por producto Cotizacion inválidas")
-        if self.composer_variant not in {"official", "sunon_cdmx_v1c"}:
+        if self.composer_variant not in {
+            "official",
+            "official_v17",
+            "sunon_cdmx_v1c",
+        }:
             raise ValueError("Variante de compositor Cotizacion inválida")
         if self.quote_currency not in {"", "MXN", "USD", "EUR"}:
             raise ValueError("Moneda de mutación Cotizacion inválida")
@@ -583,7 +663,7 @@ class CotizacionSheetMutation:
             != self.section_subtotal_rows
         ):
             raise TypeError("Filas de subtotal por sección inválidas")
-        if self.composer_variant == "official" and self.section_subtotal_rows:
+        if self.composer_variant != "sunon_cdmx_v1c" and self.section_subtotal_rows:
             raise ValueError("La plantilla oficial no admite subtotales CDMX")
         object.__setattr__(
             self,
@@ -677,8 +757,6 @@ class CotizacionSheetEditor:
             raise TypeError("Metadata de Cotizacion inválida")
         if isinstance(sections, (str, bytes)) or not isinstance(sections, Sequence):
             raise TypeError("Secciones Cotizacion inválidas")
-        if composer_variant not in {"official", "sunon_cdmx_v1c"}:
-            raise ValueError("Variante de compositor Cotizacion inválida")
         frozen_sections = tuple(sections)
         if not all(isinstance(section, CotizacionSection) for section in frozen_sections):
             raise TypeError("Secciones Cotizacion inválidas")
@@ -692,17 +770,45 @@ class CotizacionSheetEditor:
             raise ValueError("item_key duplicado en Cotizacion")
 
         rows = {int(row.attrib["r"]): row for row in self.sheet_data.findall(f"{{{MAIN}}}row")}
+        if (
+            composer_variant == "official"
+            and 17 in rows
+            and _formula_text(rows[17], "F17") == "=Mobiliti!AA14"
+        ):
+            composer_variant = "official_v17"
+        layout = _cotizacion_layout(composer_variant)
         try:
             category_template = rows[16]
             product_template = rows[17]
-            total_templates = tuple(rows[number] for number in range(20, 25))
-            gap_templates = tuple(rows[number] for number in range(25, 28))
+            total_templates = tuple(
+                rows[number]
+                for number in range(layout.total_start, layout.total_row + 1)
+            )
+            gap_templates = tuple(
+                rows[number]
+                for number in range(layout.total_row + 1, layout.terms_start)
+            )
         except KeyError as error:
             raise ValueError("Bloques oficiales de Cotizacion incompletos") from error
+        product_g_formula = (
+            _formula_text(product_template, "G17")
+            if layout.global_discount
+            else None
+        )
         product_h_formula = _formula_text(product_template, "H17")
         product_j_formula = _formula_text(product_template, "J17")
-        subtotal_formula = _formula_text(total_templates[0], "H20")
-        if None in {product_h_formula, product_j_formula, subtotal_formula}:
+        subtotal_formula = _formula_text(
+            total_templates[0],
+            f"H{layout.total_start}",
+        )
+        required_formulas = {
+            product_h_formula,
+            product_j_formula,
+            subtotal_formula,
+        }
+        if layout.global_discount:
+            required_formulas.add(product_g_formula)
+        if None in required_formulas:
             raise ValueError("Fórmulas oficiales de Cotizacion incompletas")
         section_subtotal_template: ET.Element | None = None
         if composer_variant == "sunon_cdmx_v1c":
@@ -721,14 +827,21 @@ class CotizacionSheetEditor:
                 )
         official_f = _require_cell(product_template, "F17")
         official_i = _require_cell(product_template, "I17")
+        official_i_valid = (
+            _formula_text(product_template, "I17") == "=F17-H17"
+            and official_i.findtext(f"{{{MAIN}}}v") == "0"
+            if layout.global_discount
+            else _formula_text(product_template, "I17") is None
+            and official_i.find(f"{{{MAIN}}}v") is None
+        )
         if (
-            _formula_text(product_template, "F17") != "=Mobiliti!X14"
+            _formula_text(product_template, "F17")
+            != f"=Mobiliti!{layout.price_column}14"
             or official_f.findtext(f"{{{MAIN}}}v") != "0"
-            or _formula_text(product_template, "I17") is not None
-            or official_i.find(f"{{{MAIN}}}v") is not None
+            or not official_i_valid
         ):
             raise ValueError("Firma oficial F/I inesperada")
-        formula_contract = CotizacionFormulaContract()
+        formula_contract = CotizacionFormulaContract(layout.price_column)
 
         self._write_metadata(metadata)
         preserved_headers = [row for number, row in sorted(rows.items()) if number < 16]
@@ -793,7 +906,19 @@ class CotizacionSheetEditor:
                         target_row=target_row,
                     )
                     _set_formula(row, f"F{target_row}", contract_formulas["F"])
-                if target_row == first_discount_row:
+                if layout.global_discount:
+                    assert product_g_formula is not None
+                    _set_formula(
+                        row,
+                        f"G{target_row}",
+                        translate_formula(
+                            product_g_formula,
+                            origin="G17",
+                            target=f"G{target_row}",
+                            sheet="Cotizacion",
+                        ),
+                    )
+                elif target_row == first_discount_row:
                     _set_number(row, f"G{target_row}", product.discount)
                 else:
                     _set_formula(
@@ -877,14 +1002,18 @@ class CotizacionSheetEditor:
                 cursor += 1
 
         total_start = cursor
-        total_delta = total_start - CANONICAL_COTIZACION_TOTAL_START
+        total_delta = total_start - layout.total_start
         totals = [
             _clone_row_region(row, source, source + total_delta, last_column=10)
-            for source, row in zip(range(20, 25), total_templates, strict=True)
+            for source, row in zip(
+                range(layout.total_start, layout.total_row + 1),
+                total_templates,
+                strict=True,
+            )
         ]
         subtotal_row = total_start
-        total_row = CANONICAL_COTIZACION_TOTAL_ROW + total_delta
-        if total_row + (CANONICAL_COTIZACION_PRINT_END - CANONICAL_COTIZACION_TOTAL_ROW) > XLSX_MAX_ROWS:
+        total_row = layout.total_row + total_delta
+        if total_row + (layout.print_end - layout.total_row) > XLSX_MAX_ROWS:
             raise ValueError("Cotizacion excede la capacidad física de XLSX")
         if composer_variant == "sunon_cdmx_v1c":
             subtotal_references = ",".join(
@@ -898,23 +1027,17 @@ class CotizacionSheetEditor:
                 f"=SUM({subtotal_references})",
             )
         else:
-            translated_subtotal = translate_formula(
-                subtotal_formula,
-                origin="H20",
-                target=f"H{subtotal_row}",
-                sheet="Cotizacion",
-            )
             subtotal_ranges = [
                 token
-                for token in _formula_range_tokens(translated_subtotal[1:])
+                for token in _formula_range_tokens(subtotal_formula[1:])
                 if re.fullmatch(r"J[1-9][0-9]*:J[1-9][0-9]*", token)
             ]
             if len(subtotal_ranges) != 1:
                 raise ValueError("Rango subtotal oficial Cotizacion inesperado")
             translated_subtotal = translate_formula(
                 subtotal_formula,
-                origin="H20",
-                target=f"H{subtotal_row}",
+                origin=f"H{layout.total_start}",
+                target=f"H{layout.total_start}",
                 range_overrides={
                     subtotal_ranges[0]: f"J{product_rows[0]}:J{product_rows[-1]}"
                 },
@@ -929,13 +1052,13 @@ class CotizacionSheetEditor:
         for offset, row in enumerate(totals):
             target = total_start + offset
             if offset != 0:
-                source = CANONICAL_COTIZACION_TOTAL_START + offset
+                source = layout.total_start + offset
                 source_formula = _formula_text(total_templates[offset], f"H{source}")
                 if source_formula is not None:
                     if offset == 2:
                         source_formula = (
-                            f"=H{CANONICAL_COTIZACION_TOTAL_START}"
-                            f"+H{CANONICAL_COTIZACION_TOTAL_START + 1}"
+                            f"=H{layout.total_start}"
+                            f"+H{layout.total_start + 1}"
                         )
                     _set_formula(
                         row,
@@ -944,19 +1067,31 @@ class CotizacionSheetEditor:
                             source_formula,
                             origin=f"H{source}",
                             target=f"H{target}",
+                            range_overrides=(
+                                {
+                                    f"$N${layout.total_start + 2}":
+                                    f"$N${total_start + 2}"
+                                }
+                                if layout.global_discount and offset == 1
+                                else None
+                            ),
                             sheet="Cotizacion",
                         ),
                     )
         dynamic_rows.extend(totals)
         dynamic_rows.extend(
             _clone_row_region(row, source, source + total_delta, last_column=10)
-            for source, row in zip(range(25, 28), gap_templates, strict=True)
+            for source, row in zip(
+                range(layout.total_row + 1, layout.terms_start),
+                gap_templates,
+                strict=True,
+            )
         )
 
         terms_rows = [
             _clone_row_region(row, number, number + total_delta, last_column=10)
             for number, row in sorted(rows.items())
-            if number >= CANONICAL_COTIZACION_TERMS_START
+            if number >= layout.terms_start
         ]
         if metadata.quote_currency:
             currency_name = {
@@ -964,7 +1099,7 @@ class CotizacionSheetEditor:
                 "USD": "Dólares Estadounidenses",
                 "EUR": "Euros",
             }[metadata.quote_currency]
-            target = CANONICAL_COTIZACION_CURRENCY_TERM_ROW + total_delta
+            target = layout.currency_term_row + total_delta
             currency_row = next(
                 row for row in terms_rows if int(row.attrib["r"]) == target
             )
@@ -978,7 +1113,21 @@ class CotizacionSheetEditor:
                     "referencia el tipo de cambio bancario."
                 ),
             )
-        sidecars = _sidecar_cells(rows, first_row=16, first_sidecar_column=11)
+        if layout.delivery_term_row is not None:
+            target = layout.delivery_term_row + total_delta
+            delivery_row = next(
+                row for row in terms_rows if int(row.attrib["r"]) == target
+            )
+            _set_inline_string(
+                delivery_row,
+                f"D{target}",
+                metadata.delivery_place,
+            )
+        sidecars = _shift_cotizacion_sidecars(
+            _sidecar_cells(rows, first_row=16, first_sidecar_column=11),
+            layout=layout,
+            total_delta=total_delta,
+        )
         rebuilt = preserved_headers + dynamic_rows + terms_rows
         _apply_sidecars(rebuilt, sidecars)
         rebuilt.sort(key=lambda row: int(row.attrib["r"]))
@@ -987,6 +1136,12 @@ class CotizacionSheetEditor:
         _rebuild_cotizacion_merges(
             self.root,
             dynamic_merges=dynamic_merges,
+            total_delta=total_delta,
+            layout=layout,
+        )
+        _shift_cotizacion_delivery_validation(
+            self.root,
+            layout=layout,
             total_delta=total_delta,
         )
         _update_dimension(self.root, total_delta)
@@ -1096,11 +1251,17 @@ def build_allowlisted_mutation(
     _validate_declared_sheet_surfaces(base, request)
 
     cotizacion = merge_cotizacion_product_images(base, request.cotizacion)
+    cotizacion_variant = request.cotizacion.composer_variant
     mobiliti_part = base.sheet_part("Mobiliti")
     cotizacion_part = base.sheet_part("Cotizacion")
+    mobiliti_xml = _translate_mobiliti_delivery_reference(
+        request.mobiliti.xml,
+        variant=cotizacion_variant,
+        terms_row_delta=request.cotizacion.terms_row_delta,
+    )
     replacements: dict[str, bytes] = {
         mobiliti_part: _serialize_xml_like_source(
-            request.mobiliti.xml,
+            mobiliti_xml,
             base.parts[mobiliti_part],
             "Mobiliti",
         ),
@@ -1137,7 +1298,11 @@ def build_allowlisted_mutation(
     fletes_part = base.sheet_part("Fletes")
     estrategia_part = base.sheet_part("Estrategia Comercial ")
     replacements[fletes_part] = _serialize_xml_like_source(
-        _translate_fletes(base.parts[fletes_part], request.mobiliti.row_map),
+        _translate_fletes(
+            base.parts[fletes_part],
+            request.mobiliti.row_map,
+            variant=cotizacion_variant,
+        ),
         base.parts[fletes_part],
         "Fletes",
     )
@@ -1146,10 +1311,22 @@ def build_allowlisted_mutation(
             base.parts[estrategia_part],
             request.mobiliti.row_map,
             request.cotizacion.total_row,
+            variant=cotizacion_variant,
         ),
         base.parts[estrategia_part],
         "Estrategia Comercial",
     )
+    control_part: str | None = None
+    if cotizacion_variant == "official_v17":
+        control_part = base.sheet_part("Control Administrativo")
+        replacements[control_part] = _serialize_xml_like_source(
+            _translate_control_administrativo(
+                base.parts[control_part],
+                request.cotizacion.total_row,
+            ),
+            base.parts[control_part],
+            "Control Administrativo",
+        )
 
     sheet_additions = tuple(
         item
@@ -1166,6 +1343,7 @@ def build_allowlisted_mutation(
             base,
             sheet_additions,
             cotizacion_terms_delta=request.cotizacion.terms_row_delta,
+            cotizacion_variant=cotizacion_variant,
             extra_additions=cotizacion.related_additions,
             extra_content_types=cotizacion.related_content_types,
         )
@@ -1206,6 +1384,8 @@ def build_allowlisted_mutation(
         *mobiliti_drawing_replacements,
         *validated_addition_replacements,
     }
+    if control_part is not None:
+        fixed_replacements.add(control_part)
     if cantidades_lumbro_part is not None:
         fixed_replacements.add(cantidades_lumbro_part)
     if calc_chain_part is not None:
@@ -1286,7 +1466,15 @@ def verify_output_contract(
     calc_chain_part = _calc_chain_part(package)
     if calc_chain_part is None:
         raise ValueError("La salida perdio calcChain")
-    for sheet_name in ("Mobiliti", "Cotizacion"):
+    recalculated_sheets = [
+        "Mobiliti",
+        "Cotizacion",
+        "Fletes",
+        "Estrategia Comercial ",
+    ]
+    if "Control Administrativo" in states:
+        recalculated_sheets.append("Control Administrativo")
+    for sheet_name in recalculated_sheets:
         _validate_calc_chain_sheet_coordinates(
             package.parts[calc_chain_part],
             sheet_id=_workbook_sheet_id(package, sheet_name),
@@ -1303,54 +1491,167 @@ def verify_output_contract(
         raise ValueError("La salida alteró el conjunto exacto de nombres definidos")
     if _formula_at(package, "Fletes", "D19") != f"Mobiliti!H{row_map.total_row}":
         raise ValueError("Referencia Fletes!D19 desactualizada")
-    if _formula_at(package, "Estrategia Comercial ", "D59") != (
-        f"Cotizacion!H{cotizacion_total_row}"
-    ):
-        raise ValueError("Referencia Estrategia!D59 desactualizada")
+    variant = _cotizacion_composer_variant(package)
     estrategia = ET.fromstring(package.parts[package.sheet_part("Estrategia Comercial ")])
-    for row in range(7, 38):
-        for column in ("B", "C"):
-            formula = _formula_in_root(estrategia, f"{column}{row}")
-            if formula is None or f"${row_map.last_product_row}" not in formula:
+    if variant == "official_v17":
+        layout = _cotizacion_layout(variant)
+        assert layout.delivery_term_row is not None
+        delivery_row = (
+            layout.delivery_term_row
+            + cotizacion_total_row
+            - layout.total_row
+        )
+        if _formula_at(package, "Mobiliti", "P8") != (
+            f"Cotizacion!$D${delivery_row}"
+        ):
+            raise ValueError("Referencia Mobiliti!P8 desactualizada")
+        cotizacion = ET.fromstring(
+            package.parts[package.sheet_part("Cotizacion")]
+        )
+        delivery_sqref = _delivery_validation_sqref(cotizacion)
+        if (delivery_sqref.text or "").strip() != f"D{delivery_row}":
+            raise ValueError("Lista de lugar de entrega desactualizada")
+        estrategia_totals = {
+            "B62": cotizacion_total_row - 3,
+            "B67": cotizacion_total_row - 3,
+            "B68": cotizacion_total_row - 2,
+            "B69": cotizacion_total_row - 1,
+            "B70": cotizacion_total_row,
+        }
+        for coordinate, expected_row in estrategia_totals.items():
+            if _formula_in_root(estrategia, coordinate) != f"Cotizacion!H{expected_row}":
+                raise ValueError(
+                    f"Referencia Estrategia!{coordinate} desactualizada"
+                )
+        for coordinate in (
+            *(f"{column}{row}" for row in range(6, 40) for column in ("B", "C")),
+            "B112",
+            "B113",
+            "B115",
+        ):
+            formula = _formula_in_root(estrategia, coordinate)
+            if formula is None:
+                raise ValueError(f"Fórmula Estrategia!{coordinate} ausente")
+            dynamic_ranges = [
+                token
+                for token in _formula_range_tokens(formula)
+                if re.fullmatch(
+                    r"Mobiliti!\$?[A-Z]{1,3}\$14:"
+                    r"\$?[A-Z]{1,3}\$[1-9][0-9]*",
+                    token,
+                )
+            ]
+            if dynamic_ranges and any(
+                not token.endswith(f"${row_map.last_product_row}")
+                for token in dynamic_ranges
+            ):
                 raise ValueError("Rangos de Estrategia Comercial desactualizados")
+        fletes = ET.fromstring(package.parts[package.sheet_part("Fletes")])
+        for coordinate in ("B61", "B67"):
+            formula = _formula_in_root(fletes, coordinate) or ""
+            if f"${row_map.last_product_row}" not in formula:
+                raise ValueError(f"Rango Fletes!{coordinate} desactualizado")
+        control = ET.fromstring(
+            package.parts[package.sheet_part("Control Administrativo")]
+        )
+        if _formula_in_root(control, "E3") != (
+            f"Cotizacion!H{cotizacion_total_row - 2}"
+        ) or _formula_in_root(control, "E4") != (
+            f"Cotizacion!$H${cotizacion_total_row}"
+        ):
+            raise ValueError("Referencias de Control Administrativo desactualizadas")
+        control_balance = _formula_in_root(control, "B14") or ""
+        if f"Cotizacion!H{cotizacion_total_row - 2}" not in control_balance:
+            raise ValueError("Balance de Control Administrativo desactualizado")
+    else:
+        if _formula_at(package, "Estrategia Comercial ", "D59") != (
+            f"Cotizacion!H{cotizacion_total_row}"
+        ):
+            raise ValueError("Referencia Estrategia!D59 desactualizada")
+        for row in range(7, 38):
+            for column in ("B", "C"):
+                formula = _formula_in_root(estrategia, f"{column}{row}")
+                if formula is None or f"${row_map.last_product_row}" not in formula:
+                    raise ValueError("Rangos de Estrategia Comercial desactualizados")
 
     mobiliti = ET.fromstring(package.parts[package.sheet_part("Mobiliti")])
-    if _formula_in_root(mobiliti, "K6") is None:
-        raise ValueError("La fórmula oficial Mobiliti!K6 fue eliminada")
+    mobiliti_layout = WorksheetEditor.from_xml(
+        package.parts[package.sheet_part("Mobiliti")]
+    ).layout
+    selector_formula = "P6" if mobiliti_layout.id == "v17" else "K6"
+    if _formula_in_root(mobiliti, selector_formula) is None:
+        raise ValueError(
+            f"La fórmula oficial Mobiliti!{selector_formula} fue eliminada"
+        )
     first_product_row = row_map.sections[0].product_start
     last_product_row = row_map.last_product_row
     for target_row in row_map.item_rows:
-        for column in ("W", "X", "Y", "AB", "AC", "AD", "AE"):
+        formula_columns = (
+            ("Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL")
+            if mobiliti_layout.id == "v17"
+            else ("W", "X", "Y", "AB", "AC", "AD", "AE")
+        )
+        for column in formula_columns:
             if _formula_in_root(mobiliti, f"{column}{target_row}") is None:
                 raise ValueError(f"Fórmula oficial Mobiliti!{column}{target_row} ausente")
-        x_formula = _formula_in_root(mobiliti, f"X{target_row}") or ""
-        expected_x_formula = (
-            f"_xlfn.MINIFS($W${first_product_row}:$W${last_product_row},"
-            f"$D${first_product_row}:$D${last_product_row},D{target_row},"
-            f"$H${first_product_row}:$H${last_product_row},"
-            f"_xlfn.MAXIFS($H${first_product_row}:$H${last_product_row},"
-            f"$D${first_product_row}:$D${last_product_row},D{target_row}))"
-        )
-        if x_formula != expected_x_formula:
-            raise ValueError(
-                f"Precio uniforme Mobiliti!X{target_row} desactualizado"
+        if mobiliti_layout.id == "v17":
+            uniform_formula = _formula_in_root(mobiliti, f"AA{target_row}") or ""
+            expected_uniform = (
+                f"IF(Z{target_row}>=Y{target_row},"
+                f"_xlfn.MINIFS($Z${first_product_row}:$Z${last_product_row},"
+                f"$D${first_product_row}:$D${last_product_row},D{target_row},"
+                f"$H${first_product_row}:$H${last_product_row},"
+                f"_xlfn.MAXIFS($H${first_product_row}:$H${last_product_row},"
+                f"$D${first_product_row}:$D${last_product_row},D{target_row})),"
+                '"NO SE ESTA RESPETANDO EL MARGEN")'
             )
-        if _formula_in_root(mobiliti, f"Y{target_row}") != (
-            f"(X{target_row}*H{target_row})"
-        ):
-            raise ValueError(f"Importe uniforme Mobiliti!Y{target_row} desactualizado")
-        expected_downstream = {
-            "AB": f"X{target_row}*AA{target_row}",
-            "AC": (
-                f'IF(AA{target_row}>Z{target_row},"ERROR",'
-                f"(X{target_row}-AB{target_row}))"
-            ),
-            "AD": f"AC{target_row}*H{target_row}",
-            "AE": (
-                f"IF(A{target_row + 1}=TRUE,MAX(0,"
-                f'1-(AF{target_row}/X{target_row})),"NA")'
-            ),
-        }
+            if uniform_formula != expected_uniform:
+                raise ValueError(
+                    f"Precio uniforme Mobiliti!AA{target_row} desactualizado"
+                )
+            expected_downstream = {
+                "AB": f"IFERROR(AA{target_row}*H{target_row},0)",
+                "AE": f"IFERROR(AA{target_row}*AD{target_row},0)",
+                "AF": (
+                    f'IF($E$5>$E$6,"ERROR",AA{target_row}-AE{target_row})'
+                ),
+                "AG": f"AF{target_row}*H{target_row}",
+                "AH": (
+                    f"IF(A{target_row + 1}=TRUE,MAX(0,"
+                    f'1-(AI{target_row}/Z{target_row})),"NA")'
+                ),
+            }
+        else:
+            uniform_formula = _formula_in_root(mobiliti, f"X{target_row}") or ""
+            expected_uniform = (
+                f"_xlfn.MINIFS($W${first_product_row}:$W${last_product_row},"
+                f"$D${first_product_row}:$D${last_product_row},D{target_row},"
+                f"$H${first_product_row}:$H${last_product_row},"
+                f"_xlfn.MAXIFS($H${first_product_row}:$H${last_product_row},"
+                f"$D${first_product_row}:$D${last_product_row},D{target_row}))"
+            )
+            if uniform_formula != expected_uniform:
+                raise ValueError(
+                    f"Precio uniforme Mobiliti!X{target_row} desactualizado"
+                )
+            if _formula_in_root(mobiliti, f"Y{target_row}") != (
+                f"(X{target_row}*H{target_row})"
+            ):
+                raise ValueError(
+                    f"Importe uniforme Mobiliti!Y{target_row} desactualizado"
+                )
+            expected_downstream = {
+                "AB": f"X{target_row}*AA{target_row}",
+                "AC": (
+                    f'IF(AA{target_row}>Z{target_row},"ERROR",'
+                    f"(X{target_row}-AB{target_row}))"
+                ),
+                "AD": f"AC{target_row}*H{target_row}",
+                "AE": (
+                    f"IF(A{target_row + 1}=TRUE,MAX(0,"
+                    f'1-(AF{target_row}/X{target_row})),"NA")'
+                ),
+            }
         for column, expected_formula in expected_downstream.items():
             if _formula_in_root(mobiliti, f"{column}{target_row}") != expected_formula:
                 raise ValueError(
@@ -1379,6 +1680,7 @@ def merge_cotizacion_product_images(
 
     if mutation.related_parts or mutation.related_additions:
         raise ValueError("Cotizacion ya contiene partes relacionadas no verificadas")
+    layout = _cotizacion_layout(mutation.composer_variant)
     image_rows = tuple(image.target_row for image in mutation.images)
     if not set(image_rows).issubset(mutation.product_rows):
         raise ValueError("Las imágenes Cotizacion deben pertenecer a filas de producto")
@@ -1427,10 +1729,15 @@ def merge_cotizacion_product_images(
             raise ValueError("Ancla de dibujo Cotizacion inválida")
         worksheet_row = int(row_node.text) + 1
         worksheet_column = int(column_node.text) + 1
-        if 16 <= worksheet_row <= 18 and 1 <= worksheet_column <= 10:
+        if (
+            CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW
+            <= worksheet_row
+            < layout.total_start
+            and 1 <= worksheet_column <= 10
+        ):
             drawing_root.remove(anchor)
             continue
-        if worksheet_row >= CANONICAL_COTIZACION_TERMS_START:
+        if worksheet_row >= layout.terms_start:
             _shift_anchor_rows(anchor, mutation.terms_row_delta)
 
     related_additions: dict[str, bytes] = {}
@@ -1579,8 +1886,47 @@ def _stable_image_relationship_type(drawing_rels: ET.Element) -> str:
     return f"{OFFICE_DOCUMENT_RELATIONSHIPS}/image"
 
 
-def _translate_fletes(payload: bytes, row_map: MobilitiRowMap) -> bytes:
+def _translate_fletes(
+    payload: bytes,
+    row_map: MobilitiRowMap,
+    *,
+    variant: str = "official",
+) -> bytes:
     root = _worksheet_root(payload, "Fletes")
+    if variant == "official_v17":
+        if _formula_in_root(root, "D19") != "Mobiliti!H573":
+            raise ValueError("Fórmula oficial inesperada: Fletes!D19")
+        sheet_data = root.find(f"{{{MAIN}}}sheetData")
+        if sheet_data is None:
+            raise ValueError("Fletes no contiene sheetData")
+        rows = {
+            int(row.attrib["r"]): row
+            for row in sheet_data.findall(f"{{{MAIN}}}row")
+        }
+        if not set(V17_FLETE_LOOKUP_ROWS).issubset(rows):
+            raise ValueError("Filas de lookup Fletes v17 incompletas")
+        for row, (category, installation) in V17_FLETE_LOOKUP_ROWS.items():
+            _set_inline_string(rows[row], f"M{row}", category)
+            installation_text = format(installation, "f")
+            _set_formula(
+                rows[row],
+                f"N{row}",
+                (
+                    f"=IF(Mobiliti!$P$4=TRUE,"
+                    f"({installation_text}/Mobiliti!$P$6),"
+                    f"{installation_text})"
+                ),
+            )
+            _set_inline_string(rows[row], f"Q{row}", category)
+            _set_number(rows[row], f"R{row}", Decimal("2"))
+        _translate_dynamic_financial_formulas(
+            root,
+            sheet="Fletes",
+            row_map=row_map,
+        )
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    if variant not in {"official", "sunon_cdmx_v1c"}:
+        raise ValueError("Variante Fletes inválida")
     sheet_data = root.find(f"{{{MAIN}}}sheetData")
     if sheet_data is None:
         raise ValueError("Fletes no contiene sheetData")
@@ -1784,15 +2130,29 @@ def _validate_exact_mobiliti_surface(
         SectionNeed(section.id, section.title, section.item_count)
         for section in row_map.sections
     ]
+    official_payload = base.parts[base.sheet_part("Mobiliti")]
+    official_editor = WorksheetEditor.from_xml(official_payload)
     input_kinds = {
         "D": ("text", "formula"),
         "E": ("text",),
         "F": ("text",),
         "H": ("number", "formula"),
         "J": ("number", "formula", "text"),
-        "K": ("text", "number", "formula"),
-        "P": ("text",),
     }
+    if official_editor.layout.id == "v17":
+        input_kinds.update(
+            {
+                "P": ("text", "number", "formula"),
+                "S": ("text",),
+            }
+        )
+    else:
+        input_kinds.update(
+            {
+                "K": ("text", "number", "formula"),
+                "P": ("text",),
+            }
+        )
     writes: list[MobilitiCellWrite] = []
     for row in row_map.item_rows:
         for column, allowed_kinds in input_kinds.items():
@@ -1810,37 +2170,42 @@ def _validate_exact_mobiliti_surface(
             if kind is not None:
                 writes.append(MobilitiCellWrite(coordinate, kind, value))
 
-    official_payload = base.parts[base.sheet_part("Mobiliti")]
     expected = build_mobiliti_sheet(official_payload, needs, writes)
     if expected.row_map != row_map:
         raise ValueError("Mobiliti no cumple el contrato exacto de layout")
     editor = WorksheetEditor.from_xml(expected.xml)
     selector_writes: list[MobilitiCellWrite] = []
-    for coordinate, kind in (("K4", "boolean"), ("K8", "text")):
+    selector_contract = (
+        (("P4", "boolean"),)
+        if official_editor.layout.id == "v17"
+        else (("K4", "boolean"), ("K8", "text"))
+    )
+    for coordinate, kind in selector_contract:
         cell = _cell_in_root(candidate, coordinate)
         if cell is None:
             raise ValueError(f"Mobiliti no cumple el contrato exacto: {coordinate}")
         value = _exact_typed_value(cell, kind, allow_blank=False)
         selector_writes.append(MobilitiCellWrite(coordinate, kind, value))
+    if official_editor.layout.id == "v17":
+        candidate_discount = _cell_in_root(candidate, "AD13")
+        expected_discount = _cell_in_root(editor.root, "AD13")
+        if candidate_discount is None or expected_discount is None:
+            raise ValueError("Mobiliti no cumple el contrato exacto: AD13")
+        if _xml_signature(candidate_discount) != _xml_signature(expected_discount):
+            discount = _exact_typed_value(
+                candidate_discount,
+                "number",
+                allow_blank=False,
+            )
+            selector_writes.append(
+                MobilitiCellWrite("AD13", "number", discount)
+            )
     editor.set_typed_values(selector_writes)
     _assert_exact_worksheet(editor.root, candidate, "Mobiliti")
 
 
 _COTIZACION_POSITIVE_DECIMAL = (
     r"(?:[1-9][0-9]*(?:\.[0-9]*[1-9])?|0\.[0-9]*[1-9])"
-)
-_COTIZACION_PRICE_TERM = re.compile(
-    rf"Mobiliti!X(?P<row>[1-9][0-9]*)"
-    rf"(?:\*(?P<numerator>{_COTIZACION_POSITIVE_DECIMAL}))?"
-    rf"(?:/(?P<denominator>{_COTIZACION_POSITIVE_DECIMAL}))?"
-)
-_COTIZACION_COMPOSED_PRINCIPAL = re.compile(
-    r"Mobiliti!X(?P<row>[1-9][0-9]*)"
-)
-_COTIZACION_COMPOSED_COMPLEMENT = re.compile(
-    r"Mobiliti!X(?P<row>[1-9][0-9]*)"
-    r"\*Mobiliti!H(?P<quantity_row>[1-9][0-9]*)"
-    r"/Mobiliti!H(?P<principal_row>[1-9][0-9]*)"
 )
 _COTIZACION_DESCRIPTION_FORMULA = re.compile(
     r"=Quotation!D(?P<row>[1-9][0-9]*)\Z"
@@ -1866,13 +2231,30 @@ def _validate_cotizacion_description_formula(formula: str) -> int:
 
 def _cotizacion_price_terms_from_formula(
     formula: str,
+    *,
+    price_column: str = "X",
 ) -> tuple[CotizacionPriceTerm, ...]:
     if not isinstance(formula, str) or not formula:
         raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
+    if price_column not in {"X", "AA"}:
+        raise ValueError("Columna de precio Cotizacion inválida")
+    price_term = re.compile(
+        rf"Mobiliti!{price_column}(?P<row>[1-9][0-9]*)"
+        rf"(?:\*(?P<numerator>{_COTIZACION_POSITIVE_DECIMAL}))?"
+        rf"(?:/(?P<denominator>{_COTIZACION_POSITIVE_DECIMAL}))?"
+    )
+    composed_principal = re.compile(
+        rf"Mobiliti!{price_column}(?P<row>[1-9][0-9]*)"
+    )
+    composed_complement = re.compile(
+        rf"Mobiliti!{price_column}(?P<row>[1-9][0-9]*)"
+        r"\*Mobiliti!H(?P<quantity_row>[1-9][0-9]*)"
+        r"/Mobiliti!H(?P<principal_row>[1-9][0-9]*)"
+    )
     raw_terms = formula.split("+")
     terms: list[CotizacionPriceTerm] = []
     principal_match = (
-        _COTIZACION_COMPOSED_PRINCIPAL.fullmatch(raw_terms[0])
+        composed_principal.fullmatch(raw_terms[0])
         if len(raw_terms) > 1
         else None
     )
@@ -1882,7 +2264,7 @@ def _cotizacion_price_terms_from_formula(
             raise ValueError("Cotizacion no cumple el contrato exacto de fórmulas")
         terms.append(CotizacionPriceTerm(principal_row))
         for raw_term in raw_terms[1:]:
-            match = _COTIZACION_COMPOSED_COMPLEMENT.fullmatch(raw_term)
+            match = composed_complement.fullmatch(raw_term)
             if (
                 match is None
                 or match.group("row") != match.group("quantity_row")
@@ -1894,7 +2276,7 @@ def _cotizacion_price_terms_from_formula(
             terms.append(CotizacionPriceTerm(int(match.group("row"))))
     else:
         for raw_term in raw_terms:
-            match = _COTIZACION_PRICE_TERM.fullmatch(raw_term)
+            match = price_term.fullmatch(raw_term)
             if match is None:
                 raise ValueError(
                     "Cotizacion no cumple el contrato exacto de fórmulas"
@@ -1907,7 +2289,7 @@ def _cotizacion_price_terms_from_formula(
                 )
             )
     result = tuple(terms)
-    expected = CotizacionFormulaContract().product_formulas(
+    expected = CotizacionFormulaContract(price_column).product_formulas(
         target_row=1,
         price_terms=result,
     )["F"][1:]
@@ -1924,8 +2306,14 @@ def _cotizacion_composer_variant(base: XlsxPackage) -> str:
     try:
         base.sheet_part(CDMX_LUMBRO_SHEET)
     except KeyError:
+        pass
+    else:
+        return "sunon_cdmx_v1c"
+    try:
+        base.sheet_part("Control Administrativo")
+    except KeyError:
         return "official"
-    return "sunon_cdmx_v1c"
+    return "official_v17"
 
 
 def _validate_exact_cotizacion_surface(
@@ -1951,12 +2339,20 @@ def _validate_exact_cotizacion_surface(
         or product_count_invalid
     ):
         raise ValueError("Cotizacion no cumple el contrato exacto de filas de producto")
-    if mutation.terms_row_delta != mutation.total_row - CANONICAL_COTIZACION_TOTAL_ROW:
+    expected_variant = _cotizacion_composer_variant(base)
+    layout = _cotizacion_layout(expected_variant)
+    global_discount_formula = (
+        _formula_at(base, "Cotizacion", "G17")
+        if layout.global_discount
+        else None
+    )
+    if layout.global_discount and not global_discount_formula:
+        raise ValueError("Fórmula oficial de descuento global ausente")
+    if mutation.terms_row_delta != mutation.total_row - layout.total_row:
         raise ValueError("Cotizacion no cumple el contrato exacto de términos")
-    subtotal_row = mutation.total_row - CANONICAL_COTIZACION_TOTAL_SPAN
+    subtotal_row = mutation.total_row - layout.total_span
     if subtotal_row <= CANONICAL_COTIZACION_FIRST_DYNAMIC_ROW:
         raise ValueError("Cotizacion no cumple el contrato exacto de totales")
-    expected_variant = _cotizacion_composer_variant(base)
     if mutation.composer_variant != expected_variant:
         raise ValueError("Cotizacion no cumple la variante exacta del template")
     section_subtotal_rows = mutation.section_subtotal_rows
@@ -1992,9 +2388,19 @@ def _validate_exact_cotizacion_surface(
         field: _exact_inline_text(_require_root_cell(candidate, coordinate), coordinate)
         for field, coordinate in metadata_coordinates.items()
     }
+    delivery_place = ""
+    if layout.delivery_term_row is not None:
+        delivery_coordinate = (
+            f"D{layout.delivery_term_row + mutation.terms_row_delta}"
+        )
+        delivery_place = _exact_inline_text(
+            _require_root_cell(candidate, delivery_coordinate),
+            delivery_coordinate,
+        )
     metadata = CotizacionMetadata(
         **metadata_values,
         quote_currency=mutation.quote_currency,
+        delivery_place=delivery_place,
     )
 
     sections: list[CotizacionSection] = []
@@ -2063,12 +2469,29 @@ def _validate_exact_cotizacion_surface(
         declared_mobiliti_rows = mutation.product_mobiliti_rows[
             product_sequence - 1
         ]
-        if first_discount is None:
+        if layout.global_discount:
+            assert global_discount_formula is not None
+            expected_discount_formula = translate_formula(
+                "=" + global_discount_formula,
+                origin="G17",
+                target=f"G{worksheet_row}",
+                sheet="Cotizacion",
+            )[1:]
+            if _exact_formula_text(
+                _require_root_cell(candidate, f"G{worksheet_row}"),
+                f"G{worksheet_row}",
+            ) != expected_discount_formula:
+                raise ValueError("Descuento global Cotizacion inválido")
+            product_discount = Decimal("0")
+        elif first_discount is None:
             first_discount = _exact_typed_value(
                 _require_root_cell(candidate, f"G{worksheet_row}"),
                 "number",
                 allow_blank=False,
             )
+            product_discount = first_discount
+        else:
+            product_discount = first_discount
         price_cell = _require_root_cell(candidate, f"F{worksheet_row}")
         price_pending = price_cell.attrib.get("t") == "inlineStr"
         if price_pending:
@@ -2104,9 +2527,15 @@ def _validate_exact_cotizacion_surface(
             )
         else:
             formula = _exact_formula_text(price_cell, f"F{worksheet_row}")
-            match = re.fullmatch(r"Mobiliti!X([1-9][0-9]*)", formula)
+            match = re.fullmatch(
+                rf"Mobiliti!{layout.price_column}([1-9][0-9]*)",
+                formula,
+            )
             if match is None:
-                price_terms = _cotizacion_price_terms_from_formula(formula)
+                price_terms = _cotizacion_price_terms_from_formula(
+                    formula,
+                    price_column=layout.price_column,
+                )
             else:
                 price_terms = (CotizacionPriceTerm(int(match.group(1))),)
             if tuple(term.mobiliti_row for term in price_terms) != declared_mobiliti_rows:
@@ -2182,7 +2611,7 @@ def _validate_exact_cotizacion_surface(
                 dimensions=dimensions,
                 quantity=quantity,
                 mobiliti_row=mobiliti_row,
-                discount=first_discount,
+                discount=product_discount,
                 description_formula=description_formula,
                 price_terms=price_terms,
                 price_pending=price_pending,
@@ -2378,8 +2807,20 @@ def _translate_estrategia(
     payload: bytes,
     row_map: MobilitiRowMap,
     cotizacion_total_row: int,
+    *,
+    variant: str = "official",
 ) -> bytes:
     root = _worksheet_root(payload, "Estrategia Comercial ")
+    if variant == "official_v17":
+        _translate_dynamic_financial_formulas(
+            root,
+            sheet="Estrategia Comercial ",
+            row_map=row_map,
+            cotizacion_total_row=cotizacion_total_row,
+        )
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    if variant not in {"official", "sunon_cdmx_v1c"}:
+        raise ValueError("Variante Estrategia inválida")
     for row in range(7, 38):
         for column in ("B", "C"):
             coordinate = f"{column}{row}"
@@ -2424,6 +2865,93 @@ def _translate_estrategia(
     )
     _replace_formula(root, "D59", "=" + translated_total)
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _translate_control_administrativo(
+    payload: bytes,
+    cotizacion_total_row: int,
+) -> bytes:
+    root = _worksheet_root(payload, "Control Administrativo")
+    _translate_dynamic_financial_formulas(
+        root,
+        sheet="Control Administrativo",
+        cotizacion_total_row=cotizacion_total_row,
+    )
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _translate_dynamic_financial_formulas(
+    root: ET.Element,
+    *,
+    sheet: str,
+    row_map: MobilitiRowMap | None = None,
+    cotizacion_total_row: int | None = None,
+) -> None:
+    """Actualiza rangos dinámicos en hojas financieras firmadas de v17."""
+
+    cotizacion_delta = (
+        None
+        if cotizacion_total_row is None
+        else cotizacion_total_row - V17_COTIZACION_LAYOUT.total_row
+    )
+    for cell in root.findall(f".//{{{MAIN}}}c"):
+        formula_node = cell.find(f"{{{MAIN}}}f")
+        if formula_node is None or not formula_node.text:
+            continue
+        coordinate = cell.attrib.get("r")
+        if coordinate is None:
+            raise ValueError(f"Celda sin coordenada en {sheet}")
+        overrides: dict[str, str] = {}
+        for token in _formula_range_tokens(formula_node.text):
+            if row_map is not None:
+                product_range = re.fullmatch(
+                    r"Mobiliti!(?P<first_column>\$?[A-Z]{1,3})"
+                    r"(?P<first_absolute>\$?)14:"
+                    r"(?P<last_column>\$?[A-Z]{1,3})"
+                    r"(?P<last_absolute>\$?)571",
+                    token,
+                )
+                if product_range is not None:
+                    overrides[token] = (
+                        f"Mobiliti!{product_range.group('first_column')}"
+                        f"{product_range.group('first_absolute')}14:"
+                        f"{product_range.group('last_column')}"
+                        f"{product_range.group('last_absolute')}"
+                        f"{row_map.last_product_row}"
+                    )
+                    continue
+                total_reference = re.fullmatch(
+                    r"Mobiliti!(?P<column>\$?[A-Z]{1,3})"
+                    r"(?P<absolute>\$?)573",
+                    token,
+                )
+                if total_reference is not None:
+                    overrides[token] = (
+                        f"Mobiliti!{total_reference.group('column')}"
+                        f"{total_reference.group('absolute')}{row_map.total_row}"
+                    )
+                    continue
+            if cotizacion_delta is not None:
+                cotizacion_reference = re.fullmatch(
+                    r"Cotizacion!(?P<column>\$?H)"
+                    r"(?P<absolute>\$?)(?P<row>3[7-9]|4[01])",
+                    token,
+                )
+                if cotizacion_reference is not None:
+                    overrides[token] = (
+                        f"Cotizacion!{cotizacion_reference.group('column')}"
+                        f"{cotizacion_reference.group('absolute')}"
+                        f"{int(cotizacion_reference.group('row')) + cotizacion_delta}"
+                    )
+        if not overrides:
+            continue
+        translated = _translate_formula_with_overrides(
+            formula_node.text,
+            coordinate=coordinate,
+            sheet=sheet,
+            overrides=overrides,
+        )
+        _replace_formula(root, coordinate, "=" + translated)
 
 
 def _formula_range_tokens(formula: str) -> list[str]:
@@ -2806,6 +3334,7 @@ def _add_workbook_sheets(
     sheet_additions: Sequence[SheetAddition],
     *,
     cotizacion_terms_delta: int,
+    cotizacion_variant: str,
     extra_additions: Mapping[str, bytes],
     extra_content_types: Mapping[str, str],
 ) -> tuple[bytes, bytes, bytes, dict[str, bytes], dict[str, bytes]]:
@@ -2889,6 +3418,26 @@ def _add_workbook_sheets(
         defined_names = ET.Element(f"{{{MAIN}}}definedNames")
         insertion = list(workbook).index(sheets) + 1
         workbook.insert(insertion, defined_names)
+    if cotizacion_variant == "official_v17":
+        lookup_ranges = {
+            "Tabla_Instalacion": (
+                "Fletes!$M$6:$N$19",
+                "Fletes!$M$6:$N$21",
+            ),
+            "Tabla_Factor": (
+                "Fletes!$Q$6:$R$18",
+                "Fletes!$Q$6:$R$21",
+            ),
+        }
+        for name, (expected, replacement) in lookup_ranges.items():
+            matches = [
+                item
+                for item in defined_names.findall(f"{{{MAIN}}}definedName")
+                if item.attrib.get("name") == name
+            ]
+            if len(matches) != 1 or matches[0].text != expected:
+                raise ValueError(f"Nombre definido oficial inesperado: {name}")
+            matches[0].text = replacement
     print_area = next(
         (
             item
@@ -2898,13 +3447,12 @@ def _add_workbook_sheets(
         ),
         None,
     )
-    official_print_area = (
-        f"Cotizacion!$A$1:$J${CANONICAL_COTIZACION_PRINT_END}"
-    )
+    cotizacion_layout = _cotizacion_layout(cotizacion_variant)
+    official_print_area = f"Cotizacion!$A$1:$J${cotizacion_layout.print_end}"
     if print_area is None or print_area.text != official_print_area:
         raise ValueError("Print_Area oficial de Cotizacion inesperada")
     print_area.text = (
-        f"Cotizacion!$A$1:$J${CANONICAL_COTIZACION_PRINT_END + cotizacion_terms_delta}"
+        f"Cotizacion!$A$1:$J${cotizacion_layout.print_end + cotizacion_terms_delta}"
     )
     for addition, _part, sheet_index in additions_with_parts:
         for defined_name in addition.defined_names:
@@ -2942,11 +3490,23 @@ def _translate_official_calc_chain(
         cotizacion, CotizacionSheetMutation
     ):
         raise TypeError("Mutacion de calcChain invalida")
+    recalculated_sheets = [
+        "Mobiliti",
+        "Cotizacion",
+        "Fletes",
+        "Estrategia Comercial ",
+    ]
+    try:
+        base.sheet_part("Control Administrativo")
+    except KeyError:
+        pass
+    else:
+        recalculated_sheets.append("Control Administrativo")
     return _prune_calc_chain_sheets(
         base.parts[calc_part],
         {
-            _workbook_sheet_id(base, "Mobiliti"),
-            _workbook_sheet_id(base, "Cotizacion"),
+            _workbook_sheet_id(base, sheet_name)
+            for sheet_name in recalculated_sheets
         },
     )
 
@@ -3021,6 +3581,7 @@ def _rebuild_mobiliti_calc_chain(
         formula_coordinates.add(coordinate)
         formula_cells.append((coordinate, formula))
     formula_cells.sort(key=lambda item: _cell_coordinate_sort_key(item[0]))
+    mobiliti_layout = WorksheetEditor.from_xml(mobiliti.xml).layout
 
     target_sheet_id = str(sheet_id)
     effective_sheet_id: str | None = None
@@ -3047,6 +3608,7 @@ def _rebuild_mobiliti_calc_chain(
             coordinate,
             mobiliti.row_map,
             source_metadata,
+            table_last_column=mobiliti_layout.table_last_column,
         )
         if source_coordinate is not None:
             attributes.update(
@@ -3070,13 +3632,15 @@ def _mobiliti_calc_metadata_source(
     coordinate: str,
     row_map: MobilitiRowMap,
     source_metadata: Mapping[str, Sequence[Mapping[str, str]]],
+    *,
+    table_last_column: int = 34,
 ) -> str | None:
     match = _CELL.fullmatch(coordinate)
     if match is None:
         raise ValueError("Coordenada Mobiliti invalida")
     column = match.group("column")
     row = int(match.group("row"))
-    table_column = column_index_from_string(column) <= 34
+    table_column = column_index_from_string(column) <= table_last_column
 
     if table_column:
         for index, section in enumerate(row_map.sections):
@@ -3187,6 +3751,7 @@ def _cotizacion_calc_metadata_source(
         raise ValueError("Coordenada Cotizacion invalida")
     column = match.group("column")
     row = int(match.group("row"))
+    layout = _cotizacion_layout(mutation.composer_variant)
     editable_column = column_index_from_string(column) <= 10
     if editable_column and row in mutation.section_subtotal_rows:
         template = f"{column}18"
@@ -3195,12 +3760,12 @@ def _cotizacion_calc_metadata_source(
         template = f"{column}{CANONICAL_COTIZACION_FIRST_PRODUCT_ROW}"
         return template if template in source_metadata else None
 
-    subtotal_row = mutation.total_row - CANONICAL_COTIZACION_TOTAL_SPAN
+    subtotal_row = mutation.total_row - layout.total_span
     if editable_column and subtotal_row <= row <= mutation.total_row:
-        template = f"{column}{CANONICAL_COTIZACION_TOTAL_START + row - subtotal_row}"
+        template = f"{column}{layout.total_start + row - subtotal_row}"
         return template if template in source_metadata else None
 
-    shifted_terms_start = CANONICAL_COTIZACION_TERMS_START + mutation.terms_row_delta
+    shifted_terms_start = layout.terms_start + mutation.terms_row_delta
     if editable_column and row >= shifted_terms_start:
         template = f"{column}{row - mutation.terms_row_delta}"
         return template if template in source_metadata else None
@@ -3389,6 +3954,8 @@ def _recycle_candidate(candidate: Path) -> Path | None:
     candidate = Path(candidate)
     if _lstat_or_none(candidate) is None:
         return None
+    if local_files_preserved():
+        return candidate
     command: list[str] | None = None
     if os.name == "nt":
         profile = Path(os.environ.get("USERPROFILE", ""))
@@ -3624,6 +4191,153 @@ def _sidecar_cells(
     return result
 
 
+def _shift_cotizacion_sidecars(
+    sidecars: Mapping[int, tuple[ET.Element, ...]],
+    *,
+    layout: CotizacionLayoutContract,
+    total_delta: int,
+) -> dict[int, tuple[ET.Element, ...]]:
+    """Mueve las celdas auxiliares junto con totales y términos Cotizacion."""
+
+    shifted: dict[int, tuple[ET.Element, ...]] = {}
+    for source_row, cells in sidecars.items():
+        target_row = (
+            source_row + total_delta
+            if source_row >= layout.total_start
+            else source_row
+        )
+        translated_cells: list[ET.Element] = []
+        for source_cell in cells:
+            cell = deepcopy(source_cell)
+            match = _CELL.fullmatch(cell.attrib["r"])
+            if match is None:
+                raise ValueError("Celda auxiliar Cotizacion inválida")
+            source_coordinate = cell.attrib["r"]
+            target_coordinate = f"{match.group('column')}{target_row}"
+            cell.attrib["r"] = target_coordinate
+            formula = cell.find(f"{{{MAIN}}}f")
+            if layout.variant == "official_v17" and source_coordinate == "N37":
+                expected_freight = (
+                    'IF(Mobiliti!$C$13="Dólares",Cotizacion!H37*17.5,Cotizacion!H37)'
+                )
+                if formula is None or formula.text != expected_freight:
+                    raise ValueError("Fórmula oficial de flete N37 inesperada")
+                # v17 usa P4; se conserva el factor comercial de la plantilla.
+                formula.text = expected_freight.replace(
+                    'Mobiliti!$C$13="Dólares"', "Mobiliti!$P$4=TRUE"
+                )
+            if formula is not None and formula.text is not None:
+                overrides = None
+                if layout.delivery_term_row is not None:
+                    overrides = {
+                        f"$D${layout.delivery_term_row}":
+                        f"$D${layout.delivery_term_row + total_delta}"
+                    }
+                translated = _translate_trusted_formula_with_defined_names(
+                    "=" + formula.text,
+                    origin=source_coordinate,
+                    target=target_coordinate,
+                    range_overrides=overrides,
+                    sheet="Cotizacion",
+                )
+                formula.text = translated[1:]
+                cached = cell.find(f"{{{MAIN}}}v")
+                if cached is not None:
+                    cell.remove(cached)
+            translated_cells.append(cell)
+        shifted[target_row] = tuple(translated_cells)
+    return shifted
+
+
+def _delivery_validation_sqref(root: ET.Element) -> ET.Element:
+    """Localiza la única lista firmada de lugar de entrega de Cotizacion."""
+
+    matches: list[ET.Element] = []
+    for validation in root.findall(f".//{{{X14}}}dataValidation"):
+        formula = validation.find(f"{{{X14}}}formula1/{{{XM}}}f")
+        if formula is not None and (formula.text or "").strip() == (
+            "Fletes!$A$46:$A$55"
+        ):
+            matches.append(validation)
+    if len(matches) != 1:
+        raise ValueError("Lista oficial de lugar de entrega inesperada")
+    sqref = matches[0].find(f"{{{XM}}}sqref")
+    if sqref is None:
+        raise ValueError("Destino de lista de lugar de entrega ausente")
+    return sqref
+
+
+def _shift_cotizacion_delivery_validation(
+    root: ET.Element,
+    *,
+    layout: CotizacionLayoutContract,
+    total_delta: int,
+) -> None:
+    """Mueve el desplegable junto con la fila dinámica de lugar de entrega."""
+
+    if layout.delivery_term_row is None:
+        return
+    sqref = _delivery_validation_sqref(root)
+    expected = f"D{layout.delivery_term_row}"
+    if (sqref.text or "").strip() != expected:
+        raise ValueError("Destino oficial de lugar de entrega inesperado")
+    sqref.text = f"D{layout.delivery_term_row + total_delta}"
+
+
+def _translate_mobiliti_delivery_reference(
+    payload: bytes,
+    *,
+    variant: str,
+    terms_row_delta: int,
+) -> bytes:
+    """Mantiene Mobiliti!P8 enlazada a la fila dinámica de Cotizacion."""
+
+    layout = _cotizacion_layout(variant)
+    if layout.delivery_term_row is None:
+        return payload
+    root = _worksheet_root(payload, "Mobiliti")
+    expected = f"Cotizacion!$D${layout.delivery_term_row}"
+    if _formula_in_root(root, "P8") != expected:
+        raise ValueError("Referencia oficial Mobiliti!P8 inesperada")
+    target_row = layout.delivery_term_row + terms_row_delta
+    _replace_formula(root, "P8", f"=Cotizacion!$D${target_row}")
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _translate_trusted_formula_with_defined_names(
+    formula: str,
+    *,
+    origin: str,
+    target: str,
+    range_overrides: Mapping[str, str] | None = None,
+    sheet: str,
+) -> str:
+    """Traslada referencias firmadas y conserva nombres definidos del libro."""
+
+    overrides = dict(range_overrides or {})
+    try:
+        tokens = Tokenizer(formula).items
+    except Exception as error:
+        raise ValueError(f"Fórmula oficial no tokenizable: {sheet}!{origin}") from error
+    result = ["="]
+    for token in tokens:
+        value = token.value
+        if (
+            token.type == "OPERAND"
+            and token.subtype == "RANGE"
+            and _TRANSLATABLE_RANGE_TOKEN.fullmatch(value)
+        ):
+            value = translate_formula(
+                "=" + value,
+                origin=origin,
+                target=target,
+                sheet=sheet,
+            )[1:]
+            value = overrides.get(value, value)
+        result.append(value)
+    return "".join(result)
+
+
 def _apply_sidecars(
     rows: list[ET.Element],
     sidecars: Mapping[int, tuple[ET.Element, ...]],
@@ -3647,6 +4361,7 @@ def _rebuild_cotizacion_merges(
     *,
     dynamic_merges: Sequence[str],
     total_delta: int,
+    layout: CotizacionLayoutContract,
 ) -> None:
     merges = root.find(f"{{{MAIN}}}mergeCells")
     if merges is None:
@@ -3661,12 +4376,10 @@ def _rebuild_cotizacion_merges(
             preserved.append(deepcopy(merge))
         elif max_col <= 10 and max_row < 16:
             preserved.append(deepcopy(merge))
-        elif max_col <= 10 and 19 <= min_row <= 24:
+        elif max_col <= 10 and layout.total_start <= min_row <= layout.total_row:
             preserved.append(_shift_merge(merge, total_delta))
-        elif max_col <= 10 and min_row >= 28:
+        elif max_col <= 10 and min_row >= layout.terms_start:
             preserved.append(_shift_merge(merge, total_delta))
-        elif max_col > 10:
-            preserved.append(deepcopy(merge))
     preserved.extend(
         ET.Element(f"{{{MAIN}}}mergeCell", {"ref": reference})
         for reference in dynamic_merges

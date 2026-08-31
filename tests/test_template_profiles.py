@@ -47,7 +47,7 @@ def test_official_profile_resolves_to_promoted_asset_and_contract() -> None:
     profile = module.resolve_template_profile("official_2026_gdl")
 
     assert profile.id == "official_2026_gdl"
-    assert profile.display_name == "Formato Cotización 2026 GDL (1)"
+    assert profile.display_name == "Formato Cotización 2026 (1)"
     assert profile.template_path == OFFICIAL_TEMPLATE
     assert profile.contract_path == OFFICIAL_CONTRACT
     assert (
@@ -65,6 +65,8 @@ def test_official_profile_resolves_to_promoted_asset_and_contract() -> None:
         "   ",
         "Formato Cotizacion 2026 GDL (1).xlsx",
         "Formato Cotización 2026 GDL (1)",
+        "Formato Cotizacion 2026 (1).xlsx",
+        "Formato Cotización 2026 (1)",
         "Formato Cotizacion 2026 Oficial.xlsx",
         "Plantilla Corporativa Mobiliti 2025",
     ],

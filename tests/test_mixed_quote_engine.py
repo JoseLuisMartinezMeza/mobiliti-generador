@@ -461,16 +461,16 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
                 f"=Quotation!K{source_row}"
             )
             assert wb["Quotation"].cell(source_row, 11).value == expected_price
-        assert cot.cell(tarkett_cot, 7).value == 0.4
-        assert cot.cell(alma_cot, 7).value == f"=$G${tarkett_cot}"
-        assert cot.cell(imported_cot, 7).value == f"=$G${tarkett_cot}"
+        assert mobiliti["AD13"].value == 0.4
+        for row in (tarkett_cot, alma_cot, imported_cot):
+            assert cot.cell(row, 7).value == "=ROUND(Mobiliti!$AD$13,2)"
         for row in (tarkett_mob, alma_mob, imported_mob):
-            assert mobiliti.cell(row, 27).value == f"=Cotizacion!G${tarkett_cot}"
-            assert mobiliti.cell(row, 28).value == f"=X{row}*AA{row}"
-        assert cot.cell(tarkett_cot, 6).value == f"=Mobiliti!X{tarkett_mob}"
-        assert cot.cell(alma_cot, 6).value == f"=Mobiliti!X{alma_mob}"
-        assert cot.cell(imported_cot, 6).value == f"=Mobiliti!X{imported_mob}"
-        assert mobiliti["K4"].value is (currency != "MXN")
+            assert mobiliti[f"AD{row}"].value == f"=IF(H{row}>0,$E$5,0)"
+            assert mobiliti[f"AE{row}"].value == f"=IFERROR(AA{row}*AD{row},0)"
+        assert cot.cell(tarkett_cot, 6).value == f"=Mobiliti!AA{tarkett_mob}"
+        assert cot.cell(alma_cot, 6).value == f"=Mobiliti!AA{alma_mob}"
+        assert cot.cell(imported_cot, 6).value == f"=Mobiliti!AA{imported_mob}"
+        assert mobiliti["P4"].value is (currency != "MXN")
         for row in (tarkett_cot, alma_cot, imported_cot):
             assert cot.cell(row, 8).value == f"=F{row}*G{row}"
             assert cot.cell(row, 9).value == f"=F{row}-H{row}"
@@ -478,31 +478,10 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
             for column in (6, 8, 9, 10):
                 assert money_literal in cot.cell(row, column).number_format
         for row in (tarkett_mob, alma_mob, imported_mob):
-            for column in (
-                10,
-                13,
-                14,
-                17,
-                18,
-                19,
-                20,
-                21,
-                    22,
-                    23,
-                    24,
-                    25,
-                    28,
-                    29,
-                    30,
-                    32,
-                ):
-                assert money_literal in mobiliti.cell(row, column).number_format
-        if currency == "EUR":
-            assert all(
-                engine.MONEY_FORMAT != mobiliti.cell(row, column).number_format
-                for row in (tarkett_mob, alma_mob, imported_mob)
-                for column in (13, 18, 20)
-            )
+            # Columnas monetarias de la plantilla v17; no las posiciones legacy.
+            for column in ("J", "M", "O", "R", "T", "U", "W", "X", "Y",
+                           "Z", "AA", "AB", "AE", "AF", "AG", "AI", "AJ"):
+                assert money_literal in mobiliti[f"{column}{row}"].number_format
     finally:
         wb.close()
 
@@ -639,7 +618,7 @@ def test_mixed_metadata_rejects_surplus_rate_summary(mode, provider, discount):
         ("EUR", "0.048780", "0.902430"),
     ],
 )
-def test_mixed_lumbro_accessories_are_selective_and_use_frozen_rate(
+def test_mixed_legacy_flags_add_no_accessories_and_keep_explicit_frozen_cost(
     tmp_path, currency, mxn_rate, usd_rate
 ):
     source = _write_mixed_source(
@@ -737,30 +716,22 @@ def test_mixed_lumbro_accessories_are_selective_and_use_frozen_rate(
                 mobiliti.cell(row, 4).value,
             ) in {"LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"}
         ]
-        assert len(automatic_rows) == 3
-        assert parent_mob < automatic_rows[0] < alma_mob < manual_mob
-        lumbro_prices = engine._load_lumbro_prices(TEMPLATE)
-        for row in automatic_rows:
-            code = _resolved_simple_reference(wb, mobiliti.cell(row, 4).value)
-            source_match = re.fullmatch(
-                r"=Quotation!B([1-9][0-9]*)",
-                mobiliti.cell(row, 4).value,
-            )
-            assert source_match is not None
-            source_row = int(source_match.group(1))
-            assert mobiliti.cell(row, 10).value == f"=Quotation!K{source_row}"
-            assert wb["Quotation"].cell(source_row, 11).value == _converted_price(
-                lumbro_prices[code].price_mxn,
-                mxn_rate,
-            )
-            assert mobiliti.cell(row, 28).value == f"=X{row}*AA{row}"
+        assert automatic_rows == []
+        assert parent_mob < alma_mob < manual_mob
+        assert wb["Quotation_Data"].max_row == 4
+        assert not any(
+            ":lumbro:" in str(wb["Quotation_Data"].cell(row, 1).value)
+            for row in range(2, 5)
+        )
         parent_cot = _row_for_formula(cot, 1, "=Quotation!B9")
-        assert cot.cell(parent_cot, 6).value == f"=Mobiliti!X{parent_mob}"
-        for offset, row in enumerate(automatic_rows, start=1):
-            assert cot.cell(parent_cot + offset, 1).value == f"=Mobiliti!D{row}"
-            assert cot.cell(parent_cot + offset, 6).value == f"=Mobiliti!X{row}"
-        assert cot.cell(parent_cot, 7).value == 0.4
+        assert cot.cell(parent_cot + 1, 1).value == f"=Mobiliti!D{alma_mob}"
+        assert cot.cell(parent_cot + 2, 1).value == f"=Mobiliti!D{manual_mob}"
         assert mobiliti.cell(manual_mob, 6).value == "Lumbro CH"
+        assert mobiliti.cell(manual_mob, 10).value == f"=Quotation!K{manual_source_row}"
+        assert wb["Quotation"].cell(manual_source_row, 11).value == _converted_price(
+            120, mxn_rate,
+        )
+        assert wb["Quotation"].cell(manual_source_row, 8).value == 1
     finally:
         wb.close()
 
@@ -1113,33 +1084,33 @@ def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets
     try:
         cot = wb["Cotizacion"]
         mobiliti = wb["Mobiliti"]
-        first_cot_row = _row_for_formula(cot, 1, "=Quotation!B9")
+        assert mobiliti["AD13"].value == pytest.approx(0.12345678)
         for source_row in (9, 10):
             cot_row = _row_for_formula(cot, 1, f"=Quotation!B{source_row}")
             mobiliti_row = _row_for_formula(mobiliti, 4, f"=Quotation!B{source_row}")
-            if source_row == 9:
-                assert cot.cell(cot_row, 7).value == pytest.approx(0.12345678)
-            else:
-                assert cot.cell(cot_row, 7).value == f"=$G${first_cot_row}"
+            # El usuario confirmó conservar ROUND de la plantilla oficial.
+            assert cot.cell(cot_row, 7).value == "=ROUND(Mobiliti!$AD$13,2)"
             assert mobiliti.cell(mobiliti_row, 10).value == (
                 f"=Quotation!K{source_row}"
             )
             assert wb["Quotation"].cell(source_row, 11).value == (
                 2.68 if source_row == 9 else 0.01
             )
-            assert mobiliti.cell(mobiliti_row, 28).value == (
-                f"=X{mobiliti_row}*AA{mobiliti_row}"
+            assert mobiliti[f"AE{mobiliti_row}"].value == (
+                f"=IFERROR(AA{mobiliti_row}*AD{mobiliti_row},0)"
             )
-            assert mobiliti.cell(mobiliti_row, 23).value.startswith(
-                f'=IF(F{mobiliti_row}="Offiho",J{mobiliti_row},'
+            assert mobiliti[f"Z{mobiliti_row}"].value.startswith(
+                f'=ROUNDUP(IF(OR(F{mobiliti_row}="Offiho",'
             )
-            assert mobiliti.cell(mobiliti_row, 24).value == (
-                f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row},"
+            assert mobiliti[f"AA{mobiliti_row}"].value == (
+                f"=IF(Z{mobiliti_row}>=Y{mobiliti_row},"
+                f"_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D{mobiliti_row},"
                 f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
-                f"$D$14:$D$571,D{mobiliti_row}))"
+                f"$D$14:$D$571,D{mobiliti_row})),"
+                '"NO SE ESTA RESPETANDO EL MARGEN")'
             )
-            assert mobiliti.cell(mobiliti_row, 25).value == (
-                f"=(X{mobiliti_row}*H{mobiliti_row})"
+            assert mobiliti[f"AB{mobiliti_row}"].value == (
+                f"=IFERROR(AA{mobiliti_row}*H{mobiliti_row},0)"
             )
     finally:
         wb.close()

@@ -54,16 +54,19 @@ def test_minimal_composition_preserves_linked_usd_mxn_metadata_and_pricing_formu
     assert _cell(composed, "J6").attrib.get("vm") == _cell(official, "J6").attrib["vm"]
     assert ET.tostring(_cell(composed, "J6")) == ET.tostring(_cell(official, "J6"))
 
-    assert _formula_payload(_cell(composed, "K6")) == _formula_payload(
-        _cell(official, "K6")
+    assert _formula_payload(_cell(composed, "P6")) == _formula_payload(
+        _cell(official, "P6")
     )
-    assert _formula_payload(_cell(composed, "K6"))[1] == '_FV(J6,"High")'
+    assert _formula_payload(_cell(composed, "P6"))[1] == (
+        'IF(P4=TRUE,_FV(J6,"Price"),0)'
+    )
 
-    assert _formula_payload(_cell(composed, "W14")) == _formula_payload(
-        _cell(official, "W14")
+    assert _formula_payload(_cell(composed, "Z14")) == _formula_payload(
+        _cell(official, "Z14")
     )
-    assert _formula_payload(_cell(composed, "X14"))[1] == (
-        "_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D14,"
+    assert _formula_payload(_cell(composed, "AA14"))[1] == (
+        "IF(Z14>=Y14,_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D14,"
         "$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,$D$14:$D$571,D14))"
+        ',"NO SE ESTA RESPETANDO EL MARGEN")'
     )
-    assert _formula_payload(_cell(composed, "Y14"))[1] == "(X14*H14)"
+    assert _formula_payload(_cell(composed, "AB14"))[1] == "IFERROR(AA14*H14,0)"

@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
+from .local_files import save_quotation_workbook
+
 from .catalog_cart import (
     MAX_EXCEL_CELL_TEXT_LENGTH,
     _set_column_widths,
@@ -1515,7 +1517,7 @@ def create_mixed_catalog_quotation_workbook(
             ws.column_dimensions[column].width = width
         for column in ("T", "U", "V", "W"):
             ws.column_dimensions[column].hidden = True
-        wb.save(output)
+        save_quotation_workbook(wb, output)
     finally:
         if wb is not None:
             wb.close()

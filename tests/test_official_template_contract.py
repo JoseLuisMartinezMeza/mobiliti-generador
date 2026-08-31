@@ -25,7 +25,7 @@ TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 Oficial.xlsx"
 )
-OFFICIAL_SHA256 = "25f79e3ae533aa8f560be3e80586c19993ea65c0a07c500eb458738f9915b251"
+OFFICIAL_SHA256 = "7df7df6d13168b95ea665f68d8ac7dbc7697044e281debf161f87cf283fd097d"
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
@@ -50,8 +50,9 @@ def test_promoted_template_matches_official_contract():
     assert result.sheet_states == {
         "Cotizacion": "visible",
         "Mobiliti": "visible",
+        "Control Administrativo": "visible",
         "Estrategia Comercial ": "visible",
-        "Fletes": "visible",
+        "Fletes": "hidden",
         "Proveedores": "hidden",
         "SPEC LAMINADO JOME": "hidden",
         "SPEC-GUIDE-LUMBRO": "hidden",
@@ -60,7 +61,7 @@ def test_promoted_template_matches_official_contract():
         "SPEC-GUIDE-CR GLOBAL": "hidden",
         "Meses Sin Intereses Tarjetas": "hidden",
     }
-    assert result.defined_name_count == 29
+    assert result.defined_name_count == 31
     assert result.external_link_parts == 12
     assert result.spec_formula_count == 1314
 
@@ -70,17 +71,15 @@ def test_official_template_uses_latest_sharepoint_price_columns() -> None:
     mobiliti = ET.fromstring(package.parts[package.sheet_part("Mobiliti")])
     cotizacion = ET.fromstring(package.parts[package.sheet_part("Cotizacion")])
 
-    assert mobiliti.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A1:AW610"
-    assert _formula(mobiliti, "W14") == (
-        'IF(F14="Offiho",J14,IF(_xlfn.XLOOKUP('
-        'F14,Proveedores!A$2:A$51,Proveedores!E$2:E$51,"")="Nacional",'
-        '(J14/0.5)+IF(H14<=30,U14,0),'
-        '((J14/0.3/0.5)*IF(H14<=25,1+O14,1))+IF(H14<=25,U14,0)))'
+    assert mobiliti.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A1:AZ610"
+    assert _formula(mobiliti, "Y14").startswith("ROUNDUP(IF(OR(F14=\"Offiho\"")
+    assert _formula(mobiliti, "Z14").startswith("ROUNDUP(IF(OR(F14=\"Offiho\"")
+    assert _formula(mobiliti, "AA14") == (
+        'IF(Z14>=Y14,_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D14),'
+        '"NO SE ESTA RESPETANDO EL MARGEN")'
     )
-    assert _formula(mobiliti, "X14") == "_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D14)"
-    assert _formula(mobiliti, "Y14") == "(W14*H14)"
-    assert _formula(mobiliti, "Z14").startswith('IF(F14="Sunon Inc",$AK$577')
-    assert _formula(cotizacion, "F17") == "Mobiliti!X14"
+    assert _formula(mobiliti, "AD14") == "IF(H14>0,$E$5,0)"
+    assert _formula(cotizacion, "F17") == "Mobiliti!AA14"
 
 
 def test_modified_template_fails_before_output(tmp_path):

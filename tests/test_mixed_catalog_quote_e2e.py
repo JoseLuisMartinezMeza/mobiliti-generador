@@ -915,7 +915,7 @@ def _identical_offiho_payload_with_lumbro_parents() -> dict:
     )
 
 
-def test_authoritative_identity_rejects_inverted_identical_lines_and_keeps_lumbro_parents(
+def test_authoritative_identity_rejects_inverted_lines_without_automatic_accessories(
     monkeypatch,
     tmp_path,
 ):
@@ -947,16 +947,7 @@ def test_authoritative_identity_rejects_inverted_identical_lines_and_keeps_lumbr
         audit = correct["Quotation_Data"]
         keys = [audit.cell(row, 1).value for row in range(2, audit.max_row + 1)]
         first, second = (row.item_key for row in canonical_rows)
-        assert keys == [
-            first,
-            f"{first}:lumbro:1:LIDO.OP-INT",
-            f"{first}:lumbro:2:JUMP-1.5M",
-            f"{first}:lumbro:3:CAJA-FUS",
-            second,
-            f"{second}:lumbro:1:LIDO.OP-INT",
-            f"{second}:lumbro:2:JUMP-1.5M",
-            f"{second}:lumbro:3:CAJA-FUS",
-        ]
+        assert keys == [first, second]
     finally:
         correct.close()
 
@@ -1246,10 +1237,11 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
         assert quotation.cell(edited_row, 2).value == "Alien Task Chair imported-only"
         assert mobiliti.cell(mobiliti_row, 4).value == f"=Quotation!B{edited_row}"
         assert quotation.cell(edited_row, 11).value == 82
-        assert mobiliti.cell(mobiliti_row, 16).value == "Centro"
+        assert mobiliti.cell(mobiliti_row, 19).value == "Centro"
         assert mobiliti.cell(mobiliti_row, 6).value == "Sunon Inc"
-        assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
-        assert cotizacion.cell(cotizacion_row, 7).value == 0.4
+        assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
+        assert mobiliti["AD13"].value == 0.4
+        assert cotizacion.cell(cotizacion_row, 7).value == "=ROUND(Mobiliti!$AD$13,2)"
         assert cotizacion.cell(cotizacion_row, 8).value == (
             f"=F{cotizacion_row}*G{cotizacion_row}"
         )
@@ -1499,10 +1491,10 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
     assert hashlib.sha256(imported_source.read_bytes()).hexdigest() == source_hash_before
     template_workbook = load_workbook(WORKER_TEMPLATE, data_only=False)
     try:
-        template_freight_formula = template_workbook["Cotizacion"]["H21"].value
-        template_before_tax_formula = template_workbook["Cotizacion"]["H22"].value
-        template_tax_formula = template_workbook["Cotizacion"]["H23"].value
-        template_total_formula = template_workbook["Cotizacion"]["H24"].value
+        template_freight_formula = template_workbook["Cotizacion"]["H38"].value
+        template_before_tax_formula = template_workbook["Cotizacion"]["H39"].value
+        template_tax_formula = template_workbook["Cotizacion"]["H40"].value
+        template_total_formula = template_workbook["Cotizacion"]["H41"].value
     finally:
         template_workbook.close()
     assert isinstance(template_freight_formula, str)
@@ -1575,9 +1567,10 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         assert mobiliti_rows == sorted(mobiliti_rows)
         assert cotizacion_rows == sorted(cotizacion_rows)
         first_product_row = cotizacion_rows[0]
+        assert mobiliti["AD13"].value == 0.4
+        assert mobiliti["P4"].value is (quote_currency in {"USD", "EUR"})
         assert [cotizacion.cell(row, 7).value for row in cotizacion_rows] == [
-            0.4,
-            *(f"=$G${first_product_row}" for _ in cotizacion_rows[1:]),
+            "=ROUND(Mobiliti!$AD$13,2)" for _ in cotizacion_rows
         ]
         for canonical, mobiliti_row, cotizacion_row in zip(
             canonical_rows,
@@ -1609,14 +1602,15 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
                     canonical.converted_cost
                 )
                 assert cost_formula == f"=Quotation!K{quotation_row}"
-            assert mobiliti.cell(mobiliti_row, 16).value == canonical.region
-            assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
-            assert mobiliti.cell(mobiliti_row, 24).value == (
-                f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row},"
+            assert mobiliti.cell(mobiliti_row, 19).value == canonical.region
+            assert str(mobiliti.cell(mobiliti_row, 26).value).startswith("=ROUNDUP(IF(")
+            assert mobiliti.cell(mobiliti_row, 27).value == (
+                f"=IF(Z{mobiliti_row}>=Y{mobiliti_row},"
+                f"_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D{mobiliti_row},"
                 f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
-                f"$D$14:$D$571,D{mobiliti_row}))"
+                f'$D$14:$D$571,D{mobiliti_row})),"NO SE ESTA RESPETANDO EL MARGEN")'
             )
-            assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+            assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
             assert cotizacion.cell(cotizacion_row, 8).value == (
                 f"=F{cotizacion_row}*G{cotizacion_row}"
             )
@@ -1653,32 +1647,53 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         assert getattr(subtotal_formula, "text", None) == (
             f"=SUM(IFERROR(J{first_product_row}:J{cotizacion_rows[-1]},0))"
         )
-        assert cotizacion.cell(subtotal + 1, 8).value == Translator(
-            template_freight_formula,
-            origin="H21",
-        ).translate_formula(f"H{subtotal + 1}")
+        assert template_freight_formula == "=H37*$N$39"
+        # La inserción de filas mueve también la referencia absoluta al auxiliar.
+        # Translator modela copiar una fórmula y dejaría N39 apuntando al texto.
+        assert cotizacion.cell(subtotal + 1, 8).value == (
+            f"=H{subtotal}*$N${before_tax}"
+        )
+        assert cotizacion.cell(before_tax, 14).value == f"=M{subtotal}*O{subtotal}"
         assert cotizacion.cell(before_tax, 8).value == (
             f"=H{subtotal}+H{subtotal + 1}"
         )
         assert cotizacion.cell(tax, 8).value == Translator(
             template_tax_formula,
-            origin="H23",
+            origin="H40",
         ).translate_formula(f"H{tax}")
         assert cotizacion.cell(total, 8).value == Translator(
             template_total_formula,
-            origin="H24",
+            origin="H41",
         ).translate_formula(f"H{total}")
 
-        cotizacion_hashes = {
-            hashlib.sha256(image._data()).hexdigest()
+        cotizacion_images = [
+            (image.anchor._from.row + 1, image._data())
             for image in cotizacion._images
+        ]
+        cotizacion_hashes = {
+            hashlib.sha256(content).hexdigest()
+            for _row, content in cotizacion_images
         }
-        assert hashlib.sha256(catalog_image.read_bytes()).hexdigest() in (
-            cotizacion_hashes
+        assert hashlib.sha256(catalog_image.read_bytes()).hexdigest() in cotizacion_hashes
+        imported_position = next(
+            index for index, canonical in enumerate(canonical_rows)
+            if canonical.origin == "imported"
         )
-        assert hashlib.sha256(imported_images[11][0]).hexdigest() in (
-            cotizacion_hashes
+        imported_presentation_images = [
+            content for row, content in cotizacion_images
+            if row == cotizacion_rows[imported_position]
+        ]
+        assert len(imported_presentation_images) == 1
+        assert hashlib.sha256(imported_presentation_images[0]).hexdigest() != (
+            hashlib.sha256(imported_images[11][0]).hexdigest()
         )
+        # La imagen original se conserva arriba en Quotation; Cotizacion recibe
+        # la versión ampliada. El color único de la fixture detecta cruces de fila.
+        with Image.open(BytesIO(imported_presentation_images[0])) as presented:
+            assert presented.format == "PNG"
+            assert min(presented.size) >= 550
+            assert abs(presented.width / presented.height - 80 / 60) < 1 / presented.height
+            assert presented.convert("RGB").getextrema() == ((40, 40), (80, 80), (120, 120))
     finally:
         wb.close()
 
@@ -1911,7 +1926,7 @@ def _assert_task9_final_workbook(
     assert [record["position"] for record in records] == list(
         range(1, len(records) + 1)
     )
-    assert len(records) == len(base_rows) + 3
+    assert len(records) == len(base_rows)
     assert [
         record["item_key"]
         for record in records
@@ -1947,58 +1962,8 @@ def _assert_task9_final_workbook(
         )
         assert len(actual["row_hash"]) == 64
 
-    parent_key = base_keys[0]
-    parent_record = records_by_key[parent_key]
     derived = [record for record in records if record["item_key"] not in set(base_keys)]
-    assert [record["position"] for record in derived] == [2, 3, 4]
-    assert [record["item_key"].rsplit(":", 1)[-1] for record in derived] == [
-        "LIDO.OP-INT",
-        "JUMP-1.5M",
-        "CAJA-FUS",
-    ]
-    assert all(
-        record["item_key"].startswith(f"{parent_key}:lumbro:")
-        and record["origin"] == "lumbro"
-        and record["source_row"] is None
-        and record["section_id"] == parent_record["section_id"]
-        and record["section_title"] == parent_record["section_title"]
-        and record["upstream_row_hash"] == ""
-        and len(record["source_hash"]) == 64
-        and len(record["row_hash"]) == 64
-        for record in derived
-    )
-    assert len({record["source_hash"] for record in derived}) == 1
-    assert [Decimal(str(record["frozen_rate"])) for record in derived] == [
-        Decimal(automatic_rate),
-    ] * 3
-
-    template_values = load_workbook(WORKER_TEMPLATE, data_only=True, read_only=True)
-    try:
-        guide = template_values["SPEC-GUIDE-LUMBRO"]
-        expected_original_costs = [
-            Decimal(str(guide[f"E{row}"].value)).quantize(
-                Decimal("0.000001"),
-                rounding=ROUND_HALF_UP,
-            )
-            for row in (380, 396, 406)
-        ]
-    finally:
-        template_values.close()
-    assert [Decimal(str(record["original_cost"])) for record in derived] == (
-        expected_original_costs
-    )
-    assert [Decimal(str(record["converted_cost"])) for record in derived] == [
-        (cost * Decimal(automatic_rate)).quantize(
-            MONEY,
-            rounding=ROUND_HALF_UP,
-        )
-        for cost in expected_original_costs
-    ]
-    assert [Decimal(str(record["quantity"])) for record in derived] == [
-        Decimal("8"),
-        Decimal("8"),
-        Decimal("2"),
-    ]
+    assert derived == []
 
     payload_items = {
         item["line_id"]: item
@@ -2006,8 +1971,7 @@ def _assert_task9_final_workbook(
         for item in group["items"]
     }
     base_names = [payload_items[key]["name"] for key in base_keys]
-    derived_names = ["LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"]
-    final_names = [base_names[0], *derived_names, *base_names[1:]]
+    final_names = base_names
     mobiliti_rows = _ordered_mobiliti_rows_for_product_names(
         mobiliti,
         quotation,
@@ -2018,8 +1982,8 @@ def _assert_task9_final_workbook(
         1,
         [f"=Mobiliti!D{row}" for row in mobiliti_rows],
     )
-    assert mobiliti_rows == list(range(14, 25))
-    assert cotizacion_rows == list(range(17, 28))
+    assert mobiliti_rows == list(range(14, 22))
+    assert cotizacion_rows == list(range(17, 25))
 
     processed_by_cotizacion_row = {}
     for record, mobiliti_row, cotizacion_row in zip(
@@ -2034,12 +1998,13 @@ def _assert_task9_final_workbook(
         assert Decimal(str(quotation.cell(int(match.group(1)), 11).value)) == (
             Decimal(str(record["converted_cost"]))
         )
-        assert mobiliti.cell(mobiliti_row, 16).value == record["region"]
-        assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
-        assert mobiliti.cell(mobiliti_row, 24).value == (
-            f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row},"
+        assert mobiliti.cell(mobiliti_row, 19).value == record["region"]
+        assert str(mobiliti.cell(mobiliti_row, 25).value).startswith("=ROUNDUP(IF(")
+        assert mobiliti.cell(mobiliti_row, 27).value == (
+            f"=IF(Z{mobiliti_row}>=Y{mobiliti_row},"
+            f"_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D{mobiliti_row},"
             f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
-            f"$D$14:$D$571,D{mobiliti_row}))"
+            f'$D$14:$D$571,D{mobiliti_row})),"NO SE ESTA RESPETANDO EL MARGEN")'
         )
         quantity_match = re.fullmatch(
             r"=Quotation!H([1-9][0-9]*)",
@@ -2050,7 +2015,7 @@ def _assert_task9_final_workbook(
         assert Decimal(str(quotation.cell(quotation_row, 8).value)) == Decimal(
             str(record["quantity"])
         )
-        assert mobiliti.cell(mobiliti_row, 11).value == (
+        assert mobiliti.cell(mobiliti_row, 16).value == (
             f"=Quotation!I{quotation_row}"
         )
         assert cotizacion.cell(cotizacion_row, 1).value == (
@@ -2071,7 +2036,7 @@ def _assert_task9_final_workbook(
         ).value
         assert processed_by_cotizacion_row[cotizacion_row]
         assert cotizacion.cell(cotizacion_row, 6).value == (
-            f"=Mobiliti!X{mobiliti_row}"
+            f"=Mobiliti!AA{mobiliti_row}"
         )
         assert cotizacion.cell(cotizacion_row, 8).value == (
             f"=F{cotizacion_row}*G{cotizacion_row}"
@@ -2083,10 +2048,10 @@ def _assert_task9_final_workbook(
             f"=E{cotizacion_row}*I{cotizacion_row}"
         )
     first_product = cotizacion_rows[0]
+    assert mobiliti["AD13"].value == 0.4
     assert [cotizacion.cell(row, 7).value for row in cotizacion_rows] == [
-        0.4,
-        *(f"=$G${first_product}" for _ in cotizacion_rows[1:]),
-    ]
+        "=ROUND(Mobiliti!$AD$13,2)"
+    ] * len(cotizacion_rows)
     assert not any(
         str(cotizacion.cell(row, 1).value or "").startswith("=Quotation!")
         for row in range(16, cotizacion.max_row + 1)
@@ -2117,13 +2082,13 @@ def _assert_task9_final_workbook(
     assert getattr(subtotal_formula, "text", None) == (
         f"=SUM(IFERROR(J{first_product}:J{cotizacion_rows[-1]},0))"
     )
-    assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*8%"
+    assert cotizacion.cell(subtotal + 1, 8).value == f"=H{subtotal}*$N${before_tax}"
     assert cotizacion.cell(before_tax, 8).value == (
         f"=H{subtotal}+H{subtotal + 1}"
     )
     assert cotizacion.cell(tax_row, 8).value == f"=H{before_tax}*16%"
     assert cotizacion.cell(total_row, 8).value == f"=H{before_tax}+H{tax_row}"
-    assert mobiliti["K4"].value is (quote_currency != "MXN")
+    assert mobiliti["P4"].value is (quote_currency != "MXN")
 
     cotizacion_center_colors = set()
     for image in cotizacion._images:
