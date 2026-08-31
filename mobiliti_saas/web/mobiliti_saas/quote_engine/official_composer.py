@@ -1919,6 +1919,16 @@ def _translate_fletes(
             )
             _set_inline_string(rows[row], f"Q{row}", category)
             _set_number(rows[row], f"R{row}", Decimal("2"))
+        # Sin m3 no se asigna contenedor; se conservan IVA y otros costos.
+        _replace_formula(
+            root, "E61", "=IF(B67=0,0,MIN(1,B67/(B62*B71+B63*B74)))"
+        )
+        _replace_formula(
+            root,
+            "B66",
+            '=IF(E60="MANUAL",E63,IF(B61=0,0,IF(E60="PRORRATEADO",'
+            '(B61*B65+E62+B78)/B61,(B61*B65+B64+B78)/B61)))',
+        )
         _translate_dynamic_financial_formulas(
             root,
             sheet="Fletes",

@@ -123,6 +123,38 @@ def _binding(
     )
 
 
+def test_import_freight_exception_keeps_taxes_margins_and_manual_factor():
+    needs = [SectionNeed("first", "SILLAS", 2), SectionNeed("second", "OTRAS", 1)]
+    mutation = build_mobiliti_sheet(
+        _official_xml(),
+        needs,
+        (
+            MobilitiCellWrite("F14", "text", "Alma - Exterior"),
+            MobilitiCellWrite("P14", "number", Decimal("0")),
+            MobilitiCellWrite("F15", "text", "Sunon Inc"),
+            MobilitiCellWrite("P15", "number", Decimal("0.42")),
+            MobilitiCellWrite("F49", "text", "Offiho"),
+            MobilitiCellWrite("P49", "number", Decimal("0")),
+        ),
+    )
+    output = ET.fromstring(mutation.xml)
+    official = ET.fromstring(_official_xml())
+
+    for row in (14, 15, 49):
+        formula = _cell(output, f"L{row}").find(f"{{{MAIN}}}f")
+        assert formula is not None
+        # También funciona si otros productos sí aportan m3 al mismo proyecto.
+        assert formula.text == (
+            f'IF(K{row}="Importado",IF(OR(P{row}>0,Fletes!$E$60="MANUAL"),'
+            'Fletes!$B$66,IF(Fletes!$B$61=0,0,'
+            'Fletes!$B$65+Fletes!$B$78/Fletes!$B$61)),0%)'
+        )
+        for column in ("M", "N", "O", "Y", "Z"):
+            assert _formula_signature(_cell(output, f"{column}{row}")) == (
+                _formula_signature(_cell(official, f"{column}{row}"))
+            )
+
+
 @pytest.mark.parametrize(
     ("original", "rate", "expected"),
     [

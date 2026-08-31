@@ -685,6 +685,28 @@ def test_composer_extends_v17_flete_and_installation_tables(
     assert defined_names["Tabla_Factor"] == "Fletes!$Q$6:$R$21"
 
 
+def test_composer_handles_imported_goods_without_shipping_volume(tmp_path: Path) -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    request = _minimal_request(tmp_path / "imported-no-volume.xlsx")
+
+    mutation = build_allowlisted_mutation(base, request)
+
+    fletes = ET.fromstring(mutation.replacements[base.sheet_part("Fletes")])
+    official = ET.fromstring(base.parts[base.sheet_part("Fletes")])
+    # Sin m3 no hay ocupación ni flete de contenedor; el IVA no se elimina.
+    assert _cell_formula_in_root(fletes, "E61") == (
+        "=IF(B67=0,0,MIN(1,B67/(B62*B71+B63*B74)))"
+    )
+    assert _cell_formula_in_root(fletes, "B66") == (
+        '=IF(E60="MANUAL",E63,IF(B61=0,0,IF(E60="PRORRATEADO",'
+        '(B61*B65+E62+B78)/B61,(B61*B65+B64+B78)/B61)))'
+    )
+    for coordinate in ("B62", "B63", "B64", "B65", "E62"):
+        assert _cell_formula_in_root(fletes, coordinate) == (
+            _cell_formula_in_root(official, coordinate)
+        )
+
+
 def test_cotizacion_clears_contamination_uses_master_discount_and_keeps_terms(
     tmp_path: Path,
 ) -> None:

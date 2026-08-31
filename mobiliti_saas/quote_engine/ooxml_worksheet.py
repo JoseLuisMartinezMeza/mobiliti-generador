@@ -591,6 +591,19 @@ def clone_formula_row(
         row_map,
         editor.layout,
     )
+    if editor.layout.id == "v17":
+        # La excepción sin m3 omite solo el contenedor, no IVA ni otros costos.
+        # Con volumen o factor manual explícito se mantiene el cálculo oficial.
+        import_factor = _find_cell(clone, 12)
+        if import_factor is None:
+            raise ValueError(f"La fila Mobiliti no contiene L{target_row}")
+        _clear_cell(import_factor)
+        ET.SubElement(import_factor, f"{{{MAIN}}}f").text = (
+            f'IF(K{target_row}="Importado",'
+            f'IF(OR(P{target_row}>0,Fletes!$E$60="MANUAL"),'
+            'Fletes!$B$66,IF(Fletes!$B$61=0,0,'
+            'Fletes!$B$65+Fletes!$B$78/Fletes!$B$61)),0%)'
+        )
     provider = _find_cell(clone, 6)
     yellow_reference = _find_cell(clone, 8)
     if provider is None or yellow_reference is None or "s" not in yellow_reference.attrib:
