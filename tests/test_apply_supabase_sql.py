@@ -45,6 +45,13 @@ def test_require_database_url_accepts_real_shape():
     assert apply_supabase_sql.require_database_url({"DATABASE_URL": "postgresql://user:pass@example.com/db"}).startswith("postgresql://")
 
 
+def test_sql_tokenizer_ignores_layout_comments_but_preserves_string_contents():
+    left = "\ufeff SELECT '-- not a comment', public . asset, '/* literal */';"
+    right = "select '-- not a comment', public/* ignored */.asset,'/* literal */'; -- ignored\n"
+
+    assert apply_supabase_sql.tokenize_sql(left) == apply_supabase_sql.tokenize_sql(right)
+
+
 PINNED_BATCH = "470442fc-3dc3-5948-b0e4-1dd34c1fcd30"
 SETUP = Path("mobiliti_saas/supabase_setup")
 MIGRATION_A = SETUP / "2026_09_catalog_asset_registry_r2.sql"
@@ -125,6 +132,94 @@ def test_runner_pins_cutover_content_copied_to_another_path(tmp_path, capsys):
         "--confirm-cutover-batch", PINNED_BATCH,
     ])
     assert "Dry-run" in capsys.readouterr().out
+
+
+def test_runner_accepts_cutover_with_comments_and_whitespace_between_tokens(tmp_path, capsys):
+    formatted_cutover = tmp_path / "formatted-cutover.sql"
+    formatted_cutover.write_text(
+        MIGRATION_B.read_text(encoding="utf-8").replace(
+            "public.saas_catalog_asset_cutover_batches",
+            "public /* audited formatting */ .\n saas_catalog_asset_cutover_batches",
+        ),
+        encoding="utf-8",
+    )
+
+    apply_supabase_sql.main([
+        "--file", str(formatted_cutover),
+        "--confirm-cutover-batch", PINNED_BATCH,
+    ])
+
+    assert "Dry-run" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        ("AND missing_count = 0", "AND missing_count = 1"),
+        ("AND failed_count = 0", "AND failed_count = 1"),
+        ("AND verified_at IS NOT NULL", "AND verified_at IS NULL"),
+    ),
+)
+def test_runner_rejects_cutover_with_any_certification_guard_changed(
+    tmp_path, old, new,
+):
+    altered_cutover = tmp_path / "altered-guard.sql"
+    original = MIGRATION_B.read_text(encoding="utf-8")
+    assert old in original
+    altered_cutover.write_text(original.replace(old, new, 1), encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        apply_supabase_sql.main([
+            "--file", str(altered_cutover),
+            "--confirm-cutover-batch", PINNED_BATCH,
+        ])
+
+
+def test_runner_ignores_expected_uuid_when_it_only_appears_in_a_comment(tmp_path):
+    altered_cutover = tmp_path / "comment-does-not-pin.sql"
+    active_uuid = "11111111-1111-1111-1111-111111111111"
+    altered_cutover.write_text(
+        f"-- expected batch was {PINNED_BATCH}\n"
+        + MIGRATION_B.read_text(encoding="utf-8").replace(PINNED_BATCH, active_uuid),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit):
+        apply_supabase_sql.main([
+            "--file", str(altered_cutover),
+            "--confirm-cutover-batch", PINNED_BATCH,
+        ])
+
+
+def test_runner_rejects_modified_content_even_when_document_uses_canonical_b_path():
+    parser = apply_supabase_sql.build_parser()
+    args = parser.parse_args([
+        "--file", str(MIGRATION_B),
+        "--confirm-cutover-batch", PINNED_BATCH,
+    ])
+
+    with pytest.raises(SystemExit):
+        apply_supabase_sql.validate_sql_selection(
+            args,
+            parser,
+            [(MIGRATION_B, "select current_date;\n")],
+        )
+
+
+def test_runner_rejects_structural_cutover_update_without_canonical_b(tmp_path):
+    structural_cutover = tmp_path / "looks-arbitrary.sql"
+    structural_cutover.write_text(
+        """
+        UPDATE public /* spacing cannot hide the target */ .
+               saas_catalog_asset_cutover_batches
+        SET cutover_applied_at = now()
+        WHERE batch_id = '11111111-1111-1111-1111-111111111111';
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit):
+        apply_supabase_sql.main(["--file", str(structural_cutover)])
 
 
 def test_runner_rejects_cutover_shaped_content_with_altered_pin(tmp_path):
