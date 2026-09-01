@@ -407,15 +407,6 @@ def _run_supplier_sync(
         candidate = _validate_snapshot(raw_candidate, expected_supplier=supplier)
         if asset_build is not None:
             counters.update(_asset_metrics(candidate, asset_build))
-            if not dry_run:
-                error_code = "repository_failed"
-                store_asset = getattr(repository, "store_catalog_asset_if_absent", None)
-                if not callable(store_asset):
-                    raise ValueError
-                for sha256, asset in sorted(asset_build.assets_by_sha256.items()):
-                    object_name = f"{sha256}.png"
-                    if store_asset(object_name, asset.data, asset.media_type) != object_name:
-                        raise ValueError
         error_code = "repository_failed"
         previous = repository.get_published_snapshot(source)
         if previous is not None and not isinstance(previous, SnapshotRecord):
@@ -434,6 +425,18 @@ def _run_supplier_sync(
             error_code = "repository_failed"
             repository.finish_no_changes(run_id, dict(public_metrics), delta.delta_link)
             return _result("no_changes", run_id, diff=diff, metrics=public_metrics)
+
+        if asset_build is not None:
+            store_asset = getattr(repository, "store_catalog_asset_if_absent", None)
+            if not callable(store_asset):
+                raise ValueError
+            previous_assets = _catalog_asset_names(previous_payload)
+            for sha256, asset in sorted(asset_build.assets_by_sha256.items()):
+                object_name = f"{sha256}.png"
+                if object_name in previous_assets:
+                    continue
+                if store_asset(object_name, asset.data, asset.media_type) != object_name:
+                    raise ValueError
 
         error_code = "repository_failed"
         staged = dict(candidate)
@@ -502,6 +505,23 @@ def _dependencies(
         return config, adapter, repository, graph_client
     except Exception:
         raise ValueError("Invalid sync request") from None
+
+
+def _catalog_asset_names(snapshot):
+    if snapshot is None:
+        return set()
+    names = set()
+    for row in snapshot["items"]:
+        attributes = row["attributes"]
+        asset = attributes.get("approved_asset") if isinstance(attributes, dict) else None
+        if (
+            isinstance(asset, dict)
+            and asset.get("bucket") == "catalog-assets"
+            and isinstance(asset.get("path"), str)
+            and re.fullmatch(r"[0-9a-f]{64}\.png", asset["path"])
+        ):
+            names.add(asset["path"])
+    return names
 
 
 def _validate_snapshot(raw, expected_supplier=None):

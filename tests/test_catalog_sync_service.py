@@ -2157,6 +2157,33 @@ def _alma_sidecar(payload, *, bound_brands=("KUN",), status_by_brand=None):
     return AlmaSnapshotBuild(payload, {sha256: asset}, bindings)
 
 
+def _two_asset_sidecar(payload, first_data, second_data):
+    payload = deepcopy(payload)
+    assets = {}
+    bindings = []
+    for row, data in zip(payload["items"], (first_data, second_data), strict=True):
+        sha256 = hashlib.sha256(data).hexdigest()
+        row["image_url"] = ""
+        row["image_kind"] = "official"
+        row["attributes"]["image_match"] = {
+            "status": "exact_xlsx",
+            "asset_sha256": sha256,
+            "source_references": [],
+        }
+        row["attributes"]["approved_asset"] = {
+            "bucket": "catalog-assets",
+            "path": f"{sha256}.png",
+            "image_kind": "official",
+            "label": "Imagen oficial del XLSX ALMA",
+            "approved": True,
+        }
+        assets[sha256] = ImageAsset(data, "image/png", 1, 1, sha256)
+        bindings.append(CatalogAssetBinding(
+            row["internal_id"], sha256, f"{sha256}.png", "official", "exact_xlsx", ()
+        ))
+    return CatalogSnapshotBuild(payload, assets, tuple(bindings))
+
+
 def _generic_sidecar(
     payload,
     *,
@@ -2295,7 +2322,7 @@ def test_alma_sidecar_dry_run_plans_assets_without_any_mutation():
     } & set(call_names(repo))
 
 
-def test_alma_sidecar_uploads_unique_assets_before_no_changes():
+def test_alma_sidecar_no_changes_does_not_store_assets_or_stage():
     second = item(
         internal_id="alma:kun:chair-2",
         product_key="chair-2",
@@ -2311,12 +2338,38 @@ def test_alma_sidecar_uploads_unique_assets_before_no_changes():
 
     assert result.status == "no_changes"
     names = call_names(repo)
-    assert names.count("store_catalog_asset_if_absent") == 1
-    assert names.index("store_catalog_asset_if_absent") < names.index("finish_no_changes")
+    assert "store_catalog_asset_if_absent" not in names
+    assert "stage_candidate" not in names
+    assert "auto_publish_candidate" not in names
+    assert names.count("finish_no_changes") == 1
     assert metrics(result)["official_images_planned"] == 2
     assert metrics(result)["unique_assets_planned"] == 1
     assert metrics(result)["image_exact_xlsx"] == 1
     assert metrics(result)["image_family_xlsx"] == 1
+
+
+def test_sidecar_change_stores_only_asset_missing_from_published_snapshot():
+    first = item()
+    second = item(
+        internal_id="alma:kun:chair-2",
+        product_key="chair-2",
+        sku="CHAIR-2",
+    )
+    first_asset = _png_asset_bytes(color=(1, 2, 3))
+    second_asset = _png_asset_bytes(color=(4, 5, 6))
+    candidate = _two_asset_sidecar(
+        snapshot(source_hash="c" * 64, items=[first, second]), first_asset, second_asset
+    )
+    prior_payload = snapshot(items=[deepcopy(candidate.snapshot["items"][0]), second])
+    repo = FakeRepository(
+        active=(source_file(),), published_snapshot=published(prior_payload)
+    )
+
+    result = call(repo, FakeGraph(), lambda files: candidate)
+
+    assert result.status == "awaiting_approval"
+    stored = [entry[1] for entry in repo.calls if entry[0] == "store_catalog_asset_if_absent"]
+    assert stored == [hashlib.sha256(second_asset).hexdigest() + ".png"]
 
 
 def test_alma_sidecar_uploads_before_stage_with_asset_metadata_attached():

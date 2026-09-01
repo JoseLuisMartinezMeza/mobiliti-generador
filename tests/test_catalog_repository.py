@@ -737,13 +737,18 @@ def test_store_catalog_asset_rejects_more_than_eight_mib_without_network():
     assert opener.requests == []
 
 
-def test_store_catalog_asset_conflict_accepts_only_same_authenticated_content():
+def test_store_catalog_asset_conflict_accepts_matching_head_metadata_without_body_get():
     content = b"\x89PNG\r\n\x1a\nofficial image"
-    object_name = hashlib.sha256(content).hexdigest() + ".png"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
     conflict = HTTPError("redacted", 409, "conflict", {}, io.BytesIO(b"exists"))
     repo, opener = repository([
         conflict,
-        Response(200, content, {"Content-Type": "image/png"}),
+        Response(200, b"", {
+            "Content-Type": "image/png",
+            "Content-Length": str(len(content)),
+            "x-amz-meta-sha256": digest,
+        }),
     ])
 
     assert repo.store_catalog_asset_if_absent(
@@ -751,26 +756,40 @@ def test_store_catalog_asset_conflict_accepts_only_same_authenticated_content():
     ) == object_name
 
     confirmation, parsed, query, _ = request_parts(opener, 1)
-    assert confirmation.method == "GET" and query == {}
+    assert confirmation.method == "HEAD" and query == {}
     assert parsed.path == (
-        f"/storage/v1/object/authenticated/catalog-assets/{object_name}"
+        f"/storage/v1/object/catalog-assets/{object_name}"
     )
-    assert confirmation.headers["Accept"] == "application/octet-stream"
+    assert len(opener.requests) == 2
 
 
-def test_store_catalog_asset_conflict_rejects_collision_or_missing_object():
+@pytest.mark.parametrize("field,value", [
+    ("x-amz-meta-sha256", "0" * 64),
+    ("Content-Length", "0"),
+    ("Content-Type", "image/jpeg"),
+    ("x-amz-meta-sha256", None),
+])
+def test_store_catalog_asset_conflict_rejects_unverified_head_metadata(field, value):
     content = b"\x89PNG\r\n\x1a\nofficial image"
-    object_name = hashlib.sha256(content).hexdigest() + ".png"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    conflict = HTTPError("redacted", 409, "conflict", {}, io.BytesIO(b"exists"))
+    headers = {
+        "Content-Type": "image/png",
+        "Content-Length": str(len(content)),
+        "x-amz-meta-sha256": digest,
+    }
+    if value is None:
+        headers.pop(field)
+    else:
+        headers[field] = value
+    repo, opener = repository([conflict, Response(200, b"", headers)])
 
-    for existing in (
-        Response(200, b"different", {"Content-Type": "image/png"}),
-        HTTPError("redacted", 404, "missing", {}, io.BytesIO(b"missing")),
-    ):
-        conflict = HTTPError("redacted", 409, "conflict", {}, io.BytesIO(b"exists"))
-        repo, opener = repository([conflict, existing])
-        with pytest.raises(CatalogRepositoryError, match="storage"):
-            repo.store_catalog_asset_if_absent(object_name, content, "image/png")
-        assert len(opener.requests) == 2
+    with pytest.raises(CatalogRepositoryError, match="storage"):
+        repo.store_catalog_asset_if_absent(object_name, content, "image/png")
+
+    assert len(opener.requests) == 2
+    assert request_parts(opener, 1)[0].method == "HEAD"
 
 
 def test_store_raw_reads_one_verified_descriptor_and_detects_identity_change(tmp_path, monkeypatch):

@@ -746,30 +746,39 @@ class CatalogRepository:
                 "apikey": self._service_key,
                 "Content-Type": content_type,
                 "x-upsert": "false",
+                "x-amz-meta-sha256": match.group(1),
             },
         )
         try:
             self._open(request, (200, 201), max_bytes=_MAX_STORAGE_RESPONSE_BYTES)
         except _HTTPStatus as error:
-            if error.code != 409 or not self._catalog_asset_matches(object_name, match.group(1)):
+            if error.code != 409 or not self._catalog_asset_matches(
+                object_name, match.group(1), len(content), content_type
+            ):
                 raise CatalogRepositoryError("Catalog storage request failed") from None
         return object_name
 
-    def _catalog_asset_matches(self, object_name, expected_sha256):
+    def _catalog_asset_matches(self, object_name, expected_sha256, expected_size, expected_mime):
         request = Request(
-            f"{self._base_url}/storage/v1/object/authenticated/catalog-assets/{object_name}",
-            method="GET",
+            f"{self._base_url}/storage/v1/object/catalog-assets/{object_name}",
+            method="HEAD",
             headers={
-                "Accept": "application/octet-stream",
                 "Authorization": f"Bearer {self._service_key}",
                 "apikey": self._service_key,
             },
         )
         try:
-            content, _ = self._open(request, (200,), max_bytes=_MAX_CATALOG_ASSET_BYTES)
+            _, headers = self._open(request, (200,), max_bytes=0)
         except (_HTTPStatus, CatalogRepositoryError):
             return False
-        return hashlib.sha256(content).hexdigest() == expected_sha256
+        content_type = headers.get("content-type")
+        content_length = headers.get("content-length")
+        sha256 = headers.get("x-amz-meta-sha256")
+        return (
+            content_type == expected_mime
+            and content_length == str(expected_size)
+            and sha256 == expected_sha256
+        )
 
     def _raw_exists(self, name):
         request = Request(
