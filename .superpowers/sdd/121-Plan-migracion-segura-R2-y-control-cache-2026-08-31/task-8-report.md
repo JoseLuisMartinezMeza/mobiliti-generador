@@ -11,6 +11,9 @@ Commits locales:
 - `85fc3b5` — contratos de búsqueda y aceptación alineados con v17.
 - `88a0ece` — reporte y ledger del cierre transversal.
 - `96641ac` — clasificación fail-closed del SQL sensible por contenido.
+- `e50e387` — reporte del primer follow-up independiente.
+- `8ebb5c4` — canonicalización y fingerprint del stream de tokens SQL.
+- `este commit (HEAD en el handoff)` — reporte del segundo follow-up.
 
 Estado operativo: **Gate 8 live no ejecutado**. No hubo deploy, push, DDL,
 lectura/escritura live, cambio de secretos, mutación Cloudflare, borrado ni
@@ -75,6 +78,23 @@ validado es el que se resume y, sólo con `--apply`, se ejecutaría. Una copia d
 bootstrap mediante `--file` exige usar el modo explícito canónico, una copia de
 B exige el UUID certificado exacto y una B estructural con batch/digests
 alterados falla cerrada. No se imprime el SQL ni DATABASE_URL.
+
+Un segundo re-review encontró que los sentinelas de texto aún podían evadirse
+separando `public . tabla`, que los valores esperados podían aparecer sólo en
+comentarios y que la lista parcial de pins no cubría `missing_count`,
+`failed_count` ni `verified_at`. `8ebb5c4` reemplaza esos substrings por un lexer
+determinista: ignora BOM, whitespace, comentarios de línea y bloques anidados
+fuera de strings; conserva strings e identificadores quoted; y produce tokens
+canónicos con fingerprint SHA-256 length-prefixed. Los fingerprints fijan la
+secuencia completa de bootstrap, A y B, no sólo valores sueltos.
+
+Así, una B válida permite únicamente variaciones de comentarios/whitespace y
+por equivalencia conserva UUID, ambos digests, status `verified`, 2214/2214,
+0/0 y `verified_at IS NOT NULL`. Una ruta canónica con contenido cambiado ya no
+es confiable por su nombre: se marca como no canónica. También se reconoce como
+cutover estructural cualquier reemplazo de las RPC de clone o un `UPDATE` de
+`cutover_applied_at` sobre la tabla de batches; si no equivale a B, se rechaza
+como `cutover_unpinned`.
 
 `CLOUD_DEPLOY.md` y `supabase_setup/README.md` distinguen base nueva de proyecto
 existente y documentan A → Gate 7A → Task 6 execute/certify Gate 6 → B. El
@@ -145,6 +165,31 @@ Sólo se actualizaron expectations. No se cambió engine ni template.
 - `py_compile` de runner y tests modificados: exit 0; diff-check scoped: exit 0.
 - El harness PostgreSQL opt-in ahora incluye también Supabase → R2 preservando
   la fila Supabase y rechazos de MIME/bucket; no se abrió una DB en este host.
+
+### Segundo follow-up independiente (`e50e387`)
+
+- RED principal del lexer: **6 failed, 13 passed**. Cubrió whitespace/comentario
+  alrededor de `.`, UUID correcto sólo en comentario con UUID activo alterado,
+  `missing_count=1`, `failed_count=1`, `verified_at IS NULL` y ruta B canónica
+  asociada a contenido modificado.
+- RED estructural adicional: **1 failed, 19 passed** para un `UPDATE public /*
+  ... */ . saas_catalog_asset_cutover_batches SET cutover_applied_at` no
+  canónico.
+- Verificación final exacta:
+
+```powershell
+python -B -m pytest -p no:cacheprovider -q tests/test_apply_supabase_sql.py tests/test_catalog_migrations.py tests/test_catalog_asset_r2_migration.py tests/test_project_migrations.py
+```
+
+Resultado: **138 passed, 3 skipped in 5.88s**. Los tres skips siguen siendo
+harness PostgreSQL/Docker opt-in. Verificaciones estáticas exactas:
+
+```powershell
+python -B -m py_compile scripts/apply_supabase_sql.py tests/test_apply_supabase_sql.py tests/test_catalog_migrations.py
+git diff --check -- scripts/apply_supabase_sql.py tests/test_apply_supabase_sql.py
+```
+
+Ambas finalizaron con exit 0.
 
 ## Regresión completa y deuda residual
 
