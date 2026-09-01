@@ -1548,14 +1548,14 @@ $$;
 
 -- Registro neutral de assets. El backfill histórico se aplica por migración, no en bootstrap.
 CREATE TABLE IF NOT EXISTS saas_catalog_asset_cutover_batches (
-    batch_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    batch_id UUID PRIMARY KEY DEFAULT extensions.gen_random_uuid(),
     manifest_digest TEXT NOT NULL CHECK (manifest_digest ~ '^[0-9a-f]{64}$'),
     keyset_digest TEXT NOT NULL CHECK (keyset_digest ~ '^[0-9a-f]{64}$'),
     expected_count INTEGER NOT NULL CHECK (expected_count > 0),
     verified_count INTEGER NOT NULL DEFAULT 0 CHECK (verified_count >= 0),
     missing_count INTEGER NOT NULL DEFAULT 0 CHECK (missing_count >= 0),
     failed_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','verified','failed')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','loading','verified','failed')),
     verified_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1586,7 +1586,8 @@ CREATE TABLE IF NOT EXISTS saas_catalog_asset_cutover_entries (
     object_name TEXT NOT NULL, sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
     byte_size BIGINT NOT NULL CHECK (byte_size > 0), mime_type TEXT NOT NULL CHECK (mime_type IN ('image/png','image/jpeg','image/webp')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (batch_id, object_name),
-    CHECK (object_name ~ '^[0-9a-f]{64}[.](png|jpg|jpeg|webp)$'), CHECK (split_part(object_name, '.', 1) = sha256)
+    CHECK (object_name ~ '^[0-9a-f]{64}[.](png|jpg|jpeg|webp)$'), CHECK (split_part(object_name, '.', 1) = sha256),
+    CHECK ((object_name ~ '[.]png$' AND mime_type = 'image/png') OR (object_name ~ '[.](jpg|jpeg)$' AND mime_type = 'image/jpeg') OR (object_name ~ '[.]webp$' AND mime_type = 'image/webp'))
 );
 
 CREATE OR REPLACE FUNCTION saas_register_catalog_asset(
@@ -1626,9 +1627,200 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION saas_start_catalog_asset_cutover_batch(p_batch_id UUID,p_expected_count INTEGER,p_manifest_digest TEXT,p_keyset_digest TEXT) RETURNS UUID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN IF p_batch_id IS NULL OR p_expected_count IS NULL OR p_manifest_digest IS NULL OR p_keyset_digest IS NULL OR p_expected_count <> 2214 THEN RAISE EXCEPTION 'invalid catalog asset cutover batch'; END IF; INSERT INTO public.saas_catalog_asset_cutover_batches(batch_id,manifest_digest,keyset_digest,expected_count,status) VALUES(p_batch_id,p_manifest_digest,p_keyset_digest,p_expected_count,'loading') ON CONFLICT DO NOTHING; RETURN p_batch_id; END; $$;
-CREATE OR REPLACE FUNCTION saas_add_catalog_asset_cutover_entry(p_batch_id UUID,p_object_name TEXT,p_sha256 TEXT,p_byte_size BIGINT,p_mime_type TEXT) RETURNS TEXT LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN IF p_batch_id IS NULL OR p_object_name IS NULL OR p_sha256 IS NULL OR p_byte_size IS NULL OR p_mime_type IS NULL THEN RAISE EXCEPTION 'invalid catalog asset cutover entry'; END IF; INSERT INTO public.saas_catalog_asset_cutover_entries(batch_id,object_name,sha256,byte_size,mime_type) VALUES(p_batch_id,p_object_name,p_sha256,p_byte_size,p_mime_type) ON CONFLICT DO NOTHING; RETURN p_object_name; END; $$;
-CREATE OR REPLACE FUNCTION saas_finalize_catalog_asset_cutover_batch(p_batch_id UUID) RETURNS UUID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ DECLARE v_batch public.saas_catalog_asset_cutover_batches%ROWTYPE; BEGIN IF p_batch_id IS NULL THEN RAISE EXCEPTION 'invalid catalog asset cutover batch'; END IF; SELECT * INTO v_batch FROM public.saas_catalog_asset_cutover_batches WHERE batch_id=p_batch_id FOR UPDATE; IF NOT FOUND THEN RAISE EXCEPTION 'catalog asset cutover batch does not exist'; END IF; IF (SELECT COUNT(*) FROM public.saas_catalog_asset_cutover_entries WHERE batch_id=p_batch_id) <> 2214 THEN RAISE EXCEPTION 'catalog asset cutover manifest is not verified'; END IF; RETURN p_batch_id; END; $$;
+CREATE OR REPLACE FUNCTION saas_start_catalog_asset_cutover_batch(
+    p_batch_id UUID,
+    p_expected_count INTEGER,
+    p_manifest_digest TEXT,
+    p_keyset_digest TEXT
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_batch public.saas_catalog_asset_cutover_batches%ROWTYPE;
+BEGIN
+    IF p_batch_id IS NULL
+       OR p_expected_count IS NULL
+       OR p_manifest_digest IS NULL
+       OR p_keyset_digest IS NULL
+       OR p_expected_count <> 2214
+       OR p_manifest_digest !~ '^[0-9a-f]{64}$'
+       OR p_keyset_digest !~ '^[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION 'invalid catalog asset cutover batch';
+    END IF;
+
+    INSERT INTO public.saas_catalog_asset_cutover_batches (
+        batch_id, manifest_digest, keyset_digest, expected_count, status
+    ) VALUES (
+        p_batch_id, p_manifest_digest, p_keyset_digest, p_expected_count, 'pending'
+    )
+    ON CONFLICT DO NOTHING;
+
+    SELECT * INTO v_batch
+    FROM public.saas_catalog_asset_cutover_batches
+    WHERE batch_id = p_batch_id
+    FOR UPDATE;
+    IF NOT FOUND
+       OR v_batch.manifest_digest IS DISTINCT FROM p_manifest_digest
+       OR v_batch.keyset_digest IS DISTINCT FROM p_keyset_digest
+       OR v_batch.expected_count IS DISTINCT FROM p_expected_count
+       OR v_batch.status NOT IN ('pending','loading') THEN
+        RAISE EXCEPTION 'catalog asset cutover batch conflict';
+    END IF;
+
+    UPDATE public.saas_catalog_asset_cutover_batches
+    SET status = 'loading', updated_at = NOW()
+    WHERE batch_id = p_batch_id;
+    RETURN p_batch_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION saas_add_catalog_asset_cutover_entry(
+    p_batch_id UUID,
+    p_object_name TEXT,
+    p_sha256 TEXT,
+    p_byte_size BIGINT,
+    p_mime_type TEXT
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_entry public.saas_catalog_asset_cutover_entries%ROWTYPE;
+BEGIN
+    IF p_batch_id IS NULL
+       OR p_object_name IS NULL
+       OR p_sha256 IS NULL
+       OR p_byte_size IS NULL
+       OR p_mime_type IS NULL
+       OR p_object_name !~ '^[0-9a-f]{64}[.](png|jpg|jpeg|webp)$'
+       OR p_sha256 !~ '^[0-9a-f]{64}$'
+       OR split_part(p_object_name, '.', 1) <> p_sha256
+       OR p_byte_size <= 0
+       OR p_mime_type NOT IN ('image/png','image/jpeg','image/webp')
+       OR (p_object_name ~ '[.]png$' AND p_mime_type <> 'image/png')
+       OR (p_object_name ~ '[.](jpg|jpeg)$' AND p_mime_type <> 'image/jpeg')
+       OR (p_object_name ~ '[.]webp$' AND p_mime_type <> 'image/webp') THEN
+        RAISE EXCEPTION 'invalid catalog asset cutover entry';
+    END IF;
+
+    PERFORM 1
+    FROM public.saas_catalog_asset_cutover_batches
+    WHERE batch_id = p_batch_id AND status = 'loading'
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'catalog asset cutover batch is not loading';
+    END IF;
+
+    INSERT INTO public.saas_catalog_asset_cutover_entries (
+        batch_id, object_name, sha256, byte_size, mime_type
+    ) VALUES (
+        p_batch_id, p_object_name, p_sha256, p_byte_size, p_mime_type
+    )
+    ON CONFLICT DO NOTHING;
+
+    SELECT * INTO v_entry
+    FROM public.saas_catalog_asset_cutover_entries
+    WHERE batch_id = p_batch_id AND object_name = p_object_name
+    FOR UPDATE;
+    IF NOT FOUND
+       OR v_entry.sha256 IS DISTINCT FROM p_sha256
+       OR v_entry.byte_size IS DISTINCT FROM p_byte_size
+       OR v_entry.mime_type IS DISTINCT FROM p_mime_type THEN
+        RAISE EXCEPTION 'catalog asset cutover entry conflict';
+    END IF;
+    RETURN p_object_name;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION saas_finalize_catalog_asset_cutover_batch(
+    p_batch_id UUID
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_batch public.saas_catalog_asset_cutover_batches%ROWTYPE;
+    v_count INTEGER;
+    v_matches INTEGER;
+    v_keyset TEXT;
+    v_manifest TEXT;
+BEGIN
+    IF p_batch_id IS NULL THEN
+        RAISE EXCEPTION 'invalid catalog asset cutover batch';
+    END IF;
+    SELECT * INTO v_batch
+    FROM public.saas_catalog_asset_cutover_batches
+    WHERE batch_id = p_batch_id
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'catalog asset cutover batch does not exist';
+    END IF;
+    IF v_batch.status = 'verified' THEN
+        RETURN p_batch_id;
+    END IF;
+    IF v_batch.status <> 'loading' OR v_batch.expected_count <> 2214 THEN
+        RAISE EXCEPTION 'catalog asset cutover batch is not finalizable';
+    END IF;
+
+    SELECT COUNT(*)::INTEGER,
+           encode(extensions.digest(convert_to(
+               string_agg(object_name, E'\n' ORDER BY object_name), 'UTF8'
+           ), 'sha256'), 'hex'),
+           encode(extensions.digest(convert_to(string_agg(
+               object_name || '|' || sha256 || '|' || byte_size::TEXT || '|' || mime_type,
+               E'\n' ORDER BY object_name
+           ), 'UTF8'), 'sha256'), 'hex')
+    INTO v_count, v_keyset, v_manifest
+    FROM public.saas_catalog_asset_cutover_entries
+    WHERE batch_id = p_batch_id;
+    IF v_count <> 2214
+       OR v_keyset IS DISTINCT FROM v_batch.keyset_digest
+       OR v_manifest IS DISTINCT FROM v_batch.manifest_digest THEN
+        RAISE EXCEPTION 'catalog asset cutover manifest is not verified';
+    END IF;
+
+    SELECT COUNT(*)::INTEGER INTO v_matches
+    FROM public.saas_catalog_asset_cutover_entries AS entry
+    JOIN public.saas_catalog_assets AS asset
+      ON asset.object_name = entry.object_name
+     AND asset.sha256 = entry.sha256
+     AND asset.byte_size = entry.byte_size
+     AND asset.mime_type = entry.mime_type
+     AND asset.storage_provider = 'r2'
+     AND asset.physical_bucket = 'catalog-assets'
+     AND asset.verified_at IS NOT NULL
+     AND (asset.cutover_batch_id IS NULL OR asset.cutover_batch_id = p_batch_id)
+    WHERE entry.batch_id = p_batch_id;
+    IF v_matches <> 2214 THEN
+        RAISE EXCEPTION 'catalog asset cutover registry mismatch';
+    END IF;
+
+    UPDATE public.saas_catalog_assets AS asset
+    SET cutover_batch_id = p_batch_id, updated_at = NOW()
+    FROM public.saas_catalog_asset_cutover_entries AS entry
+    WHERE entry.batch_id = p_batch_id
+      AND asset.object_name = entry.object_name
+      AND asset.sha256 = entry.sha256
+      AND asset.byte_size = entry.byte_size
+      AND asset.mime_type = entry.mime_type
+      AND asset.storage_provider = 'r2'
+      AND asset.physical_bucket = 'catalog-assets'
+      AND asset.verified_at IS NOT NULL;
+    UPDATE public.saas_catalog_asset_cutover_batches
+    SET status = 'verified', verified_count = v_count,
+        missing_count = 0, failed_count = 0,
+        verified_at = NOW(), updated_at = NOW()
+    WHERE batch_id = p_batch_id;
+    RETURN p_batch_id;
+END;
+$$;
 
 CREATE OR REPLACE FUNCTION saas_clone_catalog_candidate_with_asset(
     p_candidate_id UUID,
@@ -1643,14 +1835,18 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
-    v_new_id UUID := gen_random_uuid();
+    v_new_id UUID := extensions.gen_random_uuid();
     v_existing_item JSONB;
     v_new_item JSONB;
     v_new_payload JSONB;
     v_new_hash TEXT;
     v_approved_at TIMESTAMPTZ := NOW();
 BEGIN
-    IF p_asset_object_name !~ '^[0-9a-f]{64}\.(png|jpg|jpeg|webp)$'
+    IF p_candidate_id IS NULL
+       OR p_reviewed_by IS NULL
+       OR p_asset_object_name IS NULL
+       OR p_json_path IS NULL
+       OR p_asset_object_name !~ '^[0-9a-f]{64}\.(png|jpg|jpeg|webp)$'
        OR COALESCE(array_length(p_json_path, 1), 0) <> 2
        OR COALESCE(array_lower(p_json_path, 1), 0) <> 1
        OR p_json_path[1] IS DISTINCT FROM 'items'
@@ -1775,14 +1971,21 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
-    v_new_id UUID := gen_random_uuid();
+    v_new_id UUID := extensions.gen_random_uuid();
     v_existing_item JSONB;
     v_new_item JSONB;
     v_new_payload JSONB;
     v_new_hash TEXT;
     v_approved_at TIMESTAMPTZ := NOW();
 BEGIN
-    IF p_asset_object_name !~ '^[0-9a-f]{64}\.(png|jpg|jpeg|webp)$'
+    IF p_candidate_id IS NULL
+       OR p_reviewed_by IS NULL
+       OR p_asset_object_name IS NULL
+       OR p_json_path IS NULL
+       OR p_image_kind IS NULL
+       OR p_image_label IS NULL
+       OR p_image_references IS NULL
+       OR p_asset_object_name !~ '^[0-9a-f]{64}\.(png|jpg|jpeg|webp)$'
        OR COALESCE(array_length(p_json_path, 1), 0) <> 2
        OR COALESCE(array_lower(p_json_path, 1), 0) <> 1
        OR p_json_path[1] IS DISTINCT FROM 'items'

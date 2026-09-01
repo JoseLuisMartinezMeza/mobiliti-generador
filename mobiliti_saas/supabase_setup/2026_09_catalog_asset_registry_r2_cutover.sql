@@ -6,6 +6,7 @@ DECLARE
     v_batch public.saas_catalog_asset_cutover_batches%ROWTYPE;
     v_keyset_digest TEXT;
     v_manifest_digest TEXT;
+    v_entry_count INTEGER;
     v_asset_count INTEGER;
 BEGIN
     SELECT * INTO v_batch
@@ -30,17 +31,30 @@ BEGIN
                e.object_name || '|' || e.sha256 || '|' || e.byte_size::TEXT || '|' || e.mime_type,
                E'\n' ORDER BY e.object_name
            ), 'UTF8'), 'sha256'), 'hex')
-    INTO v_asset_count, v_keyset_digest, v_manifest_digest
+    INTO v_entry_count, v_keyset_digest, v_manifest_digest
     FROM public.saas_catalog_asset_cutover_entries e
-    JOIN public.saas_catalog_assets a ON a.object_name=e.object_name AND a.sha256=e.sha256
-      AND a.byte_size=e.byte_size AND a.mime_type=e.mime_type AND a.storage_provider='r2'
-      AND a.physical_bucket='catalog-assets' AND a.verified_at IS NOT NULL
     WHERE e.batch_id = v_batch.batch_id;
 
-    IF v_asset_count IS DISTINCT FROM 2214
+    IF v_entry_count IS DISTINCT FROM 2214
        OR v_keyset_digest IS DISTINCT FROM v_batch.keyset_digest
        OR v_manifest_digest IS DISTINCT FROM v_batch.manifest_digest THEN
         RAISE EXCEPTION 'catalog asset R2 cutover manifest is not verified';
+    END IF;
+
+    SELECT COUNT(*)::INTEGER INTO v_asset_count
+    FROM public.saas_catalog_asset_cutover_entries AS entry
+    JOIN public.saas_catalog_assets AS asset
+      ON asset.object_name = entry.object_name
+     AND asset.sha256 = entry.sha256
+     AND asset.byte_size = entry.byte_size
+     AND asset.mime_type = entry.mime_type
+     AND asset.storage_provider = 'r2'
+     AND asset.physical_bucket = 'catalog-assets'
+     AND asset.verified_at IS NOT NULL
+     AND asset.cutover_batch_id = v_batch.batch_id
+    WHERE entry.batch_id = v_batch.batch_id;
+    IF v_asset_count IS DISTINCT FROM 2214 THEN
+        RAISE EXCEPTION 'catalog asset R2 cutover registry is not verified';
     END IF;
 END;
 $$;
@@ -55,10 +69,12 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
-    v_new_id UUID := gen_random_uuid(); v_existing_item JSONB; v_new_item JSONB;
+    v_new_id UUID := extensions.gen_random_uuid(); v_existing_item JSONB; v_new_item JSONB;
     v_new_payload JSONB; v_new_hash TEXT; v_approved_at TIMESTAMPTZ := NOW();
 BEGIN
-    IF p_asset_object_name !~ '^[0-9a-f]{64}\.(png|jpg|jpeg|webp)$'
+    IF p_candidate_id IS NULL OR p_reviewed_by IS NULL
+       OR p_asset_object_name IS NULL OR p_json_path IS NULL
+       OR p_asset_object_name !~ '^[0-9a-f]{64}\.(png|jpg|jpeg|webp)$'
        OR COALESCE(array_length(p_json_path, 1), 0) <> 2 OR COALESCE(array_lower(p_json_path, 1), 0) <> 1
        OR p_json_path[1] IS DISTINCT FROM 'items' OR p_json_path[2] IS NULL
        OR p_json_path[2] !~ '^(0|[1-9][0-9]*)$' THEN RAISE EXCEPTION 'invalid catalog item asset target'; END IF;
@@ -108,10 +124,13 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
     v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
-    v_new_id UUID := gen_random_uuid(); v_existing_item JSONB; v_new_item JSONB;
+    v_new_id UUID := extensions.gen_random_uuid(); v_existing_item JSONB; v_new_item JSONB;
     v_new_payload JSONB; v_new_hash TEXT; v_approved_at TIMESTAMPTZ := NOW();
 BEGIN
-    IF p_asset_object_name !~ '^[0-9a-f]{64}\.(png|jpg|jpeg|webp)$'
+    IF p_candidate_id IS NULL OR p_reviewed_by IS NULL
+       OR p_asset_object_name IS NULL OR p_json_path IS NULL
+       OR p_image_kind IS NULL OR p_image_label IS NULL OR p_image_references IS NULL
+       OR p_asset_object_name !~ '^[0-9a-f]{64}\.(png|jpg|jpeg|webp)$'
        OR COALESCE(array_length(p_json_path, 1), 0) <> 2 OR COALESCE(array_lower(p_json_path, 1), 0) <> 1
        OR p_json_path[1] IS DISTINCT FROM 'items' OR p_json_path[2] IS NULL OR p_json_path[2] !~ '^(0|[1-9][0-9]*)$'
        OR p_image_kind NOT IN ('official','generated_reference') OR COALESCE(array_length(p_image_references, 1), 0) > 20
@@ -146,10 +165,10 @@ BEGIN
     THEN RAISE EXCEPTION 'catalog image metadata clone did not produce the approved payload'; END IF;
     v_new_hash := encode(extensions.digest(convert_to(v_new_payload::TEXT, 'UTF8'), 'sha256'), 'hex');
     v_new_payload := jsonb_set(v_new_payload, '{source_hash}', to_jsonb(v_new_hash), TRUE);
-    INSERT INTO saas_catalog_snapshot_versions (id,supplier,source_hash,generated_at,status,payload,previous_snapshot_id,sync_run_id,base_published_version_id,reviewed_by,review_note,reviewed_at)
+    INSERT INTO public.saas_catalog_snapshot_versions (id,supplier,source_hash,generated_at,status,payload,previous_snapshot_id,sync_run_id,base_published_version_id,reviewed_by,review_note,reviewed_at)
     VALUES (v_new_id,v_candidate.supplier,v_new_hash,v_candidate.generated_at,'candidate',v_new_payload,v_candidate.id,v_candidate.sync_run_id,v_candidate.base_published_version_id,p_reviewed_by,'Approved catalog asset ' || p_asset_object_name,v_approved_at);
-    UPDATE saas_catalog_snapshot_versions SET status = 'superseded' WHERE id = v_candidate.id;
-    UPDATE saas_catalog_sync_runs SET candidate_version_id = v_new_id, updated_at = NOW() WHERE id = v_candidate.sync_run_id;
+    UPDATE public.saas_catalog_snapshot_versions SET status = 'superseded' WHERE id = v_candidate.id;
+    UPDATE public.saas_catalog_sync_runs SET candidate_version_id = v_new_id, updated_at = NOW() WHERE id = v_candidate.sync_run_id;
     RETURN v_new_id;
 END;
 $$;

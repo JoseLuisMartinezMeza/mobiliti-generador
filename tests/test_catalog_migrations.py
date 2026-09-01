@@ -1,6 +1,8 @@
 import os
 import re
 import subprocess
+import time
+import uuid
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -69,6 +71,15 @@ def _function_definition(sql, name):
     return re.sub(r"\s+", " ", sql[start:end]).strip()
 
 
+def _unqualified_saas_relations(function):
+    dml_pattern = re.compile(
+        r"(?is)\b(?:FROM|JOIN|UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+"
+        r"(?!public\.)(saas_[a-z0-9_]+)\b"
+    )
+    rowtype_pattern = re.compile(r"(?i)(?<!public\.)\bsaas_[a-z0-9_]+%ROWTYPE\b")
+    return [*dml_pattern.findall(function), *rowtype_pattern.findall(function)]
+
+
 def test_catalog_asset_registry_is_private_idempotent_and_service_role_only():
     sql = ASSET_REGISTRY_MIGRATION.read_text(encoding="utf-8")
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
@@ -87,7 +98,8 @@ def test_catalog_asset_registry_is_private_idempotent_and_service_role_only():
         assert "REVOKE ALL ON TABLE saas_catalog_assets FROM PUBLIC, anon, authenticated" in document
         assert "REVOKE ALL ON TABLE saas_catalog_assets FROM service_role" in document
         assert "GRANT SELECT ON TABLE saas_catalog_assets TO service_role" in document
-        assert "GRANT INSERT ON TABLE saas_catalog_assets TO service_role" not in document
+        for operation in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+            assert f"GRANT {operation} ON TABLE saas_catalog_assets TO service_role" not in document
         assert "saas_register_catalog_asset" in document
         assert "SECURITY DEFINER" in _function_sql(document, "saas_register_catalog_asset")
         assert "SET search_path = public, pg_temp" in _function_sql(document, "saas_register_catalog_asset")
@@ -125,23 +137,77 @@ def test_catalog_asset_cutover_manifest_is_private_and_independently_verified():
     sql = ASSET_REGISTRY_MIGRATION.read_text(encoding="utf-8")
     cutover = ASSET_REGISTRY_CUTOVER.read_text(encoding="utf-8")
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    for table in (
+        "saas_catalog_asset_cutover_batches",
+        "saas_catalog_assets",
+        "saas_catalog_asset_cutover_entries",
+    ):
+        assert _normalized_sql(_statement(sql, f"CREATE TABLE IF NOT EXISTS {table}")) == _normalized_sql(
+            _statement(bootstrap, f"CREATE TABLE IF NOT EXISTS {table}")
+        )
     for document in (sql, bootstrap):
         assert "CREATE TABLE IF NOT EXISTS saas_catalog_asset_cutover_entries" in document
         assert "PRIMARY KEY (batch_id, object_name)" in document
+        assert "status IN ('pending','loading','verified','failed')" in document
         assert "REVOKE ALL ON TABLE saas_catalog_asset_cutover_entries FROM PUBLIC, anon, authenticated" in document
-        assert "GRANT INSERT ON TABLE saas_catalog_asset_cutover_entries TO service_role" not in document
+        for table in ("saas_catalog_asset_cutover_batches", "saas_catalog_asset_cutover_entries"):
+            assert f"REVOKE ALL ON TABLE {table} FROM service_role" in document
+            assert f"GRANT SELECT ON TABLE {table} TO service_role" in document
+            service_grants = re.findall(
+                rf"(?is)GRANT\s+([^;]+?)\s+ON\s+TABLE\s+{table}\s+TO\s+service_role\s*;",
+                document,
+            )
+            assert service_grants
+            assert all(
+                re.search(r"\b(?:INSERT|UPDATE|DELETE|TRUNCATE|ALL)\b", grant, re.IGNORECASE) is None
+                for grant in service_grants
+            )
         for name in ("saas_start_catalog_asset_cutover_batch", "saas_add_catalog_asset_cutover_entry", "saas_finalize_catalog_asset_cutover_batch"):
             function = _function_sql(document, name)
             assert "SECURITY DEFINER" in function
             assert "public.saas_catalog_asset_cutover" in function
             assert " IS NULL" in function
+        assert "ON CONFLICT DO NOTHING" in _function_sql(document, "saas_start_catalog_asset_cutover_batch")
+        assert "ON CONFLICT DO NOTHING" in _function_sql(document, "saas_add_catalog_asset_cutover_entry")
+        starter = _function_sql(document, "saas_start_catalog_asset_cutover_batch")
+        assert "v_batch.manifest_digest IS DISTINCT FROM p_manifest_digest" in starter
+        assert "v_batch.keyset_digest IS DISTINCT FROM p_keyset_digest" in starter
+        assert "v_batch.expected_count IS DISTINCT FROM p_expected_count" in starter
+        adder = _function_sql(document, "saas_add_catalog_asset_cutover_entry")
+        assert "status='loading'" in re.sub(r"\s+", "", adder)
+        assert "catalog asset cutover entry conflict" in adder
     finalizer = _function_sql(sql, "saas_finalize_catalog_asset_cutover_batch")
     assert "public.saas_catalog_asset_cutover_entries" in finalizer
     assert "public.saas_catalog_assets" in finalizer
     assert "expected_count <> 2214" in finalizer
+    assert "extensions.digest" in finalizer
+    assert "v_keyset IS DISTINCT FROM v_batch.keyset_digest" in finalizer
+    assert "v_manifest IS DISTINCT FROM v_batch.manifest_digest" in finalizer
+    assert "v_matches <> 2214" in finalizer
+    assert "status='verified'" in re.sub(r"\s+", "", finalizer)
     assert "ON CONFLICT DO NOTHING" in _function_sql(sql, "saas_register_catalog_asset")
     assert "public.saas_catalog_assets%ROWTYPE" in _function_sql(sql, "saas_register_catalog_asset")
     assert "public.saas_catalog_asset_cutover_entries" in cutover
+    assert "JOIN public.saas_catalog_assets" in cutover
+    assert "cutover_batch_id = v_batch.batch_id" in cutover
+
+    for name in (
+        "saas_register_catalog_asset",
+        "saas_start_catalog_asset_cutover_batch",
+        "saas_add_catalog_asset_cutover_entry",
+        "saas_finalize_catalog_asset_cutover_batch",
+    ):
+        assert _normalized_sql(_function_definition(sql, name)) == _normalized_sql(
+            _function_definition(bootstrap, name)
+        )
+
+    for name in (
+        "saas_clone_catalog_candidate_with_asset",
+        "saas_clone_catalog_candidate_with_image_metadata",
+    ):
+        assert _normalized_sql(_function_definition(cutover, name)) == _normalized_sql(
+            _function_definition(bootstrap, name)
+        )
 
 
 def test_catalog_asset_security_definers_qualify_registry_and_clone_relations():
@@ -159,9 +225,47 @@ def test_catalog_asset_security_definers_qualify_registry_and_clone_relations():
                 continue
             function = _function_sql(document, name)
             assert "SECURITY DEFINER" in function and "SET search_path = public, pg_temp" in function
-            assert "FROM saas_" not in function
-            assert "INTO saas_" not in function
-            assert "UPDATE saas_" not in function
+            assert _unqualified_saas_relations(function) == []
+            assert re.search(r"(?<!extensions\.)\bgen_random_uuid\s*\(", function) is None
+            assert re.search(r"(?<!extensions\.)\bdigest\s*\(", function) is None
+
+
+def test_catalog_asset_rpcs_reject_null_inputs_explicitly():
+    registry = ASSET_REGISTRY_MIGRATION.read_text("utf-8")
+    cutover = ASSET_REGISTRY_CUTOVER.read_text("utf-8")
+    bootstrap = BOOTSTRAP.read_text("utf-8")
+    expected_null_guards = {
+        "saas_register_catalog_asset": (
+            "p_object_name IS NULL", "p_storage_provider IS NULL",
+            "p_physical_bucket IS NULL", "p_byte_size IS NULL", "p_mime_type IS NULL",
+        ),
+        "saas_start_catalog_asset_cutover_batch": (
+            "p_batch_id IS NULL", "p_expected_count IS NULL",
+            "p_manifest_digest IS NULL", "p_keyset_digest IS NULL",
+        ),
+        "saas_add_catalog_asset_cutover_entry": (
+            "p_batch_id IS NULL", "p_object_name IS NULL", "p_sha256 IS NULL",
+            "p_byte_size IS NULL", "p_mime_type IS NULL",
+        ),
+        "saas_finalize_catalog_asset_cutover_batch": ("p_batch_id IS NULL",),
+        "saas_clone_catalog_candidate_with_asset": (
+            "p_candidate_id IS NULL", "p_reviewed_by IS NULL",
+            "p_asset_object_name IS NULL", "p_json_path IS NULL",
+        ),
+        "saas_clone_catalog_candidate_with_image_metadata": (
+            "p_candidate_id IS NULL", "p_reviewed_by IS NULL",
+            "p_asset_object_name IS NULL", "p_json_path IS NULL",
+            "p_image_kind IS NULL", "p_image_label IS NULL",
+            "p_image_references IS NULL",
+        ),
+    }
+    for document in (registry, cutover, bootstrap):
+        for name, guards in expected_null_guards.items():
+            if f"CREATE OR REPLACE FUNCTION {name}" not in document:
+                continue
+            function = _function_sql(document, name)
+            for guard in guards:
+                assert guard in function, f"{name} lacks {guard}"
 
 
 def test_jome_lauco_migration_replaces_both_reservation_rpcs_safely():
@@ -1221,7 +1325,10 @@ def _local_postgres_test_context():
     dsn = os.environ.get("TASK6_LOCAL_POSTGRES_URL", "").strip()
     container = os.environ.get("TASK6_LOCAL_POSTGRES_CONTAINER", "").strip()
     if not dsn or not container:
-        pytest.skip("Task 6 PostgreSQL validation is opt-in")
+        pytest.skip(
+            "Certified local PostgreSQL validation is opt-in; "
+            "set TASK6_LOCAL_POSTGRES_URL and TASK6_LOCAL_POSTGRES_CONTAINER"
+        )
     parsed = urlsplit(dsn)
     if (
         parsed.scheme not in {"postgres", "postgresql"}
@@ -1249,6 +1356,47 @@ def _container_psql(container, user, password, database, sql):
     )
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
     return result.stdout.decode("utf-8")
+
+
+def _container_psql_failure(container, user, password, database, sql):
+    result = subprocess.run(
+        [
+            "docker", "exec", "-i", "-e", f"PGPASSWORD={password}", container,
+            "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1",
+            "-U", user, "-d", database,
+        ],
+        input=sql.encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0, result.stdout.decode("utf-8", errors="replace")
+    return result.stderr.decode("utf-8", errors="replace")
+
+
+def _start_container_psql(container, user, password, database, sql):
+    process = subprocess.Popen(
+        [
+            "docker", "exec", "-i", "-e", f"PGPASSWORD={password}", container,
+            "psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1",
+            "-U", user, "-d", database, "-At",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    process.stdin.write(sql.encode("utf-8"))
+    process.stdin.close()
+    return process
+
+
+def _finish_container_psql(process):
+    returncode = process.wait(timeout=30)
+    assert process.stdout is not None and process.stderr is not None
+    stdout = process.stdout.read().decode("utf-8", errors="replace")
+    stderr = process.stderr.read().decode("utf-8", errors="replace")
+    assert returncode == 0, stderr
+    return stdout
 
 
 _LOCAL_SUPABASE_STORAGE_SHIM = """
@@ -1511,16 +1659,354 @@ def test_local_postgres_applies_task6_bootstrap_and_forward_migration():
 
 
 def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
-    """Ejercita el contrato real cuando existe el contenedor local certificado."""
+    """Ejercita concurrencia, ACL, manifiesto y clones en PostgreSQL real opt-in."""
     container, user, password, database = _local_postgres_test_context()
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
     registry = ASSET_REGISTRY_MIGRATION.read_text(encoding="utf-8")
+    cutover = ASSET_REGISTRY_CUTOVER.read_text(encoding="utf-8")
     _container_psql(container, user, password, database, _LOCAL_SUPABASE_STORAGE_SHIM)
     _container_psql(container, user, password, database, bootstrap)
     _container_psql(container, user, password, database, registry)
-    checks = _container_psql(container, user, password, database, """
-        SELECT has_table_privilege('service_role', 'public.saas_catalog_asset_cutover_entries', 'INSERT')::TEXT;
-        SELECT has_function_privilege('anon', 'public.saas_register_catalog_asset(text,text,text,bigint,text)', 'EXECUTE')::TEXT;
-        SELECT has_function_privilege('service_role', 'public.saas_register_catalog_asset(text,text,text,bigint,text)', 'EXECUTE')::TEXT;
+
+    concurrent_object = "a" * 64 + ".png"
+    first = _start_container_psql(container, user, password, database, f"""
+        BEGIN;
+        SET LOCAL ROLE service_role;
+        SELECT public.saas_register_catalog_asset(
+            '{concurrent_object}', 'r2', 'catalog-assets', 123, 'image/png'
+        );
+        SELECT pg_sleep(2);
+        COMMIT;
     """)
-    assert checks.splitlines() == ["false", "false", "true"]
+    time.sleep(0.5)
+    second = _start_container_psql(container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_register_catalog_asset(
+            '{concurrent_object}', 'r2', 'catalog-assets', 123, 'image/png'
+        );
+    """)
+    assert concurrent_object in _finish_container_psql(first)
+    assert concurrent_object in _finish_container_psql(second)
+    concurrent_count = _container_psql(
+        container, user, password, database,
+        f"SELECT COUNT(*) FROM public.saas_catalog_assets WHERE object_name='{concurrent_object}';",
+    )
+    assert concurrent_count.strip() == "1"
+    conflict = _container_psql_failure(container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_register_catalog_asset(
+            '{concurrent_object}', 'r2', 'catalog-assets', 124, 'image/png'
+        );
+    """)
+    assert "Catalog asset registry conflict" in conflict
+
+    roles_and_rls = _container_psql(container, user, password, database, """
+        SELECT role_name || ':' || table_name || ':' ||
+               has_table_privilege(role_name, 'public.' || table_name, 'SELECT')::TEXT || ':' ||
+               has_table_privilege(role_name, 'public.' || table_name, 'INSERT')::TEXT || ':' ||
+               has_table_privilege(role_name, 'public.' || table_name, 'UPDATE')::TEXT || ':' ||
+               has_table_privilege(role_name, 'public.' || table_name, 'DELETE')::TEXT
+        FROM unnest(ARRAY['anon','authenticated']) AS roles(role_name)
+        CROSS JOIN unnest(ARRAY[
+            'saas_catalog_assets',
+            'saas_catalog_asset_cutover_batches',
+            'saas_catalog_asset_cutover_entries'
+        ]) AS tables(table_name)
+        ORDER BY role_name, table_name;
+        SELECT 'service:' || table_name || ':' ||
+               has_table_privilege('service_role', 'public.' || table_name, 'SELECT')::TEXT || ':' ||
+               has_table_privilege('service_role', 'public.' || table_name, 'INSERT')::TEXT || ':' ||
+               has_table_privilege('service_role', 'public.' || table_name, 'UPDATE')::TEXT || ':' ||
+               has_table_privilege('service_role', 'public.' || table_name, 'DELETE')::TEXT
+        FROM unnest(ARRAY[
+            'saas_catalog_assets',
+            'saas_catalog_asset_cutover_batches',
+            'saas_catalog_asset_cutover_entries'
+        ]) AS tables(table_name)
+        ORDER BY table_name;
+        SELECT 'rls:' || COUNT(*) FILTER (WHERE relrowsecurity) || ':' ||
+               COUNT(*) FILTER (WHERE NOT relrowsecurity)
+        FROM pg_class
+        WHERE oid = ANY(ARRAY[
+            'public.saas_catalog_assets'::regclass,
+            'public.saas_catalog_asset_cutover_batches'::regclass,
+            'public.saas_catalog_asset_cutover_entries'::regclass
+        ]);
+        SELECT 'policies:' || COUNT(*) FROM pg_policies
+        WHERE schemaname='public' AND tablename = ANY(ARRAY[
+            'saas_catalog_assets',
+            'saas_catalog_asset_cutover_batches',
+            'saas_catalog_asset_cutover_entries'
+        ]);
+        SELECT 'public-table-acl:' || COUNT(*)
+        FROM pg_class AS relation
+        CROSS JOIN LATERAL aclexplode(
+            COALESCE(relation.relacl, acldefault('r', relation.relowner))
+        ) AS acl
+        WHERE relation.oid = ANY(ARRAY[
+            'public.saas_catalog_assets'::regclass,
+            'public.saas_catalog_asset_cutover_batches'::regclass,
+            'public.saas_catalog_asset_cutover_entries'::regclass
+        ]) AND acl.grantee = 0;
+    """)
+    acl_lines = roles_and_rls.splitlines()
+    assert len([line for line in acl_lines if line.endswith(":false:false:false:false")]) == 6
+    assert len([line for line in acl_lines if line.startswith("service:") and line.endswith(":true:false:false:false")]) == 3
+    assert "rls:3:0" in acl_lines
+    assert "policies:0" in acl_lines
+    assert "public-table-acl:0" in acl_lines
+
+    def series_rows(prefix, count=2214):
+        return f"""
+            SELECT i,
+                   encode(extensions.digest(convert_to('{prefix}-' || i::TEXT, 'UTF8'), 'sha256'), 'hex') AS sha256,
+                   encode(extensions.digest(convert_to('{prefix}-' || i::TEXT, 'UTF8'), 'sha256'), 'hex') || '.png' AS object_name
+            FROM generate_series(1, {count}) AS generated(i)
+        """
+
+    def start_batch(batch_id, prefix, count=2214, manifest="computed", keyset="computed"):
+        rows = series_rows(prefix, count)
+        manifest_sql = (
+            "encode(extensions.digest(convert_to(string_agg(object_name || '|' || sha256 || '|' || i::TEXT || '|image/png', E'\\n' ORDER BY object_name), 'UTF8'), 'sha256'), 'hex')"
+            if manifest == "computed" else f"'{manifest}'"
+        )
+        keyset_sql = (
+            "encode(extensions.digest(convert_to(string_agg(object_name, E'\\n' ORDER BY object_name), 'UTF8'), 'sha256'), 'hex')"
+            if keyset == "computed" else f"'{keyset}'"
+        )
+        return _container_psql(container, user, password, database, f"""
+            SET ROLE service_role;
+            WITH rows AS ({rows})
+            SELECT public.saas_start_catalog_asset_cutover_batch(
+                '{batch_id}'::UUID, 2214, {manifest_sql}, {keyset_sql}
+            ) FROM rows;
+        """)
+
+    def load_batch(batch_id, prefix, count=2214):
+        rows = series_rows(prefix, count)
+        loaded = _container_psql(container, user, password, database, f"""
+            SET ROLE service_role;
+            WITH rows AS ({rows})
+            SELECT COUNT(*) FROM (
+                SELECT public.saas_add_catalog_asset_cutover_entry(
+                    '{batch_id}'::UUID, object_name, sha256, i, 'image/png'
+                ) FROM rows
+            ) AS accepted;
+        """)
+        assert loaded.strip() == str(count)
+
+    def register_series(prefix, count=2214):
+        rows = series_rows(prefix, count)
+        registered = _container_psql(container, user, password, database, f"""
+            SET ROLE service_role;
+            WITH rows AS ({rows})
+            SELECT COUNT(*) FROM (
+                SELECT public.saas_register_catalog_asset(
+                    object_name, 'r2', 'catalog-assets', i, 'image/png'
+                ) FROM rows
+            ) AS accepted;
+        """)
+        assert registered.strip() == str(count)
+
+    def finalize_failure(batch_id, expected_message):
+        failure = _container_psql_failure(container, user, password, database, f"""
+            SET ROLE service_role;
+            SELECT public.saas_finalize_catalog_asset_cutover_batch('{batch_id}'::UUID);
+        """)
+        assert expected_message in failure
+
+    token = uuid.uuid4().hex
+    shared_prefix = f"task3-shared-{token}"
+    missing_prefix = f"task3-registry-missing-{token}"
+    manifest_batch = uuid.uuid4()
+    start_batch(manifest_batch, shared_prefix, manifest="0" * 64)
+    register_series(shared_prefix)
+    load_batch(manifest_batch, shared_prefix)
+    finalize_failure(manifest_batch, "catalog asset cutover manifest is not verified")
+
+    keyset_batch = uuid.uuid4()
+    start_batch(keyset_batch, shared_prefix, keyset="1" * 64)
+    load_batch(keyset_batch, shared_prefix)
+    finalize_failure(keyset_batch, "catalog asset cutover manifest is not verified")
+
+    short_batch = uuid.uuid4()
+    start_batch(short_batch, shared_prefix, count=2213)
+    load_batch(short_batch, shared_prefix, count=2213)
+    finalize_failure(short_batch, "catalog asset cutover manifest is not verified")
+
+    registry_batch = uuid.uuid4()
+    start_batch(registry_batch, missing_prefix)
+    load_batch(registry_batch, missing_prefix)
+    finalize_failure(registry_batch, "catalog asset cutover registry mismatch")
+
+    verified_batch = uuid.uuid4()
+    start_batch(verified_batch, shared_prefix)
+    frozen = _container_psql_failure(container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_start_catalog_asset_cutover_batch(
+            '{verified_batch}'::UUID, 2214, '{'2' * 64}', '{'3' * 64}'
+        );
+    """)
+    assert "catalog asset cutover batch conflict" in frozen
+    load_batch(verified_batch, shared_prefix)
+    finalized = _container_psql(container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_finalize_catalog_asset_cutover_batch('{verified_batch}'::UUID);
+    """)
+    assert finalized.strip() == str(verified_batch)
+    immutable = _container_psql_failure(container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_add_catalog_asset_cutover_entry(
+            '{verified_batch}'::UUID, '{'f' * 64}.png', '{'f' * 64}', 1, 'image/png'
+        );
+    """)
+    assert "catalog asset cutover batch is not loading" in immutable
+
+    _container_psql(container, user, password, database, cutover)
+
+    null_cases = (
+        (
+            "SELECT public.saas_register_catalog_asset(NULL, 'r2', 'catalog-assets', 1, 'image/png');",
+            "invalid catalog asset registry input",
+        ),
+        (
+            f"SELECT public.saas_start_catalog_asset_cutover_batch(NULL, 2214, '{'0' * 64}', '{'1' * 64}');",
+            "invalid catalog asset cutover batch",
+        ),
+        (
+            f"SELECT public.saas_add_catalog_asset_cutover_entry(NULL, '{'f' * 64}.png', '{'f' * 64}', 1, 'image/png');",
+            "invalid catalog asset cutover entry",
+        ),
+        (
+            "SELECT public.saas_finalize_catalog_asset_cutover_batch(NULL);",
+            "invalid catalog asset cutover batch",
+        ),
+        (
+            f"SELECT public.saas_clone_catalog_candidate_with_asset(NULL, 1, '{'f' * 64}.png', ARRAY['items','0']);",
+            "invalid catalog item asset target",
+        ),
+        (
+            f"SELECT public.saas_clone_catalog_candidate_with_image_metadata(extensions.gen_random_uuid(), 1, '{'f' * 64}.png', ARRAY['items','0'], 'official', NULL, ARRAY[]::TEXT[]);",
+            "invalid catalog image metadata",
+        ),
+    )
+    for statement, expected_error in null_cases:
+        failure = _container_psql_failure(container, user, password, database, f"""
+            SET ROLE service_role;
+            {statement}
+        """)
+        assert expected_error in failure
+
+    rpc_acl = _container_psql(container, user, password, database, """
+        SELECT role_name || ':' || COUNT(*) FILTER (
+            WHERE has_function_privilege(role_name, routine, 'EXECUTE')
+        )
+        FROM unnest(ARRAY['anon','authenticated','service_role']) AS roles(role_name)
+        CROSS JOIN unnest(ARRAY[
+            'public.saas_register_catalog_asset(text,text,text,bigint,text)',
+            'public.saas_start_catalog_asset_cutover_batch(uuid,integer,text,text)',
+            'public.saas_add_catalog_asset_cutover_entry(uuid,text,text,bigint,text)',
+            'public.saas_finalize_catalog_asset_cutover_batch(uuid)',
+            'public.saas_clone_catalog_candidate_with_asset(uuid,integer,text,text[])',
+            'public.saas_clone_catalog_candidate_with_image_metadata(uuid,integer,text,text[],text,text,text[])'
+        ]) AS routines(routine)
+        GROUP BY role_name ORDER BY role_name;
+        SELECT 'public-function-acl:' || COUNT(*)
+        FROM pg_proc AS routine
+        CROSS JOIN LATERAL aclexplode(
+            COALESCE(routine.proacl, acldefault('f', routine.proowner))
+        ) AS acl
+        WHERE routine.oid = ANY(ARRAY[
+            'public.saas_register_catalog_asset(text,text,text,bigint,text)'::regprocedure,
+            'public.saas_start_catalog_asset_cutover_batch(uuid,integer,text,text)'::regprocedure,
+            'public.saas_add_catalog_asset_cutover_entry(uuid,text,text,bigint,text)'::regprocedure,
+            'public.saas_finalize_catalog_asset_cutover_batch(uuid)'::regprocedure,
+            'public.saas_clone_catalog_candidate_with_asset(uuid,integer,text,text[])'::regprocedure,
+            'public.saas_clone_catalog_candidate_with_image_metadata(uuid,integer,text,text[],text,text,text[])'::regprocedure
+        ]) AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE';
+    """)
+    assert rpc_acl.splitlines() == [
+        "anon:0", "authenticated:0", "service_role:6", "public-function-acl:0",
+    ]
+
+    admin_email = f"task3-{token}@example.test"
+    run_asset, run_metadata = uuid.uuid4(), uuid.uuid4()
+    candidate_asset, candidate_metadata = uuid.uuid4(), uuid.uuid4()
+    asset_source_hash = token * 2
+    metadata_source_hash = token[::-1] * 2
+    object_sql = f"encode(extensions.digest(convert_to('{shared_prefix}-1', 'UTF8'), 'sha256'), 'hex') || '.png'"
+    clone_setup = f"""
+        INSERT INTO public.saas_usuarios(email, hashed_password, es_admin, activo)
+        VALUES ('{admin_email}', 'not-a-real-password', TRUE, TRUE);
+        INSERT INTO public.saas_catalog_sources(
+            supplier, label, adapter, graph_drive_id, graph_root_item_id
+        ) VALUES ('requiez', 'Requiez', 'requiez', 'task3-drive', 'task3-root')
+        ON CONFLICT (supplier) DO NOTHING;
+        INSERT INTO public.saas_catalog_sync_runs(
+            id, source_id, request_key, trigger_type, status, requested_by, metrics, started_at
+        ) VALUES (
+            '{run_asset}'::UUID, (SELECT id FROM public.saas_catalog_sources WHERE supplier='requiez'),
+            '{uuid.uuid4()}'::UUID, 'manual', 'running',
+            (SELECT id FROM public.saas_usuarios WHERE email='{admin_email}'), '{{}}'::JSONB, NOW()
+        );
+        INSERT INTO public.saas_catalog_snapshot_versions(
+            id, supplier, source_hash, generated_at, status, payload, sync_run_id, base_published_version_id
+        ) VALUES (
+            '{candidate_asset}'::UUID, 'requiez', '{asset_source_hash}', '2026-08-31T12:00:00Z', 'candidate',
+            jsonb_build_object('supplier','requiez','source_hash','{asset_source_hash}','generated_at','2026-08-31T12:00:00Z','items',jsonb_build_array(jsonb_build_object('internal_id','asset-item','attributes','{{}}'::JSONB))),
+            '{run_asset}'::UUID, NULL
+        );
+        UPDATE public.saas_catalog_sync_runs
+        SET status='awaiting_approval', candidate_version_id='{candidate_asset}'::UUID, finished_at=NOW(), updated_at=NOW()
+        WHERE id='{run_asset}'::UUID;
+        INSERT INTO public.saas_catalog_sync_runs(
+            id, source_id, request_key, trigger_type, status, requested_by, metrics, started_at
+        ) VALUES (
+            '{run_metadata}'::UUID, (SELECT id FROM public.saas_catalog_sources WHERE supplier='requiez'),
+            '{uuid.uuid4()}'::UUID, 'manual', 'running',
+            (SELECT id FROM public.saas_usuarios WHERE email='{admin_email}'), '{{}}'::JSONB, NOW()
+        );
+        INSERT INTO public.saas_catalog_snapshot_versions(
+            id, supplier, source_hash, generated_at, status, payload, sync_run_id, base_published_version_id
+        ) VALUES (
+            '{candidate_metadata}'::UUID, 'requiez', '{metadata_source_hash}', '2026-08-31T12:01:00Z', 'candidate',
+            jsonb_build_object('supplier','requiez','source_hash','{metadata_source_hash}','generated_at','2026-08-31T12:01:00Z','items',jsonb_build_array(jsonb_build_object('internal_id','metadata-item','attributes','{{}}'::JSONB))),
+            '{run_metadata}'::UUID, NULL
+        );
+        UPDATE public.saas_catalog_sync_runs
+        SET status='awaiting_approval', candidate_version_id='{candidate_metadata}'::UUID, finished_at=NOW(), updated_at=NOW()
+        WHERE id='{run_metadata}'::UUID;
+        SELECT 'storage:' || COUNT(*) FROM storage.objects WHERE bucket_id='catalog-assets' AND name=({object_sql});
+    """
+    assert "storage:0" in _container_psql(container, user, password, database, clone_setup).splitlines()
+    cloned = _container_psql(container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_clone_catalog_candidate_with_asset(
+            '{candidate_asset}'::UUID,
+            (SELECT id FROM public.saas_usuarios WHERE email='{admin_email}'),
+            ({object_sql}), ARRAY['items','0']
+        );
+        SELECT public.saas_clone_catalog_candidate_with_image_metadata(
+            '{candidate_metadata}'::UUID,
+            (SELECT id FROM public.saas_usuarios WHERE email='{admin_email}'),
+            ({object_sql}), ARRAY['items','0'], 'generated_reference',
+            'Referencia Task 3', ARRAY['https://example.test/reference']
+        );
+    """)
+    assert len(cloned.splitlines()) == 2
+    clone_payloads = _container_psql(container, user, password, database, f"""
+        SELECT run.id::TEXT || '|' ||
+               version.payload #>> '{{items,0,attributes,approved_asset,bucket}}' || '|' ||
+               version.payload #>> '{{items,0,attributes,approved_asset,path}}'
+        FROM public.saas_catalog_sync_runs AS run
+        JOIN public.saas_catalog_snapshot_versions AS version
+          ON version.id = run.candidate_version_id
+        WHERE run.id IN ('{run_asset}'::UUID, '{run_metadata}'::UUID)
+        ORDER BY run.id;
+    """)
+    payload_lines = clone_payloads.splitlines()
+    assert len(payload_lines) == 2
+    expected_object = _container_psql(
+        container, user, password, database, f"SELECT ({object_sql});"
+    ).strip()
+    assert all(line.endswith(f"|catalog-assets|{expected_object}") for line in payload_lines)
