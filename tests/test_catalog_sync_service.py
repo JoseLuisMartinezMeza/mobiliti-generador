@@ -170,12 +170,14 @@ def graph_item(*, item_id="graph-1", name="SPEC Guide-Alma-KUN.xlsx",
 
 
 class FakeRepository:
-    def __init__(self, *, active=(), history=(), published_snapshot=None, start=True):
+    def __init__(self, *, active=(), history=(), published_snapshot=None, start=True,
+                 asset_matches=None):
         self.source = source()
         self.active = {row.drive_item_id: row for row in active}
         self.history = {(row.drive_item_id, row.e_tag): row for row in (*active, *history)}
         self.published_snapshot = published_snapshot
         self.start = start
+        self.asset_matches = dict(asset_matches or {})
         self.calls = []
         self.next_file_id = 100
 
@@ -214,6 +216,10 @@ class FakeRepository:
     def store_catalog_asset_if_absent(self, object_name, content, content_type):
         self.calls.append(("store_catalog_asset_if_absent", object_name, content, content_type))
         return object_name
+
+    def catalog_asset_matches(self, object_name, sha256, size, mime_type):
+        self.calls.append(("catalog_asset_matches", object_name, sha256, size, mime_type))
+        return self.asset_matches.get(object_name, True)
 
     def materialize_raw_if_present(self, row, destination):
         self.calls.append(("materialize_raw_if_present", row.id, destination))
@@ -2341,6 +2347,7 @@ def test_alma_sidecar_no_changes_does_not_store_assets_or_stage():
     assert "store_catalog_asset_if_absent" not in names
     assert "stage_candidate" not in names
     assert "auto_publish_candidate" not in names
+    assert "catalog_asset_matches" not in names
     assert names.count("finish_no_changes") == 1
     assert metrics(result)["official_images_planned"] == 2
     assert metrics(result)["unique_assets_planned"] == 1
@@ -2370,6 +2377,26 @@ def test_sidecar_change_stores_only_asset_missing_from_published_snapshot():
     assert result.status == "awaiting_approval"
     stored = [entry[1] for entry in repo.calls if entry[0] == "store_catalog_asset_if_absent"]
     assert stored == [hashlib.sha256(second_asset).hexdigest() + ".png"]
+    checked = [entry[1] for entry in repo.calls if entry[0] == "catalog_asset_matches"]
+    assert checked == [hashlib.sha256(first_asset).hexdigest() + ".png"]
+
+
+def test_changed_snapshot_restores_missing_asset_referenced_by_published_snapshot():
+    build = _alma_sidecar(snapshot(source_hash="c" * 64))
+    object_name = next(iter(build.assets_by_sha256)) + ".png"
+    prior_payload = deepcopy(build.snapshot)
+    prior_payload["source_hash"] = "a" * 64
+    repo = FakeRepository(
+        active=(source_file(),),
+        published_snapshot=published(prior_payload),
+        asset_matches={object_name: None},
+    )
+
+    result = call(repo, FakeGraph(), lambda files: build)
+
+    assert result.status == "awaiting_approval"
+    stored = [entry[1] for entry in repo.calls if entry[0] == "store_catalog_asset_if_absent"]
+    assert stored == [object_name]
 
 
 def test_alma_sidecar_uploads_before_stage_with_asset_metadata_attached():

@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import io
 import json
@@ -134,6 +135,19 @@ def request_parts(opener, index=0):
     request, timeout = opener.requests[index]
     parsed = urlsplit(request.full_url)
     return request, parsed, parse_qs(parsed.query), timeout
+
+
+def catalog_asset_info(object_name, sha256, size, mime_type):
+    return {
+        "id": "asset-id",
+        "version": "asset-version",
+        "name": object_name,
+        "bucket_id": "catalog-assets",
+        "created_at": "2026-07-16T12:00:00Z",
+        "size": size,
+        "content_type": mime_type,
+        "metadata": {"sha256": sha256},
+    }
 
 
 def test_from_environment_requires_valid_supabase_configuration(monkeypatch):
@@ -699,6 +713,7 @@ def test_store_catalog_asset_is_content_addressed_and_never_upserts():
     assert parsed.path == f"/storage/v1/object/catalog-assets/{object_name}"
     assert request.headers["Content-type"] == "image/png"
     assert request.headers["X-upsert"] == "false"
+    assert json.loads(base64.b64decode(request.headers["X-metadata"])) == {"sha256": digest}
     assert request.data == content
 
 
@@ -737,18 +752,14 @@ def test_store_catalog_asset_rejects_more_than_eight_mib_without_network():
     assert opener.requests == []
 
 
-def test_store_catalog_asset_conflict_accepts_matching_head_metadata_without_body_get():
+def test_store_catalog_asset_conflict_accepts_matching_info_metadata_without_body_get():
     content = b"\x89PNG\r\n\x1a\nofficial image"
     digest = hashlib.sha256(content).hexdigest()
     object_name = digest + ".png"
     conflict = HTTPError("redacted", 409, "conflict", {}, io.BytesIO(b"exists"))
     repo, opener = repository([
         conflict,
-        Response(200, b"", {
-            "Content-Type": "image/png",
-            "Content-Length": str(len(content)),
-            "x-amz-meta-sha256": digest,
-        }),
+        response(200, catalog_asset_info(object_name, digest, len(content), "image/png")),
     ])
 
     assert repo.store_catalog_asset_if_absent(
@@ -756,40 +767,74 @@ def test_store_catalog_asset_conflict_accepts_matching_head_metadata_without_bod
     ) == object_name
 
     confirmation, parsed, query, _ = request_parts(opener, 1)
-    assert confirmation.method == "HEAD" and query == {}
+    assert confirmation.method == "GET" and query == {}
     assert parsed.path == (
-        f"/storage/v1/object/catalog-assets/{object_name}"
+        f"/storage/v1/object/info/catalog-assets/{object_name}"
     )
     assert len(opener.requests) == 2
 
 
 @pytest.mark.parametrize("field,value", [
-    ("x-amz-meta-sha256", "0" * 64),
-    ("Content-Length", "0"),
-    ("Content-Type", "image/jpeg"),
-    ("x-amz-meta-sha256", None),
+    ("sha256", "0" * 64),
+    ("size", 0),
+    ("content_type", "image/jpeg"),
+    ("sha256", None),
 ])
-def test_store_catalog_asset_conflict_rejects_unverified_head_metadata(field, value):
+def test_store_catalog_asset_conflict_rejects_unverified_info_metadata(field, value):
     content = b"\x89PNG\r\n\x1a\nofficial image"
     digest = hashlib.sha256(content).hexdigest()
     object_name = digest + ".png"
     conflict = HTTPError("redacted", 409, "conflict", {}, io.BytesIO(b"exists"))
-    headers = {
-        "Content-Type": "image/png",
-        "Content-Length": str(len(content)),
-        "x-amz-meta-sha256": digest,
-    }
+    info = catalog_asset_info(object_name, digest, len(content), "image/png")
     if value is None:
-        headers.pop(field)
+        info["metadata"].pop(field)
     else:
-        headers[field] = value
-    repo, opener = repository([conflict, Response(200, b"", headers)])
+        target = info["metadata"] if field == "sha256" else info
+        target[field] = value
+    repo, opener = repository([conflict, response(200, info)])
 
     with pytest.raises(CatalogRepositoryError, match="storage"):
         repo.store_catalog_asset_if_absent(object_name, content, "image/png")
 
     assert len(opener.requests) == 2
-    assert request_parts(opener, 1)[0].method == "HEAD"
+    assert request_parts(opener, 1)[0].method == "GET"
+
+
+def test_catalog_asset_matches_uses_info_metadata_without_asset_body():
+    content = b"\x89PNG\r\n\x1a\nofficial image"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    repo, opener = repository([
+        response(200, catalog_asset_info(object_name, digest, len(content), "image/png")),
+    ])
+
+    assert repo.catalog_asset_matches(object_name, digest, len(content), "image/png") is True
+
+    request, parsed, query, _ = request_parts(opener)
+    assert request.method == "GET" and query == {}
+    assert parsed.path == f"/storage/v1/object/info/catalog-assets/{object_name}"
+
+
+def test_catalog_asset_matches_rejects_info_metadata_with_missing_or_wrong_fields():
+    content = b"\x89PNG\r\n\x1a\nofficial image"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    invalid = catalog_asset_info(object_name, digest, len(content), "image/png")
+    invalid["metadata"].pop("sha256")
+    repo, _ = repository([response(200, invalid)])
+
+    assert repo.catalog_asset_matches(object_name, digest, len(content), "image/png") is False
+
+
+def test_catalog_asset_matches_returns_none_only_when_info_reports_not_found():
+    content = b"\x89PNG\r\n\x1a\nofficial image"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    missing = HTTPError("redacted", 404, "missing", {}, io.BytesIO(b"missing"))
+    repo, opener = repository([missing])
+
+    assert repo.catalog_asset_matches(object_name, digest, len(content), "image/png") is None
+    assert request_parts(opener)[0].method == "GET"
 
 
 def test_store_raw_reads_one_verified_descriptor_and_detects_identity_change(tmp_path, monkeypatch):

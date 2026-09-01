@@ -63,6 +63,7 @@ _REPOSITORY_METHODS = (
     "list_latest_files", "store_raw_if_absent", "materialize_raw_if_present",
     "record_source_file", "mark_file_deleted",
     "stage_candidate", "finish_no_changes", "finish_failed", "auto_publish_candidate",
+    "catalog_asset_matches",
 )
 _GRAPH_METHODS = ("iter_delta", "download_content")
 _SUPPLIERS = (
@@ -434,7 +435,13 @@ def _run_supplier_sync(
             for sha256, asset in sorted(asset_build.assets_by_sha256.items()):
                 object_name = f"{sha256}.png"
                 if object_name in previous_assets:
-                    continue
+                    asset_status = repository.catalog_asset_matches(
+                        object_name, sha256, len(asset.data), asset.media_type
+                    )
+                    if asset_status is True:
+                        continue
+                    if asset_status is not None:
+                        raise ValueError
                 if store_asset(object_name, asset.data, asset.media_type) != object_name:
                     raise ValueError
 

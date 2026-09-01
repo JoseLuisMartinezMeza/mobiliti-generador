@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import os
@@ -746,38 +747,63 @@ class CatalogRepository:
                 "apikey": self._service_key,
                 "Content-Type": content_type,
                 "x-upsert": "false",
-                "x-amz-meta-sha256": match.group(1),
+                "x-metadata": base64.b64encode(
+                    json.dumps({"sha256": match.group(1)}, separators=(",", ":")).encode()
+                ).decode(),
             },
         )
         try:
             self._open(request, (200, 201), max_bytes=_MAX_STORAGE_RESPONSE_BYTES)
         except _HTTPStatus as error:
-            if error.code != 409 or not self._catalog_asset_matches(
+            if error.code != 409 or self.catalog_asset_matches(
                 object_name, match.group(1), len(content), content_type
-            ):
+            ) is not True:
                 raise CatalogRepositoryError("Catalog storage request failed") from None
         return object_name
 
-    def _catalog_asset_matches(self, object_name, expected_sha256, expected_size, expected_mime):
+    def catalog_asset_matches(self, object_name, expected_sha256, expected_size, expected_mime):
+        match = _CATALOG_ASSET_NAME.fullmatch(object_name) if isinstance(object_name, str) else None
+        if (
+            match is None
+            or expected_sha256 != match.group(1)
+            or type(expected_size) is not int
+            or not 0 <= expected_size <= _MAX_CATALOG_ASSET_BYTES
+            or expected_mime != "image/png"
+        ):
+            raise CatalogRepositoryError("Invalid catalog asset")
         request = Request(
-            f"{self._base_url}/storage/v1/object/catalog-assets/{object_name}",
-            method="HEAD",
+            f"{self._base_url}/storage/v1/object/info/catalog-assets/{object_name}",
+            method="GET",
             headers={
+                "Accept": "application/json",
                 "Authorization": f"Bearer {self._service_key}",
                 "apikey": self._service_key,
             },
         )
         try:
-            _, headers = self._open(request, (200,), max_bytes=0)
-        except (_HTTPStatus, CatalogRepositoryError):
+            raw, _ = self._open(
+                request, (200,), require_json=True, max_bytes=_MAX_STORAGE_RESPONSE_BYTES
+            )
+        except _HTTPStatus as error:
+            if error.code == 404:
+                return None
+            raise CatalogRepositoryError("Catalog storage request failed") from None
+        except CatalogRepositoryError:
             return False
-        content_type = headers.get("content-type")
-        content_length = headers.get("content-length")
-        sha256 = headers.get("x-amz-meta-sha256")
+        try:
+            info = json.loads(raw)
+        except (TypeError, ValueError):
+            return False
+        metadata = info.get("metadata") if isinstance(info, dict) else None
         return (
-            content_type == expected_mime
-            and content_length == str(expected_size)
-            and sha256 == expected_sha256
+            isinstance(info, dict)
+            and info.get("name") == object_name
+            and info.get("bucket_id") == "catalog-assets"
+            and type(info.get("size")) is int
+            and info["size"] == expected_size
+            and info.get("content_type") == expected_mime
+            and isinstance(metadata, dict)
+            and metadata.get("sha256") == expected_sha256
         )
 
     def _raw_exists(self, name):
