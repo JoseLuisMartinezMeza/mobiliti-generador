@@ -13,7 +13,9 @@ Commits locales:
 - `96641ac` — clasificación fail-closed del SQL sensible por contenido.
 - `e50e387` — reporte del primer follow-up independiente.
 - `8ebb5c4` — canonicalización y fingerprint del stream de tokens SQL.
-- `este commit (HEAD en el handoff)` — reporte del segundo follow-up.
+- `79c7bca` — reporte del segundo follow-up independiente.
+- `a309b51` — runner restringido a los tres archivos SQL canónicos.
+- `este commit (HEAD en el handoff)` — reporte del tercer follow-up.
 
 Estado operativo: **Gate 8 live no ejecutado**. No hubo deploy, push, DDL,
 lectura/escritura live, cambio de secretos, mutación Cloudflare, borrado ni
@@ -63,38 +65,22 @@ los contratos textuales y la paridad real A/bootstrap y B/bootstrap pasaron.
 - A+B se rechazan en una misma invocación;
 - dry-run sigue siendo el default, no abre DB y no imprime DATABASE_URL.
 
-El review independiente posterior a `88a0ece` detectó que esas barreras todavía
-dependían de `Path.resolve()`: una copia o hardlink podía cambiar de nombre y
-evadirlas. `96641ac` añade clasificación por contenido además de conservar la
-identidad de rutas conocidas. El helper puro normaliza BOM, mayúsculas y
-whitespace, reconoce sentinelas estructurales de bootstrap/A/B y separa una B
-con pins alterados como `cutover_unpinned`. Los roles se unen por documento y
-por toda la selección, de modo que A+B también se rechaza dentro de un único
-archivo o repartida entre varios. SQL arbitrario que no coincide con esos
-contratos continúa permitido.
+Los dos primeros follow-ups probaron que clasificar SQL arbitrario por
+substrings o por un lexer propio mantenía una superficie innecesaria. El diseño
+vigente de `a309b51` elimina por completo parser, tokens y sentinelas:
 
-Los documentos se leen una sola vez antes de cualquier conexión; el mismo texto
-validado es el que se resume y, sólo con `--apply`, se ejecutaría. Una copia de
-bootstrap mediante `--file` exige usar el modo explícito canónico, una copia de
-B exige el UUID certificado exacto y una B estructural con batch/digests
-alterados falla cerrada. No se imprime el SQL ni DATABASE_URL.
+- `--bootstrap-new-project` selecciona únicamente `create_tables.sql` canónico;
+- `--file` acepta exactamente una ruta canónica: A o B;
+- copias, hardlinks, symlinks, renombrados, quoted SQL, SQL arbitrario y uno o
+  dos archivos A+B se rechazan por allowlist antes de consultar DATABASE_URL;
+- cada contenido canónico se valida con SHA-256 hardcodeado sobre UTF-8 con
+  CRLF/CR normalizado a LF;
+- B continúa exigiendo la confirmación UUID exacta.
 
-Un segundo re-review encontró que los sentinelas de texto aún podían evadirse
-separando `public . tabla`, que los valores esperados podían aparecer sólo en
-comentarios y que la lista parcial de pins no cubría `missing_count`,
-`failed_count` ni `verified_at`. `8ebb5c4` reemplaza esos substrings por un lexer
-determinista: ignora BOM, whitespace, comentarios de línea y bloques anidados
-fuera de strings; conserva strings e identificadores quoted; y produce tokens
-canónicos con fingerprint SHA-256 length-prefixed. Los fingerprints fijan la
-secuencia completa de bootstrap, A y B, no sólo valores sueltos.
-
-Así, una B válida permite únicamente variaciones de comentarios/whitespace y
-por equivalencia conserva UUID, ambos digests, status `verified`, 2214/2214,
-0/0 y `verified_at IS NOT NULL`. Una ruta canónica con contenido cambiado ya no
-es confiable por su nombre: se marca como no canónica. También se reconoce como
-cutover estructural cualquier reemplazo de las RPC de clone o un `UPDATE` de
-`cutover_applied_at` sobre la tabla de batches; si no equivale a B, se rechaza
-como `cutover_unpinned`.
+El archivo seleccionado se lee exactamente una vez; ese mismo texto se valida,
+resume y, sólo con `--apply`, se entrega a psycopg. Dry-run sigue siendo default
+y no se imprime SQL ni DATABASE_URL. SQL adicional queda fuera de este runner y
+requiere un proceso separado o una ejecución manual revisada, sin flag bypass.
 
 `CLOUD_DEPLOY.md` y `supabase_setup/README.md` distinguen base nueva de proyecto
 existente y documentan A → Gate 7A → Task 6 execute/certify Gate 6 → B. El
@@ -190,6 +176,33 @@ git diff --check -- scripts/apply_supabase_sql.py tests/test_apply_supabase_sql.
 ```
 
 Ambas finalizaron con exit 0.
+
+### Tercer follow-up independiente (`79c7bca`)
+
+El enfoque lexer anterior quedó deliberadamente superseded y se retiró.
+
+- RED allowlist/hash: **4 failed, 9 passed, 1 skipped**. El test matricial
+  incluía quoted B/bootstrap/A+B, prefijo standard-conforming, dollar-quoted
+  ajeno, SQL arbitrario, copias A/B/bootstrap, concatenación y hardlink; además
+  fallaron las tres mutaciones de contenido canónico simuladas sin editar los
+  SQL reales. El skip fue symlink sin privilegio en Windows.
+- RED docs después del GREEN de código: **1 failed, 12 passed, 1 skipped** por
+  faltar el límite explícito bootstrap/A/B y el proceso separado/manual.
+- Verificación final exacta:
+
+```powershell
+python -B -m pytest -p no:cacheprovider -q tests/test_apply_supabase_sql.py tests/test_catalog_migrations.py tests/test_catalog_asset_r2_migration.py tests/test_project_migrations.py
+```
+
+Resultado: **130 passed, 4 skipped in 5.57s**. Tres skips son los harness
+PostgreSQL/Docker opt-in y uno es el symlink no disponible en este Windows.
+
+```powershell
+python -B -m py_compile scripts/apply_supabase_sql.py tests/test_apply_supabase_sql.py tests/test_catalog_migrations.py
+git diff --check -- scripts/apply_supabase_sql.py tests/test_apply_supabase_sql.py mobiliti_saas/CLOUD_DEPLOY.md mobiliti_saas/supabase_setup/README.md
+```
+
+Ambas verificaciones estáticas finalizaron con exit 0.
 
 ## Regresión completa y deuda residual
 
