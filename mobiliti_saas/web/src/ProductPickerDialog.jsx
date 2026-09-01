@@ -101,7 +101,19 @@ export default function ProductPickerDialog({
   }, [open]);
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || !supplier) {
+      if (open) {
+        setLoading(false);
+        setError("");
+        setResults([]);
+        setCollections([]);
+        setTotal(0);
+        setSelected(null);
+        setSelectedBaseOptionId("");
+        setSelectedAddOnOptionIds([]);
+      }
+      return undefined;
+    }
     const controller = new AbortController();
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
@@ -256,7 +268,7 @@ export default function ProductPickerDialog({
                 setSelectedAddOnOptionIds([]);
               }}
             >
-              <option value="">Todos los proveedores</option>
+              <option value="">Selecciona un proveedor</option>
               {CATALOG_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>

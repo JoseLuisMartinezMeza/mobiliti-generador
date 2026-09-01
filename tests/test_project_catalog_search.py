@@ -25,7 +25,7 @@ def test_search_returns_safe_display_price_and_dimensions_without_private_source
     result = search_catalog_products(
         {"sunon": {"items": [_supplier_item("sunon", "Olíve II Chair", "OLIVE-II")] }},
         query="olÍve",
-        supplier=None,
+        supplier="sunon",
         offset=0,
         limit=20,
     )
@@ -153,7 +153,7 @@ def test_search_quotable_uses_the_cart_contract_for_pending_numeric_and_review_i
     result = search_catalog_products(
         catalogs,
         query="",
-        supplier=None,
+        supplier="idelika",
         offset=0,
         limit=20,
     )
@@ -163,9 +163,6 @@ def test_search_quotable_uses_the_cart_contract_for_pending_numeric_and_review_i
     assert by_key[pending["internal_id"]]["price_pending"] is True
     assert by_key[pending_without_exact_marker["internal_id"]]["quotable"] is False
     assert by_key[pending_without_exact_marker["internal_id"]]["price_pending"] is False
-    assert by_key[sunon["internal_id"]]["quotable"] is True
-    assert by_key[alma["internal_id"]]["quotable"] is True
-    assert by_key[review["internal_id"]]["quotable"] is True
 
 
 @pytest.mark.parametrize(
@@ -429,7 +426,7 @@ def test_search_omits_invalid_prices_and_currency_instead_of_leaking_bad_values(
     ]
 
 
-def test_search_uses_all_seven_catalogs_and_stable_pagination():
+def test_search_requires_an_explicit_supplier():
     catalogs = {
         "lumbro": {"items": [_supplier_item("lumbro", "Silla Álfa", "L-2")]},
         "sunon": {"items": [_supplier_item("sunon", "Silla Alfa", "S-2")]},
@@ -451,33 +448,20 @@ def test_search_uses_all_seven_catalogs_and_stable_pagination():
         }]},
     }
 
-    first = search_catalog_products(catalogs, query="SÍLLA", supplier=None, offset=0, limit=3)
-    second = search_catalog_products(catalogs, query="silla", supplier=None, offset=3, limit=3)
-    last = search_catalog_products(catalogs, query="silla", supplier=None, offset=6, limit=3)
-
-    assert first["total"] == 7
-    assert [item["catalog"] for item in first["items"]] == ["tarkett", "offiho", "cr-global"]
-    assert [item["catalog"] for item in second["items"]] == ["sonara", "sunon", "alma"]
-    assert [item["catalog"] for item in last["items"]] == ["lumbro"]
-    assert first["next_offset"] == 3
-    assert second["next_offset"] == 6
-    assert last["next_offset"] is None
-    assert first["items"][1]["snapshot"]["availability"] == "Agotado"
-    assert first["items"][1]["quotable"] is True
-    assert first["items"][0]["snapshot"]["availability"] == "Disponible"
-    assert first["items"][0]["quotable"] is True
+    with pytest.raises(ValueError, match="proveedor requerido"):
+        search_catalog_products(catalogs, query="SÍLLA", supplier=None, offset=0, limit=3)
 
 
 def test_search_omits_identity_that_fails_mixed_catalog_preflight():
     result = search_catalog_products(
         {"offiho": {"items": [{"code": "MISSING-INVENTORY", "name": "Silla"}]}},
         query="silla",
-        supplier=None,
+        supplier="offiho",
         offset=0,
         limit=20,
     )
 
-    assert result == {"items": [], "total": 0, "next_offset": None}
+    assert result == {"items": [], "total": 0, "next_offset": None, "collections": []}
 
 
 def test_search_rejects_non_allowlisted_supplier():
@@ -510,8 +494,8 @@ def test_search_lists_and_filters_derived_collections_for_one_supplier():
     assert result["items"][0]["snapshot"]["collection"] == "Sillas operativas"
 
 
-def test_search_rejects_collection_without_supplier_or_with_control_characters():
-    with pytest.raises(ValueError, match="proveedor"):
+def test_search_rejects_missing_supplier_or_collection_with_control_characters():
+    with pytest.raises(ValueError, match="proveedor requerido"):
         search_catalog_products(
             {}, query="", supplier=None, collection="Sillas", offset=0, limit=20,
         )
@@ -558,7 +542,7 @@ def test_search_sanitizes_metadata_with_closed_availability_and_warnings():
             },
         ]}},
         query="silla",
-        supplier=None,
+        supplier="sunon",
         offset=0,
         limit=20,
     )

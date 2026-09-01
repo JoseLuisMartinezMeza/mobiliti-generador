@@ -830,7 +830,7 @@ def run_picker(source):
     return json.loads(completed.stdout)
 
 
-def test_product_picker_search_path_omits_empty_supplier_and_includes_valid_supplier():
+def test_product_picker_does_not_create_a_search_request_without_supplier():
     result = run_picker(r"""
       console.log(JSON.stringify({
         initial: picker.buildCatalogSearchPath({query: "", supplier: "", offset: 0, limit: 20}),
@@ -845,7 +845,7 @@ def test_product_picker_search_path_omits_empty_supplier_and_includes_valid_supp
       }));
     """)
     assert result == {
-        "initial": "/catalogs/search?q=&offset=0&limit=20",
+        "initial": None,
         "filtered": "/catalogs/search?q=silla&offset=20&limit=20&supplier=alma",
         "collection": (
             "/catalogs/search?q=mesa&offset=0&limit=20&supplier=jome"

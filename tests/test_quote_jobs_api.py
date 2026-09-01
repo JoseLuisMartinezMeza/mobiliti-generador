@@ -3679,6 +3679,78 @@ def test_generic_catalog_backend_never_falls_back_to_anon_key(monkeypatch):
         index.db_list_exchange_rates()
 
 
+def test_catalog_search_rejects_missing_supplier_before_reading_payload(monkeypatch):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(
+        index,
+        "_catalog_search_snapshots",
+        lambda *_args: pytest.fail("La búsqueda global no debe leer payloads"),
+    )
+
+    response = _client().get("/catalogs/search?q=silla", headers=_auth_headers())
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "proveedor requerido"
+
+
+def test_supplier_catalog_cache_reuses_payload_when_published_version_is_unchanged(monkeypatch):
+    payload_reads = []
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "db_get_published_catalog_version_id", lambda supplier: "version-1", raising=False)
+    monkeypatch.setattr(
+        index,
+        "db_get_published_catalog_snapshot",
+        lambda supplier, version_id=None: payload_reads.append((supplier, version_id)) or {
+            "id": "version-1", "supplier": supplier, "payload": _mock_supplier_catalog(),
+        },
+    )
+    index._SUPPLIER_CATALOG_CACHE.clear()
+
+    index._load_supplier_catalog_cached("cr-global")
+    index._load_supplier_catalog_cached("cr-global")
+
+    assert payload_reads == [("cr-global", "version-1")]
+
+
+def test_supplier_catalog_cache_reads_one_new_payload_after_published_version_changes(monkeypatch):
+    version = {"id": "version-1"}
+    payload_reads = []
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "db_get_published_catalog_version_id", lambda supplier: version["id"], raising=False)
+    monkeypatch.setattr(
+        index,
+        "db_get_published_catalog_snapshot",
+        lambda supplier, version_id=None: payload_reads.append((supplier, version_id)) or {
+            "id": version_id, "supplier": supplier, "payload": _mock_supplier_catalog(),
+        },
+    )
+    index._SUPPLIER_CATALOG_CACHE.clear()
+
+    index._load_supplier_catalog_cached("cr-global")
+    version["id"] = "version-2"
+    index._load_supplier_catalog_cached("cr-global")
+
+    assert payload_reads == [("cr-global", "version-1"), ("cr-global", "version-2")]
+
+
+def test_authenticated_catalog_search_disables_shared_http_caching(monkeypatch):
+    _mock_user(monkeypatch)
+    monkeypatch.setattr(index, "_require_active_subscription", lambda _user_id: None)
+    monkeypatch.setattr(
+        index,
+        "_catalog_search_snapshots",
+        lambda _user_id, supplier: {supplier: {"items": []}},
+    )
+
+    response = _client().get(
+        "/catalogs/search?supplier=cr-global&q=silla",
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+
+
 @pytest.mark.parametrize("image_kind", ["official", "generated_reference"])
 def test_published_catalog_hydrates_approved_asset_without_changing_contract(monkeypatch, image_kind):
     payload = _mock_supplier_catalog()
@@ -3700,8 +3772,9 @@ def test_published_catalog_hydrates_approved_asset_without_changing_contract(mon
     monkeypatch.setattr(
         index,
         "db_get_published_catalog_snapshot",
-        lambda supplier: {"id": "snapshot-1", "supplier": supplier, "payload": payload},
+        lambda supplier, version_id: {"id": version_id, "supplier": supplier, "payload": payload},
     )
+    monkeypatch.setattr(index, "db_get_published_catalog_version_id", lambda supplier: "snapshot-1")
     monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
     index._SUPPLIER_CATALOG_CACHE.clear()
 
@@ -3718,25 +3791,27 @@ def test_published_catalog_hydrates_approved_asset_without_changing_contract(mon
     assert catalog["items"][0]["attributes"]["price_evidence"] == [{"kind": "base"}]
 
 
-def test_dev_catalog_cache_observes_visual_updates_with_same_snapshot_identity(monkeypatch):
-    state = {"payload": _mock_supplier_catalog()}
+def test_dev_catalog_cache_invalidates_when_published_version_changes(monkeypatch):
+    state = {"payload": _mock_supplier_catalog(), "version_id": "snapshot-stable"}
     monkeypatch.setattr(index, "DEV_MODE", True)
     monkeypatch.setattr(
         index,
         "db_get_published_catalog_snapshot",
-        lambda supplier: {
-            "id": "snapshot-stable",
+        lambda supplier, version_id: {
+            "id": version_id,
             "supplier": supplier,
             "source_hash": state["payload"]["source_hash"],
             "payload": deepcopy(state["payload"]),
         },
     )
+    monkeypatch.setattr(index, "db_get_published_catalog_version_id", lambda supplier: state["version_id"])
     index._SUPPLIER_CATALOG_CACHE.clear()
 
     first = index._load_supplier_catalog_cached("cr-global")
     assert first["items"][0]["product_url"] == "https://example.test/chair"
 
     state["payload"]["items"][0]["product_url"] = "https://example.test/chair-curated"
+    state["version_id"] = "snapshot-updated"
     second = index._load_supplier_catalog_cached("cr-global")
 
     assert second["items"][0]["product_url"] == "https://example.test/chair-curated"
@@ -3780,8 +3855,9 @@ def test_published_catalog_hydrates_legacy_asset_with_safe_existing_kind(monkeyp
     monkeypatch.setattr(
         index,
         "db_get_published_catalog_snapshot",
-        lambda supplier: {"id": "snapshot-legacy", "supplier": supplier, "payload": payload},
+        lambda supplier, version_id: {"id": version_id, "supplier": supplier, "payload": payload},
     )
+    monkeypatch.setattr(index, "db_get_published_catalog_version_id", lambda supplier: "snapshot-legacy")
     monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
     index._SUPPLIER_CATALOG_CACHE.clear()
 

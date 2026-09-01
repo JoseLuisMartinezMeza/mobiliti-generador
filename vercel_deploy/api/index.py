@@ -2070,12 +2070,47 @@ def db_get_catalog_source(supplier: str) -> dict | None:
     return rows[0] if isinstance(rows, list) and rows else None
 
 
-def db_get_published_catalog_snapshot(supplier: str) -> dict | None:
+def db_get_published_catalog_version_id(supplier: str) -> str | None:
     supplier = _catalog_supplier(supplier)
     if DEV_MODE:
-        return _dev_load().setdefault("catalog_published_snapshots", {}).get(supplier)
-    source = db_get_catalog_source(supplier)
-    version_id = source.get("published_version_id") if isinstance(source, dict) else None
+        snapshot = _dev_load().setdefault("catalog_published_snapshots", {}).get(supplier)
+        version_id = snapshot.get("id") if isinstance(snapshot, dict) else None
+        return str(version_id).strip() or None
+    _require_catalog_service_backend()
+    if _use_postgres():
+        row = _pg_one(
+            """
+            SELECT published_version_id
+            FROM saas_catalog_sources
+            WHERE supplier = %s AND enabled IS TRUE
+            LIMIT 1
+            """,
+            (supplier,),
+        )
+    else:
+        rows = _supabase_req(
+            "GET",
+            "/saas_catalog_sources",
+            params={
+                "supplier": f"eq.{supplier}",
+                "enabled": "eq.true",
+                "select": "published_version_id",
+                "limit": "1",
+            },
+        )
+        row = rows[0] if isinstance(rows, list) and rows else None
+    version_id = row.get("published_version_id") if isinstance(row, dict) else None
+    return str(version_id).strip() or None
+
+
+def db_get_published_catalog_snapshot(supplier: str, version_id: str | None = None) -> dict | None:
+    supplier = _catalog_supplier(supplier)
+    if DEV_MODE:
+        snapshot = _dev_load().setdefault("catalog_published_snapshots", {}).get(supplier)
+        if version_id and isinstance(snapshot, dict) and snapshot.get("id") != version_id:
+            return None
+        return snapshot
+    version_id = version_id or db_get_published_catalog_version_id(supplier)
     if not version_id:
         return None
     if _use_postgres():
@@ -2101,8 +2136,6 @@ def db_get_published_catalog_snapshot(supplier: str) -> dict | None:
             },
         )
         row = rows[0] if isinstance(rows, list) and rows else None
-    if row:
-        row = {**row, "source_id": source.get("id"), "label": source.get("label")}
     return row
 
 
@@ -3019,29 +3052,26 @@ def _catalog_run_detailed_diff(run: dict) -> dict:
 
 def _load_supplier_catalog_cached(supplier: str) -> dict:
     supplier = _catalog_supplier(supplier)
-    snapshot = db_get_published_catalog_snapshot(supplier)
+    version_id = db_get_published_catalog_version_id(supplier)
+    if not version_id:
+        raise RuntimeError("Catalogo publicado no disponible")
+    cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
+    if cached and cached.get("published_version_id") == version_id:
+        return cached["catalog"]
+    snapshot = db_get_published_catalog_snapshot(supplier, version_id)
     payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
     if not isinstance(payload, dict):
         raise RuntimeError("Catalogo publicado no disponible")
-    cache_key = str(snapshot.get("id") or snapshot.get("source_hash") or payload.get("source_hash") or "")
-    if DEV_MODE:
-        payload_fingerprint = hashlib.sha256(
-            json.dumps(
-                payload,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
-        cache_key = f"{cache_key}:{payload_fingerprint}"
-    cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
-    if cached and cached.get("cache_key") == cache_key:
-        return cached["catalog"]
+    if str(snapshot.get("id") or "").strip() != version_id:
+        raise RuntimeError("Catalogo publicado no disponible")
     try:
         catalog = load_supplier_catalog_data(_hydrate_catalog_asset_urls(payload), expected_supplier=supplier)
     except (TypeError, ValueError, KeyError) as exc:
         raise RuntimeError("Catalogo publicado invalido") from exc
-    _SUPPLIER_CATALOG_CACHE[supplier] = {"cache_key": cache_key, "catalog": catalog}
+    _SUPPLIER_CATALOG_CACHE[supplier] = {
+        "published_version_id": version_id,
+        "catalog": catalog,
+    }
     return catalog
 
 
@@ -5909,6 +5939,7 @@ def supplier_exchange_rates(base_currency: str = "USD", current_user: dict = Dep
 
 @app.get("/catalogs/search")
 def catalog_search(
+    response: Response,
     q: str = "",
     supplier: str | None = None,
     collection: str | None = None,
@@ -5924,6 +5955,7 @@ def catalog_search(
             {}, query=q, supplier=supplier, collection=collection,
             offset=parsed_offset, limit=parsed_limit,
         )
+        response.headers["Cache-Control"] = "private, no-store"
         clean_supplier = supplier.strip().lower() if supplier is not None else None
         _require_active_subscription(current_user["id"])
         snapshots = _catalog_search_snapshots(current_user["id"], clean_supplier)

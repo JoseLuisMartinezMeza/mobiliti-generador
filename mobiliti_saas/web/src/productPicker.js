@@ -27,15 +27,14 @@ export function buildCatalogSearchPath({
   offset = 0,
   limit = 20,
 }) {
+  if (!CATALOG_LABELS.has(supplier)) return null;
   const params = new URLSearchParams({
     q: String(query),
     offset: String(offset),
     limit: String(limit),
   });
-  if (CATALOG_LABELS.has(supplier)) {
-    params.set("supplier", supplier);
-    if (String(collection).trim()) params.set("collection", String(collection).trim());
-  }
+  params.set("supplier", supplier);
+  if (String(collection).trim()) params.set("collection", String(collection).trim());
   return `/catalogs/search?${params.toString()}`;
 }
 
