@@ -855,7 +855,7 @@ AS $$
 DECLARE
     v_run saas_catalog_sync_runs%ROWTYPE;
     v_source saas_catalog_sources%ROWTYPE;
-    v_candidate saas_catalog_snapshot_versions%ROWTYPE;
+    v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
     v_candidate_id UUID := gen_random_uuid();
     v_canonical_hash TEXT;
     v_canonical_generated_at TEXT;
@@ -957,7 +957,7 @@ BEGIN
         RAISE EXCEPTION 'catalog sync run is not stageable';
     END IF;
 
-    INSERT INTO saas_catalog_snapshot_versions (
+    INSERT INTO public.saas_catalog_snapshot_versions (
         id, supplier, source_hash, generated_at, status, payload,
         base_published_version_id, sync_run_id
     ) VALUES (
@@ -1235,7 +1235,7 @@ BEGIN
         RAISE EXCEPTION 'automatic publication requires a stock or lead_time change';
     END IF;
 
-    UPDATE saas_catalog_snapshot_versions
+    UPDATE public.saas_catalog_snapshot_versions
     SET status = 'superseded'
     WHERE id = v_base.id;
 
@@ -1251,7 +1251,7 @@ BEGIN
         updated_at = NOW()
     WHERE id = v_source.id;
 
-    UPDATE saas_catalog_sync_runs
+    UPDATE public.saas_catalog_sync_runs
     SET status = 'published',
         reviewed_by = NULL,
         reviewed_at = NULL,
@@ -1413,7 +1413,7 @@ DECLARE
     v_source saas_catalog_sources%ROWTYPE;
 BEGIN
     IF p_reviewed_by IS NULL OR NOT EXISTS (
-        SELECT 1 FROM saas_usuarios
+        SELECT 1 FROM public.saas_usuarios
         WHERE id = p_reviewed_by AND activo IS TRUE AND es_admin IS TRUE
     ) THEN
         RAISE EXCEPTION 'active admin reviewer is required';
@@ -1666,7 +1666,7 @@ BEGIN
         RAISE EXCEPTION 'active admin reviewer is required';
     END IF;
 
-    PERFORM 1 FROM saas_catalog_assets
+    PERFORM 1 FROM public.saas_catalog_assets
     WHERE object_name = p_asset_object_name
       AND storage_provider = 'r2'
       AND physical_bucket = 'catalog-assets'
@@ -1676,7 +1676,7 @@ BEGIN
     END IF;
 
     SELECT * INTO v_candidate
-    FROM saas_catalog_snapshot_versions
+    FROM public.saas_catalog_snapshot_versions
     WHERE id = p_candidate_id
     FOR UPDATE;
 
@@ -1691,7 +1691,7 @@ BEGIN
         RAISE EXCEPTION 'catalog item asset target does not exist';
     END IF;
 
-    PERFORM 1 FROM saas_catalog_sync_runs
+    PERFORM 1 FROM public.saas_catalog_sync_runs
     WHERE id = v_candidate.sync_run_id
       AND candidate_version_id = v_candidate.id
       AND status = 'awaiting_approval'
@@ -1736,7 +1736,7 @@ BEGIN
     v_new_hash := encode(extensions.digest(convert_to(v_new_payload::TEXT, 'UTF8'), 'sha256'), 'hex');
     v_new_payload := jsonb_set(v_new_payload, '{source_hash}', to_jsonb(v_new_hash), TRUE);
 
-    INSERT INTO saas_catalog_snapshot_versions (
+    INSERT INTO public.saas_catalog_snapshot_versions (
         id, supplier, source_hash, generated_at, status, payload,
         previous_snapshot_id, sync_run_id, base_published_version_id, reviewed_by,
         review_note, reviewed_at
@@ -1746,11 +1746,11 @@ BEGIN
         'Approved catalog asset ' || p_asset_object_name, v_approved_at
     );
 
-    UPDATE saas_catalog_snapshot_versions
+    UPDATE public.saas_catalog_snapshot_versions
     SET status = 'superseded'
     WHERE id = v_candidate.id;
 
-    UPDATE saas_catalog_sync_runs
+    UPDATE public.saas_catalog_sync_runs
     SET candidate_version_id = v_new_id,
         updated_at = NOW()
     WHERE id = v_candidate.sync_run_id;
@@ -1774,7 +1774,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-    v_candidate saas_catalog_snapshot_versions%ROWTYPE;
+    v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
     v_new_id UUID := gen_random_uuid();
     v_existing_item JSONB;
     v_new_item JSONB;
@@ -1807,13 +1807,13 @@ BEGIN
     END IF;
 
     IF p_reviewed_by IS NULL OR NOT EXISTS (
-        SELECT 1 FROM saas_usuarios
+        SELECT 1 FROM public.saas_usuarios
         WHERE id = p_reviewed_by AND activo IS TRUE AND es_admin IS TRUE
     ) THEN
         RAISE EXCEPTION 'active admin reviewer is required';
     END IF;
 
-    PERFORM 1 FROM saas_catalog_assets
+    PERFORM 1 FROM public.saas_catalog_assets
     WHERE object_name = p_asset_object_name
       AND storage_provider = 'r2'
       AND physical_bucket = 'catalog-assets'
@@ -1823,7 +1823,7 @@ BEGIN
     END IF;
 
     SELECT * INTO v_candidate
-    FROM saas_catalog_snapshot_versions
+    FROM public.saas_catalog_snapshot_versions
     WHERE id = p_candidate_id
     FOR UPDATE;
 
@@ -1838,7 +1838,7 @@ BEGIN
         RAISE EXCEPTION 'catalog item asset target does not exist';
     END IF;
 
-    PERFORM 1 FROM saas_catalog_sync_runs
+    PERFORM 1 FROM public.saas_catalog_sync_runs
     WHERE id = v_candidate.sync_run_id
       AND candidate_version_id = v_candidate.id
       AND status = 'awaiting_approval'

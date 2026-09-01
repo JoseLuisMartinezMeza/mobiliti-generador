@@ -1488,3 +1488,19 @@ def test_local_postgres_applies_task6_bootstrap_and_forward_migration():
         check=False,
     )
     assert rejected.returncode == 0, rejected.stderr.decode("utf-8", errors="replace")
+
+
+def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
+    """Ejercita el contrato real cuando existe el contenedor local certificado."""
+    container, user, password, database = _local_postgres_test_context()
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    registry = ASSET_REGISTRY_MIGRATION.read_text(encoding="utf-8")
+    _container_psql(container, user, password, database, _LOCAL_SUPABASE_STORAGE_SHIM)
+    _container_psql(container, user, password, database, bootstrap)
+    _container_psql(container, user, password, database, registry)
+    checks = _container_psql(container, user, password, database, """
+        SELECT has_table_privilege('service_role', 'public.saas_catalog_asset_cutover_entries', 'INSERT')::TEXT;
+        SELECT has_function_privilege('anon', 'public.saas_register_catalog_asset(text,text,text,bigint,text)', 'EXECUTE')::TEXT;
+        SELECT has_function_privilege('service_role', 'public.saas_register_catalog_asset(text,text,text,bigint,text)', 'EXECUTE')::TEXT;
+    """)
+    assert checks.splitlines() == ["false", "false", "true"]
