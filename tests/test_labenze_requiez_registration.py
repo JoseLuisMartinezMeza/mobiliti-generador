@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 import pytest
+from fastapi import Response
 
 from mobiliti_saas.api import index as api
 from mobiliti_saas.quote_engine.engine import (
@@ -265,8 +266,9 @@ def test_catalog_search_endpoint_applies_bounded_response_helper(runtime, monkey
     )
 
     response = runtime.catalog_search(
+        response=Response(),
         q="",
-        supplier=None,
+        supplier="labenze",
         collection=None,
         offset="17",
         limit="20",

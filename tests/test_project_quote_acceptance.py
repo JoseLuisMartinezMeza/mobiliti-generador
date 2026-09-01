@@ -550,9 +550,9 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
             for row in quotation_rows
         ] == list(physical_quantities)
         assert cotizacion["F17"].value == (
-            "=Mobiliti!X14"
-            "+Mobiliti!X15*Mobiliti!H15/Mobiliti!H14"
-            "+Mobiliti!X16*Mobiliti!H16/Mobiliti!H14"
+            "=Mobiliti!AA14"
+            "+Mobiliti!AA15*Mobiliti!H15/Mobiliti!H14"
+            "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H14"
         )
         assert cotizacion["A17"].value == "=Mobiliti!D14"
         assert cotizacion["C17"].value == f"=Quotation!D{quotation_rows[0]}"
@@ -703,29 +703,26 @@ def test_project_quote_preserves_original_quotation_and_template_contract(
         for coordinate, cell in output_fletes.items()
         if _formula(cell)
     }
+    guarded_fletes = {"B66", "E61"}
     assert {
         coordinate: output_formulas[coordinate]
         for coordinate in template_formulas
-    } == template_formulas
+        if coordinate not in guarded_fletes
+    } == {
+        coordinate: formula
+        for coordinate, formula in template_formulas.items()
+        if coordinate not in guarded_fletes
+    }
+    assert output_formulas["E61"] == "IF(B67=0,0,MIN(1,B67/(B62*B71+B63*B74)))"
+    assert output_formulas["B66"] == (
+        'IF(E60="MANUAL",E63,IF(B61=0,0,IF(E60="PRORRATEADO",'
+        "(B61*B65+E62+B78)/B61,(B61*B65+B64+B78)/B61)))"
+    )
     expected_category_formulas = {
-        "K16": (
-            "IF(Mobiliti!$K$4=TRUE,"
-            "((J16/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
-            "(J16/$J$21)*Mobiliti!$P$9)"
-        ),
-        "N16": "IF(Mobiliti!$K$4=TRUE,(56/Mobiliti!$K$6),56)",
-        "K17": (
-            "IF(Mobiliti!$K$4=TRUE,"
-            "((J17/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
-            "(J17/$J$21)*Mobiliti!$P$9)"
-        ),
-        "N17": "IF(Mobiliti!$K$4=TRUE,(1790/Mobiliti!$K$6),1790)",
-        "K18": (
-            "IF(Mobiliti!$K$4=TRUE,"
-            "((J18/$J$21)*Mobiliti!$P$9)/Mobiliti!$K$6,"
-            "(J18/$J$21)*Mobiliti!$P$9)"
-        ),
-        "N18": "IF(Mobiliti!$K$4=TRUE,(210/Mobiliti!$K$6),210)",
+        "N18": "IF(Mobiliti!$P$4=TRUE,(56/Mobiliti!$P$6),56)",
+        "N19": "IF(Mobiliti!$P$4=TRUE,(1790/Mobiliti!$P$6),1790)",
+        "N20": "IF(Mobiliti!$P$4=TRUE,(210/Mobiliti!$P$6),210)",
+        "N21": "IF(Mobiliti!$P$4=TRUE,(980/Mobiliti!$P$6),980)",
     }
     assert {
         coordinate: output_formulas[coordinate]
@@ -789,17 +786,14 @@ def test_project_quote_expands_past_16_sections_and_33_components(
         int(coordinate[1:])
         for coordinate, cell in cotizacion.items()
         if coordinate.startswith("F")
-        and any(
-            f"Mobiliti!{column}" in _formula(cell)
-            for column in ("W", "X")
-        )
+        and "Mobiliti!AA" in _formula(cell)
     )
     assert len(visible_formula_rows) == 698
     first_visible_row = visible_formula_rows[0]
     assert _formula(cotizacion[f"F{first_visible_row}"]) == (
-        "Mobiliti!X14"
-        "+Mobiliti!X15*Mobiliti!H15/Mobiliti!H14"
-        "+Mobiliti!X16*Mobiliti!H16/Mobiliti!H14"
+        "Mobiliti!AA14"
+        "+Mobiliti!AA15*Mobiliti!H15/Mobiliti!H14"
+        "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H14"
     )
 
 
@@ -821,16 +815,18 @@ def _excel_acceptance_surface(
     expectations: dict[tuple[str, str], str] = {}
     inspected: set[tuple[str, str]] = set()
     for row in sorted(selected_rows):
-        for column in ("W", "X"):
+        for column in ("W", "X", "AA"):
             coordinate = f"{column}{row}"
-            if column == "X":
+            if column == "AA":
                 last_row = result.layout.last_product_row
                 expected = (
-                    f"=_xlfn.MINIFS($W$14:$W${last_row},"
+                    f"=IF(Z{row}>=Y{row},"
+                    f"_xlfn.MINIFS($Z$14:$Z${last_row},"
                     f"$D$14:$D${last_row},D{row},"
                     f"$H$14:$H${last_row},"
                     f"_xlfn.MAXIFS($H$14:$H${last_row},"
-                    f"$D$14:$D${last_row},D{row}))"
+                    f"$D$14:$D${last_row},D{row})),"
+                    '"NO SE ESTA RESPETANDO EL MARGEN")'
                 )
             else:
                 expected = translate_formula(

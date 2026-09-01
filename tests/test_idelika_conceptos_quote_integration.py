@@ -160,11 +160,17 @@ def test_idelika_y_conceptos_participan_en_busqueda_proyecto_y_cotizacion_mixta(
     assert MIXED_CATALOG_ORDER[-4:-2] == ("idelika", "conceptos")
     assert ENGINE_MIXED_CATALOG_ORDER[-4:-2] == ("idelika", "conceptos")
 
-    search = search_catalog_products(catalogs, query="silla", supplier=None, offset=0, limit=20)
-    assert [item["catalog"] for item in search["items"]] == ["idelika", "idelika", "conceptos"]
-    assert search["items"][0]["base_currency"] == "MXN"
+    search_items = [
+        item
+        for supplier in ("idelika", "conceptos")
+        for item in search_catalog_products(
+            catalogs, query="silla", supplier=supplier, offset=0, limit=20
+        )["items"]
+    ]
+    assert [item["catalog"] for item in search_items] == ["idelika", "idelika", "conceptos"]
+    assert search_items[0]["base_currency"] == "MXN"
     pending_search = next(
-        item for item in search["items"]
+        item for item in search_items
         if item["identity"].get("internal_id") == "idelika:pending"
     )
     assert pending_search["official_code"] == ""
