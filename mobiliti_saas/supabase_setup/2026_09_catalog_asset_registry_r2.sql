@@ -103,8 +103,7 @@ BEGIN
     ON CONFLICT DO NOTHING;
     SELECT * INTO v_existing FROM public.saas_catalog_assets WHERE object_name = p_object_name FOR UPDATE;
     IF FOUND THEN
-        IF v_existing.storage_provider IS DISTINCT FROM p_storage_provider
-           OR v_existing.physical_bucket IS DISTINCT FROM p_physical_bucket
+        IF v_existing.physical_bucket IS DISTINCT FROM p_physical_bucket
            OR v_existing.sha256 IS DISTINCT FROM v_sha256
            OR v_existing.byte_size IS DISTINCT FROM p_byte_size
            OR v_existing.mime_type IS DISTINCT FROM p_mime_type

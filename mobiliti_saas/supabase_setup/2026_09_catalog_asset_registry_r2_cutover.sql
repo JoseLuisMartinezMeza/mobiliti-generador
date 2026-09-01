@@ -11,14 +11,15 @@ DECLARE
 BEGIN
     SELECT * INTO v_batch
     FROM public.saas_catalog_asset_cutover_batches
-    WHERE status = 'verified'
+    WHERE batch_id = '470442fc-3dc3-5948-b0e4-1dd34c1fcd30'::UUID
+      AND manifest_digest = '72ecc6b84bfec9ba012a24dea9c5bcdf6d1beaad8d81c68eb4697f8e83e188ff'
+      AND keyset_digest = '93e30738942bc0c4b85d85d63239c82588ec1d163c5c3820ef2de01dc07caeb7'
+      AND status = 'verified'
       AND expected_count = 2214
       AND verified_count = 2214
       AND missing_count = 0
       AND failed_count = 0
       AND verified_at IS NOT NULL
-    ORDER BY verified_at DESC, batch_id DESC
-    LIMIT 1
     FOR UPDATE;
 
     IF NOT FOUND THEN
@@ -81,7 +82,7 @@ BEGIN
     IF p_reviewed_by IS NULL OR NOT EXISTS (SELECT 1 FROM public.saas_usuarios WHERE id = p_reviewed_by AND activo IS TRUE AND es_admin IS TRUE)
     THEN RAISE EXCEPTION 'active admin reviewer is required'; END IF;
     PERFORM 1 FROM public.saas_catalog_assets
-    WHERE object_name = p_asset_object_name AND storage_provider = 'r2'
+    WHERE object_name = p_asset_object_name
       AND physical_bucket = 'catalog-assets' AND verified_at IS NOT NULL;
     IF NOT FOUND THEN RAISE EXCEPTION 'approved catalog asset does not exist'; END IF;
     SELECT * INTO v_candidate FROM public.saas_catalog_snapshot_versions WHERE id = p_candidate_id FOR UPDATE;
@@ -141,7 +142,7 @@ BEGIN
     IF p_reviewed_by IS NULL OR NOT EXISTS (SELECT 1 FROM public.saas_usuarios WHERE id = p_reviewed_by AND activo IS TRUE AND es_admin IS TRUE)
     THEN RAISE EXCEPTION 'active admin reviewer is required'; END IF;
     PERFORM 1 FROM public.saas_catalog_assets
-    WHERE object_name = p_asset_object_name AND storage_provider = 'r2'
+    WHERE object_name = p_asset_object_name
       AND physical_bucket = 'catalog-assets' AND verified_at IS NOT NULL;
     IF NOT FOUND THEN RAISE EXCEPTION 'approved catalog asset does not exist'; END IF;
     SELECT * INTO v_candidate FROM public.saas_catalog_snapshot_versions WHERE id = p_candidate_id FOR UPDATE;

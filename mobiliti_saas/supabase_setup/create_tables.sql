@@ -1614,8 +1614,7 @@ BEGIN
     INSERT INTO public.saas_catalog_assets (object_name,storage_provider,physical_bucket,sha256,byte_size,mime_type,verified_at) VALUES (p_object_name,p_storage_provider,p_physical_bucket,v_sha256,p_byte_size,p_mime_type,NOW()) ON CONFLICT DO NOTHING;
     SELECT * INTO v_existing FROM public.saas_catalog_assets WHERE object_name = p_object_name FOR UPDATE;
     IF FOUND THEN
-        IF v_existing.storage_provider IS DISTINCT FROM p_storage_provider
-           OR v_existing.physical_bucket IS DISTINCT FROM p_physical_bucket
+        IF v_existing.physical_bucket IS DISTINCT FROM p_physical_bucket
            OR v_existing.sha256 IS DISTINCT FROM v_sha256
            OR v_existing.byte_size IS DISTINCT FROM p_byte_size
            OR v_existing.mime_type IS DISTINCT FROM p_mime_type
@@ -1864,7 +1863,6 @@ BEGIN
 
     PERFORM 1 FROM public.saas_catalog_assets
     WHERE object_name = p_asset_object_name
-      AND storage_provider = 'r2'
       AND physical_bucket = 'catalog-assets'
       AND verified_at IS NOT NULL;
     IF NOT FOUND THEN
@@ -2018,7 +2016,6 @@ BEGIN
 
     PERFORM 1 FROM public.saas_catalog_assets
     WHERE object_name = p_asset_object_name
-      AND storage_provider = 'r2'
       AND physical_bucket = 'catalog-assets'
       AND verified_at IS NOT NULL;
     IF NOT FOUND THEN

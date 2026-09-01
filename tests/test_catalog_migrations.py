@@ -110,6 +110,25 @@ def test_catalog_asset_registry_is_private_idempotent_and_service_role_only():
         assert f"GRANT EXECUTE ON FUNCTION {signature} TO service_role" in document
 
 
+def test_catalog_asset_registry_allows_verified_cross_provider_copy_without_repointing_row():
+    """Rompe si el registro vuelve a tratar provider como metadata de identidad."""
+    for document in (
+        ASSET_REGISTRY_MIGRATION.read_text(encoding="utf-8"),
+        BOOTSTRAP.read_text(encoding="utf-8"),
+    ):
+        function = _function_sql(document, "saas_register_catalog_asset")
+        conflict_guard = function[function.index("IF v_existing.") : function.index("RETURN p_object_name;")]
+        assert "v_existing.storage_provider IS DISTINCT FROM p_storage_provider" not in conflict_guard
+        for required in (
+            "v_existing.physical_bucket IS DISTINCT FROM p_physical_bucket",
+            "v_existing.sha256 IS DISTINCT FROM v_sha256",
+            "v_existing.byte_size IS DISTINCT FROM p_byte_size",
+            "v_existing.mime_type IS DISTINCT FROM p_mime_type",
+            "v_existing.verified_at IS NULL",
+        ):
+            assert required in conflict_guard
+
+
 def test_catalog_asset_cutover_is_guarded_before_replacing_clone_rpcs():
     sql = ASSET_REGISTRY_CUTOVER.read_text(encoding="utf-8")
     guard = "catalog asset R2 cutover manifest is not verified"
@@ -126,11 +145,37 @@ def test_catalog_asset_cutover_is_guarded_before_replacing_clone_rpcs():
         function = _function_sql(sql, name)
         assert "FROM public.saas_catalog_assets" in function
         assert "storage.objects" not in function
-        assert "storage_provider = 'r2'" in function
+        assert "storage_provider = 'r2'" not in function
         assert "physical_bucket = 'catalog-assets'" in function
         assert "verified_at IS NOT NULL" in function
         assert "SECURITY DEFINER" in function
         assert "SET search_path = public, pg_temp" in function
+
+
+def test_catalog_asset_cutover_is_pinned_to_the_certified_initial_batch():
+    sql = ASSET_REGISTRY_CUTOVER.read_text(encoding="utf-8")
+    guard = sql[: sql.index("CREATE OR REPLACE FUNCTION saas_clone_catalog_candidate_with_asset")]
+    assert "batch_id = '470442fc-3dc3-5948-b0e4-1dd34c1fcd30'::UUID" in guard
+    assert "keyset_digest = '93e30738942bc0c4b85d85d63239c82588ec1d163c5c3820ef2de01dc07caeb7'" in guard
+    assert "manifest_digest = '72ecc6b84bfec9ba012a24dea9c5bcdf6d1beaad8d81c68eb4697f8e83e188ff'" in guard
+    assert "ORDER BY verified_at" not in guard
+    assert "LIMIT 1" not in guard
+
+
+def test_bootstrap_and_forward_sql_keep_real_registry_and_clone_definitions_in_parity():
+    registry = ASSET_REGISTRY_MIGRATION.read_text(encoding="utf-8")
+    cutover = ASSET_REGISTRY_CUTOVER.read_text(encoding="utf-8")
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    assert _normalized_sql(_function_definition(registry, "saas_register_catalog_asset")) == _normalized_sql(
+        _function_definition(bootstrap, "saas_register_catalog_asset")
+    )
+    for name in (
+        "saas_clone_catalog_candidate_with_asset",
+        "saas_clone_catalog_candidate_with_image_metadata",
+    ):
+        assert _normalized_sql(_function_definition(cutover, name)) == _normalized_sql(
+            _function_definition(bootstrap, name)
+        )
 
 
 def test_catalog_asset_cutover_manifest_is_private_and_independently_verified():
@@ -1692,6 +1737,18 @@ def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
         f"SELECT COUNT(*) FROM public.saas_catalog_assets WHERE object_name='{concurrent_object}';",
     )
     assert concurrent_count.strip() == "1"
+    preserved_provider = _container_psql(
+        container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_register_catalog_asset(
+            '{concurrent_object}', 'supabase', 'catalog-assets', 123, 'image/png'
+        );
+        RESET ROLE;
+        SELECT storage_provider FROM public.saas_catalog_assets
+        WHERE object_name='{concurrent_object}';
+        """,
+    ).splitlines()
+    assert preserved_provider == [concurrent_object, "r2"]
     conflict = _container_psql_failure(container, user, password, database, f"""
         SET ROLE service_role;
         SELECT public.saas_register_catalog_asset(
@@ -1862,7 +1919,10 @@ def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
     """)
     assert "catalog asset cutover batch is not loading" in immutable
 
-    _container_psql(container, user, password, database, cutover)
+    wrong_verified_batch = _container_psql_failure(
+        container, user, password, database, cutover
+    )
+    assert "catalog asset R2 cutover manifest is not verified" in wrong_verified_batch
 
     null_cases = (
         (
@@ -1935,6 +1995,7 @@ def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
     asset_source_hash = token * 2
     metadata_source_hash = token[::-1] * 2
     object_sql = f"encode(extensions.digest(convert_to('{shared_prefix}-1', 'UTF8'), 'sha256'), 'hex') || '.png'"
+    supabase_object_sql = f"encode(extensions.digest(convert_to('task3-supabase-{token}', 'UTF8'), 'sha256'), 'hex') || '.png'"
     clone_setup = f"""
         INSERT INTO public.saas_usuarios(email, hashed_password, es_admin, activo)
         VALUES ('{admin_email}', 'not-a-real-password', TRUE, TRUE);
@@ -1976,6 +2037,11 @@ def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
         UPDATE public.saas_catalog_sync_runs
         SET status='awaiting_approval', candidate_version_id='{candidate_metadata}'::UUID, finished_at=NOW(), updated_at=NOW()
         WHERE id='{run_metadata}'::UUID;
+        SET ROLE service_role;
+        SELECT public.saas_register_catalog_asset(
+            ({supabase_object_sql}), 'supabase', 'catalog-assets', 321, 'image/png'
+        );
+        RESET ROLE;
         SELECT 'storage:' || COUNT(*) FROM storage.objects WHERE bucket_id='catalog-assets' AND name=({object_sql});
     """
     assert "storage:0" in _container_psql(container, user, password, database, clone_setup).splitlines()
@@ -1989,7 +2055,7 @@ def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
         SELECT public.saas_clone_catalog_candidate_with_image_metadata(
             '{candidate_metadata}'::UUID,
             (SELECT id FROM public.saas_usuarios WHERE email='{admin_email}'),
-            ({object_sql}), ARRAY['items','0'], 'generated_reference',
+            ({supabase_object_sql}), ARRAY['items','0'], 'generated_reference',
             'Referencia Task 3', ARRAY['https://example.test/reference']
         );
     """)
@@ -2009,4 +2075,8 @@ def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
     expected_object = _container_psql(
         container, user, password, database, f"SELECT ({object_sql});"
     ).strip()
-    assert all(line.endswith(f"|catalog-assets|{expected_object}") for line in payload_lines)
+    expected_supabase_object = _container_psql(
+        container, user, password, database, f"SELECT ({supabase_object_sql});"
+    ).strip()
+    assert any(line.endswith(f"|catalog-assets|{expected_object}") for line in payload_lines)
+    assert any(line.endswith(f"|catalog-assets|{expected_supabase_object}") for line in payload_lines)
