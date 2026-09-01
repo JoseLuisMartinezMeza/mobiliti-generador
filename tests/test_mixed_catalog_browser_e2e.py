@@ -601,6 +601,7 @@ def test_complement_picker_filters_results_by_supplier_collection(vite_url, brow
 
         page.get_by_role("button", name="Agregar producto", exact=True).click()
         picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Proveedor", exact=True).select_option("sunon")
         picker.get_by_label("Buscar producto", exact=True).fill("OLIVE-II")
         picker.get_by_role(
             "button", name=re.compile("OLIVE-II", re.IGNORECASE)
@@ -633,6 +634,30 @@ def test_complement_picker_filters_results_by_supplier_collection(vite_url, brow
             for query in stub.catalog_search_queries
         )
         assert stub.unexpected_requests == []
+    finally:
+        context.close()
+
+
+def test_opening_product_picker_without_supplier_does_not_invoke_request(vite_url, browser):
+    stub = ApiStub([])
+    stub.enable_project_routes(project_id=PROJECT_ID)
+    context, page = new_page(
+        browser, {"width": 1440, "height": 1000}, stub, vite_url
+    )
+    fetches = []
+    page.on("request", lambda request: (
+        fetches.append(request.url) if request.resource_type == "fetch" else None
+    ))
+    try:
+        page.goto(vite_url)
+        create_active_project(page, "QA selector sin proveedor")
+        fetches.clear()
+
+        page.get_by_role("button", name="Agregar producto", exact=True).click()
+        page.get_by_role("dialog", name="Seleccionar producto").wait_for(state="visible")
+        page.wait_for_timeout(450)
+
+        assert fetches == []
     finally:
         context.close()
 

@@ -89,3 +89,39 @@ Resultados:
   compartido.
 - No se realizaron DDL, despliegues, llamadas externas de escritura, push ni
   eliminaciones. Se preservaron cambios ajenos ya presentes en el worktree.
+
+## Fix de revisión — invocación real del selector
+
+El hallazgo señaló que la prueba original de `productPicker.js` no ejecutaba
+el efecto de `ProductPickerDialog`. Se añadió una aceptación mínima con la
+infraestructura Playwright/Vite existente en
+`tests/test_mixed_catalog_browser_e2e.py`. La prueba abre un proyecto, abre
+el diálogo real sin proveedor, espera los 300 ms de debounce y registra las
+solicitudes `fetch` de la página. El resultado esperado es una lista vacía.
+
+### RED por mutación controlada
+
+Con la prueba ya añadida, se reemplazó temporalmente el guard real del efecto
+de búsqueda de `if (!open || !supplier)` por `if (!open)`. El comando:
+
+```powershell
+python -m pytest tests/test_mixed_catalog_browser_e2e.py::test_opening_product_picker_without_supplier_does_not_invoke_request -q
+```
+
+falló como se esperaba con:
+
+```text
+AssertionError: assert ['http://127.0.0.1:<puerto>/'] == []
+```
+
+Esto demuestra que, sin el guard del componente, su prop `request` sí se
+invoca y termina emitiendo un `fetch`. La mutación se restauró inmediatamente
+con `apply_patch`; no forma parte del commit.
+
+### GREEN
+
+Con el guard restaurado, el mismo comando terminó con `1 passed`. Se ejecutó
+además la regresión dirigida de UI y el chequeo de diff antes del commit
+separado del fix de revisión. La aceptación vecina que iniciaba una búsqueda
+sin proveedor se actualizó para seleccionar `sunon` explícitamente; ambas
+aceptaciones del selector terminaron con `2 passed`.
