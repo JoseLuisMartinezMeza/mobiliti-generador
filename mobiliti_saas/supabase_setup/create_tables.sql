@@ -957,7 +957,7 @@ BEGIN
         RAISE EXCEPTION 'catalog sync run is not stageable';
     END IF;
 
-    INSERT INTO public.saas_catalog_snapshot_versions (
+    INSERT INTO saas_catalog_snapshot_versions (
         id, supplier, source_hash, generated_at, status, payload,
         base_published_version_id, sync_run_id
     ) VALUES (
