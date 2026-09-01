@@ -1757,6 +1757,38 @@ def test_local_postgres_catalog_asset_registry_contract_is_opt_in():
     """)
     assert "Catalog asset registry conflict" in conflict
 
+    supabase_first_object = "b" * 64 + ".webp"
+    supabase_first = _container_psql(
+        container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_register_catalog_asset(
+            '{supabase_first_object}', 'supabase', 'catalog-assets', 456, 'image/webp'
+        );
+        SELECT public.saas_register_catalog_asset(
+            '{supabase_first_object}', 'r2', 'catalog-assets', 456, 'image/webp'
+        );
+        RESET ROLE;
+        SELECT storage_provider FROM public.saas_catalog_assets
+        WHERE object_name='{supabase_first_object}';
+        """,
+    ).splitlines()
+    assert supabase_first == [supabase_first_object, supabase_first_object, "supabase"]
+
+    mime_conflict = _container_psql_failure(container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_register_catalog_asset(
+            '{supabase_first_object}', 'r2', 'catalog-assets', 456, 'image/png'
+        );
+    """)
+    assert "invalid catalog asset registry input" in mime_conflict
+    bucket_conflict = _container_psql_failure(container, user, password, database, f"""
+        SET ROLE service_role;
+        SELECT public.saas_register_catalog_asset(
+            '{supabase_first_object}', 'r2', 'quote-files', 456, 'image/webp'
+        );
+    """)
+    assert "invalid catalog asset registry input" in bucket_conflict
+
     roles_and_rls = _container_psql(container, user, password, database, """
         SELECT role_name || ':' || table_name || ':' ||
                has_table_privilege(role_name, 'public.' || table_name, 'SELECT')::TEXT || ':' ||

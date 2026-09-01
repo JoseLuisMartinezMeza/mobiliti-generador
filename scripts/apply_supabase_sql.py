@@ -21,17 +21,67 @@ REGISTRY_MIGRATION_SQL = SETUP_DIR / "2026_09_catalog_asset_registry_r2.sql"
 CUTOVER_MIGRATION_SQL = SETUP_DIR / "2026_09_catalog_asset_registry_r2_cutover.sql"
 PINNED_CUTOVER_BATCH = "470442fc-3dc3-5948-b0e4-1dd34c1fcd30"
 
+BOOTSTRAP_SENTINELS = (
+    "create table if not exists saas_usuarios",
+    "create table if not exists saas_catalog_assets",
+    "create or replace function saas_register_catalog_asset",
+)
+REGISTRY_SENTINELS = (
+    "create table if not exists saas_catalog_asset_cutover_batches",
+    "create table if not exists saas_catalog_asset_cutover_entries",
+    "create or replace function saas_finalize_catalog_asset_cutover_batch",
+)
+CUTOVER_STRUCTURE_SENTINELS = (
+    "from public.saas_catalog_asset_cutover_batches",
+    "catalog asset r2 cutover manifest is not verified",
+    "create or replace function saas_clone_catalog_candidate_with_asset",
+    "create or replace function saas_clone_catalog_candidate_with_image_metadata",
+)
+CUTOVER_PIN_SENTINELS = (
+    PINNED_CUTOVER_BATCH,
+    "93e30738942bc0c4b85d85d63239c82588ec1d163c5c3820ef2de01dc07caeb7",
+    "72ecc6b84bfec9ba012a24dea9c5bcdf6d1beaad8d81c68eb4697f8e83e188ff",
+    "expected_count = 2214",
+    "verified_count = 2214",
+)
 
-def load_sql(paths: list[Path]) -> str:
-    parts = []
+
+def classify_sql_content(sql: str) -> frozenset[str]:
+    """Clasifica SQL sensible mediante sentinelas estables, sin depender de su ruta."""
+    normalized = " ".join(sql.lower().replace("\ufeff", "").split())
+    roles: set[str] = set()
+    is_bootstrap = all(marker in normalized for marker in BOOTSTRAP_SENTINELS)
+    if is_bootstrap:
+        roles.add("bootstrap")
+    elif all(marker in normalized for marker in REGISTRY_SENTINELS):
+        roles.add("registry")
+    if all(marker in normalized for marker in CUTOVER_STRUCTURE_SENTINELS):
+        if all(marker in normalized for marker in CUTOVER_PIN_SENTINELS):
+            roles.add("cutover")
+        else:
+            roles.add("cutover_unpinned")
+    return frozenset(roles)
+
+
+def load_sql_documents(paths: list[Path]) -> list[tuple[Path, str]]:
+    documents = []
     for path in paths:
         if not path.exists():
             raise FileNotFoundError(path)
         text = path.read_text(encoding="utf-8")
         if not text.strip():
             raise ValueError(f"SQL vacio: {path}")
-        parts.append(f"-- file: {path}\n{text}")
+        documents.append((path, text))
+    return documents
+
+
+def render_sql_documents(documents: list[tuple[Path, str]]) -> str:
+    parts = [f"-- file: {path}\n{text}" for path, text in documents]
     return "\n\n".join(parts)
+
+
+def load_sql(paths: list[Path]) -> str:
+    return render_sql_documents(load_sql_documents(paths))
 
 
 def summarize_sql(sql: str) -> dict:
@@ -94,25 +144,48 @@ def resolve_sql_paths(args: argparse.Namespace, parser: argparse.ArgumentParser)
     if not files:
         parser.error("elige --file o --bootstrap-new-project")
 
-    resolved = [path.resolve() for path in files]
-    bootstrap = BOOTSTRAP_SQL.resolve()
-    registry = REGISTRY_MIGRATION_SQL.resolve()
-    cutover = CUTOVER_MIGRATION_SQL.resolve()
-    if bootstrap in resolved:
-        parser.error("create_tables.sql sólo se permite con --bootstrap-new-project")
+    return files
 
-    includes_registry = registry in resolved
-    includes_cutover = cutover in resolved
-    if includes_registry and includes_cutover:
-        parser.error("las migraciones A y B nunca se aplican juntas")
-    if includes_cutover:
+
+def validate_sql_selection(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    documents: list[tuple[Path, str]],
+) -> None:
+    """Aplica las barreras A/B/bootstrap a rutas conocidas y a su contenido real."""
+    roles: set[str] = set()
+    known_paths = {
+        BOOTSTRAP_SQL.resolve(): "bootstrap",
+        REGISTRY_MIGRATION_SQL.resolve(): "registry",
+        CUTOVER_MIGRATION_SQL.resolve(): "cutover",
+    }
+    for path, text in documents:
+        known_role = known_paths.get(path.resolve())
+        if known_role:
+            roles.add(known_role)
+        roles.update(classify_sql_content(text))
+
+    # Detecta también sentinelas repartidas entre varios archivos seleccionados.
+    roles.update(classify_sql_content("\n".join(text for _, text in documents)))
+
+    if args.bootstrap_new_project:
+        if roles != {"bootstrap"}:
+            parser.error("--bootstrap-new-project sólo permite el bootstrap canónico aislado")
+        return
+
+    if "bootstrap" in roles:
+        parser.error("el contenido de create_tables.sql sólo se permite con --bootstrap-new-project")
+    if "cutover_unpinned" in roles:
+        parser.error("el contenido de la migración B no conserva el batch y digests certificados")
+    if "registry" in roles and "cutover" in roles:
+        parser.error("las migraciones A y B nunca se aplican juntas, aunque estén copiadas o combinadas")
+    if "cutover" in roles:
         if args.confirm_cutover_batch != PINNED_CUTOVER_BATCH:
             parser.error(
                 "la migración B requiere --confirm-cutover-batch con el UUID certificado exacto"
             )
     elif args.confirm_cutover_batch:
         parser.error("--confirm-cutover-batch sólo se usa con la migración B")
-    return files
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -120,7 +193,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     paths = resolve_sql_paths(args, parser)
-    sql = load_sql(paths)
+    documents = load_sql_documents(paths)
+    validate_sql_selection(args, parser, documents)
+    sql = render_sql_documents(documents)
     summary = summarize_sql(sql)
 
     print("SQL listo:")

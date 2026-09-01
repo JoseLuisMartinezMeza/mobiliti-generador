@@ -92,6 +92,84 @@ def test_runner_allows_migration_a_but_pins_and_isolates_migration_b(capsys):
     assert "Dry-run" in capsys.readouterr().out
 
 
+def test_runner_rejects_bootstrap_content_copied_to_another_path(tmp_path):
+    copied_bootstrap = tmp_path / "harmless_name.sql"
+    copied_bootstrap.write_text(
+        (SETUP / "create_tables.sql").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as error:
+        apply_supabase_sql.main(["--file", str(copied_bootstrap)])
+
+    assert error.value.code == 2
+
+
+def test_runner_pins_cutover_content_copied_to_another_path(tmp_path, capsys):
+    copied_cutover = tmp_path / "renamed.sql"
+    copied_cutover.write_text(
+        "-- copied for an audited run\r\n"
+        + MIGRATION_B.read_text(encoding="utf-8").replace("\n", "\r\n"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit):
+        apply_supabase_sql.main(["--file", str(copied_cutover)])
+    with pytest.raises(SystemExit):
+        apply_supabase_sql.main([
+            "--file", str(copied_cutover), "--confirm-cutover-batch", "wrong",
+        ])
+
+    apply_supabase_sql.main([
+        "--file", str(copied_cutover),
+        "--confirm-cutover-batch", PINNED_BATCH,
+    ])
+    assert "Dry-run" in capsys.readouterr().out
+
+
+def test_runner_rejects_cutover_shaped_content_with_altered_pin(tmp_path):
+    altered_cutover = tmp_path / "altered-cutover.sql"
+    altered_cutover.write_text(
+        MIGRATION_B.read_text(encoding="utf-8").replace(
+            PINNED_BATCH,
+            "11111111-1111-1111-1111-111111111111",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as error:
+        apply_supabase_sql.main(["--file", str(altered_cutover)])
+
+    assert error.value.code == 2
+
+
+def test_runner_rejects_a_and_b_combined_inside_one_file(tmp_path):
+    combined = tmp_path / "combined.sql"
+    combined.write_text(
+        MIGRATION_A.read_text(encoding="utf-8")
+        + "\n\n"
+        + MIGRATION_B.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as error:
+        apply_supabase_sql.main(["--file", str(combined)])
+
+    assert error.value.code == 2
+
+
+def test_runner_allows_copied_a_and_unrelated_sql(tmp_path, capsys):
+    copied_registry = tmp_path / "registry-copy.sql"
+    copied_registry.write_text(MIGRATION_A.read_text(encoding="utf-8"), encoding="utf-8")
+    unrelated = tmp_path / "operator-maintenance.sql"
+    unrelated.write_text("select current_date;\n", encoding="utf-8")
+
+    apply_supabase_sql.main(["--file", str(copied_registry)])
+    apply_supabase_sql.main(["--file", str(unrelated)])
+
+    assert capsys.readouterr().out.count("Dry-run") == 2
+
+
 def test_runner_apply_never_prints_database_url(monkeypatch, capsys):
     secret_url = "postgresql://operator:secret@private.example.test/database"
     applied = []
