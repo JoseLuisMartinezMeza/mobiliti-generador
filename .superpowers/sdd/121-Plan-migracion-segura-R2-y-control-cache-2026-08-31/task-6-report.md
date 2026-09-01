@@ -100,7 +100,7 @@ Sólo después de los 2,214 GET completos se ejecuta el orden exacto:
 
 Los payloads coinciden con las firmas SQL de Task 3. Un error intermedio no llama finalize. Reejecutar un batch parcial repite las operaciones idempotentes con el mismo UUID. Después de todos los GET se consulta con service role la fila privada exacta de `saas_catalog_asset_cutover_batches`, sin usar Supabase Storage. Una fila ausente, `pending` o `loading` exacta provoca replay completo de start, todas las add, todas las register y finalize. Una fila `verified` exacta todavía exige un finalize idempotente con respuesta UUID exacta. En ambos caminos se vuelve a consultar la fila y sólo una prueba final `verified` con batch/digests/counts exactos permite `certified=true`; un mismatch, estado distinto o falta de fila falla cerrado.
 
-El cliente Supabase sólo llama `/rest/v1/rpc/<función>` y limita la respuesta; no llama endpoints de Supabase Storage ni obtiene cuerpos de assets.
+El cliente Supabase sólo usa los RPC de Task 3 bajo `/rest/v1/rpc/<función>` y el `SELECT` autenticado, privado y con columnas exactas sobre `/rest/v1/saas_catalog_asset_cutover_batches`; limita ambas respuestas. Nunca llama endpoints de Supabase Storage ni obtiene cuerpos de assets.
 
 ## Reporte y redacción
 
@@ -115,6 +115,8 @@ El JSON final incluye:
 - códigos de fallo sanitizados.
 
 Los escritores JSON eliminan defensivamente campos con credenciales, tokens, Authorization, headers, endpoints y excepciones crudas; también redaccionan URLs y strings Bearer. Los contadores parciales se conservan si execute falla, mientras `certified` permanece false. Reporte y checkpoint distinguen estadísticas `current` de `cumulative`; las acumuladas sobreviven a una reanudación.
+
+Las estadísticas `cumulative` son contabilidad local operacional y **best-effort**. Como el checkpoint es un archivo local manipulable, no son evidencia inviolable de certificación, facturación o costo; ninguna decisión de `certified` depende de ellas. Para auditoría se deben conservar los reportes atómicos de cada ejecución y contrastarlos con la prueba privada exacta de DB y, cuando corresponda, con la telemetría del proveedor.
 
 ## TDD RED → GREEN
 
@@ -228,7 +230,7 @@ Las pruebas cubren dos ataques: reemplazo/in-place entre auditoría y PUT produc
 - El parser JSON rechaza member names duplicados recursivamente en manifiesto, checkpoint y respuestas REST/RPC.
 - La raíz `SOURCE_DIR` se valida por `lstat` como directorio real no-reparse antes de abrir archivos o ejecutar `scandir`.
 - Errores de `mkdir`, temporal, fsync u `os.replace` se reducen a `atomic_output_failed`, sin filtrar paths/excepciones.
-- Checkpoint/reporte conservan y separan estadísticas current/cumulative; se persiste un checkpoint después de la ronda GET antes de tocar DB.
+- Checkpoint/reporte conservan y separan estadísticas current/cumulative; las acumuladas son best-effort, locales y manipulables, no prueba de certificación ni de costo. Se persiste un checkpoint después de la ronda GET antes de tocar DB y se recomienda conservar un reporte por ejecución.
 
 ### RED → GREEN de la revisión
 
@@ -283,16 +285,16 @@ Resultado: exit 0, `certified=false`, cero entorno/cliente/red/RPC/DB, 2,214 obj
 
 ## Límites y bloqueos live explícitos
 
-No se creó manifiesto operacional en Git ni fuera de Git durante esta tarea. No se leyó ninguna credencial, no se construyó cliente real, no hubo llamadas live, upload, deploy, push, DDL, cambio de bucket/domain/CORS/cache, corte ni borrado.
+No se creó ni versionó un manifiesto operacional en Git. El controller sí creó fuera de Git el manifiesto externo `C:/Users/pepem/Downloads/catalog-assets-manifest-2026-09-01.json` y los dos reportes dry-run indicados arriba; sus hashes quedaron documentados y el primer reporte fue preservado byte por byte. No se leyó ninguna credencial, no se construyó cliente real, no hubo llamadas live, upload, deploy, push, DDL, cambio de bucket/domain/CORS/cache, corte ni borrado.
 
 Por ello **no se afirma Gate 6 live**. Para ejecutar y certificarlo todavía hacen falta, como gates externos independientes:
 
-1. archivo manifiesto autoritativo exacto de 2,214 entries y su SHA-256 externo confirmado;
+1. aprobación y custodia operacional del manifiesto externo exacto ya generado, junto con su SHA-256 ancla confirmado;
 2. Task 3 aplicada y verificada live, incluyendo las RPC exactas y ausencia de conflictos incompatibles del registro;
 3. sync/cargas administrativas congeladas y colas drenadas durante backfill/registro;
 4. bucket R2 Standard dedicado `catalog-assets` y token temporal limitado a ese bucket;
 5. endpoint/región/credenciales dedicadas y Supabase service role entregados sólo al entorno de ejecución;
-6. ejecución dry-run real sobre el mirror y revisión del inventario de 770 extras;
+6. revisión/aprobación humana de los dos dry-runs locales ya generados y del inventario de 770 extras excluidos;
 7. execute completo con 2,214/2,214 GET+SHA, finalize exitoso y revisión del reporte/costo;
 8. Gate 7 de domain/CORS/cache y los gates 8–9 de canary/corte/observación posteriores.
 
