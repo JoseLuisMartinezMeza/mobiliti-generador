@@ -20,6 +20,10 @@ Este bootstrap y `create_tables.sql` son exclusivamente para una **base de
 datos nueva**. El script no imprime `DATABASE_URL`. Sin `--apply` no toca la
 base. Sin `--file` ni `--bootstrap-new-project` falla de forma segura.
 
+Este runner ejecuta únicamente el bootstrap, A y B canónicos, con ruta y
+contenido verificados. SQL adicional requiere un proceso separado o una
+ejecución manual revisada; no existe un flag de bypass en este runner.
+
 ## Aplicar manual
 
 Copia `mobiliti_saas/supabase_setup/create_tables.sql` en Supabase SQL Editor

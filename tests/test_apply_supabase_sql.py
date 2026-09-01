@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -45,15 +46,9 @@ def test_require_database_url_accepts_real_shape():
     assert apply_supabase_sql.require_database_url({"DATABASE_URL": "postgresql://user:pass@example.com/db"}).startswith("postgresql://")
 
 
-def test_sql_tokenizer_ignores_layout_comments_but_preserves_string_contents():
-    left = "\ufeff SELECT '-- not a comment', public . asset, '/* literal */';"
-    right = "select '-- not a comment', public/* ignored */.asset,'/* literal */'; -- ignored\n"
-
-    assert apply_supabase_sql.tokenize_sql(left) == apply_supabase_sql.tokenize_sql(right)
-
-
 PINNED_BATCH = "470442fc-3dc3-5948-b0e4-1dd34c1fcd30"
 SETUP = Path("mobiliti_saas/supabase_setup")
+BOOTSTRAP = SETUP / "create_tables.sql"
 MIGRATION_A = SETUP / "2026_09_catalog_asset_registry_r2.sql"
 MIGRATION_B = SETUP / "2026_09_catalog_asset_registry_r2_cutover.sql"
 
@@ -70,7 +65,7 @@ def test_runner_bootstrap_is_explicit_dry_run_and_cannot_be_disguised_as_file(ca
     assert "Dry-run" in capsys.readouterr().out
 
     with pytest.raises(SystemExit):
-        apply_supabase_sql.main(["--file", str(SETUP / "create_tables.sql")])
+        apply_supabase_sql.main(["--file", str(BOOTSTRAP)])
     with pytest.raises(SystemExit):
         apply_supabase_sql.main([
             "--bootstrap-new-project", "--file", str(MIGRATION_A)
@@ -99,170 +94,93 @@ def test_runner_allows_migration_a_but_pins_and_isolates_migration_b(capsys):
     assert "Dry-run" in capsys.readouterr().out
 
 
-def test_runner_rejects_bootstrap_content_copied_to_another_path(tmp_path):
-    copied_bootstrap = tmp_path / "harmless_name.sql"
-    copied_bootstrap.write_text(
-        (SETUP / "create_tables.sql").read_text(encoding="utf-8"),
+def test_runner_rejects_every_noncanonical_file_path_before_database(tmp_path, monkeypatch):
+    sql_a = MIGRATION_A.read_text(encoding="utf-8")
+    sql_b = MIGRATION_B.read_text(encoding="utf-8")
+    sql_bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    quoted_a = tmp_path / "quoted-a.sql"
+    quoted_a.write_text(f"SELECT $sql${sql_a}$sql$;", encoding="utf-8")
+    quoted_b = tmp_path / "quoted-b.sql"
+    quoted_b.write_text(f"SELECT $sql${sql_b}$sql$;", encoding="utf-8")
+    quoted_bootstrap = tmp_path / "quoted-bootstrap.sql"
+    quoted_bootstrap.write_text(
+        "SELECT '" + sql_bootstrap.replace("'", "''") + "';",
         encoding="utf-8",
     )
-
-    with pytest.raises(SystemExit) as error:
-        apply_supabase_sql.main(["--file", str(copied_bootstrap)])
-
-    assert error.value.code == 2
-
-
-def test_runner_pins_cutover_content_copied_to_another_path(tmp_path, capsys):
-    copied_cutover = tmp_path / "renamed.sql"
-    copied_cutover.write_text(
-        "-- copied for an audited run\r\n"
-        + MIGRATION_B.read_text(encoding="utf-8").replace("\n", "\r\n"),
+    standard_prefix = tmp_path / "standard-prefix.sql"
+    standard_prefix.write_text(
+        "SELECT E'" + sql_b.replace("\\", "\\\\").replace("'", "\\'") + "';",
         encoding="utf-8",
     )
+    dollar_quoted = tmp_path / "dollar-quoted.sql"
+    dollar_quoted.write_text("SELECT $body$unrelated SQL$body$;", encoding="utf-8")
+    arbitrary = tmp_path / "operator-maintenance.sql"
+    arbitrary.write_text("SELECT current_date;", encoding="utf-8")
+    copied_a = tmp_path / "copied-a.sql"
+    copied_a.write_text(sql_a, encoding="utf-8")
+    copied_b = tmp_path / "copied-b.sql"
+    copied_b.write_text(sql_b, encoding="utf-8")
+    copied_bootstrap = tmp_path / "copied-bootstrap.sql"
+    copied_bootstrap.write_text(sql_bootstrap, encoding="utf-8")
+    combined = tmp_path / "combined.sql"
+    combined.write_text(f"SELECT $sql${sql_a}\n{sql_b}$sql$;", encoding="utf-8")
+    hardlink = tmp_path / "hardlink-a.sql"
+    os.link(MIGRATION_A, hardlink)
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        apply_supabase_sql,
+        "apply_sql",
+        lambda *_: pytest.fail("no debe alcanzar la base de datos"),
+    )
+    for path in (
+        quoted_a, quoted_b, quoted_bootstrap, standard_prefix, dollar_quoted,
+        arbitrary, copied_a, copied_b, copied_bootstrap, combined, hardlink,
+    ):
+        with pytest.raises(SystemExit):
+            apply_supabase_sql.main(["--file", str(path), "--apply"])
 
     with pytest.raises(SystemExit):
-        apply_supabase_sql.main(["--file", str(copied_cutover)])
+        apply_supabase_sql.main(["--file", str(quoted_a), "--file", str(quoted_b)])
+
+
+def test_runner_rejects_symlink_to_canonical_migration_when_windows_allows_it(tmp_path):
+    link = tmp_path / "linked-a.sql"
+    try:
+        link.symlink_to(MIGRATION_A.resolve())
+    except OSError as exc:
+        pytest.skip(f"symlink no disponible en este Windows: {exc}")
+
     with pytest.raises(SystemExit):
-        apply_supabase_sql.main([
-            "--file", str(copied_cutover), "--confirm-cutover-batch", "wrong",
-        ])
-
-    apply_supabase_sql.main([
-        "--file", str(copied_cutover),
-        "--confirm-cutover-batch", PINNED_BATCH,
-    ])
-    assert "Dry-run" in capsys.readouterr().out
-
-
-def test_runner_accepts_cutover_with_comments_and_whitespace_between_tokens(tmp_path, capsys):
-    formatted_cutover = tmp_path / "formatted-cutover.sql"
-    formatted_cutover.write_text(
-        MIGRATION_B.read_text(encoding="utf-8").replace(
-            "public.saas_catalog_asset_cutover_batches",
-            "public /* audited formatting */ .\n saas_catalog_asset_cutover_batches",
-        ),
-        encoding="utf-8",
-    )
-
-    apply_supabase_sql.main([
-        "--file", str(formatted_cutover),
-        "--confirm-cutover-batch", PINNED_BATCH,
-    ])
-
-    assert "Dry-run" in capsys.readouterr().out
+        apply_supabase_sql.main(["--file", str(link)])
 
 
 @pytest.mark.parametrize(
-    ("old", "new"),
+    ("path", "argv"),
     (
-        ("AND missing_count = 0", "AND missing_count = 1"),
-        ("AND failed_count = 0", "AND failed_count = 1"),
-        ("AND verified_at IS NOT NULL", "AND verified_at IS NULL"),
+        (BOOTSTRAP, ["--bootstrap-new-project"]),
+        (MIGRATION_A, ["--file", str(MIGRATION_A)]),
+        (
+            MIGRATION_B,
+            ["--file", str(MIGRATION_B), "--confirm-cutover-batch", PINNED_BATCH],
+        ),
     ),
 )
-def test_runner_rejects_cutover_with_any_certification_guard_changed(
-    tmp_path, old, new,
-):
-    altered_cutover = tmp_path / "altered-guard.sql"
-    original = MIGRATION_B.read_text(encoding="utf-8")
-    assert old in original
-    altered_cutover.write_text(original.replace(old, new, 1), encoding="utf-8")
-
-    with pytest.raises(SystemExit):
-        apply_supabase_sql.main([
-            "--file", str(altered_cutover),
-            "--confirm-cutover-batch", PINNED_BATCH,
-        ])
-
-
-def test_runner_ignores_expected_uuid_when_it_only_appears_in_a_comment(tmp_path):
-    altered_cutover = tmp_path / "comment-does-not-pin.sql"
-    active_uuid = "11111111-1111-1111-1111-111111111111"
-    altered_cutover.write_text(
-        f"-- expected batch was {PINNED_BATCH}\n"
-        + MIGRATION_B.read_text(encoding="utf-8").replace(PINNED_BATCH, active_uuid),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(SystemExit):
-        apply_supabase_sql.main([
-            "--file", str(altered_cutover),
-            "--confirm-cutover-batch", PINNED_BATCH,
-        ])
-
-
-def test_runner_rejects_modified_content_even_when_document_uses_canonical_b_path():
+def test_runner_rejects_mutated_content_at_a_canonical_path(path, argv):
     parser = apply_supabase_sql.build_parser()
-    args = parser.parse_args([
-        "--file", str(MIGRATION_B),
-        "--confirm-cutover-batch", PINNED_BATCH,
-    ])
+    args = parser.parse_args(argv)
+    mutated = path.read_text(encoding="utf-8") + "\n-- changed\n"
 
     with pytest.raises(SystemExit):
-        apply_supabase_sql.validate_sql_selection(
-            args,
-            parser,
-            [(MIGRATION_B, "select current_date;\n")],
-        )
+        apply_supabase_sql.validate_sql_selection(args, parser, [(path, mutated)])
 
 
-def test_runner_rejects_structural_cutover_update_without_canonical_b(tmp_path):
-    structural_cutover = tmp_path / "looks-arbitrary.sql"
-    structural_cutover.write_text(
-        """
-        UPDATE public /* spacing cannot hide the target */ .
-               saas_catalog_asset_cutover_batches
-        SET cutover_applied_at = now()
-        WHERE batch_id = '11111111-1111-1111-1111-111111111111';
-        """,
-        encoding="utf-8",
-    )
+def test_runner_content_hash_normalizes_only_line_endings():
+    parser = apply_supabase_sql.build_parser()
+    args = parser.parse_args(["--file", str(MIGRATION_A)])
+    crlf = MIGRATION_A.read_text(encoding="utf-8").replace("\n", "\r\n")
 
-    with pytest.raises(SystemExit):
-        apply_supabase_sql.main(["--file", str(structural_cutover)])
-
-
-def test_runner_rejects_cutover_shaped_content_with_altered_pin(tmp_path):
-    altered_cutover = tmp_path / "altered-cutover.sql"
-    altered_cutover.write_text(
-        MIGRATION_B.read_text(encoding="utf-8").replace(
-            PINNED_BATCH,
-            "11111111-1111-1111-1111-111111111111",
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(SystemExit) as error:
-        apply_supabase_sql.main(["--file", str(altered_cutover)])
-
-    assert error.value.code == 2
-
-
-def test_runner_rejects_a_and_b_combined_inside_one_file(tmp_path):
-    combined = tmp_path / "combined.sql"
-    combined.write_text(
-        MIGRATION_A.read_text(encoding="utf-8")
-        + "\n\n"
-        + MIGRATION_B.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(SystemExit) as error:
-        apply_supabase_sql.main(["--file", str(combined)])
-
-    assert error.value.code == 2
-
-
-def test_runner_allows_copied_a_and_unrelated_sql(tmp_path, capsys):
-    copied_registry = tmp_path / "registry-copy.sql"
-    copied_registry.write_text(MIGRATION_A.read_text(encoding="utf-8"), encoding="utf-8")
-    unrelated = tmp_path / "operator-maintenance.sql"
-    unrelated.write_text("select current_date;\n", encoding="utf-8")
-
-    apply_supabase_sql.main(["--file", str(copied_registry)])
-    apply_supabase_sql.main(["--file", str(unrelated)])
-
-    assert capsys.readouterr().out.count("Dry-run") == 2
+    apply_supabase_sql.validate_sql_selection(args, parser, [(MIGRATION_A, crlf)])
 
 
 def test_runner_apply_never_prints_database_url(monkeypatch, capsys):
@@ -304,3 +222,8 @@ def test_catalog_deploy_docs_define_existing_project_order_and_all_server_env_na
     ):
         assert name in cloud
     assert "server-only" in cloud.lower()
+    for document in (cloud, setup):
+        assert "ejecuta únicamente el bootstrap, A y B canónicos" in document
+        assert "SQL adicional" in document
+        assert "proceso separado" in document
+        assert "manual revisada" in document

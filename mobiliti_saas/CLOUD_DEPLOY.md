@@ -32,6 +32,10 @@ python scripts\apply_supabase_sql.py --bootstrap-new-project --apply
    `create_tables.sql` es sólo para una base de datos nueva. La alternativa
    manual es copiarlo al SQL Editor únicamente en ese caso.
 
+   Este runner ejecuta únicamente el bootstrap, A y B canónicos, con ruta y
+   contenido verificados. SQL adicional requiere un proceso separado o una
+   ejecución manual revisada; no existe un flag de bypass en este runner.
+
    Para un **proyecto existente**, nunca uses el bootstrap y nunca apliques A+B
    juntas. El orden obligatorio es:
 

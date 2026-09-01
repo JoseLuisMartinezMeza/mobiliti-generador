@@ -22,157 +22,29 @@ REGISTRY_MIGRATION_SQL = SETUP_DIR / "2026_09_catalog_asset_registry_r2.sql"
 CUTOVER_MIGRATION_SQL = SETUP_DIR / "2026_09_catalog_asset_registry_r2_cutover.sql"
 PINNED_CUTOVER_BATCH = "470442fc-3dc3-5948-b0e4-1dd34c1fcd30"
 
-CANONICAL_SQL_FINGERPRINTS = {
-    "bootstrap": "87b18231146b888f5de1e595e37c99e902b35d06068b58c52ad7f08eccc3139e",
-    "registry": "ee87c269bcc65d73c34b8b6a007a370502a74beb22f93dbab2744a5773d07288",
-    "cutover": "77427d72daa998e6813c7713cf4a3b54f574b528677ccf97d07c70c773f587fc",
+CANONICAL_SQL_PATHS = {
+    "bootstrap": BOOTSTRAP_SQL,
+    "registry": REGISTRY_MIGRATION_SQL,
+    "cutover": CUTOVER_MIGRATION_SQL,
+}
+CANONICAL_SQL_SHA256 = {
+    "bootstrap": "2aa02145abc088bd865e9e3c0e0890b2e47c0bdc04ffcfbcc098a3aa8fd69502",
+    "registry": "6cfe4f9d129d1e0409845c1c29666ed6217d684832312f3c0e4f4240b600159f",
+    "cutover": "2648632327b5b4df8efe4097b8e2d181ec4fc6863727eec1ff12b31b8a12f5e7",
 }
 
 
-def tokenize_sql(sql: str) -> tuple[str, ...]:
-    """Tokeniza SQL ignorando BOM, comentarios y whitespace fuera de strings."""
-    tokens: list[str] = []
-    index = 0
-    length = len(sql)
-    while index < length:
-        char = sql[index]
-        if char == "\ufeff" or char.isspace():
-            index += 1
-            continue
-        if sql.startswith("--", index):
-            newline = sql.find("\n", index + 2)
-            index = length if newline < 0 else newline + 1
-            continue
-        if sql.startswith("/*", index):
-            index += 2
-            depth = 1
-            while index < length and depth:
-                if sql.startswith("/*", index):
-                    depth += 1
-                    index += 2
-                elif sql.startswith("*/", index):
-                    depth -= 1
-                    index += 2
-                else:
-                    index += 1
-            continue
-        if char in ("'", '"'):
-            quote = char
-            start = index
-            index += 1
-            while index < length:
-                if sql[index] == quote:
-                    if index + 1 < length and sql[index + 1] == quote:
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                if quote == "'" and sql[index] == "\\" and index + 1 < length:
-                    index += 2
-                else:
-                    index += 1
-            tokens.append(sql[start:index])
-            continue
-        if char == "$":
-            delimiter_end = sql.find("$", index + 1)
-            if delimiter_end >= 0:
-                candidate = sql[index : delimiter_end + 1]
-                tag = candidate[1:-1]
-                if not tag or (tag[0].isalpha() or tag[0] == "_") and all(
-                    part.isalnum() or part == "_" for part in tag
-                ):
-                    tokens.append(candidate)
-                    index = delimiter_end + 1
-                    continue
-        if char.isalnum() or char == "_":
-            start = index
-            index += 1
-            while index < length and (sql[index].isalnum() or sql[index] in "_$"):
-                index += 1
-            tokens.append(sql[start:index].lower())
-            continue
-        three = sql[index : index + 3]
-        two = sql[index : index + 2]
-        if three in ("->>", "#>>"):
-            tokens.append(three)
-            index += 3
-        elif two in ("::", ":=", "<>", "<=", ">=", "!=", "||", "->", "#>", "=>"):
-            tokens.append(two)
-            index += 2
-        else:
-            tokens.append(char)
-            index += 1
-    return tuple(tokens)
+def canonical_sql_role(path: Path) -> str | None:
+    """Acepta sólo el spelling absoluto o relativo documentado, nunca aliases."""
+    for role, canonical in CANONICAL_SQL_PATHS.items():
+        if path in (canonical, canonical.relative_to(ROOT)):
+            return role
+    return None
 
 
-def sql_token_fingerprint(tokens: tuple[str, ...]) -> str:
-    digest = hashlib.sha256()
-    for token in tokens:
-        encoded = token.encode("utf-8")
-        digest.update(len(encoded).to_bytes(4, "big"))
-        digest.update(encoded)
-    return digest.hexdigest()
-
-
-def _contains_token_sequence(tokens: tuple[str, ...], sequence: tuple[str, ...]) -> bool:
-    if not sequence or len(sequence) > len(tokens):
-        return False
-    width = len(sequence)
-    return any(
-        tokens[index : index + width] == sequence
-        for index in range(len(tokens) - width + 1)
-    )
-
-
-BOOTSTRAP_SIGNATURES = tuple(tokenize_sql(signature) for signature in (
-        "create table if not exists saas_usuarios",
-        "create table if not exists saas_catalog_assets",
-        "create or replace function saas_register_catalog_asset",
-    ))
-REGISTRY_SIGNATURES = tuple(tokenize_sql(signature) for signature in (
-        "create table if not exists saas_catalog_asset_cutover_batches",
-        "create table if not exists saas_catalog_asset_cutover_entries",
-        "create or replace function saas_finalize_catalog_asset_cutover_batch",
-    ))
-CUTOVER_SIGNATURES = tuple(tokenize_sql(signature) for signature in (
-        "create or replace function saas_clone_catalog_candidate_with_asset",
-        "create or replace function saas_clone_catalog_candidate_with_image_metadata",
-        "update public.saas_catalog_asset_cutover_batches set cutover_applied_at",
-    ))
-
-
-def classify_sql_tokens(tokens: tuple[str, ...]) -> frozenset[str]:
-    """Clasifica contratos sensibles y marca cualquier variante no canónica."""
-    fingerprint = sql_token_fingerprint(tokens)
-    roles: set[str] = set()
-    is_bootstrap = all(
-        _contains_token_sequence(tokens, item) for item in BOOTSTRAP_SIGNATURES
-    )
-    if is_bootstrap:
-        role = (
-            "bootstrap"
-            if fingerprint == CANONICAL_SQL_FINGERPRINTS["bootstrap"]
-            else "bootstrap_modified"
-        )
-        return frozenset((role,))
-
-    if all(_contains_token_sequence(tokens, item) for item in REGISTRY_SIGNATURES):
-        roles.add(
-            "registry"
-            if fingerprint == CANONICAL_SQL_FINGERPRINTS["registry"]
-            else "registry_modified"
-        )
-    if any(_contains_token_sequence(tokens, item) for item in CUTOVER_SIGNATURES):
-        roles.add(
-            "cutover"
-            if fingerprint == CANONICAL_SQL_FINGERPRINTS["cutover"]
-            else "cutover_unpinned"
-        )
-    return frozenset(roles)
-
-
-def classify_sql_content(sql: str) -> frozenset[str]:
-    return classify_sql_tokens(tokenize_sql(sql))
+def sql_text_sha256(sql: str) -> str:
+    normalized = sql.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def load_sql_documents(paths: list[Path]) -> list[tuple[Path, str]]:
@@ -255,8 +127,20 @@ def resolve_sql_paths(args: argparse.Namespace, parser: argparse.ArgumentParser)
         return [BOOTSTRAP_SQL]
     if not files:
         parser.error("elige --file o --bootstrap-new-project")
+    if len(files) != 1:
+        parser.error("--file acepta exactamente una migración canónica por ejecución")
 
-    return files
+    role = canonical_sql_role(files[0])
+    if role not in ("registry", "cutover"):
+        parser.error("--file sólo acepta la ruta canónica exacta de la migración A o B")
+    if role == "cutover":
+        if args.confirm_cutover_batch != PINNED_CUTOVER_BATCH:
+            parser.error(
+                "la migración B requiere --confirm-cutover-batch con el UUID certificado exacto"
+            )
+    elif args.confirm_cutover_batch:
+        parser.error("--confirm-cutover-batch sólo se usa con la migración B")
+    return [CANONICAL_SQL_PATHS[role]]
 
 
 def validate_sql_selection(
@@ -264,53 +148,25 @@ def validate_sql_selection(
     parser: argparse.ArgumentParser,
     documents: list[tuple[Path, str]],
 ) -> None:
-    """Aplica las barreras A/B/bootstrap a rutas conocidas y a su contenido real."""
-    roles: set[str] = set()
-    known_paths = {
-        BOOTSTRAP_SQL.resolve(): "bootstrap",
-        REGISTRY_MIGRATION_SQL.resolve(): "registry",
-        CUTOVER_MIGRATION_SQL.resolve(): "cutover",
-    }
-    for path, text in documents:
-        tokens = tokenize_sql(text)
-        fingerprint = sql_token_fingerprint(tokens)
-        known_role = known_paths.get(path.resolve())
-        if known_role:
-            if fingerprint == CANONICAL_SQL_FINGERPRINTS[known_role]:
-                roles.add(known_role)
-            else:
-                roles.add({
-                    "bootstrap": "bootstrap_modified",
-                    "registry": "registry_modified",
-                    "cutover": "cutover_unpinned",
-                }[known_role])
-        roles.update(classify_sql_tokens(tokens))
-
-    # Detecta también sentinelas repartidas entre varios archivos seleccionados.
-    roles.update(classify_sql_content("\n".join(text for _, text in documents)))
-
-    if args.bootstrap_new_project:
-        if roles != {"bootstrap"}:
-            parser.error("--bootstrap-new-project sólo permite el bootstrap canónico aislado")
-        return
-
-    has_registry = bool(roles & {"registry", "registry_modified"})
-    has_cutover = bool(roles & {"cutover", "cutover_unpinned"})
-    if has_registry and has_cutover:
-        parser.error("las migraciones A y B nunca se aplican juntas, aunque estén copiadas o combinadas")
-    if roles & {"bootstrap", "bootstrap_modified"}:
-        parser.error("el contenido de create_tables.sql sólo se permite con --bootstrap-new-project")
-    if "registry_modified" in roles:
-        parser.error("el contenido de la migración A no coincide con su secuencia canónica")
-    if "cutover_unpinned" in roles:
-        parser.error("el contenido de la migración B no coincide con el cutover certificado canónico")
-    if "cutover" in roles:
-        if args.confirm_cutover_batch != PINNED_CUTOVER_BATCH:
-            parser.error(
-                "la migración B requiere --confirm-cutover-batch con el UUID certificado exacto"
-            )
-    elif args.confirm_cutover_batch:
-        parser.error("--confirm-cutover-batch sólo se usa con la migración B")
+    """Verifica que el único documento sea el artefacto canónico intacto."""
+    if len(documents) != 1:
+        parser.error("se requiere exactamente un documento SQL canónico")
+    path, text = documents[0]
+    role = canonical_sql_role(path)
+    expected_role = "bootstrap" if args.bootstrap_new_project else canonical_sql_role(
+        list(args.file or [Path()])[0]
+    )
+    if (
+        role is None
+        or role != expected_role
+        or path.is_symlink()
+        or (not args.bootstrap_new_project and role not in ("registry", "cutover"))
+    ):
+        parser.error("la ruta SQL no es el artefacto canónico seleccionado")
+    if sql_text_sha256(text) != CANONICAL_SQL_SHA256[role]:
+        parser.error("el contenido SQL canónico fue modificado")
+    if role == "cutover" and args.confirm_cutover_batch != PINNED_CUTOVER_BATCH:
+        parser.error("la migración B no tiene la confirmación exacta del batch certificado")
 
 
 def main(argv: list[str] | None = None) -> None:
