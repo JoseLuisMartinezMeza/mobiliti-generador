@@ -151,6 +151,7 @@ class ExecuteConfig:
     r2_endpoint_url: str
     r2_access_key_id: str
     r2_secret_access_key: str
+    r2_session_token: str
     r2_region: str
     r2_bucket: str
     supabase_url: str
@@ -919,6 +920,7 @@ def load_execute_config(environ: Mapping[str, str]) -> ExecuteConfig:
     endpoint = (environ.get("CATALOG_ASSET_R2_ENDPOINT_URL", "") or "").strip()
     access = (environ.get("CATALOG_ASSET_R2_ACCESS_KEY_ID", "") or "").strip()
     secret = (environ.get("CATALOG_ASSET_R2_SECRET_ACCESS_KEY", "") or "").strip()
+    session_token = (environ.get("CATALOG_ASSET_R2_SESSION_TOKEN", "") or "").strip()
     region = (environ.get("CATALOG_ASSET_R2_REGION", "") or "").strip()
     bucket = (environ.get("CATALOG_ASSET_R2_BUCKET", "") or "").strip()
     supabase_url = (environ.get("SUPABASE_URL", "") or "").strip()
@@ -933,6 +935,7 @@ def load_execute_config(environ: Mapping[str, str]) -> ExecuteConfig:
         r2_endpoint_url=endpoint_origin,
         r2_access_key_id=access,
         r2_secret_access_key=secret,
+        r2_session_token=session_token,
         r2_region=region,
         r2_bucket=bucket,
         supabase_url=supabase_origin,
@@ -956,6 +959,8 @@ def create_r2_client(config: ExecuteConfig, *, boto3_module: Any | None = None) 
         "aws_secret_access_key": config.r2_secret_access_key,
         "region_name": config.r2_region,
     }
+    if config.r2_session_token:
+        arguments["aws_session_token"] = config.r2_session_token
     if client_config is not None:
         arguments["config"] = client_config
     try:

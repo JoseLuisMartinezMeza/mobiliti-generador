@@ -25,6 +25,7 @@ _SNAPSHOT_ENVELOPE_MARGIN_BYTES = 4 * 1024 * 1024
 _MAX_SNAPSHOT_REQUEST_BYTES = _MAX_SNAPSHOT_PAYLOAD_BYTES + _SNAPSHOT_ENVELOPE_MARGIN_BYTES
 _MAX_SNAPSHOT_RESPONSE_BYTES = _MAX_SNAPSHOT_PAYLOAD_BYTES + _SNAPSHOT_ENVELOPE_MARGIN_BYTES
 _MAX_STORAGE_RESPONSE_BYTES = 64 * 1024
+_CATALOG_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
 _MAX_CATALOG_ASSET_BYTES = 8 * 1024 * 1024
 _MAX_RAW_BYTES = 64 * 1024 * 1024
 _MAX_FILES = 10_000
@@ -382,6 +383,7 @@ class CatalogRepository:
         catalog_asset_r2_endpoint_url="",
         catalog_asset_r2_access_key_id="",
         catalog_asset_r2_secret_access_key="",
+        catalog_asset_r2_session_token="",
         catalog_asset_r2_bucket="catalog-assets",
         catalog_asset_r2_region="auto",
         catalog_asset_public_base_url="",
@@ -425,10 +427,17 @@ class CatalogRepository:
                 catalog_asset_r2_secret_access_key,
                 catalog_asset_r2_region,
             )
+            session_token = (
+                catalog_asset_r2_session_token.strip()
+                if isinstance(catalog_asset_r2_session_token, str)
+                else None
+            )
             if (
                 endpoint is None
                 or public_base is None
                 or catalog_asset_r2_bucket != "catalog-assets"
+                or session_token is None
+                or any(ord(character) < 33 or ord(character) == 127 for character in session_token)
                 or any(not isinstance(value, str) or not value.strip() for value in values)
                 or any(any(ord(character) < 33 or ord(character) == 127 for character in value) for value in values)
             ):
@@ -436,6 +445,7 @@ class CatalogRepository:
             self._catalog_asset_r2_endpoint_url = endpoint
             self._catalog_asset_r2_access_key_id = catalog_asset_r2_access_key_id
             self._catalog_asset_r2_secret_access_key = catalog_asset_r2_secret_access_key
+            self._catalog_asset_r2_session_token = session_token
             self._catalog_asset_r2_bucket = catalog_asset_r2_bucket
             self._catalog_asset_r2_region = catalog_asset_r2_region
             self._catalog_asset_public_base_url = public_base
@@ -456,6 +466,9 @@ class CatalogRepository:
             catalog_asset_r2_secret_access_key=os.environ.get(
                 "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", ""
             ),
+            catalog_asset_r2_session_token=os.environ.get(
+                "CATALOG_ASSET_R2_SESSION_TOKEN", ""
+            ),
             catalog_asset_r2_bucket=os.environ.get(
                 "CATALOG_ASSET_R2_BUCKET", "catalog-assets"
             ),
@@ -473,14 +486,16 @@ class CatalogRepository:
             from botocore.config import Config
         except ImportError as error:
             raise CatalogRepositoryError("Catalog storage request failed") from error
-        self._catalog_asset_r2_client_instance = boto3.client(
-            "s3",
+        client_options = dict(
             endpoint_url=self._catalog_asset_r2_endpoint_url,
             aws_access_key_id=self._catalog_asset_r2_access_key_id,
             aws_secret_access_key=self._catalog_asset_r2_secret_access_key,
             region_name=self._catalog_asset_r2_region,
             config=Config(signature_version="s3v4"),
         )
+        if self._catalog_asset_r2_session_token:
+            client_options["aws_session_token"] = self._catalog_asset_r2_session_token
+        self._catalog_asset_r2_client_instance = boto3.client("s3", **client_options)
         return self._catalog_asset_r2_client_instance
 
     def _open(self, request, expected, *, max_bytes, require_json=False):
@@ -865,7 +880,7 @@ class CatalogRepository:
                     Body=content,
                     IfNoneMatch="*",
                     ContentType=content_type,
-                    CacheControl="public, max-age=31536000, immutable",
+                    CacheControl=_CATALOG_ASSET_CACHE_CONTROL,
                     Metadata={"sha256": match.group(1)},
                 )
             except Exception as error:
@@ -941,6 +956,7 @@ class CatalogRepository:
                 and type(info.get("ContentLength")) is int
                 and info["ContentLength"] == expected_size
                 and info.get("ContentType") == expected_mime
+                and info.get("CacheControl") == _CATALOG_ASSET_CACHE_CONTROL
                 and isinstance(metadata, dict)
                 and metadata.get("sha256") == expected_sha256
             )

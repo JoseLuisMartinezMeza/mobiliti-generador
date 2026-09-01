@@ -140,6 +140,10 @@ def test_dry_run_needs_no_environment_and_never_constructs_clients(tmp_path, mon
     monkeypatch.setattr(migration, "SOURCE_DIR", source)
     called = []
 
+    class UnreadableEnvironment(dict):
+        def get(self, *_args, **_kwargs):
+            raise AssertionError("dry-run must not read environment")
+
     result = migration.run(
         [
             "--manifest", str(manifest),
@@ -147,7 +151,7 @@ def test_dry_run_needs_no_environment_and_never_constructs_clients(tmp_path, mon
             "--report", str(report),
         ],
         contract=_contract(entries),
-        environ={},
+        environ=UnreadableEnvironment(),
         r2_factory=lambda _: called.append("r2"),
         rpc_factory=lambda _: called.append("rpc"),
     )
@@ -956,6 +960,7 @@ def test_execute_config_reads_only_allowed_names_and_uses_explicit_credentials(m
         CATALOG_ASSET_R2_ENDPOINT_URL="https://account.example.invalid",
         CATALOG_ASSET_R2_ACCESS_KEY_ID="access",
         CATALOG_ASSET_R2_SECRET_ACCESS_KEY="secret",
+        CATALOG_ASSET_R2_SESSION_TOKEN="catalog-session-token",
         CATALOG_ASSET_R2_REGION="auto",
         CATALOG_ASSET_R2_BUCKET="catalog-assets",
         SUPABASE_URL="https://project.example.invalid",
@@ -975,14 +980,40 @@ def test_execute_config_reads_only_allowed_names_and_uses_explicit_credentials(m
     migration.create_r2_client(config, boto3_module=Boto)
     assert set(accessed) == {
         "CATALOG_ASSET_R2_ENDPOINT_URL", "CATALOG_ASSET_R2_ACCESS_KEY_ID",
-        "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", "CATALOG_ASSET_R2_REGION",
+        "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", "CATALOG_ASSET_R2_SESSION_TOKEN",
+        "CATALOG_ASSET_R2_REGION",
         "CATALOG_ASSET_R2_BUCKET", "SUPABASE_URL", "SUPABASE_SERVICE_KEY",
     }
     assert captured == {
         "service": "s3", "endpoint_url": "https://account.example.invalid",
         "aws_access_key_id": "access", "aws_secret_access_key": "secret",
+        "aws_session_token": "catalog-session-token",
         "region_name": "auto",
     }
+
+
+def test_r2_client_omits_empty_catalog_session_token():
+    config = migration.ExecuteConfig(
+        r2_endpoint_url="https://account.example.invalid",
+        r2_access_key_id="access",
+        r2_secret_access_key="secret",
+        r2_session_token="",
+        r2_region="auto",
+        r2_bucket="catalog-assets",
+        supabase_url="https://project.example.invalid",
+        supabase_service_key="service",
+    )
+    captured = {}
+
+    class Boto:
+        @staticmethod
+        def client(service, **kwargs):
+            captured.update(service=service, **kwargs)
+            return object()
+
+    migration.create_r2_client(config, boto3_module=Boto)
+
+    assert "aws_session_token" not in captured
 
 
 def test_private_batch_select_is_authenticated_exact_and_never_uses_storage_endpoint():
@@ -1056,6 +1087,7 @@ def test_atomic_outputs_defensively_redact_sensitive_keys_urls_and_exceptions(tm
         {
             "status": "failed",
             "Authorization": f"Bearer {secret}",
+            "CATALOG_ASSET_R2_SESSION_TOKEN": secret,
             "endpoint_url": "https://private.example.invalid",
             "nested": {"raw_exception": RuntimeError(secret), "safe_code": "r2_failed"},
         },

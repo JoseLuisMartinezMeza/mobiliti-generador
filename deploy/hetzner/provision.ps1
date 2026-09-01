@@ -17,6 +17,7 @@ param(
     [string]$CatalogAssetR2EndpointUrl = $env:CATALOG_ASSET_R2_ENDPOINT_URL,
     [string]$CatalogAssetR2AccessKeyId = $env:CATALOG_ASSET_R2_ACCESS_KEY_ID,
     [string]$CatalogAssetR2SecretAccessKey = $env:CATALOG_ASSET_R2_SECRET_ACCESS_KEY,
+    [string]$CatalogAssetR2SessionToken = $env:CATALOG_ASSET_R2_SESSION_TOKEN,
     [string]$CatalogAssetR2Region = $env:CATALOG_ASSET_R2_REGION,
     [string]$CatalogAssetPublicBaseUrl = $env:CATALOG_ASSET_PUBLIC_BASE_URL,
     [switch]$SkipBootstrap,
@@ -201,6 +202,7 @@ CATALOG_ASSET_R2_ACCOUNT_ID=$CatalogAssetR2AccountId
 CATALOG_ASSET_R2_ENDPOINT_URL=$CatalogAssetR2EndpointUrl
 CATALOG_ASSET_R2_ACCESS_KEY_ID=$CatalogAssetR2AccessKeyId
 CATALOG_ASSET_R2_SECRET_ACCESS_KEY=$CatalogAssetR2SecretAccessKey
+CATALOG_ASSET_R2_SESSION_TOKEN=$CatalogAssetR2SessionToken
 CATALOG_ASSET_R2_BUCKET=catalog-assets
 CATALOG_ASSET_R2_REGION=$CatalogAssetR2Region
 QUOTE_ENGINE=python

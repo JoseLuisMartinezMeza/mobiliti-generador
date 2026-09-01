@@ -217,6 +217,7 @@ CATALOG_ENABLED_SUPPLIERS = _parse_enabled_catalog_suppliers(
     os.environ.get("CATALOG_ENABLED_SUPPLIERS", "")
 )
 CATALOG_ASSET_BUCKET = "catalog-assets"
+CATALOG_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
 CATALOG_ASSET_STORAGE_PROVIDER = os.environ.get(
     "CATALOG_ASSET_STORAGE_PROVIDER", "supabase"
 ).strip().lower()
@@ -229,6 +230,9 @@ CATALOG_ASSET_R2_ACCESS_KEY_ID = os.environ.get(
 ).strip()
 CATALOG_ASSET_R2_SECRET_ACCESS_KEY = os.environ.get(
     "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", ""
+).strip()
+CATALOG_ASSET_R2_SESSION_TOKEN = os.environ.get(
+    "CATALOG_ASSET_R2_SESSION_TOKEN", ""
 ).strip()
 CATALOG_ASSET_R2_BUCKET = os.environ.get(
     "CATALOG_ASSET_R2_BUCKET", CATALOG_ASSET_BUCKET
@@ -589,14 +593,16 @@ def _catalog_asset_r2_client():
         from botocore.config import Config
     except ImportError as exc:
         raise RuntimeError("Falta dependencia boto3 para catalogo R2") from exc
-    _CATALOG_ASSET_R2_CLIENT = boto3.client(
-        "s3",
+    client_options = dict(
         endpoint_url=_catalog_asset_https_origin(CATALOG_ASSET_R2_ENDPOINT_URL),
         aws_access_key_id=CATALOG_ASSET_R2_ACCESS_KEY_ID,
         aws_secret_access_key=CATALOG_ASSET_R2_SECRET_ACCESS_KEY,
         region_name=CATALOG_ASSET_R2_REGION,
         config=Config(signature_version="s3v4"),
     )
+    if CATALOG_ASSET_R2_SESSION_TOKEN:
+        client_options["aws_session_token"] = CATALOG_ASSET_R2_SESSION_TOKEN
+    _CATALOG_ASSET_R2_CLIENT = boto3.client("s3", **client_options)
     return _CATALOG_ASSET_R2_CLIENT
 
 
@@ -630,6 +636,7 @@ def _catalog_asset_r2_matches(
         and type(info.get("ContentLength")) is int
         and info["ContentLength"] == expected_size
         and info.get("ContentType") == expected_mime
+        and info.get("CacheControl") == CATALOG_ASSET_CACHE_CONTROL
         and isinstance(metadata, dict)
         and metadata.get("sha256") == expected_sha256
     )
@@ -646,7 +653,7 @@ def _catalog_asset_r2_put_if_absent(
             Body=content,
             IfNoneMatch="*",
             ContentType=content_type,
-            CacheControl="public, max-age=31536000, immutable",
+            CacheControl=CATALOG_ASSET_CACHE_CONTROL,
             Metadata={"sha256": digest},
         )
     except Exception as exc:

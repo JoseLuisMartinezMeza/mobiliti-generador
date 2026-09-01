@@ -128,6 +128,12 @@ def validate_catalog_sync(
         _validate_https_origin(
             public_base, "CATALOG_ASSET_PUBLIC_BASE_URL", reject_r2_dev=True
         )
+    session_token = values.get("CATALOG_ASSET_R2_SESSION_TOKEN", "")
+    if session_token and (
+        len(session_token) > 16_384
+        or any(ord(character) < 33 or ord(character) == 127 for character in session_token)
+    ):
+        raise PreflightError("CATALOG_ASSET_R2_SESSION_TOKEN is invalid")
     if provider == "r2":
         for key in _CATALOG_R2_REQUIRED:
             if not values.get(key, "").strip():

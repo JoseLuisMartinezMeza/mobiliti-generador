@@ -31,6 +31,9 @@ CATALOG_ASSET_R2_ACCESS_KEY_ID = os.environ.get("CATALOG_ASSET_R2_ACCESS_KEY_ID"
 CATALOG_ASSET_R2_SECRET_ACCESS_KEY = os.environ.get(
     "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", ""
 ).strip()
+CATALOG_ASSET_R2_SESSION_TOKEN = os.environ.get(
+    "CATALOG_ASSET_R2_SESSION_TOKEN", ""
+).strip()
 CATALOG_ASSET_R2_BUCKET = os.environ.get(
     "CATALOG_ASSET_R2_BUCKET", "catalog-assets"
 ).strip()

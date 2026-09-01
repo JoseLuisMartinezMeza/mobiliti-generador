@@ -641,6 +641,12 @@ def test_worker_health_reports_catalog_provider_readiness_without_secrets(monkey
     )
     monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_ACCESS_KEY_ID", "catalog-access", raising=False)
     monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", "catalog-secret", raising=False)
+    monkeypatch.setattr(
+        render_web_worker,
+        "CATALOG_ASSET_R2_SESSION_TOKEN",
+        "catalog-session-token",
+        raising=False,
+    )
     monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_BUCKET", "catalog-assets", raising=False)
     monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_REGION", "auto", raising=False)
     monkeypatch.setattr(
@@ -662,6 +668,7 @@ def test_worker_health_reports_catalog_provider_readiness_without_secrets(monkey
         "catalog-account",
         "catalog-access",
         "catalog-secret",
+        "catalog-session-token",
         "catalog-assets",
         "r2.cloudflarestorage.com",
     ):

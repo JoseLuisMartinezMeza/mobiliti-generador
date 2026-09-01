@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -174,6 +175,7 @@ def r2_repository(client, responses=()):
         catalog_asset_r2_endpoint_url="https://catalog-account.r2.cloudflarestorage.com",
         catalog_asset_r2_access_key_id="catalog-access",
         catalog_asset_r2_secret_access_key="catalog-secret",
+        catalog_asset_r2_session_token="",
         catalog_asset_r2_bucket="catalog-assets",
         catalog_asset_r2_region="auto",
         catalog_asset_public_base_url="https://assets.example.test",
@@ -1008,6 +1010,7 @@ def test_r2_catalog_asset_precondition_accepts_only_exact_head_match():
     matching = {
         "ContentLength": len(content),
         "ContentType": "image/png",
+        "CacheControl": "public, max-age=31536000, immutable",
         "Metadata": {"sha256": digest},
     }
     client = R2Client(
@@ -1020,7 +1023,7 @@ def test_r2_catalog_asset_precondition_accepts_only_exact_head_match():
     assert [name for name, _kwargs in client.calls] == ["put_object", "head_object"]
     assert len(opener.requests) == 1
 
-    mismatching = matching | {"Metadata": {"sha256": "0" * 64}}
+    mismatching = matching | {"CacheControl": "no-cache"}
     client = R2Client(
         put=[R2Error(412, "PreconditionFailed")],
         head=[mismatching],
@@ -1029,6 +1032,75 @@ def test_r2_catalog_asset_precondition_accepts_only_exact_head_match():
     with pytest.raises(CatalogRepositoryError, match="storage"):
         repo.store_catalog_asset_if_absent(object_name, content, "image/png")
     assert opener.requests == []
+
+
+@pytest.mark.parametrize(
+    ("cache_control", "expected"),
+    [
+        (None, False),
+        ("no-cache", False),
+        ("public, max-age=31536000, immutable", True),
+    ],
+)
+def test_r2_catalog_asset_head_requires_exact_immutable_cache_control(
+    cache_control, expected
+):
+    content = b"\x89PNG\r\n\x1a\nrepository head image"
+    digest = hashlib.sha256(content).hexdigest()
+    info = {
+        "ContentLength": len(content),
+        "ContentType": "image/png",
+        "Metadata": {"sha256": digest},
+    }
+    if cache_control is not None:
+        info["CacheControl"] = cache_control
+    repo, _ = r2_repository(R2Client(head=[info]))
+
+    assert repo.catalog_asset_matches(
+        digest + ".png", digest, len(content), "image/png"
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("session_token", "expected_token"),
+    [("catalog-session-token", "catalog-session-token"), ("", None)],
+)
+def test_repository_r2_client_uses_only_optional_catalog_session_token(
+    monkeypatch, session_token, expected_token
+):
+    captured = []
+    monkeypatch.setenv("R2_SESSION_TOKEN", "quote-session-token")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "aws-chain-token")
+    monkeypatch.setitem(
+        sys.modules,
+        "boto3",
+        SimpleNamespace(client=lambda service, **kwargs: captured.append((service, kwargs)) or object()),
+    )
+    for name, value in {
+        "SUPABASE_URL": BASE_URL,
+        "SUPABASE_SERVICE_KEY": KEY,
+        "CATALOG_ASSET_STORAGE_PROVIDER": "r2",
+        "CATALOG_ASSET_R2_ACCOUNT_ID": "catalog-account",
+        "CATALOG_ASSET_R2_ENDPOINT_URL": "https://catalog-account.r2.cloudflarestorage.com",
+        "CATALOG_ASSET_R2_ACCESS_KEY_ID": "catalog-access",
+        "CATALOG_ASSET_R2_SECRET_ACCESS_KEY": "catalog-secret",
+        "CATALOG_ASSET_R2_SESSION_TOKEN": session_token,
+        "CATALOG_ASSET_R2_BUCKET": "catalog-assets",
+        "CATALOG_ASSET_R2_REGION": "auto",
+        "CATALOG_ASSET_PUBLIC_BASE_URL": "https://assets.example.test",
+    }.items():
+        monkeypatch.setenv(name, value)
+    repo = CatalogRepository.from_environment()
+
+    repo._catalog_asset_r2_client()
+
+    assert len(captured) == 1
+    service, kwargs = captured[0]
+    assert service == "s3"
+    assert kwargs.get("aws_session_token") == expected_token
+    assert ("aws_session_token" in kwargs) is (expected_token is not None)
+    assert "quote-session-token" not in repr(kwargs)
+    assert "aws-chain-token" not in repr(kwargs)
 
 
 @pytest.mark.parametrize(

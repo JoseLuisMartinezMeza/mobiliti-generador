@@ -157,6 +157,7 @@ def test_worker_example_disables_catalog_sync_and_uses_container_certificate_pat
     assert "CATALOG_ASSET_PUBLIC_BASE_URL=" in example
     assert "CATALOG_ASSET_STORAGE_PROVIDER=supabase" in example
     assert "CATALOG_ASSET_R2_BUCKET=catalog-assets" in example
+    assert "CATALOG_ASSET_R2_SESSION_TOKEN=" in example
     assert "CATALOG_SYNC_ENABLED=false" in example
 
 
@@ -168,12 +169,14 @@ def test_catalog_r2_credentials_are_server_only_and_separate_from_quote_storage(
     for contents in (server, worker):
         assert "CATALOG_ASSET_R2_ACCESS_KEY_ID=" in contents
         assert "CATALOG_ASSET_R2_SECRET_ACCESS_KEY=" in contents
+        assert "CATALOG_ASSET_R2_SESSION_TOKEN=" in contents
         assert "CATALOG_ASSET_R2_BUCKET=catalog-assets" in contents
         assert "R2_BUCKET=quote-files" in contents
     assert "CATALOG_ASSET_STORAGE_PROVIDER=" in web
     assert "CATALOG_ASSET_PUBLIC_BASE_URL=" in web
     assert "CATALOG_ASSET_R2_ACCESS_KEY_ID" not in web
     assert "CATALOG_ASSET_R2_SECRET_ACCESS_KEY" not in web
+    assert "CATALOG_ASSET_R2_SESSION_TOKEN" not in web
 
 
 def test_catalog_sync_preflight_allows_disabled_sync_without_graph_credentials():
@@ -304,6 +307,32 @@ def test_catalog_sync_preflight_accepts_complete_catalog_r2_configuration():
     )
 
 
+def test_catalog_sync_preflight_accepts_optional_catalog_r2_session_token():
+    preflight = _preflight_module()
+
+    preflight.validate_catalog_sync(
+        _active_catalog_r2_env()
+        | {"CATALOG_ASSET_R2_SESSION_TOKEN": "temporary-session-token"},
+        host_directory=_Directory(),
+        certificate=_Certificate(),
+    )
+
+
+def test_catalog_sync_preflight_rejects_invalid_session_token_without_echoing_it():
+    preflight = _preflight_module()
+    secret = "temporary token must stay private"
+
+    with pytest.raises(preflight.PreflightError) as caught:
+        preflight.validate_catalog_sync(
+            _active_catalog_r2_env()
+            | {"CATALOG_ASSET_R2_SESSION_TOKEN": secret},
+            host_directory=_Directory(),
+            certificate=_Certificate(),
+        )
+
+    assert secret not in str(caught.value)
+
+
 @pytest.mark.parametrize(
     "missing",
     (
@@ -359,12 +388,19 @@ def test_provision_passes_catalog_r2_settings_without_quote_fallback():
         "CatalogAssetR2EndpointUrl",
         "CatalogAssetR2AccessKeyId",
         "CatalogAssetR2SecretAccessKey",
+        "CatalogAssetR2SessionToken",
         "CatalogAssetPublicBaseUrl",
     ):
         assert f"${name}" in provision
     assert "CATALOG_ASSET_R2_BUCKET=catalog-assets" in provision
     assert "CATALOG_ASSET_R2_ACCESS_KEY_ID=$CatalogAssetR2AccessKeyId" in provision
     assert "CATALOG_ASSET_R2_SECRET_ACCESS_KEY=$CatalogAssetR2SecretAccessKey" in provision
+    assert "CATALOG_ASSET_R2_SESSION_TOKEN=$CatalogAssetR2SessionToken" in provision
+    assert all(
+        "$CatalogAssetR2SessionToken" not in line
+        for line in provision.splitlines()
+        if "Write-Host" in line or "Write-Warning" in line
+    )
 
 
 def test_provision_accepts_and_writes_supabase_service_key_without_printing_it():

@@ -8,6 +8,7 @@ import urllib.error
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from types import SimpleNamespace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -3929,6 +3930,7 @@ def _configure_catalog_r2(monkeypatch, client):
     )
     monkeypatch.setattr(index, "CATALOG_ASSET_R2_ACCESS_KEY_ID", "catalog-access", raising=False)
     monkeypatch.setattr(index, "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", "catalog-secret", raising=False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_R2_SESSION_TOKEN", "", raising=False)
     monkeypatch.setattr(index, "CATALOG_ASSET_R2_BUCKET", "catalog-assets", raising=False)
     monkeypatch.setattr(index, "CATALOG_ASSET_R2_REGION", "auto", raising=False)
     monkeypatch.setattr(index, "CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.test", raising=False)
@@ -3994,6 +3996,7 @@ def test_catalog_r2_precondition_requires_matching_head_before_registry(monkeypa
     matching = {
         "ContentLength": len(content),
         "ContentType": "image/png",
+        "CacheControl": "public, max-age=31536000, immutable",
         "Metadata": {"sha256": digest},
     }
     client = _CatalogR2Client(
@@ -4010,7 +4013,7 @@ def test_catalog_r2_precondition_requires_matching_head_before_registry(monkeypa
 
     client = _CatalogR2Client(
         put=[_CatalogR2Error(412, "PreconditionFailed")],
-        head=[matching | {"ContentLength": len(content) + 1}],
+        head=[matching | {"CacheControl": "no-cache"}],
     )
     _configure_catalog_r2(monkeypatch, client)
     registered.clear()
@@ -4019,12 +4022,76 @@ def test_catalog_r2_precondition_requires_matching_head_before_registry(monkeypa
     assert registered == []
 
 
+@pytest.mark.parametrize(
+    ("cache_control", "expected"),
+    [
+        (None, False),
+        ("no-cache", False),
+        ("public, max-age=31536000, immutable", True),
+    ],
+)
+def test_catalog_r2_head_requires_exact_immutable_cache_control(
+    monkeypatch, cache_control, expected
+):
+    content = b"\x89PNG\r\n\x1a\napi r2 head"
+    digest = hashlib.sha256(content).hexdigest()
+    info = {
+        "ContentLength": len(content),
+        "ContentType": "image/png",
+        "Metadata": {"sha256": digest},
+    }
+    if cache_control is not None:
+        info["CacheControl"] = cache_control
+    client = _CatalogR2Client(head=[info])
+    _configure_catalog_r2(monkeypatch, client)
+
+    assert index._catalog_asset_r2_matches(
+        digest + ".png", digest, len(content), "image/png"
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("session_token", "expected_token"),
+    [("catalog-session-token", "catalog-session-token"), ("", None)],
+)
+def test_catalog_r2_client_uses_only_optional_catalog_session_token(
+    monkeypatch, session_token, expected_token
+):
+    captured = []
+    quote_client = object()
+    _configure_catalog_r2(monkeypatch, None)
+    monkeypatch.setattr(index, "_CATALOG_ASSET_R2_CLIENT", None, raising=False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_R2_SESSION_TOKEN", session_token, raising=False)
+    monkeypatch.setattr(index, "_R2_CLIENT", quote_client)
+    monkeypatch.setattr(index, "R2_SESSION_TOKEN", "quote-session-token", raising=False)
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "aws-chain-token")
+    monkeypatch.setitem(
+        sys.modules,
+        "boto3",
+        SimpleNamespace(client=lambda service, **kwargs: captured.append((service, kwargs)) or object()),
+    )
+
+    catalog_client = index._catalog_asset_r2_client()
+
+    assert catalog_client is not quote_client
+    assert len(captured) == 1
+    service, kwargs = captured[0]
+    assert service == "s3"
+    assert kwargs.get("aws_session_token") == expected_token
+    assert ("aws_session_token" in kwargs) is (expected_token is not None)
+    assert "quote-session-token" not in repr(kwargs)
+    assert "aws-chain-token" not in repr(kwargs)
+
+
 def test_health_reports_catalog_readiness_without_catalog_or_quote_secrets(monkeypatch):
     client = _CatalogR2Client()
     _configure_catalog_r2(monkeypatch, client)
     monkeypatch.setattr(index, "R2_ACCESS_KEY_ID", "quote-access")
     monkeypatch.setattr(index, "R2_SECRET_ACCESS_KEY", "quote-secret")
     monkeypatch.setattr(index, "R2_BUCKET", "quote-files")
+    monkeypatch.setattr(
+        index, "CATALOG_ASSET_R2_SESSION_TOKEN", "catalog-session-token", raising=False
+    )
 
     payload = index.health()
     serialized = json.dumps(payload)
@@ -4039,6 +4106,7 @@ def test_health_reports_catalog_readiness_without_catalog_or_quote_secrets(monke
     assert "quote-access" not in serialized
     assert "quote-secret" not in serialized
     assert "catalog-account" not in serialized
+    assert "catalog-session-token" not in serialized
     assert "catalog-assets" not in serialized
 
 
