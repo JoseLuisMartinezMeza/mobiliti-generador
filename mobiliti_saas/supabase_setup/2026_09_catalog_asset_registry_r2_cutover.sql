@@ -3,13 +3,13 @@ BEGIN;
 
 DO $$
 DECLARE
-    v_batch saas_catalog_asset_cutover_batches%ROWTYPE;
+    v_batch public.saas_catalog_asset_cutover_batches%ROWTYPE;
     v_keyset_digest TEXT;
     v_manifest_digest TEXT;
     v_asset_count INTEGER;
 BEGIN
     SELECT * INTO v_batch
-    FROM saas_catalog_asset_cutover_batches
+    FROM public.saas_catalog_asset_cutover_batches
     WHERE status = 'verified'
       AND expected_count = 2214
       AND verified_count = 2214
@@ -25,17 +25,17 @@ BEGIN
     END IF;
 
     SELECT COUNT(*)::INTEGER,
-           encode(extensions.digest(convert_to(string_agg(object_name, E'\n' ORDER BY object_name), 'UTF8'), 'sha256'), 'hex'),
+           encode(extensions.digest(convert_to(string_agg(e.object_name, E'\n' ORDER BY e.object_name), 'UTF8'), 'sha256'), 'hex'),
            encode(extensions.digest(convert_to(string_agg(
-               object_name || '|' || sha256 || '|' || byte_size::TEXT || '|' || mime_type || '|' || storage_provider || '|' || physical_bucket,
-               E'\n' ORDER BY object_name
+               e.object_name || '|' || e.sha256 || '|' || e.byte_size::TEXT || '|' || e.mime_type,
+               E'\n' ORDER BY e.object_name
            ), 'UTF8'), 'sha256'), 'hex')
     INTO v_asset_count, v_keyset_digest, v_manifest_digest
-    FROM saas_catalog_assets
-    WHERE cutover_batch_id = v_batch.batch_id
-      AND storage_provider = 'r2'
-      AND physical_bucket = 'catalog-assets'
-      AND verified_at IS NOT NULL;
+    FROM public.saas_catalog_asset_cutover_entries e
+    JOIN public.saas_catalog_assets a ON a.object_name=e.object_name AND a.sha256=e.sha256
+      AND a.byte_size=e.byte_size AND a.mime_type=e.mime_type AND a.storage_provider='r2'
+      AND a.physical_bucket='catalog-assets' AND a.verified_at IS NOT NULL
+    WHERE e.batch_id = v_batch.batch_id;
 
     IF v_asset_count IS DISTINCT FROM 2214
        OR v_keyset_digest IS DISTINCT FROM v_batch.keyset_digest
@@ -54,7 +54,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-    v_candidate saas_catalog_snapshot_versions%ROWTYPE;
+    v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
     v_new_id UUID := gen_random_uuid(); v_existing_item JSONB; v_new_item JSONB;
     v_new_payload JSONB; v_new_hash TEXT; v_approved_at TIMESTAMPTZ := NOW();
 BEGIN
@@ -62,18 +62,18 @@ BEGIN
        OR COALESCE(array_length(p_json_path, 1), 0) <> 2 OR COALESCE(array_lower(p_json_path, 1), 0) <> 1
        OR p_json_path[1] IS DISTINCT FROM 'items' OR p_json_path[2] IS NULL
        OR p_json_path[2] !~ '^(0|[1-9][0-9]*)$' THEN RAISE EXCEPTION 'invalid catalog item asset target'; END IF;
-    IF p_reviewed_by IS NULL OR NOT EXISTS (SELECT 1 FROM saas_usuarios WHERE id = p_reviewed_by AND activo IS TRUE AND es_admin IS TRUE)
+    IF p_reviewed_by IS NULL OR NOT EXISTS (SELECT 1 FROM public.saas_usuarios WHERE id = p_reviewed_by AND activo IS TRUE AND es_admin IS TRUE)
     THEN RAISE EXCEPTION 'active admin reviewer is required'; END IF;
-    PERFORM 1 FROM saas_catalog_assets
+    PERFORM 1 FROM public.saas_catalog_assets
     WHERE object_name = p_asset_object_name AND storage_provider = 'r2'
       AND physical_bucket = 'catalog-assets' AND verified_at IS NOT NULL;
     IF NOT FOUND THEN RAISE EXCEPTION 'approved catalog asset does not exist'; END IF;
-    SELECT * INTO v_candidate FROM saas_catalog_snapshot_versions WHERE id = p_candidate_id FOR UPDATE;
+    SELECT * INTO v_candidate FROM public.saas_catalog_snapshot_versions WHERE id = p_candidate_id FOR UPDATE;
     IF NOT FOUND OR v_candidate.status <> 'candidate' OR v_candidate.sync_run_id IS NULL THEN RAISE EXCEPTION 'catalog candidate is not cloneable'; END IF;
     v_existing_item := v_candidate.payload #> p_json_path;
     IF v_existing_item IS NULL OR jsonb_typeof(v_existing_item) <> 'object' OR jsonb_typeof(v_existing_item -> 'attributes') <> 'object'
     THEN RAISE EXCEPTION 'catalog item asset target does not exist'; END IF;
-    PERFORM 1 FROM saas_catalog_sync_runs WHERE id = v_candidate.sync_run_id AND candidate_version_id = v_candidate.id AND status = 'awaiting_approval' FOR UPDATE;
+    PERFORM 1 FROM public.saas_catalog_sync_runs WHERE id = v_candidate.sync_run_id AND candidate_version_id = v_candidate.id AND status = 'awaiting_approval' FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'catalog sync run is not awaiting approval'; END IF;
     v_new_item := jsonb_set(jsonb_set(jsonb_set(v_existing_item, '{attributes,approved_asset}', jsonb_build_object(
         'bucket','catalog-assets','path',p_asset_object_name,'label','Imagen de referencia','approved',TRUE,
@@ -89,10 +89,10 @@ BEGIN
     THEN RAISE EXCEPTION 'catalog asset clone did not produce the approved payload'; END IF;
     v_new_hash := encode(extensions.digest(convert_to(v_new_payload::TEXT, 'UTF8'), 'sha256'), 'hex');
     v_new_payload := jsonb_set(v_new_payload, '{source_hash}', to_jsonb(v_new_hash), TRUE);
-    INSERT INTO saas_catalog_snapshot_versions (id,supplier,source_hash,generated_at,status,payload,previous_snapshot_id,sync_run_id,base_published_version_id,reviewed_by,review_note,reviewed_at)
+    INSERT INTO public.saas_catalog_snapshot_versions (id,supplier,source_hash,generated_at,status,payload,previous_snapshot_id,sync_run_id,base_published_version_id,reviewed_by,review_note,reviewed_at)
     VALUES (v_new_id,v_candidate.supplier,v_new_hash,v_candidate.generated_at,'candidate',v_new_payload,v_candidate.id,v_candidate.sync_run_id,v_candidate.base_published_version_id,p_reviewed_by,'Approved catalog asset ' || p_asset_object_name,v_approved_at);
-    UPDATE saas_catalog_snapshot_versions SET status = 'superseded' WHERE id = v_candidate.id;
-    UPDATE saas_catalog_sync_runs SET candidate_version_id = v_new_id, updated_at = NOW() WHERE id = v_candidate.sync_run_id;
+    UPDATE public.saas_catalog_snapshot_versions SET status = 'superseded' WHERE id = v_candidate.id;
+    UPDATE public.saas_catalog_sync_runs SET candidate_version_id = v_new_id, updated_at = NOW() WHERE id = v_candidate.sync_run_id;
     RETURN v_new_id;
 END;
 $$;
@@ -107,7 +107,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-    v_candidate saas_catalog_snapshot_versions%ROWTYPE;
+    v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
     v_new_id UUID := gen_random_uuid(); v_existing_item JSONB; v_new_item JSONB;
     v_new_payload JSONB; v_new_hash TEXT; v_approved_at TIMESTAMPTZ := NOW();
 BEGIN
@@ -119,18 +119,18 @@ BEGIN
     IF p_image_kind = 'generated_reference' AND (NULLIF(BTRIM(p_image_label), '') IS NULL OR LENGTH(BTRIM(p_image_label)) > 300
        OR COALESCE(array_length(p_image_references, 1), 0) = 0 OR EXISTS (SELECT 1 FROM unnest(p_image_references) AS reference(url) WHERE url !~ '^https://[^[:space:]/]+(?:/[^[:space:]]*)?$'))
     THEN RAISE EXCEPTION 'generated catalog image requires label and HTTPS references'; END IF;
-    IF p_reviewed_by IS NULL OR NOT EXISTS (SELECT 1 FROM saas_usuarios WHERE id = p_reviewed_by AND activo IS TRUE AND es_admin IS TRUE)
+    IF p_reviewed_by IS NULL OR NOT EXISTS (SELECT 1 FROM public.saas_usuarios WHERE id = p_reviewed_by AND activo IS TRUE AND es_admin IS TRUE)
     THEN RAISE EXCEPTION 'active admin reviewer is required'; END IF;
-    PERFORM 1 FROM saas_catalog_assets
+    PERFORM 1 FROM public.saas_catalog_assets
     WHERE object_name = p_asset_object_name AND storage_provider = 'r2'
       AND physical_bucket = 'catalog-assets' AND verified_at IS NOT NULL;
     IF NOT FOUND THEN RAISE EXCEPTION 'approved catalog asset does not exist'; END IF;
-    SELECT * INTO v_candidate FROM saas_catalog_snapshot_versions WHERE id = p_candidate_id FOR UPDATE;
+    SELECT * INTO v_candidate FROM public.saas_catalog_snapshot_versions WHERE id = p_candidate_id FOR UPDATE;
     IF NOT FOUND OR v_candidate.status <> 'candidate' OR v_candidate.sync_run_id IS NULL THEN RAISE EXCEPTION 'catalog candidate is not cloneable'; END IF;
     v_existing_item := v_candidate.payload #> p_json_path;
     IF v_existing_item IS NULL OR jsonb_typeof(v_existing_item) <> 'object' OR jsonb_typeof(v_existing_item -> 'attributes') <> 'object'
     THEN RAISE EXCEPTION 'catalog item asset target does not exist'; END IF;
-    PERFORM 1 FROM saas_catalog_sync_runs WHERE id = v_candidate.sync_run_id AND candidate_version_id = v_candidate.id AND status = 'awaiting_approval' FOR UPDATE;
+    PERFORM 1 FROM public.saas_catalog_sync_runs WHERE id = v_candidate.sync_run_id AND candidate_version_id = v_candidate.id AND status = 'awaiting_approval' FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'catalog sync run is not awaiting approval'; END IF;
     v_new_item := jsonb_set(jsonb_set(jsonb_set(v_existing_item, '{attributes,approved_asset}', jsonb_build_object(
         'bucket','catalog-assets','path',p_asset_object_name,'label',CASE WHEN p_image_kind = 'generated_reference' THEN 'Imagen de referencia' ELSE 'Imagen oficial' END,

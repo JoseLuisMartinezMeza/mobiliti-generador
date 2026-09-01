@@ -1581,6 +1581,14 @@ CREATE TABLE IF NOT EXISTS saas_catalog_assets (
         OR (object_name ~ '[.]webp$' AND mime_type = 'image/webp'))
 );
 
+CREATE TABLE IF NOT EXISTS saas_catalog_asset_cutover_entries (
+    batch_id UUID NOT NULL REFERENCES public.saas_catalog_asset_cutover_batches(batch_id) ON DELETE RESTRICT,
+    object_name TEXT NOT NULL, sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    byte_size BIGINT NOT NULL CHECK (byte_size > 0), mime_type TEXT NOT NULL CHECK (mime_type IN ('image/png','image/jpeg','image/webp')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), PRIMARY KEY (batch_id, object_name),
+    CHECK (object_name ~ '^[0-9a-f]{64}[.](png|jpg|jpeg|webp)$'), CHECK (split_part(object_name, '.', 1) = sha256)
+);
+
 CREATE OR REPLACE FUNCTION saas_register_catalog_asset(
     p_object_name TEXT, p_storage_provider TEXT, p_physical_bucket TEXT,
     p_byte_size BIGINT, p_mime_type TEXT
@@ -1591,10 +1599,10 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-    v_existing saas_catalog_assets%ROWTYPE;
+    v_existing public.saas_catalog_assets%ROWTYPE;
     v_sha256 TEXT;
 BEGIN
-    IF p_object_name !~ '^[0-9a-f]{64}[.](png|jpg|jpeg|webp)$'
+    IF p_object_name IS NULL OR p_storage_provider IS NULL OR p_physical_bucket IS NULL OR p_mime_type IS NULL OR p_object_name !~ '^[0-9a-f]{64}[.](png|jpg|jpeg|webp)$'
        OR p_storage_provider NOT IN ('supabase','r2') OR p_physical_bucket <> 'catalog-assets'
        OR p_byte_size IS NULL OR p_byte_size <= 0 OR p_mime_type NOT IN ('image/png','image/jpeg','image/webp')
        OR (p_object_name ~ '[.]png$' AND p_mime_type <> 'image/png')
@@ -1602,7 +1610,8 @@ BEGIN
        OR (p_object_name ~ '[.]webp$' AND p_mime_type <> 'image/webp')
     THEN RAISE EXCEPTION 'invalid catalog asset registry input'; END IF;
     v_sha256 := split_part(p_object_name, '.', 1);
-    SELECT * INTO v_existing FROM saas_catalog_assets WHERE object_name = p_object_name FOR UPDATE;
+    INSERT INTO public.saas_catalog_assets (object_name,storage_provider,physical_bucket,sha256,byte_size,mime_type,verified_at) VALUES (p_object_name,p_storage_provider,p_physical_bucket,v_sha256,p_byte_size,p_mime_type,NOW()) ON CONFLICT DO NOTHING;
+    SELECT * INTO v_existing FROM public.saas_catalog_assets WHERE object_name = p_object_name FOR UPDATE;
     IF FOUND THEN
         IF v_existing.storage_provider IS DISTINCT FROM p_storage_provider
            OR v_existing.physical_bucket IS DISTINCT FROM p_physical_bucket
@@ -1613,11 +1622,13 @@ BEGIN
         THEN RAISE EXCEPTION 'Catalog asset registry conflict'; END IF;
         RETURN p_object_name;
     END IF;
-    INSERT INTO saas_catalog_assets (object_name,storage_provider,physical_bucket,sha256,byte_size,mime_type,verified_at)
-    VALUES (p_object_name,p_storage_provider,p_physical_bucket,v_sha256,p_byte_size,p_mime_type,NOW());
     RETURN p_object_name;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION saas_start_catalog_asset_cutover_batch(p_batch_id UUID,p_expected_count INTEGER,p_manifest_digest TEXT,p_keyset_digest TEXT) RETURNS UUID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN IF p_batch_id IS NULL OR p_expected_count IS NULL OR p_manifest_digest IS NULL OR p_keyset_digest IS NULL OR p_expected_count <> 2214 THEN RAISE EXCEPTION 'invalid catalog asset cutover batch'; END IF; INSERT INTO public.saas_catalog_asset_cutover_batches(batch_id,manifest_digest,keyset_digest,expected_count,status) VALUES(p_batch_id,p_manifest_digest,p_keyset_digest,p_expected_count,'loading') ON CONFLICT DO NOTHING; RETURN p_batch_id; END; $$;
+CREATE OR REPLACE FUNCTION saas_add_catalog_asset_cutover_entry(p_batch_id UUID,p_object_name TEXT,p_sha256 TEXT,p_byte_size BIGINT,p_mime_type TEXT) RETURNS TEXT LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN IF p_batch_id IS NULL OR p_object_name IS NULL OR p_sha256 IS NULL OR p_byte_size IS NULL OR p_mime_type IS NULL THEN RAISE EXCEPTION 'invalid catalog asset cutover entry'; END IF; INSERT INTO public.saas_catalog_asset_cutover_entries(batch_id,object_name,sha256,byte_size,mime_type) VALUES(p_batch_id,p_object_name,p_sha256,p_byte_size,p_mime_type) ON CONFLICT DO NOTHING; RETURN p_object_name; END; $$;
+CREATE OR REPLACE FUNCTION saas_finalize_catalog_asset_cutover_batch(p_batch_id UUID) RETURNS UUID LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$ DECLARE v_batch public.saas_catalog_asset_cutover_batches%ROWTYPE; BEGIN IF p_batch_id IS NULL THEN RAISE EXCEPTION 'invalid catalog asset cutover batch'; END IF; SELECT * INTO v_batch FROM public.saas_catalog_asset_cutover_batches WHERE batch_id=p_batch_id FOR UPDATE; IF NOT FOUND THEN RAISE EXCEPTION 'catalog asset cutover batch does not exist'; END IF; IF (SELECT COUNT(*) FROM public.saas_catalog_asset_cutover_entries WHERE batch_id=p_batch_id) <> 2214 THEN RAISE EXCEPTION 'catalog asset cutover manifest is not verified'; END IF; RETURN p_batch_id; END; $$;
 
 CREATE OR REPLACE FUNCTION saas_clone_catalog_candidate_with_asset(
     p_candidate_id UUID,
@@ -2109,6 +2120,7 @@ ALTER TABLE saas_catalog_reservations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saas_exchange_rates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saas_catalog_asset_cutover_batches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saas_catalog_assets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saas_catalog_asset_cutover_entries ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON TABLE saas_catalog_sources FROM anon, authenticated;
 REVOKE ALL ON TABLE saas_catalog_source_files FROM anon, authenticated;
@@ -2118,6 +2130,7 @@ REVOKE ALL ON TABLE saas_catalog_reservations FROM anon, authenticated;
 REVOKE ALL ON TABLE saas_exchange_rates FROM anon, authenticated;
 REVOKE ALL ON TABLE saas_catalog_asset_cutover_batches FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON TABLE saas_catalog_assets FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE saas_catalog_asset_cutover_entries FROM PUBLIC, anon, authenticated;
 
 REVOKE ALL ON TABLE saas_catalog_sources FROM service_role;
 REVOKE ALL ON TABLE saas_catalog_source_files FROM service_role;
@@ -2127,6 +2140,7 @@ REVOKE ALL ON TABLE saas_catalog_reservations FROM service_role;
 REVOKE ALL ON TABLE saas_exchange_rates FROM service_role;
 REVOKE ALL ON TABLE saas_catalog_asset_cutover_batches FROM service_role;
 REVOKE ALL ON TABLE saas_catalog_assets FROM service_role;
+REVOKE ALL ON TABLE saas_catalog_asset_cutover_entries FROM service_role;
 
 GRANT SELECT ON TABLE saas_catalog_sources TO service_role;
 GRANT INSERT (supplier, label, adapter, graph_drive_id, graph_root_item_id, delta_link, sync_interval, enabled)
@@ -2150,6 +2164,7 @@ GRANT SELECT, INSERT, UPDATE ON TABLE saas_catalog_reservations TO service_role;
 GRANT SELECT ON TABLE saas_exchange_rates TO service_role;
 GRANT SELECT ON TABLE saas_catalog_asset_cutover_batches TO service_role;
 GRANT SELECT ON TABLE saas_catalog_assets TO service_role;
+GRANT SELECT ON TABLE saas_catalog_asset_cutover_entries TO service_role;
 
 REVOKE ALL ON FUNCTION saas_stage_catalog_candidate(UUID, TEXT, TIMESTAMPTZ, JSONB, JSONB, TEXT) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION saas_start_catalog_sync(UUID, TEXT, INTEGER, UUID) FROM PUBLIC, anon, authenticated;
@@ -2177,6 +2192,12 @@ GRANT EXECUTE ON FUNCTION saas_insert_exchange_rates_if_absent(JSONB) TO service
 GRANT EXECUTE ON FUNCTION saas_publish_catalog_snapshot(UUID, INTEGER, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION saas_reject_catalog_snapshot(UUID, INTEGER, TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION saas_register_catalog_asset(TEXT, TEXT, TEXT, BIGINT, TEXT) TO service_role;
+REVOKE ALL ON FUNCTION saas_start_catalog_asset_cutover_batch(UUID, INTEGER, TEXT, TEXT) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION saas_add_catalog_asset_cutover_entry(UUID, TEXT, TEXT, BIGINT, TEXT) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION saas_finalize_catalog_asset_cutover_batch(UUID) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION saas_start_catalog_asset_cutover_batch(UUID, INTEGER, TEXT, TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION saas_add_catalog_asset_cutover_entry(UUID, TEXT, TEXT, BIGINT, TEXT) TO service_role;
+GRANT EXECUTE ON FUNCTION saas_finalize_catalog_asset_cutover_batch(UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION saas_clone_catalog_candidate_with_asset(UUID, INTEGER, TEXT, TEXT[]) TO service_role;
 GRANT EXECUTE ON FUNCTION saas_clone_catalog_candidate_with_image_metadata(UUID, INTEGER, TEXT, TEXT[], TEXT, TEXT, TEXT[]) TO service_role;
 GRANT EXECUTE ON FUNCTION saas_catalog_reservation_summary(TEXT, INTEGER) TO service_role;

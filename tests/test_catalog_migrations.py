@@ -112,13 +112,36 @@ def test_catalog_asset_cutover_is_guarded_before_replacing_clone_rpcs():
         "saas_clone_catalog_candidate_with_image_metadata",
     ):
         function = _function_sql(sql, name)
-        assert "FROM saas_catalog_assets" in function
+        assert "FROM public.saas_catalog_assets" in function
         assert "storage.objects" not in function
         assert "storage_provider = 'r2'" in function
         assert "physical_bucket = 'catalog-assets'" in function
         assert "verified_at IS NOT NULL" in function
         assert "SECURITY DEFINER" in function
         assert "SET search_path = public, pg_temp" in function
+
+
+def test_catalog_asset_cutover_manifest_is_private_and_independently_verified():
+    sql = ASSET_REGISTRY_MIGRATION.read_text(encoding="utf-8")
+    cutover = ASSET_REGISTRY_CUTOVER.read_text(encoding="utf-8")
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    for document in (sql, bootstrap):
+        assert "CREATE TABLE IF NOT EXISTS saas_catalog_asset_cutover_entries" in document
+        assert "PRIMARY KEY (batch_id, object_name)" in document
+        assert "REVOKE ALL ON TABLE saas_catalog_asset_cutover_entries FROM PUBLIC, anon, authenticated" in document
+        assert "GRANT INSERT ON TABLE saas_catalog_asset_cutover_entries TO service_role" not in document
+        for name in ("saas_start_catalog_asset_cutover_batch", "saas_add_catalog_asset_cutover_entry", "saas_finalize_catalog_asset_cutover_batch"):
+            function = _function_sql(document, name)
+            assert "SECURITY DEFINER" in function
+            assert "public.saas_catalog_asset_cutover" in function
+            assert " IS NULL" in function
+    finalizer = _function_sql(sql, "saas_finalize_catalog_asset_cutover_batch")
+    assert "public.saas_catalog_asset_cutover_entries" in finalizer
+    assert "public.saas_catalog_assets" in finalizer
+    assert "expected_count <> 2214" in finalizer
+    assert "ON CONFLICT DO NOTHING" in _function_sql(sql, "saas_register_catalog_asset")
+    assert "public.saas_catalog_assets%ROWTYPE" in _function_sql(sql, "saas_register_catalog_asset")
+    assert "public.saas_catalog_asset_cutover_entries" in cutover
 
 
 def test_jome_lauco_migration_replaces_both_reservation_rpcs_safely():
