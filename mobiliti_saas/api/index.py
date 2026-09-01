@@ -5225,7 +5225,7 @@ def _project_with_visible_import_images(project: dict) -> dict:
 def _project_payload_with_persisted_catalog_image_urls(
     incoming_payload: dict,
     persisted_payload: dict,
-) -> tuple[dict, bool]:
+) -> dict:
     """Evita que autosave persista sólo el cambio de representación Supabase/R2."""
     guarded = deepcopy(incoming_payload)
     persisted_by_id = {
@@ -5233,7 +5233,6 @@ def _project_payload_with_persisted_catalog_image_urls(
         for line in persisted_payload.get("lines", [])
         if isinstance(line, dict) and isinstance(line.get("line_id"), str)
     }
-    restored = False
     for line in guarded.get("lines", []):
         if not _generic_catalog_line(line):
             continue
@@ -5251,8 +5250,7 @@ def _project_payload_with_persisted_catalog_image_urls(
         if incoming_object and incoming_object == persisted_object:
             if incoming_url != persisted_url:
                 line["display_cache"]["image_url"] = persisted_url
-                restored = True
-    return guarded, restored
+    return guarded
 
 
 def _copy_project_import_asset(path: str, content: bytes, content_type: str) -> None:
@@ -5680,7 +5678,7 @@ def projects_patch(project_id: str, body: dict, current_user: dict = Depends(get
         _project_conflict(current)
     name = _project_name(body.get("name"))
     payload = _project_payload(body.get("payload"))
-    payload, provider_url_restored = _project_payload_with_persisted_catalog_image_urls(
+    payload = _project_payload_with_persisted_catalog_image_urls(
         payload,
         current["payload"],
     )
@@ -5691,8 +5689,7 @@ def projects_patch(project_id: str, body: dict, current_user: dict = Depends(get
         inherited_asset_keys=_project_asset_keys(current["payload"]),
     )
     if (
-        provider_url_restored
-        and name == current["name"]
+        name == current["name"]
         and payload == current["payload"]
     ):
         return {"project": current}

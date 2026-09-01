@@ -62,6 +62,42 @@ python -B -m py_compile mobiliti_saas/api/index.py mobiliti_saas/web/api/index.p
 
 La ejecución de todos los `test_project*.py`, `test_quote_jobs_api.py`, `test_mixed_catalog_cart.py` y `test_mixed_catalog_workbook.py` produjo `800 passed, 5 failed`. Los cinco fallos están en `tests/test_project_quote_acceptance.py` y son ajenos a Task 5: las expectativas fijan columnas `W/X` y fórmulas históricas de `Fletes`, mientras el template actual genera columna `AA` y fórmulas diferentes. Task 5 no modifica el template, `quote_engine` ni el worker. No se ensanchó el alcance para alterar esas pruebas o el workbook.
 
+## Corrección de re-review — 2026-09-01
+
+El revisor detectó que un PATCH completamente idéntico todavía llamaba a `db_save_project` cuando no había ocurrido una reescritura de provider. Se añadió primero una prueba que convierte cualquier llamada a `db_save_project` en fallo. El RED confirmó el defecto:
+
+```text
+python -B -m pytest -p no:cacheprovider tests/test_project_api.py::test_project_patch_identical_payload_does_not_write_or_change_revision tests/test_project_api.py::test_project_visible_catalog_image_rejects_noncanonical_or_excluded_urls -q
+1 failed, 20 passed
+```
+
+La solución mínima retorna el proyecto persistido después de normalizar, aplicar el guard de URL y validar ownership siempre que `name` y `payload` sean idénticos, independientemente de si hubo reescritura de provider. No se llama `db_save_project` y se conservan revisión, `updated_at` y hash. El booleano `restored` dejó de aportar comportamiento y se eliminó; el helper ahora devuelve únicamente la copia protegida.
+
+También se ampliaron los negativos de URL con puerto, userinfo, host con case no canónico, segmentos percent-encoded, objeto percent-encoded, slash codificado y dot-segment. No se añadió una expectativa incorrecta sobre el case del scheme.
+
+GREEN específico del re-review:
+
+```text
+python -B -m pytest -p no:cacheprovider tests/test_project_api.py::test_project_patch_identical_payload_does_not_write_or_change_revision tests/test_project_api.py::test_project_patch_provider_only_image_change_preserves_jsonb_revision_and_hash tests/test_project_api.py::test_project_patch_other_change_saves_but_restores_persisted_catalog_url tests/test_project_api.py::test_project_patch_real_catalog_image_change_is_persisted tests/test_project_api.py::test_project_visible_catalog_image_rejects_noncanonical_or_excluded_urls -q
+25 passed
+```
+
+Focal actual completo:
+
+```text
+python -B -m pytest -p no:cacheprovider tests/test_project_api.py tests/test_project_quote_api.py -q
+53 passed
+```
+
+Verificación relevante post-review, incluyendo UI sin cambios y las dos pruebas de paridad API:
+
+```text
+python -B -m pytest -p no:cacheprovider tests/test_project_api.py tests/test_project_model_ui.py tests/test_project_quote_api.py tests/test_quote_template_selection.py tests/test_quote_jobs_api.py::test_deployable_api_copies_have_identical_sha256 -q
+122 passed
+```
+
+`py_compile` de las tres APIs y `git diff --check` finalizaron sin errores. La corrección está incluida en el commit adicional informado en el handoff.
+
 ## Gate de drenaje y rollback
 
 - Los estados reales que deben considerarse son `draft`, `queued` y `processing`; no se usa un estado `running`.

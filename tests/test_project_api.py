@@ -169,6 +169,13 @@ def test_project_visible_catalog_image_uses_active_provider_without_mutating_his
         ("sunon", "catalog", f"{SUPABASE_CATALOG_URL_A}?"),
         ("sunon", "catalog", f"{SUPABASE_CATALOG_URL_A}#fragmento"),
         ("sunon", "catalog", f"{SUPABASE_CATALOG_URL_A}#"),
+        ("sunon", "catalog", f"https://project.supabase.co:443/storage/v1/object/public/catalog-assets/{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", f"https://user@project.supabase.co/storage/v1/object/public/catalog-assets/{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", f"https://PROJECT.supabase.co/storage/v1/object/public/catalog-assets/{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", f"https://project.supabase.co/storage/v1/object/public/%63atalog-assets/{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", f"https://project.supabase.co/storage/v1/object/public/catalog-assets/%61{CATALOG_HASH_A[1:]}.png"),
+        ("sunon", "catalog", f"https://project.supabase.co/storage/v1/object/public/catalog-assets%2F{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", f"https://project.supabase.co/storage/v1/object/public/catalog-assets/../catalog-assets/{CATALOG_HASH_A}.png"),
         ("sunon", "catalog", f"https://assets.example.com/prefix/{CATALOG_HASH_A}.png"),
         ("sunon", "catalog", "https://assets.example.com/not-a-hash.png"),
         ("sunon", "catalog", f"https://externo.example/{CATALOG_HASH_A}.png"),
@@ -233,6 +240,42 @@ def test_project_patch_provider_only_image_change_preserves_jsonb_revision_and_h
     persisted = index.db_get_project(created["id"], 7)
     assert persisted["payload"] == created["payload"]
     assert persisted["revision"] == created["revision"]
+    assert index._project_payload_hash(persisted["payload"]) == index._project_payload_hash(
+        created["payload"]
+    )
+
+
+def test_project_patch_identical_payload_does_not_write_or_change_revision(monkeypatch):
+    client = _project_client(monkeypatch)
+    created = client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Sin cambios", "payload": valid_project_payload()},
+    ).json()["project"]
+    monkeypatch.setattr(
+        index,
+        "db_save_project",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("un PATCH identico no debe escribir")
+        ),
+    )
+
+    response = client.patch(
+        f"/projects/{created['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": created["name"],
+            "payload": deepcopy(created["payload"]),
+            "expected_revision": created["revision"],
+            "operation_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        },
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["project"] == created
+    persisted = index.db_get_project(created["id"], 7)
+    assert persisted["revision"] == created["revision"]
+    assert persisted["updated_at"] == created["updated_at"]
     assert index._project_payload_hash(persisted["payload"]) == index._project_payload_hash(
         created["payload"]
     )
