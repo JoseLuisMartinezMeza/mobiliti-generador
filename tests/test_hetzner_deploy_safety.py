@@ -74,6 +74,14 @@ def _active_catalog_env():
     }
 
 
+def _runtime_catalog_env():
+    return {
+        "CATALOG_SYNC_ENABLED": "false",
+        "SUPABASE_URL": "https://abcdefghijklmnopqrst.supabase.co",
+        "SUPABASE_SERVICE_KEY": "test-service-key",
+    }
+
+
 def _active_catalog_r2_env():
     return _active_catalog_env() | {
         "CATALOG_ASSET_STORAGE_PROVIDER": "r2",
@@ -172,7 +180,27 @@ def test_catalog_sync_preflight_allows_disabled_sync_without_graph_credentials()
     preflight = _preflight_module()
 
     for disabled in ("", "0", "false", "no"):
-        preflight.validate_catalog_sync({"CATALOG_SYNC_ENABLED": disabled})
+        preflight.validate_catalog_sync(
+            _runtime_catalog_env() | {"CATALOG_SYNC_ENABLED": disabled}
+        )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"CATALOG_ASSET_STORAGE_PROVIDER": "unknown"},
+        {"CATALOG_ASSET_PUBLIC_BASE_URL": "https://assets.example.test/path"},
+        {
+            "CATALOG_ASSET_STORAGE_PROVIDER": "r2",
+            "CATALOG_ASSET_PUBLIC_BASE_URL": "https://assets.example.test",
+        },
+    ),
+)
+def test_catalog_runtime_preflight_rejects_invalid_assets_when_sync_disabled(overrides):
+    preflight = _preflight_module()
+
+    with pytest.raises(preflight.PreflightError, match="CATALOG_ASSET"):
+        preflight.validate_catalog_sync(_runtime_catalog_env() | overrides)
 
 
 @pytest.mark.parametrize("invalid", ("enabled", "on", "2", "tru"))
@@ -339,6 +367,19 @@ def test_provision_passes_catalog_r2_settings_without_quote_fallback():
     assert "CATALOG_ASSET_R2_SECRET_ACCESS_KEY=$CatalogAssetR2SecretAccessKey" in provision
 
 
+def test_provision_accepts_and_writes_supabase_service_key_without_printing_it():
+    provision = (ROOT / "deploy" / "hetzner" / "provision.ps1").read_text(encoding="utf-8")
+
+    assert "$SupabaseServiceKey = $env:SUPABASE_SERVICE_KEY" in provision
+    assert "SUPABASE_SERVICE_KEY=$SupabaseServiceKey" in provision
+    assert "-not $SupabaseServiceKey" in provision
+    assert all(
+        "$SupabaseServiceKey" not in line
+        for line in provision.splitlines()
+        if "Write-Host" in line or "Write-Warning" in line
+    )
+
+
 @pytest.mark.parametrize(
     "contents",
     (
@@ -378,6 +419,15 @@ def test_deploy_ensures_exact_graph_host_directory_before_target_preflight():
     ensure = deploy.index('install -d -o root -g 10001 -m 0750 "${GRAPH_HOST_DIR}"')
     preflight = deploy.index(':deploy/hetzner/preflight.py')
     assert ensure < preflight
+
+
+def test_deploy_health_gate_requires_catalog_asset_readiness():
+    deploy = (ROOT / "deploy" / "hetzner" / "deploy.sh").read_text(encoding="utf-8")
+
+    health_gate = next(
+        line for line in deploy.splitlines() if "data.get(\"isolated_jobs\")" in line
+    )
+    assert 'data.get("catalog_asset_ready")' in health_gate
 
 
 def test_worker_container_has_read_only_runtime_hardening():

@@ -15,6 +15,9 @@ Estado: implementación local lista para revisión. No se ejecutó DDL, deploy, 
 - La allowlist de imágenes de supplier conserva simultáneamente orígenes Supabase y R2 para rollback, pero sólo admite claves content-addressed bajo la ruta exacta de `catalog-assets`, sin query/fragment, y revalida redirects.
 - Los tres `api/index.py` y las dos copias de `catalog_cart.py` quedan byte-identical.
 - Los ejemplos de entorno, preflight y provisionamiento incluyen configuración de catálogo separada. Las credenciales sólo aparecen en entornos server/worker; el frontend sólo recibe provider/base pública.
+- Tras la revisión, el preflight valida siempre la configuración runtime de Supabase y del provider de assets, aun con `CATALOG_SYNC_ENABLED=false`; Graph, suppliers, directorio y certificado permanecen condicionales al sync.
+- El rollout sólo acepta el nuevo worker cuando su health local reporta `catalog_asset_ready=true`, tanto para `supabase` como para `r2`; este booleano no realiza probes externos.
+- `provision.ps1` acepta `SUPABASE_SERVICE_KEY` por parámetro/entorno, exige su presencia al subir el env y la escribe al archivo protegido sin imprimir su valor.
 
 ## TDD RED → GREEN
 
@@ -35,6 +38,18 @@ GREEN focal:
 - deploy/preflight/provision: `22 passed`.
 - worker health: `2 passed`.
 
+Revisión posterior, RED antes del fix:
+
+- bypass de preflight con sync apagado: `3 failed`, para provider desconocido, base pública inválida y R2 incompleto.
+- provision/readiness: `2 failed`, por service key ausente y health gate incompleto.
+- workbook mixto: `1 failed` porque el fixture usaba `first.png`/`second.png`, incompatibles con la allowlist content-addressed.
+
+Revisión posterior, GREEN:
+
+- focal preflight/provision/readiness + fixture mixto: `7 passed`.
+- suite deploy safety completa: `60 passed`.
+- suite mixed catalog workbook completa: `37 passed`.
+
 ## Verificación fresca
 
 - `python -B -m pytest -p no:cacheprovider tests/test_catalog_repository.py -q` → `75 passed`.
@@ -48,6 +63,15 @@ GREEN focal:
 - SHA-256 de las tres APIs → `33E6B0AE60DC470742E40FC802053452672DE0DDE6B47D9A606DA237260ADC0B`.
 - SHA-256 de ambas copias de cart → `6585AD7367DD2985606AB70F686F5902270ADE900F11AED4736A53D33B55B379`.
 - `git diff --check` acotado → sin errores; sólo avisos de conversión LF/CRLF de Git para este worktree Windows.
+
+Verificación fresca de la revisión:
+
+- `python -m pytest tests/test_hetzner_deploy_safety.py -q` → `60 passed`.
+- `python -m pytest tests/test_mixed_catalog_workbook.py -q` → `37 passed`.
+- `python -m pytest tests/test_quote_worker.py tests/test_quote_jobs_api.py::test_health_reports_catalog_readiness_without_catalog_or_quote_secrets -q` → `108 passed`.
+- `python -m py_compile deploy/hetzner/preflight.py tests/test_hetzner_deploy_safety.py tests/test_mixed_catalog_workbook.py` → exit `0`.
+- Parser PowerShell de `provision.ps1` y `bash -n deploy/hetzner/deploy.sh` → sin errores.
+- Paridad de las tres APIs conservada: SHA-256 `33E6B0AE60DC470742E40FC802053452672DE0DDE6B47D9A606DA237260ADC0B`.
 
 ## Aislamiento de `quote-files`
 

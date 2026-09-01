@@ -97,7 +97,7 @@ fi
 healthy=0
 for _ in {1..12}; do
   if curl --fail --silent --show-error http://127.0.0.1:10000/health |
-    python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if data.get("ok") and data.get("isolated_jobs") else 1)'; then
+    python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if data.get("ok") and data.get("isolated_jobs") and data.get("catalog_asset_ready") else 1)'; then
     healthy=1
     break
   fi

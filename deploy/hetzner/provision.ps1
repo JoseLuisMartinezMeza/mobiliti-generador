@@ -9,6 +9,7 @@ param(
     [string]$FirewallName = "mobiliti-worker-ssh-only",
     [string]$SupabaseUrl = "https://hcdspekajlszcycecpml.supabase.co",
     [string]$SupabaseAnonKey = $env:SUPABASE_ANON_KEY,
+    [string]$SupabaseServiceKey = $env:SUPABASE_SERVICE_KEY,
     [string]$MobilitiRestSecret = $env:MOBILITI_REST_SECRET,
     [string]$QuoteStorageBucket = "quote-files",
     [string]$CatalogAssetStorageProvider = $env:CATALOG_ASSET_STORAGE_PROVIDER,
@@ -184,13 +185,14 @@ if (-not $SkipBootstrap) {
     }
 
     if (-not $SkipEnvUpload) {
-        if (-not $SupabaseAnonKey -or -not $MobilitiRestSecret) {
-            Die "Missing SUPABASE_ANON_KEY or MOBILITI_REST_SECRET. Set local env vars or run with -SkipEnvUpload."
+        if (-not $SupabaseAnonKey -or -not $SupabaseServiceKey -or -not $MobilitiRestSecret) {
+            Die "Missing SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, or MOBILITI_REST_SECRET. Set local env vars or run with -SkipEnvUpload."
         }
 
         $envContent = @"
 SUPABASE_URL=$SupabaseUrl
 SUPABASE_ANON_KEY=$SupabaseAnonKey
+SUPABASE_SERVICE_KEY=$SupabaseServiceKey
 MOBILITI_REST_SECRET=$MobilitiRestSecret
 QUOTE_STORAGE_BUCKET=$QuoteStorageBucket
 CATALOG_ASSET_STORAGE_PROVIDER=$CatalogAssetStorageProvider

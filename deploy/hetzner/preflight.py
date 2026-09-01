@@ -13,9 +13,11 @@ HOST_DIRECTORY = Path("/etc/mobiliti-worker/graph")
 HOST_CERTIFICATE = Path("/etc/mobiliti-worker/graph/client-cert.pem")
 _ENABLED = {"1", "true", "yes"}
 _DISABLED = {"", "0", "false", "no"}
-_REQUIRED = (
+_RUNTIME_REQUIRED = (
     "SUPABASE_URL",
     "SUPABASE_SERVICE_KEY",
+)
+_SYNC_REQUIRED = (
     "CATALOG_ENABLED_SUPPLIERS",
     "MS_GRAPH_TENANT_ID",
     "MS_GRAPH_CLIENT_ID",
@@ -113,10 +115,8 @@ def validate_catalog_sync(
     enabled = values.get("CATALOG_SYNC_ENABLED", "").strip().lower()
     if enabled not in _ENABLED | _DISABLED:
         raise PreflightError("CATALOG_SYNC_ENABLED is invalid")
-    if enabled in _DISABLED:
-        return
 
-    for key in _REQUIRED:
+    for key in _RUNTIME_REQUIRED:
         if not values.get(key, "").strip():
             raise PreflightError(f"missing {key}")
     _validate_https_origin(values["SUPABASE_URL"], "SUPABASE_URL")
@@ -138,6 +138,12 @@ def validate_catalog_sync(
             values["CATALOG_ASSET_R2_ENDPOINT_URL"],
             "CATALOG_ASSET_R2_ENDPOINT_URL",
         )
+    if enabled in _DISABLED:
+        return
+
+    for key in _SYNC_REQUIRED:
+        if not values.get(key, "").strip():
+            raise PreflightError(f"missing {key}")
     if values["MS_GRAPH_CERT_PATH"] != EXPECTED_CERTIFICATE_PATH:
         raise PreflightError("MS_GRAPH_CERT_PATH is invalid")
 

@@ -1014,16 +1014,26 @@ def test_mixed_workbook_keeps_structured_visual_semantics(tmp_path):
 def test_mixed_image_destination_keys_prevent_same_code_collisions(monkeypatch, tmp_path):
     first = _supplier_item("sonara", currency="MXN", internal_id="sonara:first")
     second = _supplier_item("sonara", currency="MXN", internal_id="sonara:second")
+    first_body = _png_bytes("red")
+    second_body = _png_bytes("green")
+    first_url = (
+        "https://assets.example.test/"
+        f"{hashlib.sha256(first_body).hexdigest()}.png"
+    )
+    second_url = (
+        "https://assets.example.test/"
+        f"{hashlib.sha256(second_body).hexdigest()}.png"
+    )
     first.update(
         sku="",
         code_status="needs_review",
-        image_url="https://assets.example.test/first.png",
+        image_url=first_url,
         warnings=["Codigo por verificar"],
     )
     second.update(
         sku="",
         code_status="needs_review",
-        image_url="https://assets.example.test/second.png",
+        image_url=second_url,
         warnings=["Codigo por verificar"],
     )
     catalog = {
@@ -1044,8 +1054,8 @@ def test_mixed_image_destination_keys_prevent_same_code_collisions(monkeypatch, 
         today=date(2026, 7, 19),
     )
     bodies = {
-        first["image_url"]: _png_bytes("red"),
-        second["image_url"]: _png_bytes("green"),
+        first["image_url"]: first_body,
+        second["image_url"]: second_body,
     }
 
     class Response:
