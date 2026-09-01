@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import threading
+import urllib.error
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -3825,6 +3826,47 @@ def test_catalog_asset_public_url_uses_local_dev_endpoint(monkeypatch):
     assert index._catalog_asset_public_url(object_name) == (
         f"http://127.0.0.1:8000/dev/catalog-assets/{object_name}"
     )
+
+
+def test_catalog_asset_upload_rejects_incompatible_conflict_before_registry(monkeypatch):
+    content = b"\x89PNG\r\n\x1a\nincompatible"
+    object_name = f"{hashlib.sha256(content).hexdigest()}.png"
+    conflict = urllib.error.HTTPError("redacted", 409, "conflict", {}, BytesIO(b"exists"))
+    registered = []
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://example.test")
+    monkeypatch.setattr(index, "SUPABASE_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(index, "_register_catalog_asset", lambda *args: registered.append(args), raising=False)
+    monkeypatch.setattr(index.urllib.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(conflict))
+
+    with pytest.raises(RuntimeError, match="[Cc]onflicto incompatible"):
+        index._upload_catalog_asset(object_name, content, "image/png")
+
+    assert registered == []
+
+
+def test_catalog_asset_upload_registers_after_verified_put(monkeypatch):
+    content = b"\x89PNG\r\n\x1a\nregistered"
+    object_name = f"{hashlib.sha256(content).hexdigest()}.png"
+    registered = []
+
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://example.test")
+    monkeypatch.setattr(index, "SUPABASE_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(index, "_register_catalog_asset", lambda *args: registered.append(args), raising=False)
+
+    class Uploaded:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(index.urllib.request, "urlopen", lambda *_args, **_kwargs: Uploaded())
+
+    index._upload_catalog_asset(object_name, content, "image/png")
+
+    assert registered == [(object_name, len(content), "image/png")]
 
 
 def test_dev_catalog_asset_download_serves_hash_named_png(monkeypatch, tmp_path):

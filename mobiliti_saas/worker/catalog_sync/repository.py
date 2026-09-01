@@ -759,6 +759,19 @@ class CatalogRepository:
                 object_name, match.group(1), len(content), content_type
             ) is not True:
                 raise CatalogRepositoryError("Catalog storage request failed") from None
+        registered = self._json(
+            "POST", "/rest/v1/rpc/saas_register_catalog_asset",
+            payload={
+                "p_object_name": object_name,
+                "p_storage_provider": "supabase",
+                "p_physical_bucket": "catalog-assets",
+                "p_byte_size": len(content),
+                "p_mime_type": content_type,
+            },
+            max_bytes=_MAX_STORAGE_RESPONSE_BYTES,
+        )
+        if registered != object_name:
+            raise CatalogRepositoryError("Catalog asset registry request failed")
         return object_name
 
     def catalog_asset_matches(self, object_name, expected_sha256, expected_size, expected_mime):

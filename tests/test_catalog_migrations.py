@@ -22,6 +22,8 @@ MIXED_DECIMAL_REGEX_MIGRATION = (
 MIXED_TEMP_CLEANUP_MIGRATION = (
     SETUP / "2026_07_scope_mixed_temp_cleanup.sql"
 )
+ASSET_REGISTRY_MIGRATION = SETUP / "2026_09_catalog_asset_registry_r2.sql"
+ASSET_REGISTRY_CUTOVER = SETUP / "2026_09_catalog_asset_registry_r2_cutover.sql"
 PHYSICAL_QUOTE_LINE_LIMIT = 1_048_512
 SQL_FILES = (BOOTSTRAP,)
 EXPECTED_SUPPLIERS = (
@@ -65,6 +67,58 @@ def _function_definition(sql, name):
     start = sql.rindex(f"CREATE OR REPLACE FUNCTION {name}")
     end = sql.index("\n$$;", start) + len("\n$$;")
     return re.sub(r"\s+", " ", sql[start:end]).strip()
+
+
+def test_catalog_asset_registry_is_private_idempotent_and_service_role_only():
+    sql = ASSET_REGISTRY_MIGRATION.read_text(encoding="utf-8")
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+
+    for document in (sql, bootstrap):
+        assert "CREATE TABLE IF NOT EXISTS saas_catalog_assets" in document
+        assert "object_name TEXT PRIMARY KEY" in document
+        assert "storage_provider TEXT NOT NULL CHECK (storage_provider IN ('supabase','r2'))" in document
+        assert "physical_bucket TEXT NOT NULL" in document
+        assert "sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$')" in document
+        assert "byte_size BIGINT NOT NULL CHECK (byte_size > 0)" in document
+        assert "mime_type TEXT NOT NULL CHECK (mime_type IN ('image/png','image/jpeg','image/webp'))" in document
+        assert "object_name ~ '^[0-9a-f]{64}[.](png|jpg|jpeg|webp)$'" in document
+        assert "split_part(object_name, '.', 1) = sha256" in document
+        assert "ENABLE ROW LEVEL SECURITY" in document
+        assert "REVOKE ALL ON TABLE saas_catalog_assets FROM PUBLIC, anon, authenticated" in document
+        assert "REVOKE ALL ON TABLE saas_catalog_assets FROM service_role" in document
+        assert "GRANT SELECT ON TABLE saas_catalog_assets TO service_role" in document
+        assert "GRANT INSERT ON TABLE saas_catalog_assets TO service_role" not in document
+        assert "saas_register_catalog_asset" in document
+        assert "SECURITY DEFINER" in _function_sql(document, "saas_register_catalog_asset")
+        assert "SET search_path = public, pg_temp" in _function_sql(document, "saas_register_catalog_asset")
+        assert "current_user <> 'service_role'" not in _function_sql(document, "saas_register_catalog_asset")
+        assert "Catalog asset registry conflict" in _function_sql(document, "saas_register_catalog_asset")
+        signature = "saas_register_catalog_asset(TEXT, TEXT, TEXT, BIGINT, TEXT)"
+        assert f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC, anon, authenticated" in document
+        assert f"GRANT EXECUTE ON FUNCTION {signature} TO service_role" in document
+
+
+def test_catalog_asset_cutover_is_guarded_before_replacing_clone_rpcs():
+    sql = ASSET_REGISTRY_CUTOVER.read_text(encoding="utf-8")
+    guard = "catalog asset R2 cutover manifest is not verified"
+    assert guard in sql
+    assert sql.index(guard) < sql.index("CREATE OR REPLACE FUNCTION saas_clone_catalog_candidate_with_asset")
+    assert "expected_count = 2214" in sql
+    assert "verified_count = 2214" in sql
+    assert "missing_count = 0" in sql and "failed_count = 0" in sql
+    assert "manifest_digest" in sql and "keyset_digest" in sql
+    for name in (
+        "saas_clone_catalog_candidate_with_asset",
+        "saas_clone_catalog_candidate_with_image_metadata",
+    ):
+        function = _function_sql(sql, name)
+        assert "FROM saas_catalog_assets" in function
+        assert "storage.objects" not in function
+        assert "storage_provider = 'r2'" in function
+        assert "physical_bucket = 'catalog-assets'" in function
+        assert "verified_at IS NOT NULL" in function
+        assert "SECURITY DEFINER" in function
+        assert "SET search_path = public, pg_temp" in function
 
 
 def test_jome_lauco_migration_replaces_both_reservation_rpcs_safely():

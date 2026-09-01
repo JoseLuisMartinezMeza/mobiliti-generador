@@ -702,7 +702,7 @@ def test_store_catalog_asset_is_content_addressed_and_never_upserts():
     content = b"\x89PNG\r\n\x1a\nofficial image"
     digest = hashlib.sha256(content).hexdigest()
     object_name = f"{digest}.png"
-    repo, opener = repository([response(200, {"Key": "ignored"})])
+    repo, opener = repository([response(200, {"Key": "ignored"}), response(200, object_name)])
 
     assert repo.store_catalog_asset_if_absent(
         object_name, content, "image/png"
@@ -715,6 +715,26 @@ def test_store_catalog_asset_is_content_addressed_and_never_upserts():
     assert request.headers["X-upsert"] == "false"
     assert json.loads(base64.b64decode(request.headers["X-metadata"])) == {"sha256": digest}
     assert request.data == content
+
+
+def test_store_catalog_asset_registers_only_after_successful_put():
+    content = b"\x89PNG\r\n\x1a\nregistered image"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = f"{digest}.png"
+    repo, opener = repository([response(201, {}), response(200, object_name)])
+
+    assert repo.store_catalog_asset_if_absent(object_name, content, "image/png") == object_name
+
+    registration, parsed, _, _ = request_parts(opener, 1)
+    assert registration.method == "POST"
+    assert parsed.path == "/rest/v1/rpc/saas_register_catalog_asset"
+    assert json.loads(registration.data) == {
+        "p_object_name": object_name,
+        "p_storage_provider": "supabase",
+        "p_physical_bucket": "catalog-assets",
+        "p_byte_size": len(content),
+        "p_mime_type": "image/png",
+    }
 
 
 @pytest.mark.parametrize(
@@ -760,6 +780,7 @@ def test_store_catalog_asset_conflict_accepts_matching_info_metadata_without_bod
     repo, opener = repository([
         conflict,
         response(200, catalog_asset_info(object_name, digest, len(content), "image/png")),
+        response(200, object_name),
     ])
 
     assert repo.store_catalog_asset_if_absent(
@@ -771,7 +792,7 @@ def test_store_catalog_asset_conflict_accepts_matching_info_metadata_without_bod
     assert parsed.path == (
         f"/storage/v1/object/info/catalog-assets/{object_name}"
     )
-    assert len(opener.requests) == 2
+    assert len(opener.requests) == 3
 
 
 @pytest.mark.parametrize("field,value", [

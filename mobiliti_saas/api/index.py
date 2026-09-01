@@ -9,6 +9,7 @@ con la resolucion DNS de algunos dominios mediante esas librerias.
 """
 
 import os
+import base64
 import json
 import time
 import uuid
@@ -3585,35 +3586,59 @@ def _catalog_image_metadata(image_kind: str, image_label: str, image_references:
     return kind, label, clean_references
 
 
+def _register_catalog_asset(object_name: str, byte_size: int, mime_type: str) -> None:
+    """Registra un objeto de catálogo ya confirmado por el adaptador de storage."""
+    payload = {"p_object_name": object_name, "p_storage_provider": "supabase", "p_physical_bucket": CATALOG_ASSET_BUCKET, "p_byte_size": byte_size, "p_mime_type": mime_type}
+    if DEV_MODE: return
+    if _use_postgres():
+        row = _pg_write("SELECT saas_register_catalog_asset(%s, %s, %s, %s, %s) AS value", (object_name, "supabase", CATALOG_ASSET_BUCKET, byte_size, mime_type))
+        value = row.get("value") if isinstance(row, dict) else None
+    else: value = _supabase_req("POST", "/rpc/saas_register_catalog_asset", json_data=payload)
+    if isinstance(value, list) and len(value) == 1: value = value[0]
+    if isinstance(value, dict): value = value.get("value") or value.get("saas_register_catalog_asset")
+    if value != object_name: raise RuntimeError("Registro de asset de catalogo invalido")
+
+
+def _catalog_asset_info_matches(info: object, object_name: str, byte_size: int, mime_type: str) -> bool:
+    metadata = info.get("metadata") if isinstance(info, dict) else None
+    return isinstance(info, dict) and info.get("name") == object_name and info.get("bucket_id") == CATALOG_ASSET_BUCKET and info.get("size") == byte_size and info.get("content_type") == mime_type and isinstance(metadata, dict) and metadata.get("sha256") == object_name.split(".", 1)[0]
+
+
 def _upload_catalog_asset(object_name: str, content: bytes, content_type: str) -> None:
     if not CATALOG_ASSET_NAME_RE.fullmatch(str(object_name or "")):
         raise RuntimeError("Nombre de asset invalido")
+    if hashlib.sha256(content).hexdigest() != object_name.split(".", 1)[0]: raise RuntimeError("Contenido de asset invalido")
     if DEV_MODE:
         destination = DEV_STORE_DIR / CATALOG_ASSET_BUCKET / object_name
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             if destination.read_bytes() != content:
                 raise RuntimeError("Colision de asset de catalogo")
-            return
-        destination.write_bytes(content)
+        else: destination.write_bytes(content)
+        _register_catalog_asset(object_name, len(content), content_type)
         return
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise RuntimeError("Storage de catalogos no configurado")
     encoded_name = quote(object_name, safe="")
     url = f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/{CATALOG_ASSET_BUCKET}/{encoded_name}"
     headers = _get_supabase_headers()
-    headers.update({"Content-Type": content_type, "x-upsert": "false"})
+    headers.update({"Content-Type": content_type, "x-upsert": "false", "x-metadata": base64.b64encode(json.dumps({"sha256": object_name.split(".", 1)[0]}, separators=(",", ":")).encode("utf-8")).decode("ascii")})
     request = urllib.request.Request(url, data=content, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=60):
-            return
+        with urllib.request.urlopen(request, timeout=60): pass
     except urllib.error.HTTPError as exc:
-        if exc.code == 409:
-            return
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(_safe_http_error("Supabase Storage", exc.code, body)) from exc
+        if exc.code != 409:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(_safe_http_error("Supabase Storage", exc.code, body)) from exc
+        info_request = urllib.request.Request(f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/info/{CATALOG_ASSET_BUCKET}/{encoded_name}", headers={"Accept": "application/json", **_get_supabase_headers()}, method="GET")
+        try:
+            with urllib.request.urlopen(info_request, timeout=30) as response: info = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.HTTPError, urllib.error.URLError, UnicodeDecodeError, json.JSONDecodeError) as info_exc:
+            raise RuntimeError("Conflicto incompatible de asset de catalogo") from info_exc
+        if not _catalog_asset_info_matches(info, object_name, len(content), content_type): raise RuntimeError("Conflicto incompatible de asset de catalogo")
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Supabase Storage connection error: {exc.reason}") from exc
+    _register_catalog_asset(object_name, len(content), content_type)
 
 
 _TARKETT_CATALOG_CACHE = {
