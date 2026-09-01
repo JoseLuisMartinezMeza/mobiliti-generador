@@ -71,6 +71,12 @@ function Wait-ForSsh([string]$Ip) {
     Die "SSH did not become ready for $Ip"
 }
 
+if ($CatalogAssetR2SessionToken -and (
+    $CatalogAssetR2SessionToken.Length -gt 16384 -or
+    $CatalogAssetR2SessionToken -match '[\x00-\x20\x7F]'
+)) {
+    Die "CATALOG_ASSET_R2_SESSION_TOKEN is invalid."
+}
 if (-not $Token) {
     Die "Missing HCLOUD_TOKEN. Set `$env:HCLOUD_TOKEN before running."
 }

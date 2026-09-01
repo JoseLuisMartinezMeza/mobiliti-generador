@@ -403,6 +403,60 @@ def test_provision_passes_catalog_r2_settings_without_quote_fallback():
     )
 
 
+def _run_provision_session_token_preflight(tmp_path, token):
+    environment = os.environ.copy()
+    environment.pop("HCLOUD_TOKEN", None)
+    environment["CATALOG_ASSET_R2_SESSION_TOKEN"] = token
+    environment["TEMP"] = str(tmp_path)
+    result = subprocess.run(
+        [
+            shutil.which("powershell.exe") or "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ROOT / "deploy" / "hetzner" / "provision.ps1"),
+            "-SkipBootstrap",
+            "-SkipEnvUpload",
+        ],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    return result, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "session_token",
+    ("line-one\r\nINJECTED=1", "has\ttab", "has space", "x" * 16_385),
+)
+def test_provision_rejects_unsafe_catalog_session_token_before_writing_env(
+    tmp_path, session_token
+):
+    result, output = _run_provision_session_token_preflight(tmp_path, session_token)
+
+    assert result.returncode != 0
+    assert "CATALOG_ASSET_R2_SESSION_TOKEN" in output
+    assert session_token not in output
+    assert "INJECTED=1" not in output
+    assert not (tmp_path / "mobiliti-worker.env").exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_provision_accepts_safe_optional_catalog_session_token(tmp_path):
+    session_token = "temporary-valid_token+/="
+
+    result, output = _run_provision_session_token_preflight(tmp_path, session_token)
+
+    assert result.returncode != 0
+    assert "Missing HCLOUD_TOKEN" in output
+    assert "CATALOG_ASSET_R2_SESSION_TOKEN" not in output
+    assert session_token not in output
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_provision_accepts_and_writes_supabase_service_key_without_printing_it():
     provision = (ROOT / "deploy" / "hetzner" / "provision.ps1").read_text(encoding="utf-8")
 

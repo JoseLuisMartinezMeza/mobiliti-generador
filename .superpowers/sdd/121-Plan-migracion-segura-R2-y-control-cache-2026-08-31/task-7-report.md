@@ -163,6 +163,39 @@ Dos catalog_cart.py, sin cambios:
 
 `git diff --check` acotado pasó sin errores; sólo produjo los avisos LF/CRLF habituales del worktree Windows.
 
+## Corrección de revisión — validación local antes del here-string
+
+La revisión posterior al commit inicial detectó que `provision.ps1` aceptaba el session token por parámetro/entorno y lo interpolaba más tarde en `worker.env`, pero dependía del preflight remoto para rechazar controles. Un valor con CR/LF podía, por tanto, alcanzar la formación del archivo antes de ser rechazado.
+
+Se añadió un guard local inmediatamente después de definir `Die` y antes de validar `HCLOUD_TOKEN`, resolver `hcloud`, formar el here-string o escribir archivos. El token sigue siendo opcional; si no está vacío, el guard exige longitud máxima 16,384 y rechaza la clase exacta de códigos `0..32` o `127`. El mensaje es únicamente `CATALOG_ASSET_R2_SESSION_TOKEN is invalid.` y nunca concatena el valor.
+
+La prueba ejecuta `provision.ps1` en un proceso PowerShell real con `HCLOUD_TOKEN` deliberadamente ausente, `TEMP` aislado y el session token entregado mediante la variable de entorno productiva. Esto permite demostrar el orden sin invocar `hcloud`, red o provisioning:
+
+- CR/LF con una asignación inyectada, tab, espacio y 16,385 caracteres fallan primero por nombre de variable;
+- el contenido del token y la asignación inyectada no aparecen en stdout/stderr;
+- no se crea `mobiliti-worker.env` ni ningún otro archivo en el directorio temporal;
+- un token válido pasa este guard y llega al error esperado posterior de `HCLOUD_TOKEN`, también sin escribir.
+
+RED observado antes de la corrección:
+
+```text
+4 failed, 1 passed, 62 deselected
+```
+
+Los cuatro valores inseguros llegaban incorrectamente a `Missing HCLOUD_TOKEN` en lugar de ser rechazados por el guard de sesión. GREEN focal:
+
+```text
+5 passed, 62 deselected
+```
+
+Suite Hetzner completa posterior:
+
+```text
+67 passed in 2.68s
+```
+
+El parser nativo de PowerShell y `git diff --check` acotado volvieron a pasar. Esta corrección no realiza llamadas live, no cambia preflight/API/worker/migrador y no amplía el alcance del commit inicial.
+
 ## Acciones externas no ejecutadas
 
 No hubo llamadas live a Cloudflare o Supabase, creación/configuración de bucket, dominio, token, CORS o cache rules; tampoco DDL, deploy, upload, cutover, push, lectura de secretos, borrado ni ejecución de `r2_doctor`.
