@@ -89,7 +89,7 @@ Después de terminar HEAD/PUT para el keyset entero, el mismo proceso hace un GE
 
 ## Registro Task 3 y reanudación
 
-El UUID de batch es determinista (`UUIDv5`) y queda ligado al SHA del archivo externo, `manifest_digest` y `keyset_digest`. El checkpoint guarda esa unión, los nombres con HEAD/PUT completado y el estado RPC. Un checkpoint con otra autoridad, nombre ajeno o duplicado se rechaza.
+El UUID de batch es determinista (`UUIDv5`) y queda ligado al SHA del archivo externo, `manifest_digest` y `keyset_digest`. El checkpoint guarda esa unión, los nombres con HEAD/PUT completado, estadísticas acumuladas y un estado RPC meramente informativo. Un checkpoint con otra autoridad, nombre ajeno o duplicado se rechaza. El checkpoint nunca constituye prueba de estado de base de datos ni autoriza certificación.
 
 Sólo después de los 2,214 GET completos se ejecuta el orden exacto:
 
@@ -98,7 +98,7 @@ Sólo después de los 2,214 GET completos se ejecuta el orden exacto:
 3. 2,214 × `saas_register_catalog_asset` con `provider=r2` y `physical_bucket=catalog-assets`;
 4. `saas_finalize_catalog_asset_cutover_batch`.
 
-Los payloads coinciden con las firmas SQL de Task 3. Un error intermedio no llama finalize. Reejecutar un batch parcial repite las operaciones idempotentes con el mismo UUID; un checkpoint que ya registró finalize omite RPC, pero aún repite todos los GET de la ejecución actual. `certified=true` sólo se emite después de un finalize exitoso previamente persistido en el checkpoint o completado en la ejecución actual.
+Los payloads coinciden con las firmas SQL de Task 3. Un error intermedio no llama finalize. Reejecutar un batch parcial repite las operaciones idempotentes con el mismo UUID. Después de todos los GET se consulta con service role la fila privada exacta de `saas_catalog_asset_cutover_batches`, sin usar Supabase Storage. Una fila ausente, `pending` o `loading` exacta provoca replay completo de start, todas las add, todas las register y finalize. Una fila `verified` exacta todavía exige un finalize idempotente con respuesta UUID exacta. En ambos caminos se vuelve a consultar la fila y sólo una prueba final `verified` con batch/digests/counts exactos permite `certified=true`; un mismatch, estado distinto o falta de fila falla cerrado.
 
 El cliente Supabase sólo llama `/rest/v1/rpc/<función>` y limita la respuesta; no llama endpoints de Supabase Storage ni obtiene cuerpos de assets.
 
@@ -114,7 +114,7 @@ El JSON final incluye:
 - estado/count RPC;
 - códigos de fallo sanitizados.
 
-Los escritores JSON eliminan defensivamente campos con credenciales, tokens, Authorization, headers, endpoints y excepciones crudas; también redaccionan URLs y strings Bearer. Los contadores parciales se conservan si execute falla, mientras `certified` permanece false.
+Los escritores JSON eliminan defensivamente campos con credenciales, tokens, Authorization, headers, endpoints y excepciones crudas; también redaccionan URLs y strings Bearer. Los contadores parciales se conservan si execute falla, mientras `certified` permanece false. Reporte y checkpoint distinguen estadísticas `current` de `cumulative`; las acumuladas sobreviven a una reanudación.
 
 ## TDD RED → GREEN
 
@@ -192,6 +192,94 @@ python -m py_compile scripts/migrate_catalog_assets_to_r2.py tests/test_catalog_
 git diff --check -- scripts/migrate_catalog_assets_to_r2.py tests/test_catalog_asset_r2_migration.py
 exit 0 / sin salida
 ```
+
+## Correcciones de revisión — 2026-09-01
+
+La revisión posterior al commit inicial `fdd6ae6` bloqueó execute por dos fallos críticos y abrió varios hallazgos importantes/menores. Todos se reprodujeron primero con pruebas RED y se corrigieron sin DDL ni cambios live.
+
+### Autoridad DB y recuperación post-finalize
+
+Antes de la corrección, un checkpoint local con `rpc_status=finalized` podía omitir todas las RPC y producir `certified=true`, aunque no existiera batch verificado en PostgreSQL. Además, si finalize terminaba en el servidor pero su respuesta se perdía, el siguiente start chocaba con la fila ya verificada.
+
+La corrección elimina toda autoridad del checkpoint sobre DB:
+
+- después de los GET completos, hace un SELECT REST autenticado con service role exclusivamente sobre la tabla privada de batches;
+- selecciona únicamente `batch_id`, ambos digests, expected/status y los tres contadores;
+- exige tipos JSON exactos; booleanos no se aceptan como enteros;
+- verifica el UUID determinista, ambos digests, count, missing=0, failed=0 y semántica exacta de `pending|loading|verified`;
+- una fila ausente/pending/loading repite start + todas add + todas register + finalize;
+- una fila verified exacta llama finalize idempotentemente y exige el UUID exacto;
+- ambos caminos vuelven a consultar DB y requieren prueba verified exacta antes de certificar;
+- una respuesta finalize perdida se recupera en la ejecución siguiente a partir de DB, no del checkpoint.
+
+No se consulta `/storage/v1`, no se descarga ningún body de Supabase y no se añadió DDL.
+
+### Cierre TOCTOU de upload
+
+Tras un HEAD 404, el archivo local se vuelve a abrir con `lstat`/`os.open`/`fstat`, rechazo de symlink/reparse, estabilidad pre/post, tamaño, SHA-256 y magic bytes. El contenido completo verificado se convierte a un objeto `bytes` inmutable. PUT y todos sus reintentos reciben exactamente esos bytes; boto3 nunca vuelve a abrir el path.
+
+Las pruebas cubren dos ataques: reemplazo/in-place entre auditoría y PUT produce cero PUT, y una mutación del path dentro de `put_object` no puede cambiar el Body ya fijado.
+
+### Hallazgos importantes y menores
+
+- `PRODUCTION_CONTRACT` congela además los digests autoritativos `93e30738942bc0c4b85d85d63239c82588ec1d163c5c3820ef2de01dc07caeb7` y `72ecc6b84bfec9ba012a24dea9c5bcdf6d1beaad8d81c68eb4697f8e83e188ff`; los contratos pequeños inyectables siguen permitidos sin pins.
+- Se reconocen y reintentan explícitamente `EndpointConnectionError`, `ConnectionClosedError`, `ConnectTimeoutError` y `ReadTimeoutError` reales de botocore, manteniendo SDK retries deshabilitados y contadores propios.
+- GET obtiene el Body antes de validar headers y lo cierra en `finally`, incluso ante mismatch de Content-Type/Length/metadata/cache.
+- El parser JSON rechaza member names duplicados recursivamente en manifiesto, checkpoint y respuestas REST/RPC.
+- La raíz `SOURCE_DIR` se valida por `lstat` como directorio real no-reparse antes de abrir archivos o ejecutar `scandir`.
+- Errores de `mkdir`, temporal, fsync u `os.replace` se reducen a `atomic_output_failed`, sin filtrar paths/excepciones.
+- Checkpoint/reporte conservan y separan estadísticas current/cumulative; se persiste un checkpoint después de la ronda GET antes de tocar DB.
+
+### RED → GREEN de la revisión
+
+RED conjunto inicial de los hallazgos:
+
+```text
+24 failed, 2 passed, 40 deselected
+```
+
+GREEN focal de críticos/importantes/menores:
+
+```text
+26 passed, 40 deselected
+```
+
+Una mutación adversarial adicional mostró que Python considera `True == 1` y `False == 0`; se endurecieron los tipos de los contadores DB:
+
+```text
+RED: 2 failed, 7 passed
+GREEN: 9 passed
+```
+
+Suite Task 6 final de la ronda:
+
+```text
+python -B -m pytest -p no:cacheprovider tests/test_catalog_asset_r2_migration.py -q
+67 passed, 1 skipped in 5.15s
+```
+
+El único skip sigue siendo la creación real de symlink en esta sesión Windows; las pruebas deterministas de symlink/reparse por atributos y de raíz reparse sí se ejecutan y pasan.
+
+Regresión Task 3/4 final de la ronda:
+
+```text
+python -B -m pytest -p no:cacheprovider tests/test_catalog_migrations.py tests/test_catalog_repository.py -q
+120 passed, 2 skipped in 0.76s
+```
+
+### Dry-run externo posterior a revisión
+
+Se conservó sin modificación el reporte anterior:
+
+- `C:/Users/pepem/Downloads/catalog-assets-r2-dry-run-2026-09-01.json`
+- SHA-256 anterior y posterior: `bbfe76b3fd3a7086ded638ab3f584df0d699e494a51bdc55ad32ba376868d643`.
+
+El nuevo dry-run se escribió atómicamente en una ruta distinta:
+
+- `C:/Users/pepem/Downloads/catalog-assets-r2-dry-run-after-review-2026-09-01.json`
+- SHA-256: `11bd2d51f2f99397091868c4ef3208b8b53a7113c4dc07217185334d624aceed`.
+
+Resultado: exit 0, `certified=false`, cero entorno/cliente/red/RPC/DB, 2,214 objetos y 678,858,152 bytes exactos, MIME 1,568/556/90, 770 extras y 105,398,074 bytes excluidos, extras digest `ce19df2174084c366c23f08eab359d2c8ecdce38e6be0442b60a543fee138e7f`. El manifiesto conservó SHA `be3edd24a3753af7d01a70b9da213719a8d0708f2597010792744bc2dc4578ff` y ambos digests productivos congelados.
 
 ## Límites y bloqueos live explícitos
 

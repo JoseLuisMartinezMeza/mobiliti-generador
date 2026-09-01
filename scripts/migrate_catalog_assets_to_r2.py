@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -49,12 +49,16 @@ class ManifestContract:
     entry_count: int
     total_bytes: int
     mime_counts: Mapping[str, int]
+    keyset_digest: str | None = None
+    manifest_digest: str | None = None
 
 
 PRODUCTION_CONTRACT = ManifestContract(
     entry_count=2214,
     total_bytes=678_858_152,
     mime_counts={"image/png": 1568, "image/webp": 556, "image/jpeg": 90},
+    keyset_digest="93e30738942bc0c4b85d85d63239c82588ec1d163c5c3820ef2de01dc07caeb7",
+    manifest_digest="72ecc6b84bfec9ba012a24dea9c5bcdf6d1beaad8d81c68eb4697f8e83e188ff",
 )
 
 
@@ -103,6 +107,32 @@ class TransferStats:
     full_get: int = 0
 
 
+_TRANSFER_FIELDS = (
+    "attempts", "retries", "head", "put", "existing", "created",
+    "precondition_412", "full_get",
+)
+
+
+def _stats_dict(stats: TransferStats) -> dict[str, int]:
+    return {name: getattr(stats, name) for name in _TRANSFER_FIELDS}
+
+
+def _stats_from(value: Any) -> TransferStats:
+    if (
+        not isinstance(value, dict)
+        or set(value) != set(_TRANSFER_FIELDS)
+        or any(not _is_plain_int(value[name]) or value[name] < 0 for name in _TRANSFER_FIELDS)
+    ):
+        raise MigrationError("checkpoint_binding_mismatch")
+    return TransferStats(**{name: value[name] for name in _TRANSFER_FIELDS})
+
+
+def _stats_sum(first: TransferStats, second: TransferStats) -> TransferStats:
+    return TransferStats(**{
+        name: getattr(first, name) + getattr(second, name) for name in _TRANSFER_FIELDS
+    })
+
+
 @dataclass(frozen=True)
 class RetryPolicy:
     max_attempts: int = 4
@@ -132,8 +162,26 @@ class MigrationOutcome:
     certified: bool
     batch_id: str
     stats: TransferStats
+    cumulative_stats: TransferStats
     rpc_count: int
     rpc_status: str
+    database_checks: int
+
+
+class _DuplicateJsonMember(ValueError):
+    pass
+
+
+def _strict_json_loads(raw: str) -> Any:
+    def reject_duplicates(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise _DuplicateJsonMember(key)
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=reject_duplicates)
 
 
 def _utc_now() -> str:
@@ -166,7 +214,9 @@ def load_manifest(path: Path | str, expected_file_sha256: str, contract: Manifes
     if actual_anchor != expected_file_sha256:
         raise MigrationError("manifest_anchor_mismatch")
     try:
-        document = json.loads(raw.decode("utf-8"))
+        document = _strict_json_loads(raw.decode("utf-8"))
+    except _DuplicateJsonMember:
+        raise MigrationError("manifest_json_duplicate") from None
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise MigrationError("manifest_json_invalid") from None
     if not isinstance(document, dict) or document.get("schema_version") != 1:
@@ -218,9 +268,17 @@ def load_manifest(path: Path | str, expected_file_sha256: str, contract: Manifes
     if document.get("mime_counts") != dict(contract.mime_counts) or computed_mimes != dict(contract.mime_counts):
         raise MigrationError("manifest_mime_mismatch")
     keyset_digest, manifest_digest = _task3_digests(entries)
-    if document.get("keyset_digest") != keyset_digest:
+    if (
+        document.get("keyset_digest") != keyset_digest
+        or contract.keyset_digest is not None
+        and contract.keyset_digest != keyset_digest
+    ):
         raise MigrationError("manifest_keyset_digest_mismatch")
-    if document.get("manifest_digest") != manifest_digest:
+    if (
+        document.get("manifest_digest") != manifest_digest
+        or contract.manifest_digest is not None
+        and contract.manifest_digest != manifest_digest
+    ):
         raise MigrationError("manifest_digest_mismatch")
     return ManifestData(
         entries=sorted(entries, key=lambda entry: entry["object_name"]),
@@ -258,7 +316,9 @@ def _validate_magic(mime_type: str, first: bytes, last: bytes, byte_size: int) -
     return False
 
 
-def _audit_manifested_file(path: Path, expected: Mapping[str, Any]) -> None:
+def _audit_manifested_file(
+    path: Path, expected: Mapping[str, Any], *, return_bytes: bool = False
+) -> bytes | None:
     try:
         before = path.lstat()
     except OSError:
@@ -277,12 +337,15 @@ def _audit_manifested_file(path: Path, expected: Mapping[str, Any]) -> None:
         digest = hashlib.sha256()
         first = b""
         last = b""
+        captured = bytearray() if return_bytes else None
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             while True:
                 chunk = stream.read(_CHUNK_SIZE)
                 if not chunk:
                     break
                 digest.update(chunk)
+                if captured is not None:
+                    captured.extend(chunk)
                 if len(first) < 16:
                     first = (first + chunk)[:16]
                 last = (last + chunk)[-2:]
@@ -299,6 +362,7 @@ def _audit_manifested_file(path: Path, expected: Mapping[str, Any]) -> None:
             raise MigrationError("local_asset_hash_mismatch")
         if not _validate_magic(expected["mime_type"], first, last, expected["byte_size"]):
             raise MigrationError("local_asset_magic_mismatch")
+        return bytes(captured) if captured is not None else None
     except MigrationError:
         raise
     except (OSError, ValueError):
@@ -313,8 +377,15 @@ def _audit_manifested_file(path: Path, expected: Mapping[str, Any]) -> None:
 
 def audit_local_source(source_dir: Path | str, entries: Sequence[Mapping[str, Any]]) -> LocalAudit:
     source_dir = Path(source_dir)
-    if not source_dir.is_dir():
-        raise MigrationError("local_source_missing")
+    try:
+        source_metadata = source_dir.lstat()
+    except OSError:
+        raise MigrationError("local_source_missing") from None
+    if (
+        not stat.S_ISDIR(source_metadata.st_mode)
+        or getattr(source_metadata, "st_file_attributes", 0) & _REPARSE_POINT
+    ):
+        raise MigrationError("local_source_not_directory")
     names = {entry["object_name"] for entry in entries}
     total_bytes = 0
     mime_counts = {"image/png": 0, "image/webp": 0, "image/jpeg": 0}
@@ -380,6 +451,20 @@ def _retry_delay(policy: RetryPolicy, retry_number: int) -> float:
     return base + max(0.0, jitter)
 
 
+def _retryable_transport_error(error: BaseException) -> bool:
+    if isinstance(error, (TimeoutError, ConnectionError, OSError)):
+        return True
+    return (
+        error.__class__.__module__ == "botocore.exceptions"
+        and error.__class__.__name__ in {
+            "EndpointConnectionError",
+            "ConnectionClosedError",
+            "ConnectTimeoutError",
+            "ReadTimeoutError",
+        }
+    )
+
+
 def _call_r2(
     operation: Callable[[], Any], *, stats: TransferStats, retry: RetryPolicy,
     passthrough_statuses: set[int] | None = None, failure_code: str,
@@ -398,7 +483,7 @@ def _call_r2(
             if status in {401, 403}:
                 raise MigrationError("r2_access_denied") from None
             retryable = status in {408, 429} or (status is not None and 500 <= status <= 599)
-            retryable = retryable or isinstance(error, (TimeoutError, ConnectionError, OSError))
+            retryable = retryable or _retryable_transport_error(error)
             if not retryable or attempt >= retry.max_attempts:
                 raise MigrationError(failure_code) from None
             stats.retries += 1
@@ -448,22 +533,21 @@ def ensure_r2_object(
         stats.existing += 1
         return "existing"
 
+    verified_body = _audit_manifested_file(local_path, entry, return_bytes=True)
+    if type(verified_body) is not bytes:
+        raise MigrationError("local_asset_unreadable")
+
     def put_operation():
         stats.put += 1
-        try:
-            stream = local_path.open("rb")
-        except OSError:
-            raise MigrationError("local_asset_unreadable") from None
-        with stream:
-            return client.put_object(
-                Bucket=bucket,
-                Key=entry["object_name"],
-                Body=stream,
-                IfNoneMatch="*",
-                ContentType=entry["mime_type"],
-                CacheControl=CACHE_CONTROL,
-                Metadata={"sha256": entry["sha256"]},
-            )
+        return client.put_object(
+            Bucket=bucket,
+            Key=entry["object_name"],
+            Body=verified_body,
+            IfNoneMatch="*",
+            ContentType=entry["mime_type"],
+            CacheControl=CACHE_CONTROL,
+            Metadata={"sha256": entry["sha256"]},
+        )
 
     raced = False
     try:
@@ -495,13 +579,13 @@ def verify_r2_body(
 
     def operation():
         response = client.get_object(Bucket=bucket, Key=entry["object_name"])
-        _assert_r2_headers(response, entry, "r2_get_header_mismatch")
         body = response.get("Body") if isinstance(response, dict) else None
         if body is None or not callable(getattr(body, "read", None)) or not callable(getattr(body, "close", None)):
             raise MigrationError("r2_get_body_invalid")
         digest = hashlib.sha256()
         total = 0
         try:
+            _assert_r2_headers(response, entry, "r2_get_header_mismatch")
             while True:
                 chunk = body.read(chunk_size)
                 if not chunk:
@@ -596,13 +680,15 @@ def _binding(prepared: Any, batch_id: str) -> dict[str, str]:
 
 
 def new_checkpoint(
-    prepared: Any, batch_id: str, *, prepared_names: Sequence[str] = (), rpc_status: str = "not_started"
+    prepared: Any, batch_id: str, *, prepared_names: Sequence[str] = (),
+    rpc_status: str = "not_started", cumulative_stats: TransferStats | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "binding": _binding(prepared, batch_id),
         "prepared_objects": sorted(set(prepared_names)),
         "rpc_status": rpc_status,
+        "cumulative_stats": _stats_dict(cumulative_stats or TransferStats()),
         "updated_at": _utc_now(),
     }
 
@@ -639,11 +725,11 @@ def _sanitize_output(value: Any) -> Any:
 
 def _atomic_json(path: Path | str, payload: Mapping[str, Any]) -> None:
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    sanitized = _sanitize_output(payload)
-    data = (json.dumps(sanitized, sort_keys=True, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
     temporary_name = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        sanitized = _sanitize_output(payload)
+        data = (json.dumps(sanitized, sort_keys=True, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
         with tempfile.NamedTemporaryFile(
             mode="wb", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
         ) as temporary:
@@ -671,10 +757,10 @@ def write_report(path: Path | str, payload: Mapping[str, Any]) -> None:
 def load_checkpoint(path: Path | str, prepared: Any, batch_id: str) -> dict[str, Any]:
     path = Path(path)
     try:
-        document = json.loads(path.read_text("utf-8"))
+        document = _strict_json_loads(path.read_text("utf-8"))
     except FileNotFoundError:
         return new_checkpoint(prepared, batch_id)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, _DuplicateJsonMember):
         raise MigrationError("checkpoint_invalid") from None
     if (
         not isinstance(document, dict)
@@ -685,10 +771,49 @@ def load_checkpoint(path: Path | str, prepared: Any, batch_id: str) -> dict[str,
         or any(not isinstance(name, str) for name in document["prepared_objects"])
     ):
         raise MigrationError("checkpoint_binding_mismatch")
+    _stats_from(document.get("cumulative_stats"))
     allowed = {entry["object_name"] for entry in prepared.entries}
     if len(document["prepared_objects"]) != len(set(document["prepared_objects"])) or not set(document["prepared_objects"]) <= allowed:
         raise MigrationError("checkpoint_binding_mismatch")
     return document
+
+
+_BATCH_ROW_FIELDS = {
+    "batch_id", "manifest_digest", "keyset_digest", "expected_count",
+    "status", "verified_count", "missing_count", "failed_count",
+}
+
+
+def _cutover_batch_status(row: Any, prepared: Any, batch_id: str) -> str:
+    if row is None:
+        return "absent"
+    if not isinstance(row, dict) or set(row) != _BATCH_ROW_FIELDS:
+        raise MigrationError("cutover_batch_db_mismatch")
+    if (
+        any(not _is_plain_int(row[name]) for name in (
+            "expected_count", "verified_count", "missing_count", "failed_count"
+        ))
+        or any(not isinstance(row[name], str) for name in (
+            "batch_id", "manifest_digest", "keyset_digest", "status"
+        ))
+    ):
+        raise MigrationError("cutover_batch_db_mismatch")
+    common_matches = (
+        row["batch_id"] == batch_id
+        and row["manifest_digest"] == prepared.manifest_digest
+        and row["keyset_digest"] == prepared.keyset_digest
+        and row["expected_count"] == len(prepared.entries)
+        and row["missing_count"] == 0
+        and row["failed_count"] == 0
+    )
+    status = row["status"]
+    counts_match = (
+        status == "verified" and row["verified_count"] == len(prepared.entries)
+        or status in {"pending", "loading"} and row["verified_count"] == 0
+    )
+    if not common_matches or not counts_match:
+        raise MigrationError("cutover_batch_db_mismatch")
+    return status
 
 
 def execute_migration(
@@ -703,8 +828,11 @@ def execute_migration(
         prepared.manifest_file_sha256, prepared.manifest_digest, prepared.keyset_digest
     )
     rpc_count = 0
+    database_checks = 0
+    previous_stats = TransferStats()
     try:
         checkpoint = load_checkpoint(checkpoint_path, prepared, batch_id)
+        previous_stats = _stats_from(checkpoint["cumulative_stats"])
         completed = set(checkpoint["prepared_objects"])
         for entry in prepared.entries:
             name = entry["object_name"]
@@ -714,32 +842,60 @@ def execute_migration(
                 )
                 completed.add(name)
                 checkpoint = new_checkpoint(
-                    prepared, batch_id, prepared_names=sorted(completed), rpc_status=checkpoint["rpc_status"]
+                    prepared, batch_id, prepared_names=sorted(completed),
+                    rpc_status=checkpoint["rpc_status"],
+                    cumulative_stats=_stats_sum(previous_stats, stats),
                 )
                 write_checkpoint(checkpoint_path, checkpoint)
         for entry in prepared.entries:
             verify_r2_body(r2_client, bucket, entry, stats=stats, retry=retry)
+        checkpoint = new_checkpoint(
+            prepared, batch_id, prepared_names=sorted(completed),
+            rpc_status=checkpoint["rpc_status"],
+            cumulative_stats=_stats_sum(previous_stats, stats),
+        )
+        write_checkpoint(checkpoint_path, checkpoint)
 
-        rpc_status = checkpoint["rpc_status"]
-        if rpc_status != "finalized":
+        row = rpc_client.get_cutover_batch(batch_id)
+        database_checks += 1
+        database_status = _cutover_batch_status(row, prepared, batch_id)
+        if database_status == "verified":
+            result = rpc_client.call(
+                "saas_finalize_catalog_asset_cutover_batch", {"p_batch_id": batch_id}
+            )
+            rpc_count += 1
+            if result != batch_id:
+                raise MigrationError("rpc_response_mismatch")
+        else:
             rpc_count = run_registry_cutover(
                 rpc_client, prepared.entries, batch_id, prepared.manifest_digest, prepared.keyset_digest
             )
-            rpc_status = "finalized"
-            checkpoint = new_checkpoint(
-                prepared, batch_id, prepared_names=sorted(completed), rpc_status=rpc_status
-            )
-            write_checkpoint(checkpoint_path, checkpoint)
+        final_row = rpc_client.get_cutover_batch(batch_id)
+        database_checks += 1
+        if final_row is None:
+            raise MigrationError("cutover_batch_db_unverified")
+        if _cutover_batch_status(final_row, prepared, batch_id) != "verified":
+            raise MigrationError("cutover_batch_db_unverified")
+        checkpoint = new_checkpoint(
+            prepared, batch_id, prepared_names=sorted(completed), rpc_status="finalized",
+            cumulative_stats=_stats_sum(previous_stats, stats),
+        )
+        write_checkpoint(checkpoint_path, checkpoint)
+        cumulative_stats = _stats_sum(previous_stats, stats)
         return MigrationOutcome(
-            certified=rpc_status == "finalized",
+            certified=True,
             batch_id=batch_id,
             stats=stats,
+            cumulative_stats=cumulative_stats,
             rpc_count=rpc_count,
-            rpc_status=rpc_status,
+            rpc_status="finalized",
+            database_checks=database_checks,
         )
     except MigrationError as error:
         error.stats = stats
+        error.cumulative_stats = _stats_sum(previous_stats, stats)
         error.rpc_count = getattr(error, "rpc_count", rpc_count)
+        error.database_checks = database_checks
         raise
 
 
@@ -815,18 +971,7 @@ class SupabaseRpcClient:
         self._opener = opener
         self._timeout = timeout
 
-    def call(self, name: str, payload: Mapping[str, Any]) -> Any:
-        request = Request(
-            f"{self._base_url}/rest/v1/rpc/{name}",
-            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self._service_key}",
-                "apikey": self._service_key,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-        )
+    def _request_json(self, request: Request) -> Any:
         try:
             response = self._opener(request, timeout=self._timeout)
             with response:
@@ -840,9 +985,50 @@ class SupabaseRpcClient:
         except (HTTPError, URLError, OSError, TimeoutError):
             raise MigrationError("rpc_failed") from None
         try:
-            return json.loads(raw.decode("utf-8"))
+            return _strict_json_loads(raw.decode("utf-8"))
+        except _DuplicateJsonMember:
+            raise MigrationError("rpc_response_duplicate") from None
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise MigrationError("rpc_response_invalid") from None
+
+    def call(self, name: str, payload: Mapping[str, Any]) -> Any:
+        request = Request(
+            f"{self._base_url}/rest/v1/rpc/{name}",
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self._service_key}",
+                "apikey": self._service_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+        return self._request_json(request)
+
+    def get_cutover_batch(self, batch_id: str) -> dict[str, Any] | None:
+        try:
+            if str(uuid.UUID(batch_id)) != batch_id:
+                raise ValueError
+        except (ValueError, AttributeError, TypeError):
+            raise MigrationError("cutover_batch_id_invalid") from None
+        select = (
+            "batch_id,manifest_digest,keyset_digest,expected_count,status,"
+            "verified_count,missing_count,failed_count"
+        )
+        query = urlencode({"select": select, "batch_id": f"eq.{batch_id}"})
+        request = Request(
+            f"{self._base_url}/rest/v1/saas_catalog_asset_cutover_batches?{query}",
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {self._service_key}",
+                "apikey": self._service_key,
+                "Accept": "application/json",
+            },
+        )
+        result = self._request_json(request)
+        if not isinstance(result, list) or len(result) > 1 or any(not isinstance(row, dict) for row in result):
+            raise MigrationError("cutover_batch_db_response_invalid")
+        return result[0] if result else None
 
 
 def create_rpc_client(config: ExecuteConfig) -> SupabaseRpcClient:
@@ -924,10 +1110,11 @@ def _base_report(mode: str, prepared: PreparedMigration, contract: ManifestContr
             "digest": extras.digest,
         },
         "transfer": {
-            "attempts": 0, "retries": 0, "head": 0, "put": 0,
-            "existing": 0, "created": 0, "precondition_412": 0, "full_get": 0,
+            "current": _stats_dict(TransferStats()),
+            "cumulative": _stats_dict(TransferStats()),
         },
         "rpc": {"status": "not_started", "count": 0},
+        "database": {"checks": 0},
         "failures": [],
     }
 
@@ -958,16 +1145,11 @@ def run(
             report["certified"] = outcome.certified
             report["batch_id"] = outcome.batch_id
             report["transfer"] = {
-                "attempts": outcome.stats.attempts,
-                "retries": outcome.stats.retries,
-                "head": outcome.stats.head,
-                "put": outcome.stats.put,
-                "existing": outcome.stats.existing,
-                "created": outcome.stats.created,
-                "precondition_412": outcome.stats.precondition_412,
-                "full_get": outcome.stats.full_get,
+                "current": _stats_dict(outcome.stats),
+                "cumulative": _stats_dict(outcome.cumulative_stats),
             }
             report["rpc"] = {"status": outcome.rpc_status, "count": outcome.rpc_count}
+            report["database"] = {"checks": outcome.database_checks}
         report["finished_at"] = _utc_now()
         write_report(args.report, report)
         return 0
@@ -975,19 +1157,16 @@ def run(
         partial_stats = getattr(error, "stats", None)
         if report is not None and isinstance(partial_stats, TransferStats):
             report["transfer"] = {
-                "attempts": partial_stats.attempts,
-                "retries": partial_stats.retries,
-                "head": partial_stats.head,
-                "put": partial_stats.put,
-                "existing": partial_stats.existing,
-                "created": partial_stats.created,
-                "precondition_412": partial_stats.precondition_412,
-                "full_get": partial_stats.full_get,
+                "current": _stats_dict(partial_stats),
+                "cumulative": _stats_dict(
+                    getattr(error, "cumulative_stats", partial_stats)
+                ),
             }
             report["rpc"] = {
                 "status": "failed" if getattr(error, "rpc_count", 0) else "not_started",
                 "count": getattr(error, "rpc_count", 0),
             }
+            report["database"] = {"checks": getattr(error, "database_checks", 0)}
         failure = {"code": str(error) if _safe_code(str(error)) else "migration_failed"}
         if report is None:
             report = {
