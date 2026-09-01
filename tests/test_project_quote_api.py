@@ -181,6 +181,46 @@ def test_project_quote_uses_saved_revision_and_does_not_mutate_project(project_c
     ).json()["project"]["revision"] == project["revision"]
 
 
+def test_project_quote_freezes_active_catalog_image_but_keeps_persisted_context(
+    project_client,
+    monkeypatch,
+):
+    client, headers, project, storage, _jobs, _events = project_client
+    object_name = f"{'a' * 64}.png"
+    persisted_url = (
+        "https://project.supabase.co/storage/v1/object/public/catalog-assets/"
+        f"{object_name}"
+    )
+    active_url = f"https://assets.example.com/{object_name}"
+    project["payload"]["lines"][0]["display_cache"]["image_url"] = persisted_url
+    active_catalog = _sunon_catalog()
+    active_catalog["items"][0]["image_url"] = active_url
+    active_catalog["items"][0]["image_kind"] = "official"
+    loaded = []
+    monkeypatch.setattr(index, "CATALOG_ASSET_STORAGE_PROVIDER", "r2")
+    monkeypatch.setattr(
+        index,
+        "_load_supplier_catalog_cached",
+        lambda supplier: loaded.append(supplier) or active_catalog,
+    )
+
+    response = client.post(
+        f"/projects/{project['id']}/quote",
+        headers=headers,
+        json={"expected_revision": project["revision"]},
+    )
+
+    assert response.status_code == 202, response.json()
+    assert loaded == ["sunon"]
+    frozen = json.loads(storage[response.json()["job"]["input_path"]])
+    assert frozen["groups"][0]["items"][0]["image_url"] == active_url
+    assert (
+        frozen["project_context"]["normalized_project_payload"]["lines"][0]
+        ["display_cache"]["image_url"]
+        == persisted_url
+    )
+
+
 def test_project_quote_preserves_non_contiguous_section_ids_before_enqueue(
     project_client,
 ):

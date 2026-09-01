@@ -7,6 +7,16 @@ from mobiliti_saas.web.api import index
 from project_fixtures import valid_project_payload
 
 
+CATALOG_HASH_A = "a" * 64
+CATALOG_HASH_B = "b" * 64
+SUPABASE_CATALOG_URL_A = (
+    "https://project.supabase.co/storage/v1/object/public/catalog-assets/"
+    f"{CATALOG_HASH_A}.png"
+)
+R2_CATALOG_URL_A = f"https://assets.example.com/{CATALOG_HASH_A}.png"
+R2_CATALOG_URL_B = f"https://assets.example.com/{CATALOG_HASH_B}.png"
+
+
 def _auth_headers(user_id=7):
     token = index.create_access_token({"sub": str(user_id), "email": "cliente@example.com"})
     return {"Authorization": f"Bearer {token}"}
@@ -109,10 +119,195 @@ def test_project_get_resolves_durable_import_image_without_persisting_signed_url
     reopened = client.get(f"/projects/{created['id']}", headers=_auth_headers(7))
 
     assert reopened.status_code == 200, reopened.json()
+    assert reopened.headers["cache-control"] == "private, no-store"
     visible_line = reopened.json()["project"]["payload"]["lines"][1]
     assert visible_line["display_cache"]["image_url"].endswith("?signed=1")
     stored_line = index.db_get_project(created["id"], 7)["payload"]["lines"][1]
     assert stored_line["display_cache"]["image_url"] == ""
+
+
+@pytest.mark.parametrize(
+    ("provider", "persisted_url", "expected_url"),
+    [
+        ("r2", SUPABASE_CATALOG_URL_A, R2_CATALOG_URL_A),
+        ("supabase", R2_CATALOG_URL_A, SUPABASE_CATALOG_URL_A),
+    ],
+)
+def test_project_visible_catalog_image_uses_active_provider_without_mutating_history(
+    monkeypatch,
+    provider,
+    persisted_url,
+    expected_url,
+):
+    payload = valid_project_payload()
+    payload["lines"][0]["display_cache"]["image_url"] = persisted_url
+    project = {"payload": payload, "revision": 7}
+    original = deepcopy(project)
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setattr(index, "CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.com")
+    monkeypatch.setattr(index, "CATALOG_ASSET_STORAGE_PROVIDER", provider)
+
+    visible = index._project_with_visible_import_images(project)
+    visible_again = index._project_with_visible_import_images(visible)
+
+    assert visible["payload"]["lines"][0]["display_cache"]["image_url"] == expected_url
+    assert visible_again == visible
+    assert project == original
+
+
+@pytest.mark.parametrize(
+    ("catalog", "source", "image_url"),
+    [
+        ("offiho", "catalog", SUPABASE_CATALOG_URL_A),
+        ("tarkett", "catalog", SUPABASE_CATALOG_URL_A),
+        ("sunon", "imported", SUPABASE_CATALOG_URL_A),
+        ("sunon", "catalog", f"https://project.supabase.co/static/{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", f"https://project.supabase.co/dev/catalog-assets/{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", f"https://project.supabase.co/storage/v1/object/sign/catalog-assets/{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", f"{SUPABASE_CATALOG_URL_A}?token=firmado"),
+        ("sunon", "catalog", f"{SUPABASE_CATALOG_URL_A}?"),
+        ("sunon", "catalog", f"{SUPABASE_CATALOG_URL_A}#fragmento"),
+        ("sunon", "catalog", f"{SUPABASE_CATALOG_URL_A}#"),
+        ("sunon", "catalog", f"https://assets.example.com/prefix/{CATALOG_HASH_A}.png"),
+        ("sunon", "catalog", "https://assets.example.com/not-a-hash.png"),
+        ("sunon", "catalog", f"https://externo.example/{CATALOG_HASH_A}.png"),
+    ],
+)
+def test_project_visible_catalog_image_rejects_noncanonical_or_excluded_urls(
+    monkeypatch,
+    catalog,
+    source,
+    image_url,
+):
+    payload = valid_project_payload()
+    line = payload["lines"][0]
+    line["catalog"] = catalog
+    line["source"] = source
+    line["display_cache"]["image_url"] = image_url
+    project = {"payload": payload}
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setattr(index, "CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.com")
+    monkeypatch.setattr(index, "CATALOG_ASSET_STORAGE_PROVIDER", "r2")
+
+    visible = index._project_with_visible_import_images(project)
+
+    assert visible["payload"]["lines"][0]["display_cache"]["image_url"] == image_url
+    assert project["payload"]["lines"][0]["display_cache"]["image_url"] == image_url
+
+
+def test_project_patch_provider_only_image_change_preserves_jsonb_revision_and_hash(monkeypatch):
+    client = _project_client(monkeypatch)
+    payload = valid_project_payload()
+    payload["lines"][0]["display_cache"]["image_url"] = SUPABASE_CATALOG_URL_A
+    created = client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Historico", "payload": payload},
+    ).json()["project"]
+    incoming = deepcopy(created["payload"])
+    incoming["lines"][0]["display_cache"]["image_url"] = R2_CATALOG_URL_A
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setattr(index, "CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.com")
+    monkeypatch.setattr(
+        index,
+        "db_save_project",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("un cambio exclusivo de provider no debe escribir")
+        ),
+    )
+
+    response = client.patch(
+        f"/projects/{created['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": created["name"],
+            "payload": incoming,
+            "expected_revision": created["revision"],
+            "operation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        },
+    )
+
+    assert response.status_code == 200, response.json()
+    persisted = index.db_get_project(created["id"], 7)
+    assert persisted["payload"] == created["payload"]
+    assert persisted["revision"] == created["revision"]
+    assert index._project_payload_hash(persisted["payload"]) == index._project_payload_hash(
+        created["payload"]
+    )
+
+
+def test_project_patch_other_change_saves_but_restores_persisted_catalog_url(monkeypatch):
+    client = _project_client(monkeypatch)
+    payload = valid_project_payload()
+    payload["lines"][0]["display_cache"]["image_url"] = SUPABASE_CATALOG_URL_A
+    created = client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Historico", "payload": payload},
+    ).json()["project"]
+    incoming = deepcopy(created["payload"])
+    incoming["lines"][0]["display_cache"]["image_url"] = R2_CATALOG_URL_A
+    incoming["quote_fields"]["cliente"] = "Cliente actualizado"
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setattr(index, "CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.com")
+
+    response = client.patch(
+        f"/projects/{created['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": created["name"],
+            "payload": incoming,
+            "expected_revision": created["revision"],
+            "operation_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        },
+    )
+
+    assert response.status_code == 200, response.json()
+    persisted = index.db_get_project(created["id"], 7)
+    assert persisted["revision"] == created["revision"] + 1
+    assert persisted["payload"]["quote_fields"]["cliente"] == "Cliente actualizado"
+    assert (
+        persisted["payload"]["lines"][0]["display_cache"]["image_url"]
+        == SUPABASE_CATALOG_URL_A
+    )
+
+
+@pytest.mark.parametrize("change", ["object_name", "identity"])
+def test_project_patch_real_catalog_image_change_is_persisted(monkeypatch, change):
+    client = _project_client(monkeypatch)
+    payload = valid_project_payload()
+    payload["lines"][0]["display_cache"]["image_url"] = SUPABASE_CATALOG_URL_A
+    created = client.post(
+        "/projects",
+        headers=_auth_headers(7),
+        json={"name": "Historico", "payload": payload},
+    ).json()["project"]
+    incoming = deepcopy(created["payload"])
+    incoming["lines"][0]["display_cache"]["image_url"] = (
+        R2_CATALOG_URL_B if change == "object_name" else R2_CATALOG_URL_A
+    )
+    if change == "identity":
+        incoming["lines"][0]["identity"]["internal_id"] = "sunon:chair-2"
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setattr(index, "CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.com")
+
+    response = client.patch(
+        f"/projects/{created['id']}",
+        headers=_auth_headers(7),
+        json={
+            "name": created["name"],
+            "payload": incoming,
+            "expected_revision": created["revision"],
+            "operation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        },
+    )
+
+    assert response.status_code == 200, response.json()
+    persisted = index.db_get_project(created["id"], 7)
+    assert persisted["payload"] == incoming
+    assert persisted["revision"] == created["revision"] + 1
 
 
 def test_catalog_search_requires_authentication_subscription_and_valid_query(monkeypatch):
@@ -181,7 +376,10 @@ def test_catalog_search_requires_authentication_subscription_and_valid_query(mon
     assert response.json()["collections"] == ["Sillas"]
 
     monkeypatch.setattr(index, "_require_active_subscription", lambda _usuario_id: (_ for _ in ()).throw(RuntimeError("down")))
-    assert client.get("/catalogs/search?q=olive", headers=_auth_headers(7)).status_code == 503
+    assert client.get(
+        "/catalogs/search?q=olive&supplier=sunon",
+        headers=_auth_headers(7),
+    ).status_code == 503
 
 
 def test_project_routes_are_user_scoped_and_archive_restore_duplicate(monkeypatch):

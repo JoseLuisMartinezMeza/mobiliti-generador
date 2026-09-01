@@ -5146,13 +5146,113 @@ def _project_for_current_user(project_id: str, usuario_id: int) -> dict:
     return project
 
 
+def _catalog_asset_object_name_from_public_url(value: object) -> str | None:
+    """Reconoce sólo URLs públicas canónicas de assets hash Supabase/R2."""
+    if not isinstance(value, str) or "?" in value or "#" in value:
+        return None
+    try:
+        parsed = urlparse(value)
+        parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    object_name = parsed.path.rsplit("/", 1)[-1]
+    if not CATALOG_ASSET_NAME_RE.fullmatch(object_name):
+        return None
+
+    supabase_base = str(SUPABASE_URL or "").strip().rstrip("/")
+    expected_urls = [
+        f"{supabase_base}/storage/v1/object/public/"
+        f"{CATALOG_ASSET_BUCKET}/{object_name}"
+    ]
+    try:
+        expected_urls.append(
+            f"{_catalog_asset_https_origin(CATALOG_ASSET_PUBLIC_BASE_URL, reject_r2_dev=True)}/"
+            f"{object_name}"
+        )
+    except RuntimeError:
+        pass
+
+    for expected_url in expected_urls:
+        expected = urlparse(expected_url)
+        if (
+            not expected.query
+            and not expected.fragment
+            and not expected.params
+            and parsed.scheme == expected.scheme
+            and parsed.netloc == expected.netloc
+            and parsed.path == expected.path
+        ):
+            return object_name
+    return None
+
+
+def _generic_catalog_line(line: object) -> bool:
+    return (
+        isinstance(line, dict)
+        and line.get("source") == "catalog"
+        and line.get("catalog") not in {"offiho", "tarkett"}
+    )
+
+
 def _project_with_visible_import_images(project: dict) -> dict:
     visible = deepcopy(project)
     for line in visible["payload"]["lines"]:
         image_key = line.get("image_asset_key")
         if line.get("source") == "imported" and image_key:
             line["display_cache"]["image_url"] = _create_signed_download(image_key)
+            continue
+        if not DEV_MODE and _generic_catalog_line(line):
+            object_name = _catalog_asset_object_name_from_public_url(
+                line["display_cache"].get("image_url")
+            )
+            if object_name:
+                line["display_cache"]["image_url"] = _catalog_asset_public_url(
+                    object_name
+                )
     return visible
+
+
+def _project_payload_with_persisted_catalog_image_urls(
+    incoming_payload: dict,
+    persisted_payload: dict,
+) -> tuple[dict, bool]:
+    """Evita que autosave persista sólo el cambio de representación Supabase/R2."""
+    guarded = deepcopy(incoming_payload)
+    persisted_by_id = {
+        line.get("line_id"): line
+        for line in persisted_payload.get("lines", [])
+        if isinstance(line, dict) and isinstance(line.get("line_id"), str)
+    }
+    restored = False
+    for line in guarded.get("lines", []):
+        if not _generic_catalog_line(line):
+            continue
+        previous = persisted_by_id.get(line.get("line_id"))
+        if (
+            not _generic_catalog_line(previous)
+            or line.get("catalog") != previous.get("catalog")
+            or line.get("identity") != previous.get("identity")
+        ):
+            continue
+        incoming_url = line["display_cache"].get("image_url")
+        persisted_url = previous["display_cache"].get("image_url")
+        incoming_object = _catalog_asset_object_name_from_public_url(incoming_url)
+        persisted_object = _catalog_asset_object_name_from_public_url(persisted_url)
+        if incoming_object and incoming_object == persisted_object:
+            if incoming_url != persisted_url:
+                line["display_cache"]["image_url"] = persisted_url
+                restored = True
+    return guarded, restored
 
 
 def _copy_project_import_asset(path: str, content: bytes, content_type: str) -> None:
@@ -5489,7 +5589,12 @@ def projects_list(status: str = "active", current_user: dict = Depends(get_curre
 
 
 @app.get("/projects/{project_id}")
-def projects_get(project_id: str, current_user: dict = Depends(get_current_user)):
+def projects_get(
+    project_id: str,
+    response: Response,
+    current_user: dict = Depends(get_current_user),
+):
+    response.headers["Cache-Control"] = "private, no-store"
     project = _project_for_current_user(_project_uuid(project_id), current_user["id"])
     return {"project": _project_with_visible_import_images(project)}
 
@@ -5575,12 +5680,22 @@ def projects_patch(project_id: str, body: dict, current_user: dict = Depends(get
         _project_conflict(current)
     name = _project_name(body.get("name"))
     payload = _project_payload(body.get("payload"))
+    payload, provider_url_restored = _project_payload_with_persisted_catalog_image_urls(
+        payload,
+        current["payload"],
+    )
     _validate_project_asset_ownership(
         payload,
         current_user["id"],
         project_id=project_id,
         inherited_asset_keys=_project_asset_keys(current["payload"]),
     )
+    if (
+        provider_url_restored
+        and name == current["name"]
+        and payload == current["payload"]
+    ):
+        return {"project": current}
     saved = db_save_project(
         project_id, current_user["id"], name, payload,
         expected_revision=expected_revision, operation_id=operation_id,
