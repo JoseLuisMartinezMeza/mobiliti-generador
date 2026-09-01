@@ -15,7 +15,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SQL = ROOT / "mobiliti_saas" / "supabase_setup" / "create_tables.sql"
+SETUP_DIR = ROOT / "mobiliti_saas" / "supabase_setup"
+BOOTSTRAP_SQL = SETUP_DIR / "create_tables.sql"
+REGISTRY_MIGRATION_SQL = SETUP_DIR / "2026_09_catalog_asset_registry_r2.sql"
+CUTOVER_MIGRATION_SQL = SETUP_DIR / "2026_09_catalog_asset_registry_r2_cutover.sql"
+PINNED_CUTOVER_BATCH = "470442fc-3dc3-5948-b0e4-1dd34c1fcd30"
 
 
 def load_sql(paths: list[Path]) -> str:
@@ -63,13 +67,59 @@ def apply_sql(database_url: str, sql: str) -> None:
         conn.commit()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Aplica SQL Mobiliti en Supabase")
-    parser.add_argument("--file", action="append", type=Path, help="SQL file. Default: create_tables.sql")
+    parser.add_argument("--file", action="append", type=Path, help="Migración SQL explícita")
+    parser.add_argument(
+        "--bootstrap-new-project",
+        action="store_true",
+        help="Usa create_tables.sql sólo para una base de datos nueva",
+    )
+    parser.add_argument(
+        "--confirm-cutover-batch",
+        help="UUID exacto requerido al seleccionar la migración de cutover",
+    )
     parser.add_argument("--apply", action="store_true", help="Ejecuta SQL. Sin esto solo dry-run.")
-    args = parser.parse_args()
+    return parser
 
-    paths = args.file or [DEFAULT_SQL]
+
+def resolve_sql_paths(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[Path]:
+    files = list(args.file or [])
+    if args.bootstrap_new_project:
+        if files:
+            parser.error("--bootstrap-new-project no se combina con --file")
+        if args.confirm_cutover_batch:
+            parser.error("el bootstrap no acepta confirmación de cutover")
+        return [BOOTSTRAP_SQL]
+    if not files:
+        parser.error("elige --file o --bootstrap-new-project")
+
+    resolved = [path.resolve() for path in files]
+    bootstrap = BOOTSTRAP_SQL.resolve()
+    registry = REGISTRY_MIGRATION_SQL.resolve()
+    cutover = CUTOVER_MIGRATION_SQL.resolve()
+    if bootstrap in resolved:
+        parser.error("create_tables.sql sólo se permite con --bootstrap-new-project")
+
+    includes_registry = registry in resolved
+    includes_cutover = cutover in resolved
+    if includes_registry and includes_cutover:
+        parser.error("las migraciones A y B nunca se aplican juntas")
+    if includes_cutover:
+        if args.confirm_cutover_batch != PINNED_CUTOVER_BATCH:
+            parser.error(
+                "la migración B requiere --confirm-cutover-batch con el UUID certificado exacto"
+            )
+    elif args.confirm_cutover_batch:
+        parser.error("--confirm-cutover-batch sólo se usa con la migración B")
+    return files
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    paths = resolve_sql_paths(args, parser)
     sql = load_sql(paths)
     summary = summarize_sql(sql)
 

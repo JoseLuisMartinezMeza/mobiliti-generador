@@ -20,17 +20,34 @@ codigo legado de escritorio/API vieja. Targets correctos:
 ## 1. Supabase
 
 1. Rota claves compartidas por chat.
-2. Ejecuta SQL base/migraciones:
+2. Para una **base de datos nueva**, ejecuta el bootstrap explícito:
 
 ```powershell
 $env:DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres"
-python scripts\apply_supabase_sql.py
 pip install psycopg[binary]
-python scripts\apply_supabase_sql.py --apply
+python scripts\apply_supabase_sql.py --bootstrap-new-project
+python scripts\apply_supabase_sql.py --bootstrap-new-project --apply
 ```
 
-   Alternativa manual: ejecuta `mobiliti_saas/supabase_setup/create_tables.sql`
-   en Supabase SQL Editor.
+   `create_tables.sql` es sólo para una base de datos nueva. La alternativa
+   manual es copiarlo al SQL Editor únicamente en ese caso.
+
+   Para un **proyecto existente**, nunca uses el bootstrap y nunca apliques A+B
+   juntas. El orden obligatorio es:
+
+   1. aplicar A, `2026_09_catalog_asset_registry_r2.sql`;
+   2. completar Gate 7A y ejecutar/certificar Gate 6 (Task 6) con los 2,214
+      objetos del manifiesto fijado;
+   3. aplicar B, `2026_09_catalog_asset_registry_r2_cutover.sql`, confirmando
+      exactamente el batch `470442fc-3dc3-5948-b0e4-1dd34c1fcd30`.
+
+```powershell
+python scripts\apply_supabase_sql.py --file mobiliti_saas\supabase_setup\2026_09_catalog_asset_registry_r2.sql
+python scripts\apply_supabase_sql.py --file mobiliti_saas\supabase_setup\2026_09_catalog_asset_registry_r2.sql --apply
+# Gate 7A + scripts\migrate_catalog_assets_to_r2.py --execute + certificación Gate 6
+python scripts\apply_supabase_sql.py --file mobiliti_saas\supabase_setup\2026_09_catalog_asset_registry_r2_cutover.sql --confirm-cutover-batch 470442fc-3dc3-5948-b0e4-1dd34c1fcd30
+python scripts\apply_supabase_sql.py --file mobiliti_saas\supabase_setup\2026_09_catalog_asset_registry_r2_cutover.sql --confirm-cutover-batch 470442fc-3dc3-5948-b0e4-1dd34c1fcd30 --apply
+```
 
 3. Si sigues con Supabase Storage, confirma bucket privado `quote-files`.
    Para produccion con cuota chica de Supabase, mueve los Excel/PDF a
@@ -97,6 +114,32 @@ R2_SECRET_ACCESS_KEY=[R2_S3_SECRET_ACCESS_KEY]
 R2_BUCKET=quote-files
 R2_REGION=auto
 ```
+
+Las variables de catálogo son server-only y están separadas de todas las
+`QUOTE_STORAGE_*`/`R2_*` anteriores. En el primer deploy compatible conserva
+`CATALOG_ASSET_STORAGE_PROVIDER=supabase`; no cambies el proveedor durante la
+aplicación de A ni antes de certificar Gate 6.
+
+```env
+CATALOG_ASSET_STORAGE_PROVIDER=supabase
+CATALOG_ASSET_PUBLIC_BASE_URL=https://[PROJECT_REF].supabase.co/storage/v1/object/public/catalog-assets
+CATALOG_ASSET_R2_ACCOUNT_ID=[CATALOG_CLOUDFLARE_ACCOUNT_ID]
+CATALOG_ASSET_R2_ENDPOINT_URL=https://[CATALOG_CLOUDFLARE_ACCOUNT_ID].r2.cloudflarestorage.com
+CATALOG_ASSET_R2_ACCESS_KEY_ID=[CATALOG_R2_S3_ACCESS_KEY_ID]
+CATALOG_ASSET_R2_SECRET_ACCESS_KEY=[CATALOG_R2_S3_SECRET_ACCESS_KEY]
+CATALOG_ASSET_R2_SESSION_TOKEN=[CATALOG_R2_OPTIONAL_SESSION_TOKEN]
+CATALOG_ASSET_R2_BUCKET=catalog-assets
+CATALOG_ASSET_R2_REGION=auto
+```
+
+`CATALOG_ASSET_R2_SESSION_TOKEN` es opcional y se omite cuando las credenciales
+no lo entregan. Las credenciales y el bucket deben pertenecer sólo a catálogo;
+nunca reutilices el bucket `quote-files` ni sus credenciales. El orden de
+canary/readiness es: desplegar código dual con provider `supabase`, comprobar
+`/health`, completar A → Gate 7A → Gate 6 → B, configurar la misma public base
+R2 en preview y worker canary, comprobar `catalog_asset_ready=true`, y sólo
+entonces coordinar el cambio único a provider `r2`. Mantén ambos hosts exactos
+en allowlist durante la ventana de rollback.
 
 Comandos:
 
