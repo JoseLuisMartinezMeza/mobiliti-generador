@@ -537,13 +537,14 @@ def _anchor_catalog_image(ws, row: int, source: Any) -> None:
 
 
 class _OfficialRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def __init__(self, allowed_hosts: frozenset[str]):
+    def __init__(self, allowed_hosts: frozenset[str], source_type: str = ""):
         super().__init__()
         self._allowed_hosts = allowed_hosts
+        self._source_type = source_type
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         _validate_connected_peer(fp)
-        _validate_official_https_url(newurl, self._allowed_hosts)
+        _validate_catalog_image_url(newurl, self._source_type, self._allowed_hosts)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -582,11 +583,11 @@ def _download_catalog_image(
         allowed_hosts = _allowed_image_hosts(source_type)
         if not allowed_hosts:
             return None
-        _validate_official_https_url(clean_url, allowed_hosts)
+        _validate_catalog_image_url(clean_url, source_type, allowed_hosts)
         request = urllib.request.Request(clean_url, headers={"User-Agent": "Mobiliti Official Catalog/1.0"})
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
-            _OfficialRedirectHandler(allowed_hosts),
+            _OfficialRedirectHandler(allowed_hosts, source_type),
         )
         with opener.open(request, timeout=18) as response:
             _validate_connected_peer(response)
@@ -682,12 +683,51 @@ def _allowed_image_hosts(source_type: str) -> frozenset[str]:
             and host
             and host != "kundesign.com"
             and not host.endswith(".kundesign.com")
+            and host != "r2.dev"
+            and not host.endswith(".r2.dev")
             and not parsed.username
             and not parsed.password
             and port in (None, 443)
+            and not parsed.query
+            and not parsed.fragment
+            and parsed.path in {"", "/"}
         ):
             hosts.add(host)
     return frozenset(hosts)
+
+
+def _validate_catalog_image_url(
+    url: str, source_type: str, allowed_hosts: frozenset[str]
+) -> None:
+    if source_type != "supplier_cart":
+        _validate_official_https_url(url, allowed_hosts)
+        return
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme.lower() != "https"
+        or not host
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+        or parsed.query
+        or parsed.fragment
+        or host not in allowed_hosts
+    ):
+        raise ValueError("URL de imagen de catalogo invalida")
+    object_name = parsed.path.rsplit("/", 1)[-1]
+    if not DEV_CATALOG_ASSET_OBJECT_RE.fullmatch(object_name):
+        raise ValueError("URL de imagen de catalogo invalida")
+    valid_paths = set()
+    supabase = urlsplit(os.environ.get("SUPABASE_URL", "").strip())
+    if (supabase.hostname or "").lower().rstrip(".") == host:
+        valid_paths.add(f"/storage/v1/object/public/catalog-assets/{object_name}")
+    public_base = urlsplit(os.environ.get("CATALOG_ASSET_PUBLIC_BASE_URL", "").strip())
+    if (public_base.hostname or "").lower().rstrip(".") == host:
+        valid_paths.add(f"/{object_name}")
+    if parsed.path not in valid_paths:
+        raise ValueError("URL de imagen de catalogo invalida")
+    _resolve_public_host(host)
 
 
 def _validate_official_https_url(url: str, allowed_hosts: frozenset[str]) -> None:

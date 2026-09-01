@@ -333,8 +333,60 @@ def _default_opener():
     return build_opener(ProxyHandler({}), _NoRedirect())
 
 
+def _https_origin(value, *, reject_r2_dev=False):
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    host = parsed.hostname or ""
+    if (
+        not isinstance(value, str)
+        or parsed.scheme != "https"
+        or not host
+        or host != host.lower()
+        or parsed.netloc != host
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or (reject_r2_dev and (host == "r2.dev" or host.endswith(".r2.dev")))
+    ):
+        return None
+    return f"https://{host}"
+
+
+def _r2_error_details(error):
+    response = getattr(error, "response", None)
+    if not isinstance(response, dict):
+        return None, ""
+    metadata = response.get("ResponseMetadata")
+    details = response.get("Error")
+    status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
+    code = details.get("Code") if isinstance(details, dict) else ""
+    return status, str(code or "")
+
+
 class CatalogRepository:
-    def __init__(self, base_url, service_key, *, opener=None, timeout=_TIMEOUT):
+    def __init__(
+        self,
+        base_url,
+        service_key,
+        *,
+        opener=None,
+        timeout=_TIMEOUT,
+        catalog_asset_storage_provider="supabase",
+        catalog_asset_r2_account_id="",
+        catalog_asset_r2_endpoint_url="",
+        catalog_asset_r2_access_key_id="",
+        catalog_asset_r2_secret_access_key="",
+        catalog_asset_r2_bucket="catalog-assets",
+        catalog_asset_r2_region="auto",
+        catalog_asset_public_base_url="",
+        catalog_asset_r2_client=None,
+    ):
         try:
             parsed = urlsplit(base_url)
             port = parsed.port
@@ -359,10 +411,77 @@ class CatalogRepository:
         self._service_key = service_key
         self._opener = opener or _default_opener()
         self._timeout = timeout
+        provider = str(catalog_asset_storage_provider or "").strip().lower()
+        if provider not in {"supabase", "r2"}:
+            raise CatalogRepositoryError("Invalid catalog configuration")
+        self._catalog_asset_storage_provider = provider
+        self._catalog_asset_r2_client_instance = catalog_asset_r2_client
+        if provider == "r2":
+            endpoint = _https_origin(catalog_asset_r2_endpoint_url)
+            public_base = _https_origin(catalog_asset_public_base_url, reject_r2_dev=True)
+            values = (
+                catalog_asset_r2_account_id,
+                catalog_asset_r2_access_key_id,
+                catalog_asset_r2_secret_access_key,
+                catalog_asset_r2_region,
+            )
+            if (
+                endpoint is None
+                or public_base is None
+                or catalog_asset_r2_bucket != "catalog-assets"
+                or any(not isinstance(value, str) or not value.strip() for value in values)
+                or any(any(ord(character) < 33 or ord(character) == 127 for character in value) for value in values)
+            ):
+                raise CatalogRepositoryError("Invalid catalog configuration")
+            self._catalog_asset_r2_endpoint_url = endpoint
+            self._catalog_asset_r2_access_key_id = catalog_asset_r2_access_key_id
+            self._catalog_asset_r2_secret_access_key = catalog_asset_r2_secret_access_key
+            self._catalog_asset_r2_bucket = catalog_asset_r2_bucket
+            self._catalog_asset_r2_region = catalog_asset_r2_region
+            self._catalog_asset_public_base_url = public_base
 
     @classmethod
     def from_environment(cls):
-        return cls(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_KEY"))
+        return cls(
+            os.environ.get("SUPABASE_URL"),
+            os.environ.get("SUPABASE_SERVICE_KEY"),
+            catalog_asset_storage_provider=os.environ.get(
+                "CATALOG_ASSET_STORAGE_PROVIDER", "supabase"
+            ),
+            catalog_asset_r2_account_id=os.environ.get("CATALOG_ASSET_R2_ACCOUNT_ID", ""),
+            catalog_asset_r2_endpoint_url=os.environ.get("CATALOG_ASSET_R2_ENDPOINT_URL", ""),
+            catalog_asset_r2_access_key_id=os.environ.get(
+                "CATALOG_ASSET_R2_ACCESS_KEY_ID", ""
+            ),
+            catalog_asset_r2_secret_access_key=os.environ.get(
+                "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", ""
+            ),
+            catalog_asset_r2_bucket=os.environ.get(
+                "CATALOG_ASSET_R2_BUCKET", "catalog-assets"
+            ),
+            catalog_asset_r2_region=os.environ.get("CATALOG_ASSET_R2_REGION", "auto"),
+            catalog_asset_public_base_url=os.environ.get(
+                "CATALOG_ASSET_PUBLIC_BASE_URL", ""
+            ),
+        )
+
+    def _catalog_asset_r2_client(self):
+        if self._catalog_asset_r2_client_instance is not None:
+            return self._catalog_asset_r2_client_instance
+        try:
+            import boto3
+            from botocore.config import Config
+        except ImportError as error:
+            raise CatalogRepositoryError("Catalog storage request failed") from error
+        self._catalog_asset_r2_client_instance = boto3.client(
+            "s3",
+            endpoint_url=self._catalog_asset_r2_endpoint_url,
+            aws_access_key_id=self._catalog_asset_r2_access_key_id,
+            aws_secret_access_key=self._catalog_asset_r2_secret_access_key,
+            region_name=self._catalog_asset_r2_region,
+            config=Config(signature_version="s3v4"),
+        )
+        return self._catalog_asset_r2_client_instance
 
     def _open(self, request, expected, *, max_bytes, require_json=False):
         if type(max_bytes) is not int or max_bytes < 0:
@@ -738,32 +857,53 @@ class CatalogRepository:
         ):
             raise CatalogRepositoryError("Invalid catalog asset")
 
-        request = Request(
-            f"{self._base_url}/storage/v1/object/catalog-assets/{object_name}",
-            data=content,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self._service_key}",
-                "apikey": self._service_key,
-                "Content-Type": content_type,
-                "x-upsert": "false",
-                "x-metadata": base64.b64encode(
-                    json.dumps({"sha256": match.group(1)}, separators=(",", ":")).encode()
-                ).decode(),
-            },
-        )
-        try:
-            self._open(request, (200, 201), max_bytes=_MAX_STORAGE_RESPONSE_BYTES)
-        except _HTTPStatus as error:
-            if error.code != 409 or self.catalog_asset_matches(
-                object_name, match.group(1), len(content), content_type
-            ) is not True:
-                raise CatalogRepositoryError("Catalog storage request failed") from None
+        if self._catalog_asset_storage_provider == "r2":
+            try:
+                self._catalog_asset_r2_client().put_object(
+                    Bucket=self._catalog_asset_r2_bucket,
+                    Key=object_name,
+                    Body=content,
+                    IfNoneMatch="*",
+                    ContentType=content_type,
+                    CacheControl="public, max-age=31536000, immutable",
+                    Metadata={"sha256": match.group(1)},
+                )
+            except Exception as error:
+                status, code = _r2_error_details(error)
+                if status != 412 and code not in {"PreconditionFailed", "412"}:
+                    raise CatalogRepositoryError("Catalog storage request failed") from None
+                if self.catalog_asset_matches(
+                    object_name, match.group(1), len(content), content_type
+                ) is not True:
+                    raise CatalogRepositoryError("Catalog storage request failed") from None
+        else:
+            request = Request(
+                f"{self._base_url}/storage/v1/object/catalog-assets/{object_name}",
+                data=content,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {self._service_key}",
+                    "apikey": self._service_key,
+                    "Content-Type": content_type,
+                    "x-upsert": "false",
+                    "x-metadata": base64.b64encode(
+                        json.dumps({"sha256": match.group(1)}, separators=(",", ":")).encode()
+                    ).decode(),
+                },
+            )
+            try:
+                self._open(request, (200, 201), max_bytes=_MAX_STORAGE_RESPONSE_BYTES)
+            except _HTTPStatus as error:
+                if error.code != 409 or self.catalog_asset_matches(
+                    object_name, match.group(1), len(content), content_type
+                ) is not True:
+                    raise CatalogRepositoryError("Catalog storage request failed") from None
+
         registered = self._json(
             "POST", "/rest/v1/rpc/saas_register_catalog_asset",
             payload={
                 "p_object_name": object_name,
-                "p_storage_provider": "supabase",
+                "p_storage_provider": self._catalog_asset_storage_provider,
                 "p_physical_bucket": "catalog-assets",
                 "p_byte_size": len(content),
                 "p_mime_type": content_type,
@@ -784,6 +924,26 @@ class CatalogRepository:
             or expected_mime != "image/png"
         ):
             raise CatalogRepositoryError("Invalid catalog asset")
+        if self._catalog_asset_storage_provider == "r2":
+            try:
+                info = self._catalog_asset_r2_client().head_object(
+                    Bucket=self._catalog_asset_r2_bucket,
+                    Key=object_name,
+                )
+            except Exception as error:
+                status, code = _r2_error_details(error)
+                if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
+                    return None
+                raise CatalogRepositoryError("Catalog storage request failed") from None
+            metadata = info.get("Metadata") if isinstance(info, dict) else None
+            return (
+                isinstance(info, dict)
+                and type(info.get("ContentLength")) is int
+                and info["ContentLength"] == expected_size
+                and info.get("ContentType") == expected_mime
+                and isinstance(metadata, dict)
+                and metadata.get("sha256") == expected_sha256
+            )
         request = Request(
             f"{self._base_url}/storage/v1/object/info/catalog-assets/{object_name}",
             method="GET",

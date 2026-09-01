@@ -3776,6 +3776,7 @@ def test_published_catalog_hydrates_approved_asset_without_changing_contract(mon
         lambda supplier, version_id: {"id": version_id, "supplier": supplier, "payload": payload},
     )
     monkeypatch.setattr(index, "db_get_published_catalog_version_id", lambda supplier: "snapshot-1")
+    monkeypatch.setattr(index, "CATALOG_ASSET_STORAGE_PROVIDER", "supabase")
     monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
     index._SUPPLIER_CATALOG_CACHE.clear()
 
@@ -3826,6 +3827,233 @@ def test_catalog_asset_public_url_uses_local_dev_endpoint(monkeypatch):
     assert index._catalog_asset_public_url(object_name) == (
         f"http://127.0.0.1:8000/dev/catalog-assets/{object_name}"
     )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://assets.example.test",
+        "https://user:pass@assets.example.test",
+        "https://assets.example.test:8443",
+        "https://assets.example.test/path",
+        "https://assets.example.test?token=x",
+        "https://assets.example.test#fragment",
+        "https://catalog.r2.dev",
+    ],
+)
+def test_catalog_r2_public_url_rejects_non_exact_or_r2_dev_origins(monkeypatch, base_url):
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_STORAGE_PROVIDER", "r2", raising=False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_PUBLIC_BASE_URL", base_url, raising=False)
+
+    with pytest.raises(RuntimeError, match="catalogo"):
+        index._catalog_asset_public_url(f"{'d' * 64}.png")
+
+
+def test_catalog_cache_fingerprint_changes_with_provider_and_public_origin(monkeypatch):
+    payload = _mock_supplier_catalog()
+    object_name = f"{'b' * 64}.png"
+    payload["items"][0]["attributes"]["approved_asset"] = {
+        "bucket": "catalog-assets",
+        "path": object_name,
+        "image_kind": "official",
+        "approved": True,
+    }
+    monkeypatch.setattr(
+        index,
+        "db_get_published_catalog_snapshot",
+        lambda supplier, version_id: {"id": version_id, "supplier": supplier, "payload": payload},
+    )
+    monkeypatch.setattr(index, "db_get_published_catalog_version_id", lambda supplier: "snapshot-1")
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_STORAGE_PROVIDER", "supabase", raising=False)
+    monkeypatch.setattr(index, "SUPABASE_URL", "https://project.supabase.co")
+    index._SUPPLIER_CATALOG_CACHE.clear()
+
+    first = index._load_supplier_catalog_cached("cr-global")
+
+    monkeypatch.setattr(index, "CATALOG_ASSET_STORAGE_PROVIDER", "r2", raising=False)
+    monkeypatch.setattr(
+        index, "CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.test", raising=False
+    )
+    second = index._load_supplier_catalog_cached("cr-global")
+
+    assert first["items"][0]["image_url"] == (
+        f"https://project.supabase.co/storage/v1/object/public/catalog-assets/{object_name}"
+    )
+    assert second["items"][0]["image_url"] == f"https://assets.example.test/{object_name}"
+    assert index._SUPPLIER_CATALOG_CACHE["cr-global"]["storage_fingerprint"] == (
+        "r2",
+        "https://assets.example.test",
+    )
+
+
+class _CatalogR2Error(Exception):
+    def __init__(self, status, code):
+        self.response = {
+            "Error": {"Code": code},
+            "ResponseMetadata": {"HTTPStatusCode": status},
+        }
+
+
+class _CatalogR2Client:
+    def __init__(self, *, put=None, head=None):
+        self.put = list(put or [{}])
+        self.head = list(head or [])
+        self.calls = []
+
+    def put_object(self, **kwargs):
+        self.calls.append(("put_object", kwargs))
+        result = self.put.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def head_object(self, **kwargs):
+        self.calls.append(("head_object", kwargs))
+        result = self.head.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def _configure_catalog_r2(monkeypatch, client):
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_STORAGE_PROVIDER", "r2", raising=False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_R2_ACCOUNT_ID", "catalog-account", raising=False)
+    monkeypatch.setattr(
+        index,
+        "CATALOG_ASSET_R2_ENDPOINT_URL",
+        "https://catalog-account.r2.cloudflarestorage.com",
+        raising=False,
+    )
+    monkeypatch.setattr(index, "CATALOG_ASSET_R2_ACCESS_KEY_ID", "catalog-access", raising=False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", "catalog-secret", raising=False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_R2_BUCKET", "catalog-assets", raising=False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_R2_REGION", "auto", raising=False)
+    monkeypatch.setattr(index, "CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.test", raising=False)
+    monkeypatch.setattr(index, "_CATALOG_ASSET_R2_CLIENT", client, raising=False)
+
+
+def test_catalog_r2_upload_uses_exact_create_only_contract_before_registry(monkeypatch):
+    content = b"\x89PNG\r\n\x1a\napi r2 image"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    client = _CatalogR2Client()
+    _configure_catalog_r2(monkeypatch, client)
+    registered = []
+    monkeypatch.setattr(index, "_register_catalog_asset", lambda *args: registered.append(args))
+
+    index._upload_catalog_asset(object_name, content, "image/png")
+
+    assert client.calls == [
+        (
+            "put_object",
+            {
+                "Bucket": "catalog-assets",
+                "Key": object_name,
+                "Body": content,
+                "IfNoneMatch": "*",
+                "ContentType": "image/png",
+                "CacheControl": "public, max-age=31536000, immutable",
+                "Metadata": {"sha256": digest},
+            },
+        )
+    ]
+    assert registered == [(object_name, len(content), "image/png")]
+
+
+def test_catalog_r2_registry_uses_catalog_provider_and_logical_bucket(monkeypatch):
+    client = _CatalogR2Client()
+    _configure_catalog_r2(monkeypatch, client)
+    captured = {}
+    monkeypatch.setattr(index, "_use_postgres", lambda: True)
+    monkeypatch.setattr(
+        index,
+        "_pg_write",
+        lambda sql, params: captured.update(sql=sql, params=params)
+        or {"value": f"{'a' * 64}.png"},
+    )
+
+    object_name = f"{'a' * 64}.png"
+    index._register_catalog_asset(object_name, 123, "image/png")
+
+    assert captured["params"] == (
+        object_name,
+        "r2",
+        "catalog-assets",
+        123,
+        "image/png",
+    )
+
+
+def test_catalog_r2_precondition_requires_matching_head_before_registry(monkeypatch):
+    content = b"\x89PNG\r\n\x1a\napi r2 retry"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    matching = {
+        "ContentLength": len(content),
+        "ContentType": "image/png",
+        "Metadata": {"sha256": digest},
+    }
+    client = _CatalogR2Client(
+        put=[_CatalogR2Error(412, "PreconditionFailed")],
+        head=[matching],
+    )
+    _configure_catalog_r2(monkeypatch, client)
+    registered = []
+    monkeypatch.setattr(index, "_register_catalog_asset", lambda *args: registered.append(args))
+
+    index._upload_catalog_asset(object_name, content, "image/png")
+    assert [name for name, _kwargs in client.calls] == ["put_object", "head_object"]
+    assert registered == [(object_name, len(content), "image/png")]
+
+    client = _CatalogR2Client(
+        put=[_CatalogR2Error(412, "PreconditionFailed")],
+        head=[matching | {"ContentLength": len(content) + 1}],
+    )
+    _configure_catalog_r2(monkeypatch, client)
+    registered.clear()
+    with pytest.raises(RuntimeError, match="incompatible"):
+        index._upload_catalog_asset(object_name, content, "image/png")
+    assert registered == []
+
+
+def test_health_reports_catalog_readiness_without_catalog_or_quote_secrets(monkeypatch):
+    client = _CatalogR2Client()
+    _configure_catalog_r2(monkeypatch, client)
+    monkeypatch.setattr(index, "R2_ACCESS_KEY_ID", "quote-access")
+    monkeypatch.setattr(index, "R2_SECRET_ACCESS_KEY", "quote-secret")
+    monkeypatch.setattr(index, "R2_BUCKET", "quote-files")
+
+    payload = index.health()
+    serialized = json.dumps(payload)
+
+    assert payload["catalog_asset_storage_provider"] == "r2"
+    assert payload["catalog_asset_storage_configured"] is True
+    assert payload["catalog_asset_public_configured"] is True
+    assert payload["catalog_asset_ready"] is True
+    assert client.calls == []
+    assert "catalog-access" not in serialized
+    assert "catalog-secret" not in serialized
+    assert "quote-access" not in serialized
+    assert "quote-secret" not in serialized
+    assert "catalog-account" not in serialized
+    assert "catalog-assets" not in serialized
+
+
+def test_catalog_and_quote_r2_clients_and_buckets_are_isolated(monkeypatch):
+    catalog_client = _CatalogR2Client()
+    quote_client = object()
+    _configure_catalog_r2(monkeypatch, catalog_client)
+    monkeypatch.setattr(index, "QUOTE_STORAGE_PROVIDER", "r2")
+    monkeypatch.setattr(index, "R2_BUCKET", "quote-files")
+    monkeypatch.setattr(index, "_R2_CLIENT", quote_client)
+
+    assert index._catalog_asset_r2_client() is catalog_client
+    assert index._r2_client() is quote_client
+    assert index.CATALOG_ASSET_R2_BUCKET == "catalog-assets"
+    assert index.R2_BUCKET == "quote-files"
 
 
 def test_catalog_asset_upload_rejects_incompatible_conflict_before_registry(monkeypatch):

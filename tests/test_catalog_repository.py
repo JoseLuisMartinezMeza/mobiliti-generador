@@ -64,6 +64,38 @@ class Opener:
         return response
 
 
+class R2Error(Exception):
+    def __init__(self, status, code):
+        self.response = {
+            "Error": {"Code": code},
+            "ResponseMetadata": {"HTTPStatusCode": status},
+        }
+
+
+class R2Client:
+    def __init__(self, *, put=None, head=None, events=None):
+        self.put = list(put or [{}])
+        self.head = list(head or [])
+        self.calls = []
+        self.events = events if events is not None else []
+
+    def put_object(self, **kwargs):
+        self.calls.append(("put_object", kwargs))
+        self.events.append("put")
+        result = self.put.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def head_object(self, **kwargs):
+        self.calls.append(("head_object", kwargs))
+        self.events.append("head")
+        result = self.head.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
 def response(status, value, headers=None):
     response_headers = {"Content-Type": "application/json"}
     response_headers.update(headers or {})
@@ -131,6 +163,25 @@ def repository(responses):
     return CatalogRepository(BASE_URL, KEY, opener=opener), opener
 
 
+def r2_repository(client, responses=()):
+    opener = Opener(responses)
+    repo = CatalogRepository(
+        BASE_URL,
+        KEY,
+        opener=opener,
+        catalog_asset_storage_provider="r2",
+        catalog_asset_r2_account_id="catalog-account",
+        catalog_asset_r2_endpoint_url="https://catalog-account.r2.cloudflarestorage.com",
+        catalog_asset_r2_access_key_id="catalog-access",
+        catalog_asset_r2_secret_access_key="catalog-secret",
+        catalog_asset_r2_bucket="catalog-assets",
+        catalog_asset_r2_region="auto",
+        catalog_asset_public_base_url="https://assets.example.test",
+        catalog_asset_r2_client=client,
+    )
+    return repo, opener
+
+
 def request_parts(opener, index=0):
     request, timeout = opener.requests[index]
     parsed = urlsplit(request.full_url)
@@ -172,6 +223,62 @@ def test_from_environment_requires_valid_supabase_configuration(monkeypatch):
     ):
         with pytest.raises(CatalogRepositoryError, match="configuration"):
             CatalogRepository(invalid_host, KEY)
+
+
+def test_catalog_r2_configuration_fails_closed_without_quote_storage_fallback(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", BASE_URL)
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", KEY)
+    monkeypatch.setenv("QUOTE_STORAGE_PROVIDER", "r2")
+    monkeypatch.setenv("R2_ACCOUNT_ID", "quote-account")
+    monkeypatch.setenv("R2_ENDPOINT_URL", "https://quote-account.r2.cloudflarestorage.com")
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "quote-access")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "quote-secret")
+    monkeypatch.setenv("R2_BUCKET", "quote-files")
+    monkeypatch.setenv("CATALOG_ASSET_STORAGE_PROVIDER", "r2")
+    for name in (
+        "CATALOG_ASSET_R2_ACCOUNT_ID",
+        "CATALOG_ASSET_R2_ENDPOINT_URL",
+        "CATALOG_ASSET_R2_ACCESS_KEY_ID",
+        "CATALOG_ASSET_R2_SECRET_ACCESS_KEY",
+        "CATALOG_ASSET_PUBLIC_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(CatalogRepositoryError, match="configuration") as caught:
+        CatalogRepository.from_environment()
+
+    assert "quote-account" not in str(caught.value)
+    assert "quote-secret" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "provider,public_base",
+    [
+        ("unknown", "https://assets.example.test"),
+        ("r2", "http://assets.example.test"),
+        ("r2", "https://user:pass@assets.example.test"),
+        ("r2", "https://assets.example.test:8443"),
+        ("r2", "https://assets.example.test/path"),
+        ("r2", "https://assets.example.test?token=x"),
+        ("r2", "https://assets.example.test#fragment"),
+        ("r2", "https://catalog.r2.dev"),
+    ],
+)
+def test_catalog_r2_rejects_unknown_provider_and_invalid_public_origin(provider, public_base):
+    with pytest.raises(CatalogRepositoryError, match="configuration"):
+        CatalogRepository(
+            BASE_URL,
+            KEY,
+            catalog_asset_storage_provider=provider,
+            catalog_asset_r2_account_id="catalog-account",
+            catalog_asset_r2_endpoint_url="https://catalog-account.r2.cloudflarestorage.com",
+            catalog_asset_r2_access_key_id="catalog-access",
+            catalog_asset_r2_secret_access_key="catalog-secret",
+            catalog_asset_r2_bucket="catalog-assets",
+            catalog_asset_r2_region="auto",
+            catalog_asset_public_base_url=public_base,
+            catalog_asset_r2_client=R2Client(),
+        )
 
 
 def test_default_opener_disables_proxies_and_redirects_and_redacts_exceptions():
@@ -856,6 +963,93 @@ def test_catalog_asset_matches_returns_none_only_when_info_reports_not_found():
 
     assert repo.catalog_asset_matches(object_name, digest, len(content), "image/png") is None
     assert request_parts(opener)[0].method == "GET"
+
+
+def test_r2_catalog_asset_put_is_create_only_and_registers_after_verified_write():
+    content = b"\x89PNG\r\n\x1a\nr2 official image"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    events = []
+    client = R2Client(events=events)
+    repo, opener = r2_repository(client, [response(200, object_name)])
+    original_json = repo._json
+
+    def tracked_json(*args, **kwargs):
+        events.append("register")
+        return original_json(*args, **kwargs)
+
+    repo._json = tracked_json
+
+    assert repo.store_catalog_asset_if_absent(object_name, content, "image/png") == object_name
+    assert events == ["put", "register"]
+    assert client.calls == [
+        (
+            "put_object",
+            {
+                "Bucket": "catalog-assets",
+                "Key": object_name,
+                "Body": content,
+                "IfNoneMatch": "*",
+                "ContentType": "image/png",
+                "CacheControl": "public, max-age=31536000, immutable",
+                "Metadata": {"sha256": digest},
+            },
+        )
+    ]
+    registration = json.loads(request_parts(opener)[0].data)
+    assert registration["p_storage_provider"] == "r2"
+    assert registration["p_physical_bucket"] == "catalog-assets"
+
+
+def test_r2_catalog_asset_precondition_accepts_only_exact_head_match():
+    content = b"\x89PNG\r\n\x1a\nr2 retry image"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    matching = {
+        "ContentLength": len(content),
+        "ContentType": "image/png",
+        "Metadata": {"sha256": digest},
+    }
+    client = R2Client(
+        put=[R2Error(412, "PreconditionFailed")],
+        head=[matching],
+    )
+    repo, opener = r2_repository(client, [response(200, object_name)])
+
+    assert repo.store_catalog_asset_if_absent(object_name, content, "image/png") == object_name
+    assert [name for name, _kwargs in client.calls] == ["put_object", "head_object"]
+    assert len(opener.requests) == 1
+
+    mismatching = matching | {"Metadata": {"sha256": "0" * 64}}
+    client = R2Client(
+        put=[R2Error(412, "PreconditionFailed")],
+        head=[mismatching],
+    )
+    repo, opener = r2_repository(client)
+    with pytest.raises(CatalogRepositoryError, match="storage"):
+        repo.store_catalog_asset_if_absent(object_name, content, "image/png")
+    assert opener.requests == []
+
+
+@pytest.mark.parametrize(
+    "error,expected",
+    [
+        (R2Error(404, "NoSuchKey"), None),
+        (R2Error(403, "AccessDenied"), "error"),
+        (R2Error(500, "InternalError"), "error"),
+    ],
+)
+def test_r2_catalog_asset_head_distinguishes_absence_from_operational_errors(error, expected):
+    content = b"\x89PNG\r\n\x1a\nr2 head image"
+    digest = hashlib.sha256(content).hexdigest()
+    object_name = digest + ".png"
+    repo, _ = r2_repository(R2Client(head=[error]))
+
+    if expected is None:
+        assert repo.catalog_asset_matches(object_name, digest, len(content), "image/png") is None
+    else:
+        with pytest.raises(CatalogRepositoryError, match="storage"):
+            repo.catalog_asset_matches(object_name, digest, len(content), "image/png")
 
 
 def test_store_raw_reads_one_verified_descriptor_and_detects_identity_change(tmp_path, monkeypatch):

@@ -630,6 +630,59 @@ def test_catalog_sync_subprocess_uses_exact_command_timeout_and_safe_health(monk
     assert "stdout" not in payload and "stderr" not in payload
 
 
+def test_worker_health_reports_catalog_provider_readiness_without_secrets(monkeypatch):
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_STORAGE_PROVIDER", "r2", raising=False)
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_ACCOUNT_ID", "catalog-account", raising=False)
+    monkeypatch.setattr(
+        render_web_worker,
+        "CATALOG_ASSET_R2_ENDPOINT_URL",
+        "https://catalog-account.r2.cloudflarestorage.com",
+        raising=False,
+    )
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_ACCESS_KEY_ID", "catalog-access", raising=False)
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", "catalog-secret", raising=False)
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_BUCKET", "catalog-assets", raising=False)
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_REGION", "auto", raising=False)
+    monkeypatch.setattr(
+        render_web_worker,
+        "CATALOG_ASSET_PUBLIC_BASE_URL",
+        "https://assets.example.test",
+        raising=False,
+    )
+    render_web_worker._set_state(status="running", last_error=None)
+
+    payload = render_web_worker._health_payload()
+    serialized = json.dumps(payload)
+
+    assert payload["catalog_asset_storage_provider"] == "r2"
+    assert payload["catalog_asset_storage_configured"] is True
+    assert payload["catalog_asset_public_configured"] is True
+    assert payload["catalog_asset_ready"] is True
+    for sensitive in (
+        "catalog-account",
+        "catalog-access",
+        "catalog-secret",
+        "catalog-assets",
+        "r2.cloudflarestorage.com",
+    ):
+        assert sensitive not in serialized
+
+
+def test_worker_health_fails_closed_for_unknown_or_incomplete_catalog_provider(monkeypatch):
+    render_web_worker._set_state(status="running", last_error=None)
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_STORAGE_PROVIDER", "unknown", raising=False)
+    payload = render_web_worker._health_payload()
+    assert payload["catalog_asset_storage_provider"] == "invalid"
+    assert payload["catalog_asset_ready"] is False
+
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_STORAGE_PROVIDER", "r2", raising=False)
+    monkeypatch.setattr(render_web_worker, "CATALOG_ASSET_R2_ACCESS_KEY_ID", "", raising=False)
+    payload = render_web_worker._health_payload()
+    assert payload["catalog_asset_storage_provider"] == "r2"
+    assert payload["catalog_asset_storage_configured"] is False
+    assert payload["catalog_asset_ready"] is False
+
+
 @pytest.mark.parametrize(
     ("returncode", "expected_status"),
     [

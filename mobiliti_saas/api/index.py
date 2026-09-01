@@ -217,6 +217,24 @@ CATALOG_ENABLED_SUPPLIERS = _parse_enabled_catalog_suppliers(
     os.environ.get("CATALOG_ENABLED_SUPPLIERS", "")
 )
 CATALOG_ASSET_BUCKET = "catalog-assets"
+CATALOG_ASSET_STORAGE_PROVIDER = os.environ.get(
+    "CATALOG_ASSET_STORAGE_PROVIDER", "supabase"
+).strip().lower()
+CATALOG_ASSET_R2_ACCOUNT_ID = os.environ.get("CATALOG_ASSET_R2_ACCOUNT_ID", "").strip()
+CATALOG_ASSET_R2_ENDPOINT_URL = os.environ.get(
+    "CATALOG_ASSET_R2_ENDPOINT_URL", ""
+).strip().rstrip("/")
+CATALOG_ASSET_R2_ACCESS_KEY_ID = os.environ.get(
+    "CATALOG_ASSET_R2_ACCESS_KEY_ID", ""
+).strip()
+CATALOG_ASSET_R2_SECRET_ACCESS_KEY = os.environ.get(
+    "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", ""
+).strip()
+CATALOG_ASSET_R2_BUCKET = os.environ.get(
+    "CATALOG_ASSET_R2_BUCKET", CATALOG_ASSET_BUCKET
+).strip() or CATALOG_ASSET_BUCKET
+CATALOG_ASSET_R2_REGION = os.environ.get("CATALOG_ASSET_R2_REGION", "auto").strip() or "auto"
+CATALOG_ASSET_PUBLIC_BASE_URL = os.environ.get("CATALOG_ASSET_PUBLIC_BASE_URL", "").strip()
 CATALOG_ASSET_MAX_BYTES = 8 * 1024 * 1024
 CATALOG_ASSET_MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 CATALOG_ASSET_MAX_WIDTH = 8192
@@ -416,6 +434,7 @@ def _storage_key() -> str:
 
 
 _R2_CLIENT = None
+_CATALOG_ASSET_R2_CLIENT = None
 
 
 def _use_r2_storage() -> bool:
@@ -473,6 +492,171 @@ def _r2_client():
         config=Config(signature_version="s3v4"),
     )
     return _R2_CLIENT
+
+
+def _catalog_asset_https_origin(value: str, *, reject_r2_dev: bool = False) -> str:
+    try:
+        parsed = urlparse(str(value or ""))
+        port = parsed.port
+    except ValueError:
+        raise RuntimeError("Origen publico de catalogo invalido") from None
+    host = parsed.hostname or ""
+    if (
+        parsed.scheme != "https"
+        or not host
+        or host != host.lower()
+        or parsed.netloc != host
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or (reject_r2_dev and (host == "r2.dev" or host.endswith(".r2.dev")))
+    ):
+        raise RuntimeError("Origen publico de catalogo invalido")
+    return f"https://{host}"
+
+
+def _catalog_asset_provider_name() -> str:
+    if CATALOG_ASSET_STORAGE_PROVIDER not in {"supabase", "r2"}:
+        raise RuntimeError("Provider de storage de catalogo invalido")
+    return CATALOG_ASSET_STORAGE_PROVIDER
+
+
+def _catalog_asset_r2_configured() -> bool:
+    if _catalog_asset_provider_name() != "r2":
+        return False
+    try:
+        _catalog_asset_https_origin(CATALOG_ASSET_R2_ENDPOINT_URL)
+        _catalog_asset_https_origin(CATALOG_ASSET_PUBLIC_BASE_URL, reject_r2_dev=True)
+    except RuntimeError:
+        return False
+    return bool(
+        CATALOG_ASSET_R2_ACCOUNT_ID
+        and CATALOG_ASSET_R2_ACCESS_KEY_ID
+        and CATALOG_ASSET_R2_SECRET_ACCESS_KEY
+        and CATALOG_ASSET_R2_BUCKET == CATALOG_ASSET_BUCKET
+        and CATALOG_ASSET_R2_REGION
+    )
+
+
+def _catalog_asset_storage_configured() -> bool:
+    if DEV_MODE:
+        return True
+    provider = _catalog_asset_provider_name()
+    if provider == "r2":
+        return _catalog_asset_r2_configured()
+    return bool(SUPABASE_URL and SUPABASE_SERVICE_KEY)
+
+
+def _catalog_asset_public_origin() -> str:
+    provider = _catalog_asset_provider_name()
+    if provider == "r2":
+        return _catalog_asset_https_origin(
+            CATALOG_ASSET_PUBLIC_BASE_URL, reject_r2_dev=True
+        )
+    base_url = str(SUPABASE_URL or "").strip().rstrip("/")
+    if not base_url.startswith(("http://", "https://")):
+        raise RuntimeError("SUPABASE_URL requerida para asset de catalogo")
+    return base_url
+
+
+def _catalog_asset_public_configured() -> bool:
+    if DEV_MODE:
+        return True
+    try:
+        _catalog_asset_public_origin()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _catalog_asset_storage_fingerprint() -> tuple[str, str]:
+    if DEV_MODE:
+        return "dev", DEV_PUBLIC_BASE_URL.rstrip("/")
+    return _catalog_asset_provider_name(), _catalog_asset_public_origin()
+
+
+def _catalog_asset_r2_client():
+    global _CATALOG_ASSET_R2_CLIENT
+    if _CATALOG_ASSET_R2_CLIENT is not None:
+        return _CATALOG_ASSET_R2_CLIENT
+    if not _catalog_asset_r2_configured():
+        raise RuntimeError("Storage R2 de catalogo no configurado")
+    try:
+        import boto3
+        from botocore.config import Config
+    except ImportError as exc:
+        raise RuntimeError("Falta dependencia boto3 para catalogo R2") from exc
+    _CATALOG_ASSET_R2_CLIENT = boto3.client(
+        "s3",
+        endpoint_url=_catalog_asset_https_origin(CATALOG_ASSET_R2_ENDPOINT_URL),
+        aws_access_key_id=CATALOG_ASSET_R2_ACCESS_KEY_ID,
+        aws_secret_access_key=CATALOG_ASSET_R2_SECRET_ACCESS_KEY,
+        region_name=CATALOG_ASSET_R2_REGION,
+        config=Config(signature_version="s3v4"),
+    )
+    return _CATALOG_ASSET_R2_CLIENT
+
+
+def _catalog_asset_r2_error_details(error: Exception) -> tuple[int | None, str]:
+    response = getattr(error, "response", None)
+    if not isinstance(response, dict):
+        return None, ""
+    metadata = response.get("ResponseMetadata")
+    details = response.get("Error")
+    status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
+    code = details.get("Code") if isinstance(details, dict) else ""
+    return status, str(code or "")
+
+
+def _catalog_asset_r2_matches(
+    object_name: str, expected_sha256: str, expected_size: int, expected_mime: str
+) -> bool | None:
+    try:
+        info = _catalog_asset_r2_client().head_object(
+            Bucket=CATALOG_ASSET_R2_BUCKET,
+            Key=object_name,
+        )
+    except Exception as exc:
+        status, code = _catalog_asset_r2_error_details(exc)
+        if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
+            return None
+        raise RuntimeError("Error verificando asset R2 de catalogo") from exc
+    metadata = info.get("Metadata") if isinstance(info, dict) else None
+    return (
+        isinstance(info, dict)
+        and type(info.get("ContentLength")) is int
+        and info["ContentLength"] == expected_size
+        and info.get("ContentType") == expected_mime
+        and isinstance(metadata, dict)
+        and metadata.get("sha256") == expected_sha256
+    )
+
+
+def _catalog_asset_r2_put_if_absent(
+    object_name: str, content: bytes, content_type: str
+) -> None:
+    digest = object_name.split(".", 1)[0]
+    try:
+        _catalog_asset_r2_client().put_object(
+            Bucket=CATALOG_ASSET_R2_BUCKET,
+            Key=object_name,
+            Body=content,
+            IfNoneMatch="*",
+            ContentType=content_type,
+            CacheControl="public, max-age=31536000, immutable",
+            Metadata={"sha256": digest},
+        )
+    except Exception as exc:
+        status, code = _catalog_asset_r2_error_details(exc)
+        if status != 412 and code not in {"412", "PreconditionFailed"}:
+            raise RuntimeError("Error escribiendo asset R2 de catalogo") from exc
+        if _catalog_asset_r2_matches(
+            object_name, digest, len(content), content_type
+        ) is not True:
+            raise RuntimeError("Conflicto incompatible de asset de catalogo") from exc
 
 
 def _quote_object_content_type(path: str) -> str:
@@ -2818,9 +3002,9 @@ def _catalog_asset_public_url(object_name: str) -> str:
         raise ValueError("Nombre de asset invalido")
     if DEV_MODE:
         return f"{DEV_PUBLIC_BASE_URL}/dev/catalog-assets/{quote(clean_name, safe='')}"
-    base_url = str(SUPABASE_URL or "").strip().rstrip("/")
-    if not base_url.startswith(("http://", "https://")):
-        raise ValueError("SUPABASE_URL requerida para asset de catalogo")
+    base_url = _catalog_asset_public_origin()
+    if _catalog_asset_provider_name() == "r2":
+        return f"{base_url}/{quote(clean_name, safe='')}"
     return f"{base_url}/storage/v1/object/public/{CATALOG_ASSET_BUCKET}/{quote(clean_name, safe='')}"
 
 
@@ -3056,8 +3240,13 @@ def _load_supplier_catalog_cached(supplier: str) -> dict:
     version_id = db_get_published_catalog_version_id(supplier)
     if not version_id:
         raise RuntimeError("Catalogo publicado no disponible")
+    storage_fingerprint = _catalog_asset_storage_fingerprint()
     cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
-    if cached and cached.get("published_version_id") == version_id:
+    if (
+        cached
+        and cached.get("published_version_id") == version_id
+        and cached.get("storage_fingerprint") == storage_fingerprint
+    ):
         return cached["catalog"]
     snapshot = db_get_published_catalog_snapshot(supplier, version_id)
     payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
@@ -3071,6 +3260,7 @@ def _load_supplier_catalog_cached(supplier: str) -> dict:
         raise RuntimeError("Catalogo publicado invalido") from exc
     _SUPPLIER_CATALOG_CACHE[supplier] = {
         "published_version_id": version_id,
+        "storage_fingerprint": storage_fingerprint,
         "catalog": catalog,
     }
     return catalog
@@ -3588,10 +3778,11 @@ def _catalog_image_metadata(image_kind: str, image_label: str, image_references:
 
 def _register_catalog_asset(object_name: str, byte_size: int, mime_type: str) -> None:
     """Registra un objeto de catálogo ya confirmado por el adaptador de storage."""
-    payload = {"p_object_name": object_name, "p_storage_provider": "supabase", "p_physical_bucket": CATALOG_ASSET_BUCKET, "p_byte_size": byte_size, "p_mime_type": mime_type}
     if DEV_MODE: return
+    provider = _catalog_asset_provider_name()
+    payload = {"p_object_name": object_name, "p_storage_provider": provider, "p_physical_bucket": CATALOG_ASSET_BUCKET, "p_byte_size": byte_size, "p_mime_type": mime_type}
     if _use_postgres():
-        row = _pg_write("SELECT saas_register_catalog_asset(%s, %s, %s, %s, %s) AS value", (object_name, "supabase", CATALOG_ASSET_BUCKET, byte_size, mime_type))
+        row = _pg_write("SELECT saas_register_catalog_asset(%s, %s, %s, %s, %s) AS value", (object_name, provider, CATALOG_ASSET_BUCKET, byte_size, mime_type))
         value = row.get("value") if isinstance(row, dict) else None
     else: value = _supabase_req("POST", "/rpc/saas_register_catalog_asset", json_data=payload)
     if isinstance(value, list) and len(value) == 1: value = value[0]
@@ -3615,6 +3806,12 @@ def _upload_catalog_asset(object_name: str, content: bytes, content_type: str) -
             if destination.read_bytes() != content:
                 raise RuntimeError("Colision de asset de catalogo")
         else: destination.write_bytes(content)
+        _register_catalog_asset(object_name, len(content), content_type)
+        return
+    if _catalog_asset_provider_name() == "r2":
+        if not _catalog_asset_r2_configured():
+            raise RuntimeError("Storage R2 de catalogo no configurado")
+        _catalog_asset_r2_put_if_absent(object_name, content, content_type)
         _register_catalog_asset(object_name, len(content), content_type)
         return
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
@@ -5646,11 +5843,23 @@ def root():
 
 @app.get("/health")
 def health():
+    try:
+        catalog_provider = _catalog_asset_provider_name()
+        catalog_storage_configured = _catalog_asset_storage_configured()
+        catalog_public_configured = _catalog_asset_public_configured()
+    except RuntimeError:
+        catalog_provider = "invalid"
+        catalog_storage_configured = False
+        catalog_public_configured = False
     return {
         "status": "ok",
         "db_backend": "postgres" if _use_postgres() else "supabase_rest",
         "storage_provider": "r2" if _use_r2_storage() else "supabase",
         "storage_configured": _storage_configured(),
+        "catalog_asset_storage_provider": catalog_provider,
+        "catalog_asset_storage_configured": catalog_storage_configured,
+        "catalog_asset_public_configured": catalog_public_configured,
+        "catalog_asset_ready": catalog_storage_configured and catalog_public_configured,
     }
 
 

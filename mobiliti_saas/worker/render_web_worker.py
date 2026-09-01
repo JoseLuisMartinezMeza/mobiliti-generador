@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import quote_worker
 
@@ -21,6 +22,20 @@ JOB_TIMEOUT_SECONDS = int(os.environ.get("WORKER_JOB_TIMEOUT_SECONDS", "0") or "
 CATALOG_SYNC_ENABLED = os.environ.get("CATALOG_SYNC_ENABLED", "").strip().lower() in {
     "1", "true", "yes",
 }
+CATALOG_ASSET_STORAGE_PROVIDER = os.environ.get(
+    "CATALOG_ASSET_STORAGE_PROVIDER", "supabase"
+).strip().lower()
+CATALOG_ASSET_R2_ACCOUNT_ID = os.environ.get("CATALOG_ASSET_R2_ACCOUNT_ID", "").strip()
+CATALOG_ASSET_R2_ENDPOINT_URL = os.environ.get("CATALOG_ASSET_R2_ENDPOINT_URL", "").strip()
+CATALOG_ASSET_R2_ACCESS_KEY_ID = os.environ.get("CATALOG_ASSET_R2_ACCESS_KEY_ID", "").strip()
+CATALOG_ASSET_R2_SECRET_ACCESS_KEY = os.environ.get(
+    "CATALOG_ASSET_R2_SECRET_ACCESS_KEY", ""
+).strip()
+CATALOG_ASSET_R2_BUCKET = os.environ.get(
+    "CATALOG_ASSET_R2_BUCKET", "catalog-assets"
+).strip()
+CATALOG_ASSET_R2_REGION = os.environ.get("CATALOG_ASSET_R2_REGION", "auto").strip()
+CATALOG_ASSET_PUBLIC_BASE_URL = os.environ.get("CATALOG_ASSET_PUBLIC_BASE_URL", "").strip()
 CATALOG_SYNC_LEASE_SECONDS = 45 * 60
 CATALOG_EXIT_WORKED = 0
 CATALOG_EXIT_FAILED = 1
@@ -65,6 +80,57 @@ state = {
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _catalog_https_origin_configured(value, *, reject_r2_dev=False):
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    host = parsed.hostname or ""
+    return bool(
+        parsed.scheme == "https"
+        and host
+        and host == host.lower()
+        and parsed.netloc == host
+        and port is None
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.path in {"", "/"}
+        and not (
+            reject_r2_dev and (host == "r2.dev" or host.endswith(".r2.dev"))
+        )
+    )
+
+
+def _catalog_asset_health():
+    provider = CATALOG_ASSET_STORAGE_PROVIDER
+    if provider not in {"supabase", "r2"}:
+        return "invalid", False, False
+    if provider == "supabase":
+        configured = bool(
+            os.environ.get("SUPABASE_URL", "").strip()
+            and os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+        )
+        public = _catalog_https_origin_configured(
+            os.environ.get("SUPABASE_URL", "").strip()
+        )
+        return provider, configured, public
+    configured = bool(
+        CATALOG_ASSET_R2_ACCOUNT_ID
+        and _catalog_https_origin_configured(CATALOG_ASSET_R2_ENDPOINT_URL)
+        and CATALOG_ASSET_R2_ACCESS_KEY_ID
+        and CATALOG_ASSET_R2_SECRET_ACCESS_KEY
+        and CATALOG_ASSET_R2_BUCKET == "catalog-assets"
+        and CATALOG_ASSET_R2_REGION
+    )
+    public = _catalog_https_origin_configured(
+        CATALOG_ASSET_PUBLIC_BASE_URL, reject_r2_dev=True
+    )
+    return provider, configured, public
 
 
 def _set_state(**updates):
@@ -268,6 +334,7 @@ def _health_payload():
         rate_status = "failed"
     if last_error not in {None, "catalog_sync_failed", "worker_cycle_failed"}:
         last_error = "worker_cycle_failed"
+    catalog_provider, catalog_configured, catalog_public = _catalog_asset_health()
     return {
         "ok": status in {"running", "degraded"} and last_error != "worker_cycle_failed",
         "status": status,
@@ -279,6 +346,10 @@ def _health_payload():
         "last_catalog_sync_status": catalog_status,
         "last_rate_sync_at": current.get("last_rate_sync_at"),
         "last_rate_sync_status": rate_status,
+        "catalog_asset_storage_provider": catalog_provider,
+        "catalog_asset_storage_configured": catalog_configured,
+        "catalog_asset_public_configured": catalog_public,
+        "catalog_asset_ready": catalog_configured and catalog_public,
     }
 
 

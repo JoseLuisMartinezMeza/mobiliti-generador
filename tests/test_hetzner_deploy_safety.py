@@ -60,6 +60,7 @@ class _Directory:
 def _active_catalog_env():
     return {
         "CATALOG_SYNC_ENABLED": "true",
+        "SUPABASE_URL": "https://abcdefghijklmnopqrst.supabase.co",
         "SUPABASE_SERVICE_KEY": "test-service-key",
         "CATALOG_ENABLED_SUPPLIERS": "sunon",
         "MS_GRAPH_TENANT_ID": "tenant-id",
@@ -70,6 +71,19 @@ def _active_catalog_env():
         "SHAREPOINT_SITE_PATH": "/sites/catalogs",
         "SHAREPOINT_DRIVE_NAME": "Documents",
         "SHAREPOINT_CATALOG_ROOT": "suppliers",
+    }
+
+
+def _active_catalog_r2_env():
+    return _active_catalog_env() | {
+        "CATALOG_ASSET_STORAGE_PROVIDER": "r2",
+        "CATALOG_ASSET_R2_ACCOUNT_ID": "catalog-account",
+        "CATALOG_ASSET_R2_ENDPOINT_URL": "https://catalog-account.r2.cloudflarestorage.com",
+        "CATALOG_ASSET_R2_ACCESS_KEY_ID": "catalog-access",
+        "CATALOG_ASSET_R2_SECRET_ACCESS_KEY": "catalog-secret",
+        "CATALOG_ASSET_R2_BUCKET": "catalog-assets",
+        "CATALOG_ASSET_R2_REGION": "auto",
+        "CATALOG_ASSET_PUBLIC_BASE_URL": "https://assets.example.test",
     }
 
 
@@ -133,7 +147,25 @@ def test_worker_example_disables_catalog_sync_and_uses_container_certificate_pat
     assert "MS_GRAPH_CERT_PATH=/run/secrets/mobiliti-graph/client-cert.pem" in example
     assert "SUPABASE_SERVICE_KEY=" in example
     assert "CATALOG_ASSET_PUBLIC_BASE_URL=" in example
+    assert "CATALOG_ASSET_STORAGE_PROVIDER=supabase" in example
+    assert "CATALOG_ASSET_R2_BUCKET=catalog-assets" in example
     assert "CATALOG_SYNC_ENABLED=false" in example
+
+
+def test_catalog_r2_credentials_are_server_only_and_separate_from_quote_storage():
+    server = (ROOT / "mobiliti_saas" / ".env.example").read_text(encoding="utf-8")
+    web = (ROOT / "mobiliti_saas" / "web" / ".env.example").read_text(encoding="utf-8")
+    worker = (ROOT / "deploy" / "hetzner" / "worker.env.example").read_text(encoding="utf-8")
+
+    for contents in (server, worker):
+        assert "CATALOG_ASSET_R2_ACCESS_KEY_ID=" in contents
+        assert "CATALOG_ASSET_R2_SECRET_ACCESS_KEY=" in contents
+        assert "CATALOG_ASSET_R2_BUCKET=catalog-assets" in contents
+        assert "R2_BUCKET=quote-files" in contents
+    assert "CATALOG_ASSET_STORAGE_PROVIDER=" in web
+    assert "CATALOG_ASSET_PUBLIC_BASE_URL=" in web
+    assert "CATALOG_ASSET_R2_ACCESS_KEY_ID" not in web
+    assert "CATALOG_ASSET_R2_SECRET_ACCESS_KEY" not in web
 
 
 def test_catalog_sync_preflight_allows_disabled_sync_without_graph_credentials():
@@ -154,6 +186,7 @@ def test_catalog_sync_preflight_rejects_unknown_enabled_value(invalid):
 @pytest.mark.parametrize(
     "missing",
     (
+        "SUPABASE_URL",
         "SUPABASE_SERVICE_KEY",
         "CATALOG_ENABLED_SUPPLIERS",
         "MS_GRAPH_TENANT_ID",
@@ -233,6 +266,77 @@ def test_catalog_sync_preflight_accepts_valid_sunon_configuration():
     preflight.validate_catalog_sync(
         _active_catalog_env(), host_directory=_Directory(), certificate=_Certificate()
     )
+
+
+def test_catalog_sync_preflight_accepts_complete_catalog_r2_configuration():
+    preflight = _preflight_module()
+
+    preflight.validate_catalog_sync(
+        _active_catalog_r2_env(), host_directory=_Directory(), certificate=_Certificate()
+    )
+
+
+@pytest.mark.parametrize(
+    "missing",
+    (
+        "CATALOG_ASSET_R2_ACCOUNT_ID",
+        "CATALOG_ASSET_R2_ENDPOINT_URL",
+        "CATALOG_ASSET_R2_ACCESS_KEY_ID",
+        "CATALOG_ASSET_R2_SECRET_ACCESS_KEY",
+        "CATALOG_ASSET_R2_BUCKET",
+        "CATALOG_ASSET_R2_REGION",
+        "CATALOG_ASSET_PUBLIC_BASE_URL",
+    ),
+)
+def test_catalog_sync_preflight_rejects_incomplete_catalog_r2_configuration(missing):
+    preflight = _preflight_module()
+    values = _active_catalog_r2_env()
+    values[missing] = ""
+
+    with pytest.raises(preflight.PreflightError, match=missing):
+        preflight.validate_catalog_sync(
+            values, host_directory=_Directory(), certificate=_Certificate()
+        )
+
+
+@pytest.mark.parametrize(
+    "provider,public_base",
+    (
+        ("unknown", "https://assets.example.test"),
+        ("r2", "https://assets.example.test/path"),
+        ("r2", "https://catalog.r2.dev"),
+    ),
+)
+def test_catalog_sync_preflight_rejects_unknown_provider_or_invalid_public_base(
+    provider, public_base
+):
+    preflight = _preflight_module()
+    values = _active_catalog_r2_env() | {
+        "CATALOG_ASSET_STORAGE_PROVIDER": provider,
+        "CATALOG_ASSET_PUBLIC_BASE_URL": public_base,
+    }
+
+    with pytest.raises(preflight.PreflightError, match="CATALOG_ASSET"):
+        preflight.validate_catalog_sync(
+            values, host_directory=_Directory(), certificate=_Certificate()
+        )
+
+
+def test_provision_passes_catalog_r2_settings_without_quote_fallback():
+    provision = (ROOT / "deploy" / "hetzner" / "provision.ps1").read_text(encoding="utf-8")
+
+    for name in (
+        "CatalogAssetStorageProvider",
+        "CatalogAssetR2AccountId",
+        "CatalogAssetR2EndpointUrl",
+        "CatalogAssetR2AccessKeyId",
+        "CatalogAssetR2SecretAccessKey",
+        "CatalogAssetPublicBaseUrl",
+    ):
+        assert f"${name}" in provision
+    assert "CATALOG_ASSET_R2_BUCKET=catalog-assets" in provision
+    assert "CATALOG_ASSET_R2_ACCESS_KEY_ID=$CatalogAssetR2AccessKeyId" in provision
+    assert "CATALOG_ASSET_R2_SECRET_ACCESS_KEY=$CatalogAssetR2SecretAccessKey" in provision
 
 
 @pytest.mark.parametrize(

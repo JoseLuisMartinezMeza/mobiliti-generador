@@ -1562,7 +1562,7 @@ def test_supplier_images_only_allow_configured_public_asset_hosts(monkeypatch):
     assert catalog_cart._allowed_image_hosts("supplier_cart") == frozenset()
 
     monkeypatch.setenv("SUPABASE_URL", "https://project-ref.supabase.co")
-    monkeypatch.setenv("CATALOG_ASSET_PUBLIC_BASE_URL", "https://catalog-assets.example.test/public")
+    monkeypatch.setenv("CATALOG_ASSET_PUBLIC_BASE_URL", "https://catalog-assets.example.test")
     assert catalog_cart._allowed_image_hosts("supplier_cart") == frozenset(
         {"project-ref.supabase.co", "catalog-assets.example.test"}
     )
@@ -1572,6 +1572,37 @@ def test_supplier_images_only_allow_configured_public_asset_hosts(monkeypatch):
 def test_supplier_image_allowlist_ignores_insecure_or_credentialed_bases(monkeypatch):
     monkeypatch.setenv("SUPABASE_URL", "https://project-ref.supabase.co:8443")
     monkeypatch.setenv("CATALOG_ASSET_PUBLIC_BASE_URL", "https://user:pass@assets.example.test")
+    assert catalog_cart._allowed_image_hosts("supplier_cart") == frozenset()
+
+
+def test_supplier_image_allowlist_accepts_only_content_addressed_catalog_asset_paths(monkeypatch):
+    digest = "a" * 64
+    monkeypatch.setenv("SUPABASE_URL", "https://project-ref.supabase.co")
+    monkeypatch.setenv("CATALOG_ASSET_PUBLIC_BASE_URL", "https://assets.example.test")
+    monkeypatch.setattr(catalog_cart, "_resolve_public_host", lambda host: None)
+    allowed = catalog_cart._allowed_image_hosts("supplier_cart")
+
+    for valid in (
+        f"https://project-ref.supabase.co/storage/v1/object/public/catalog-assets/{digest}.png",
+        f"https://assets.example.test/{digest}.png",
+    ):
+        catalog_cart._validate_catalog_image_url(valid, "supplier_cart", allowed)
+
+    for invalid in (
+        f"https://project-ref.supabase.co/storage/v1/object/public/quote-files/{digest}.png",
+        f"https://project-ref.supabase.co/storage/v1/object/public/catalog-assets/{digest}.png?raw=1",
+        f"https://assets.example.test/catalog-assets/{digest}.png",
+        f"https://assets.example.test/{digest}.png#fragment",
+        "https://assets.example.test/not-content-addressed.png",
+    ):
+        with pytest.raises(ValueError, match="imagen"):
+            catalog_cart._validate_catalog_image_url(invalid, "supplier_cart", allowed)
+
+
+def test_supplier_image_allowlist_rejects_r2_dev_public_base(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.setenv("CATALOG_ASSET_PUBLIC_BASE_URL", "https://catalog-account.r2.dev")
+
     assert catalog_cart._allowed_image_hosts("supplier_cart") == frozenset()
 
 
