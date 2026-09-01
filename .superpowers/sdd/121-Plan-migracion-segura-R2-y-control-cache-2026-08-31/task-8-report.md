@@ -9,6 +9,8 @@ Commits locales:
 - `ab59f75` — rollback seguro del registro y cutover fijado.
 - `64b1898` — runner A → Gate 7A/Gate 6 → B y documentación operativa.
 - `85fc3b5` — contratos de búsqueda y aceptación alineados con v17.
+- `88a0ece` — reporte y ledger del cierre transversal.
+- `96641ac` — clasificación fail-closed del SQL sensible por contenido.
 
 Estado operativo: **Gate 8 live no ejecutado**. No hubo deploy, push, DDL,
 lectura/escritura live, cambio de secretos, mutación Cloudflare, borrado ni
@@ -57,6 +59,22 @@ los contratos textuales y la paridad real A/bootstrap y B/bootstrap pasaron.
 - B requiere `--confirm-cutover-batch` con el UUID exacto;
 - A+B se rechazan en una misma invocación;
 - dry-run sigue siendo el default, no abre DB y no imprime DATABASE_URL.
+
+El review independiente posterior a `88a0ece` detectó que esas barreras todavía
+dependían de `Path.resolve()`: una copia o hardlink podía cambiar de nombre y
+evadirlas. `96641ac` añade clasificación por contenido además de conservar la
+identidad de rutas conocidas. El helper puro normaliza BOM, mayúsculas y
+whitespace, reconoce sentinelas estructurales de bootstrap/A/B y separa una B
+con pins alterados como `cutover_unpinned`. Los roles se unen por documento y
+por toda la selección, de modo que A+B también se rechaza dentro de un único
+archivo o repartida entre varios. SQL arbitrario que no coincide con esos
+contratos continúa permitido.
+
+Los documentos se leen una sola vez antes de cualquier conexión; el mismo texto
+validado es el que se resume y, sólo con `--apply`, se ejecutaría. Una copia de
+bootstrap mediante `--file` exige usar el modo explícito canónico, una copia de
+B exige el UUID certificado exacto y una B estructural con batch/digests
+alterados falla cerrada. No se imprime el SQL ni DATABASE_URL.
 
 `CLOUD_DEPLOY.md` y `supabase_setup/README.md` distinguen base nueva de proyecto
 existente y documentan A → Gate 7A → Task 6 execute/certify Gate 6 → B. El
@@ -114,6 +132,19 @@ Sólo se actualizaron expectations. No se cambió engine ni template.
 - Acceptance vigente quedó sin fallos en la regresión completa.
 - `py_compile` de todos los Python modificados: exit 0.
 - SQL parity, SECURITY DEFINER/search_path/RLS/grants y diff-check scoped: exit 0.
+
+### Follow-up del review independiente (`88a0ece`)
+
+- RED runner por copias/combinación: **3 failed, 9 passed**; bootstrap copiado,
+  B copiada sin confirmación y A+B en un solo archivo eran aceptados.
+- GREEN inicial del cierre por contenido: **12 passed**.
+- RED adicional de fail-closed: **1 failed, 12 passed** al alterar el UUID en
+  una B renombrada.
+- GREEN final runner + migraciones relacionadas: **130 passed, 3 skipped** en
+  5.42 s. Los skips son los harness PostgreSQL/Docker opt-in.
+- `py_compile` de runner y tests modificados: exit 0; diff-check scoped: exit 0.
+- El harness PostgreSQL opt-in ahora incluye también Supabase → R2 preservando
+  la fila Supabase y rechazos de MIME/bucket; no se abrió una DB en este host.
 
 ## Regresión completa y deuda residual
 
