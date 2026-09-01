@@ -144,6 +144,26 @@ def test_catalog_asset_cutover_manifest_is_private_and_independently_verified():
     assert "public.saas_catalog_asset_cutover_entries" in cutover
 
 
+def test_catalog_asset_security_definers_qualify_registry_and_clone_relations():
+    names = (
+        "saas_register_catalog_asset",
+        "saas_start_catalog_asset_cutover_batch",
+        "saas_add_catalog_asset_cutover_entry",
+        "saas_finalize_catalog_asset_cutover_batch",
+        "saas_clone_catalog_candidate_with_asset",
+        "saas_clone_catalog_candidate_with_image_metadata",
+    )
+    for document in (ASSET_REGISTRY_MIGRATION.read_text("utf-8"), ASSET_REGISTRY_CUTOVER.read_text("utf-8"), BOOTSTRAP.read_text("utf-8")):
+        for name in names:
+            if f"CREATE OR REPLACE FUNCTION {name}" not in document:
+                continue
+            function = _function_sql(document, name)
+            assert "SECURITY DEFINER" in function and "SET search_path = public, pg_temp" in function
+            assert "FROM saas_" not in function
+            assert "INTO saas_" not in function
+            assert "UPDATE saas_" not in function
+
+
 def test_jome_lauco_migration_replaces_both_reservation_rpcs_safely():
     migration = JOME_LAUCO_MIGRATION.read_text(encoding="utf-8")
     bootstrap = BOOTSTRAP.read_text(encoding="utf-8")

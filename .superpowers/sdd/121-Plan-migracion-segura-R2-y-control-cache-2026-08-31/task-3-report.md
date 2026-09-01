@@ -29,6 +29,7 @@ Estado: implementación local lista para revisión. No se ejecutó SQL live, no 
 - Se añadieron entries privadas por batch, RPCs de inicio/carga/finalización y `ON CONFLICT DO NOTHING` para el registro concurrente.
 - RED/GREEN estructural: `python -m pytest tests/test_catalog_migrations.py -q -k "asset_registry or asset_cutover or cutover_manifest"` → 3 passed.
 - Se añadió una prueba PostgreSQL opt-in de ACL/RLS; quedó skipped porque no había contenedor local certificado. La cobertura funcional de concurrencia y clones R2 sigue pendiente, por lo que esta corrección no declara el gate productivo satisfecho.
+- Commit `ff94cdb` añadió el harness ACL opt-in. Commit final posterior califica de forma estática las relaciones de registry/clones bajo `SECURITY DEFINER`; su integración local permanece skipped sin un DSN/contenedor certificado.
 
 - Gate 3 productivo no está cumplido: el backfill/manifiesto de los 2,214 assets y la ejecución live de los RPCs de clone quedan explícitamente para Tasks 6/8.
 - Los productores actuales usan Supabase Storage y registran `storage_provider='supabase'`; el cutover de clones exige assets `r2` verificados. La migración B no puede aplicarse hasta que Task 6 haya cargado y certificado el batch R2.
