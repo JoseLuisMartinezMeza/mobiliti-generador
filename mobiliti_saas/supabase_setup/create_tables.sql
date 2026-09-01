@@ -855,7 +855,7 @@ AS $$
 DECLARE
     v_run saas_catalog_sync_runs%ROWTYPE;
     v_source saas_catalog_sources%ROWTYPE;
-    v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
+    v_candidate saas_catalog_snapshot_versions%ROWTYPE;
     v_candidate_id UUID := gen_random_uuid();
     v_canonical_hash TEXT;
     v_canonical_generated_at TEXT;
@@ -1113,7 +1113,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-    v_candidate public.saas_catalog_snapshot_versions%ROWTYPE;
+    v_candidate saas_catalog_snapshot_versions%ROWTYPE;
     v_base saas_catalog_snapshot_versions%ROWTYPE;
     v_source saas_catalog_sources%ROWTYPE;
     v_candidate_count INTEGER;
