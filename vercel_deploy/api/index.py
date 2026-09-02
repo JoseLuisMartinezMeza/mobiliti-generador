@@ -2268,9 +2268,13 @@ def db_get_catalog_source(supplier: str) -> dict | None:
 def db_get_published_catalog_version_id(supplier: str) -> str | None:
     supplier = _catalog_supplier(supplier)
     if DEV_MODE:
+        source = db_get_catalog_source(supplier)
+        version_id = str(source.get("published_version_id") or "").strip() if isinstance(source, dict) else ""
+        if not version_id:
+            return None
         snapshot = _dev_load().setdefault("catalog_published_snapshots", {}).get(supplier)
-        version_id = snapshot.get("id") if isinstance(snapshot, dict) else None
-        return str(version_id).strip() or None
+        snapshot_id = str(snapshot.get("id") or "").strip() if isinstance(snapshot, dict) else ""
+        return version_id if snapshot_id == version_id else None
     _require_catalog_service_backend()
     if _use_postgres():
         row = _pg_one(

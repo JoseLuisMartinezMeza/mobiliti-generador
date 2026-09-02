@@ -335,3 +335,36 @@ def test_flag_off_does_not_return_resident_catalog_after_source_is_unpublished(m
     with pytest.raises(RuntimeError, match="publicado no disponible"):
         api._load_supplier_catalog_cached("alma")
     assert payload_reads == ["version-1"]
+
+
+def test_dev_published_version_requires_enabled_source_and_matching_snapshot_pointer(monkeypatch):
+    store = {
+        "catalog_sources": [{"supplier": "alma", "enabled": True, "published_version_id": "snapshot-1"}],
+        "catalog_published_snapshots": {"alma": {"id": "snapshot-1", "supplier": "alma"}},
+    }
+    monkeypatch.setattr(api, "DEV_MODE", True)
+    monkeypatch.setattr(api, "_dev_load", lambda: store)
+
+    assert api.db_get_published_catalog_version_id("alma") == "snapshot-1"
+    store["catalog_published_snapshots"]["alma"]["id"] = "snapshot-other"
+    assert api.db_get_published_catalog_version_id("alma") is None
+    store["catalog_published_snapshots"]["alma"]["id"] = "snapshot-1"
+    store["catalog_sources"][0]["enabled"] = False
+    assert api.db_get_published_catalog_version_id("alma") is None
+
+
+def test_dev_disabled_source_does_not_return_resident_catalog(monkeypatch):
+    store = {
+        "catalog_sources": [{"supplier": "alma", "enabled": False, "published_version_id": "snapshot-1"}],
+        "catalog_published_snapshots": {"alma": {"id": "snapshot-1", "supplier": "alma"}},
+    }
+    monkeypatch.setattr(api, "DEV_MODE", True)
+    monkeypatch.setattr(api, "CATALOG_SNAPSHOT_CACHE_ENABLED", False)
+    monkeypatch.setattr(api, "_dev_load", lambda: store)
+    monkeypatch.setattr(api, "_catalog_asset_storage_fingerprint", lambda: ("supabase", ""))
+    monkeypatch.setattr(api, "_SUPPLIER_CATALOG_CACHE", {
+        "alma": {"revision": "snapshot-1", "storage_fingerprint": ("supabase", ""), "catalog": {"stale": True}}
+    })
+
+    with pytest.raises(RuntimeError, match="publicado no disponible"):
+        api._load_supplier_catalog_cached("alma")

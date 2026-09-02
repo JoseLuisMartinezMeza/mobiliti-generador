@@ -39,3 +39,9 @@ Estado: DONE.
 - RED: `python -B -m pytest -p no:cacheprovider tests/test_api_snapshot_egress.py -q` → 2 fallos esperados: misma revisión descargaba dos veces, tanto con flag false como con R2 inválido.
 - GREEN: suite de caché/API → `29 passed in 1.40s`; regresión segura de cinco flujos API → `5 passed in 2.21s`, sin borrados bloqueados ni reciclados.
 - Se cubren revisión igual, R2 no configurado, cambio de versión, cambio de fingerprint y despublicación con catálogo residente. SHA API final: `3A1849B5CD3D7B5C6AC0C13AA37EEB633D02DFE84C40C0E76003751C782C319D`.
+
+## Revisión ronda 3 — helper DEV
+
+- `db_get_published_catalog_version_id` en DEV ahora obtiene la fuente con `db_get_catalog_source`, exige un `published_version_id` y sólo lo devuelve si coincide con el id del snapshot local. Así una fuente deshabilitada o un puntero inconsistente no puede autorizar un catálogo residente.
+- RED: `python -B -m pytest -p no:cacheprovider tests/test_api_snapshot_egress.py -q` → 2 fallos esperados: pointer local divergente y fuente DEV deshabilitada con cache residente.
+- GREEN: suite de caché/API → `31 passed in 1.08s`; regresión segura de cinco flujos API → `5 passed in 1.65s`, sin borrados bloqueados ni reciclados. SHA API final: `45178D74772B06F65924AD626E9E9AE7CC9AA91B113B5925329F92A2D911BE8F`.
