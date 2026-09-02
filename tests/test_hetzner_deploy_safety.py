@@ -173,6 +173,22 @@ def test_hetzner_bootstrap_installs_a_self_refreshing_deploy_wrapper():
     assert 'exec bash "${APP_DIR}/deploy/hetzner/deploy.sh"' not in wrapper
 
 
+def test_hetzner_bootstrap_fetches_the_target_after_existing_or_fresh_checkout():
+    bootstrap = (ROOT / "deploy" / "hetzner" / "bootstrap.sh").read_text(
+        encoding="utf-8"
+    )
+    checkout = bootstrap.index('if [[ ! -d "${APP_DIR}/.git" ]]')
+    checkout_end = bootstrap.index("\nfi\n", checkout)
+    fetch_line = 'git -C "${APP_DIR}" fetch origin "${GIT_REF}"'
+    fetch = bootstrap.index(fetch_line)
+    wrapper_show = bootstrap.index(
+        "FETCH_HEAD:deploy/hetzner/mobiliti-worker-deploy.sh"
+    )
+
+    assert bootstrap.count(fetch_line) == 1
+    assert checkout_end < fetch < wrapper_show
+
+
 def test_self_refreshing_deploy_wrapper_honors_runtime_ref_and_arguments(tmp_path):
     git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
     bash = str(git_bash) if git_bash.is_file() else shutil.which("bash")
