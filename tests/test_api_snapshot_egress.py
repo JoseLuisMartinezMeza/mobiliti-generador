@@ -257,3 +257,81 @@ def test_legacy_catalog_does_not_serve_resident_ttl_copy_when_metadata_is_absent
 
     with pytest.raises(RuntimeError, match="Catalogo.*no disponible"):
         getattr(api, loader_name)()
+
+
+@pytest.mark.parametrize("private_flag", [False, True])
+def test_flag_off_reuses_resident_catalog_without_second_payload_download(monkeypatch, private_flag):
+    if private_flag:
+        monkeypatch.setattr(api, "CATALOG_SNAPSHOT_CACHE_ENABLED", True)
+        monkeypatch.setattr(api, "SUPABASE_URL", "https://example.supabase.co")
+        monkeypatch.setattr(api, "R2_BUCKET", "private-quote-files")
+        monkeypatch.setattr(api, "_r2_configured", lambda: False)
+    else:
+        monkeypatch.setattr(api, "CATALOG_SNAPSHOT_CACHE_ENABLED", False)
+    monkeypatch.setattr(api, "_SUPPLIER_CATALOG_CACHE", {})
+    versions = iter(["version-1", "version-1"])
+    payload_reads = []
+    payload = {"supplier": "alma", "source_hash": "a" * 64, "items": []}
+
+    monkeypatch.setattr(api, "db_get_published_catalog_version_id", lambda supplier: next(versions))
+    monkeypatch.setattr(api, "db_get_published_catalog_snapshot", lambda supplier, version: payload_reads.append(version) or {"id": version, "payload": payload})
+    monkeypatch.setattr(api, "_catalog_asset_storage_fingerprint", lambda: ("supabase", ""))
+    monkeypatch.setattr(api, "_hydrate_catalog_asset_urls", lambda value: value)
+    monkeypatch.setattr(api, "load_supplier_catalog_data", lambda value, expected_supplier: value)
+
+    assert api._load_supplier_catalog_cached("alma") == payload
+    assert api._load_supplier_catalog_cached("alma") == payload
+    assert payload_reads == ["version-1"]
+
+
+@pytest.mark.parametrize(
+    ("versions", "fingerprints"),
+    [
+        (("version-1", "version-2"), (("supabase", ""), ("supabase", ""))),
+        (("version-1", "version-1"), (("supabase", "one"), ("supabase", "two"))),
+    ],
+)
+def test_flag_off_reloads_payload_when_version_or_storage_fingerprint_changes(
+    monkeypatch, versions, fingerprints
+):
+    monkeypatch.setattr(api, "CATALOG_SNAPSHOT_CACHE_ENABLED", False)
+    monkeypatch.setattr(api, "_SUPPLIER_CATALOG_CACHE", {})
+    version_values = iter(versions)
+    fingerprint_values = iter(fingerprints)
+    payload_reads = []
+
+    monkeypatch.setattr(api, "db_get_published_catalog_version_id", lambda supplier: next(version_values))
+    monkeypatch.setattr(
+        api, "db_get_published_catalog_snapshot",
+        lambda supplier, version: payload_reads.append(version) or {
+            "id": version,
+            "payload": {"supplier": "alma", "source_hash": version, "items": []},
+        },
+    )
+    monkeypatch.setattr(api, "_catalog_asset_storage_fingerprint", lambda: next(fingerprint_values))
+    monkeypatch.setattr(api, "_hydrate_catalog_asset_urls", lambda value: value)
+    monkeypatch.setattr(api, "load_supplier_catalog_data", lambda value, expected_supplier: value)
+
+    api._load_supplier_catalog_cached("alma")
+    api._load_supplier_catalog_cached("alma")
+
+    assert payload_reads == list(versions)
+
+
+def test_flag_off_does_not_return_resident_catalog_after_source_is_unpublished(monkeypatch):
+    monkeypatch.setattr(api, "CATALOG_SNAPSHOT_CACHE_ENABLED", False)
+    monkeypatch.setattr(api, "_SUPPLIER_CATALOG_CACHE", {})
+    versions = iter(["version-1", None])
+    payload_reads = []
+    payload = {"supplier": "alma", "source_hash": "a" * 64, "items": []}
+
+    monkeypatch.setattr(api, "db_get_published_catalog_version_id", lambda supplier: next(versions))
+    monkeypatch.setattr(api, "db_get_published_catalog_snapshot", lambda supplier, version: payload_reads.append(version) or {"id": version, "payload": payload})
+    monkeypatch.setattr(api, "_catalog_asset_storage_fingerprint", lambda: ("supabase", ""))
+    monkeypatch.setattr(api, "_hydrate_catalog_asset_urls", lambda value: value)
+    monkeypatch.setattr(api, "load_supplier_catalog_data", lambda value, expected_supplier: value)
+
+    api._load_supplier_catalog_cached("alma")
+    with pytest.raises(RuntimeError, match="publicado no disponible"):
+        api._load_supplier_catalog_cached("alma")
+    assert payload_reads == ["version-1"]

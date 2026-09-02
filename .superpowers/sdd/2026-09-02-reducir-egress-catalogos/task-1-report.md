@@ -32,3 +32,10 @@ Estado: DONE.
 - RED: `python -B -m pytest -p no:cacheprovider tests/test_api_snapshot_egress.py -q` → 4 fallos esperados (dos carreras y dos fallbacks TTL).
 - GREEN: `python -B -m pytest -p no:cacheprovider tests/test_snapshot_cache.py tests/test_api_snapshot_egress.py -q` → `24 passed in 1.18s`.
 - Regresión segura repetida de cinco flujos API → `5 passed in 1.73s`; sin borrados bloqueados ni reciclados. SHA API final: `18833459AAF340D09AF5DD5D6B5847F5C04047ADA9AC65DD349759E7BB431C2A`.
+
+## Revisión ronda 2 — flag OFF
+
+- Se restituyó el orden previo en la ruta sin caché privada: pointer publicado, fingerprint de storage, cache residente y sólo entonces descarga del payload en un miss. La ruta privada y su revalidación final no cambiaron.
+- RED: `python -B -m pytest -p no:cacheprovider tests/test_api_snapshot_egress.py -q` → 2 fallos esperados: misma revisión descargaba dos veces, tanto con flag false como con R2 inválido.
+- GREEN: suite de caché/API → `29 passed in 1.40s`; regresión segura de cinco flujos API → `5 passed in 2.21s`, sin borrados bloqueados ni reciclados.
+- Se cubren revisión igual, R2 no configurado, cambio de versión, cambio de fingerprint y despublicación con catálogo residente. SHA API final: `3A1849B5CD3D7B5C6AC0C13AA37EEB633D02DFE84C40C0E76003751C782C319D`.

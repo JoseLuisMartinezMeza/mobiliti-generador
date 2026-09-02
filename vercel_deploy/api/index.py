@@ -3313,6 +3313,7 @@ def _metadata_is_current(expected: dict, current: object, fields: tuple[str, ...
 
 def _load_supplier_catalog_cached(supplier: str) -> dict:
     supplier = _catalog_supplier(supplier)
+    storage_fingerprint = None
     if _private_snapshot_cache_available():
         snapshot = None
         revision = ""
@@ -3342,11 +3343,16 @@ def _load_supplier_catalog_cached(supplier: str) -> dict:
         version_id = db_get_published_catalog_version_id(supplier)
         if not version_id:
             raise RuntimeError("Catalogo publicado no disponible")
-        snapshot = db_get_published_catalog_snapshot(supplier, version_id)
         revision = version_id
+        storage_fingerprint = _catalog_asset_storage_fingerprint()
+        cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
+        if cached and cached.get("revision") == revision and cached.get("storage_fingerprint") == storage_fingerprint:
+            return cached["catalog"]
+        snapshot = db_get_published_catalog_snapshot(supplier, version_id)
         if not isinstance(snapshot, dict) or str(snapshot.get("id") or "").strip() != version_id:
             raise RuntimeError("Catalogo publicado no disponible")
-    storage_fingerprint = _catalog_asset_storage_fingerprint()
+    if storage_fingerprint is None:
+        storage_fingerprint = _catalog_asset_storage_fingerprint()
     cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
     if cached and cached.get("revision") == revision and cached.get("storage_fingerprint") == storage_fingerprint:
         return cached["catalog"]
