@@ -91,6 +91,11 @@ OFFIHO_SYNC_ENABLED = os.environ.get("OFFIHO_SYNC_ENABLED", "").strip().lower() 
 OFFIHO_SYNC_INTERVAL_SECONDS = max(900, int(os.environ.get("OFFIHO_SYNC_INTERVAL_SECONDS", "3600")))
 OFFIHO_CATALOG_FALLBACK_PATH = PROJECT_ROOT / "mobiliti_saas" / "quote_engine" / "data" / "offiho_catalog.json"
 _OFFIHO_LAST_SYNC_ATTEMPT = 0.0
+CATALOG_SNAPSHOT_CACHE_ENABLED = os.environ.get("CATALOG_SNAPSHOT_CACHE_ENABLED", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
+STALE_RECOVERY_INTERVAL_SECONDS = 60.0
+_LAST_STALE_RECOVERY_AT: float | None = None
 CATALOG_SNAPSHOT_INTERNAL_PATHS = {
     "tarkett": "/internal/catalogs/tarkett",
     "offiho": "/internal/catalogs/offiho",
@@ -113,6 +118,10 @@ from mobiliti_saas.quote_engine.local_files import (  # noqa: E402
     local_files_preserved,
     temporary_directory,
 )
+from mobiliti_saas.quote_engine.snapshot_cache import SnapshotCache  # noqa: E402
+
+
+_CATALOG_SNAPSHOT_CACHE = SnapshotCache()
 
 
 @dataclass(frozen=True)
@@ -220,6 +229,49 @@ def _catalog_snapshot_supplier(supplier: str) -> str:
     return normalized
 
 
+def _catalog_snapshot_cache_namespace(base_url: str) -> str:
+    return str(base_url or "").strip().rstrip("/").lower()
+
+
+def _catalog_snapshot_cache_available(base_url: str) -> bool:
+    return bool(
+        CATALOG_SNAPSHOT_CACHE_ENABLED
+        and _catalog_snapshot_cache_namespace(base_url)
+        and R2_BUCKET
+        and _r2_configured()
+    )
+
+
+def _catalog_snapshot_metadata_matches(metadata: dict, row: object) -> bool:
+    return bool(
+        isinstance(row, dict)
+        and isinstance(row.get("payload"), dict)
+        and all(
+            row.get(key) == metadata.get(key)
+            for key in ("supplier", "source_hash", "generated_at", "updated_at")
+        )
+    )
+
+
+def _catalog_snapshot_metadata_is_current(metadata: dict, current: object) -> bool:
+    return bool(
+        isinstance(current, dict)
+        and all(
+            current.get(key) == metadata.get(key)
+            for key in ("supplier", "source_hash", "generated_at", "updated_at")
+        )
+    )
+
+
+def _catalog_snapshot_metadata_only(row: object) -> dict:
+    if not isinstance(row, dict):
+        return {}
+    return {
+        key: row.get(key)
+        for key in ("supplier", "source_hash", "generated_at", "updated_at")
+    }
+
+
 class SupabaseClient:
     def __init__(self) -> None:
         self.base_url = _required_env("SUPABASE_URL").rstrip("/")
@@ -257,6 +309,31 @@ class SupabaseClient:
         supplier = _catalog_snapshot_supplier(supplier)
         if not os.environ.get("SUPABASE_SERVICE_KEY") and MOBILITI_REST_SECRET:
             return self._catalog_api_request(supplier, "GET")
+        if not _catalog_snapshot_cache_available(self.base_url):
+            return self._catalog_snapshot_payload_get(supplier)
+        for _attempt in range(2):
+            metadata = self._catalog_snapshot_metadata_get(supplier)
+            if not isinstance(metadata, dict) or metadata.get("supplier") != supplier:
+                raise RuntimeError("Catalogo legacy no disponible")
+            source_hash = str(metadata.get("source_hash") or "").strip()
+            updated_at = str(metadata.get("updated_at") or "").strip()
+            if not source_hash or not updated_at:
+                raise RuntimeError("Catalogo legacy no disponible")
+            snapshot = _CATALOG_SNAPSHOT_CACHE.load(
+                namespace=_catalog_snapshot_cache_namespace(self.base_url),
+                supplier=supplier,
+                revision=f"{source_hash}:{updated_at}",
+                loader=lambda: self._catalog_snapshot_payload_get(supplier),
+                validator=lambda row: _catalog_snapshot_metadata_matches(metadata, row),
+                client_factory=_r2_client,
+                bucket=R2_BUCKET,
+            )
+            current = self._catalog_snapshot_metadata_get(supplier)
+            if snapshot is not None and _catalog_snapshot_metadata_is_current(metadata, current):
+                return snapshot
+        raise RuntimeError("Catalogo legacy no disponible")
+
+    def _catalog_snapshot_payload_get(self, supplier: str) -> dict | None:
         rows = self.rest(
             "GET",
             "/saas_supplier_catalog_snapshots",
@@ -268,11 +345,34 @@ class SupabaseClient:
         )
         return rows[0] if rows else None
 
+    def _catalog_snapshot_metadata_get(self, supplier: str) -> dict | None:
+        rows = self.rest(
+            "GET",
+            "/saas_supplier_catalog_snapshots",
+            params={
+                "supplier": f"eq.{supplier}",
+                "select": "supplier,source_hash,generated_at,updated_at",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
     def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
         supplier = _catalog_snapshot_supplier(supplier)
         if not os.environ.get("SUPABASE_SERVICE_KEY") and MOBILITI_REST_SECRET:
-            return self._catalog_api_request(supplier, "PUT", {"payload": payload})
-        url = f"{self.base_url}/rest/v1/saas_supplier_catalog_snapshots?on_conflict=supplier"
+            result = _catalog_snapshot_metadata_only(
+                self._catalog_api_request(supplier, "PUT", {"payload": payload})
+            )
+            return {
+                "supplier": result.get("supplier") or supplier,
+                "source_hash": result.get("source_hash") or payload["source_hash"],
+                "generated_at": result.get("generated_at") or payload["generated_at"],
+                "updated_at": result.get("updated_at"),
+            }
+        url = (
+            f"{self.base_url}/rest/v1/saas_supplier_catalog_snapshots"
+            "?on_conflict=supplier&select=supplier,source_hash,generated_at,updated_at"
+        )
         row = {
             "supplier": supplier,
             "source_hash": payload["source_hash"],
@@ -288,7 +388,7 @@ class SupabaseClient:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 body = resp.read().decode("utf-8")
                 rows = json.loads(body) if body else []
-                return rows[0] if isinstance(rows, list) and rows else row
+                return rows[0] if isinstance(rows, list) and rows else _catalog_snapshot_metadata_only(row)
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8")
             raise RuntimeError(f"Supabase catalog snapshot {exc.code}: {body}") from exc
@@ -509,7 +609,7 @@ class PostgresClient(SupabaseClient):
                 generated_at = EXCLUDED.generated_at,
                 payload = EXCLUDED.payload,
                 updated_at = NOW()
-            RETURNING supplier, source_hash, generated_at, payload, updated_at
+            RETURNING supplier, source_hash, generated_at, updated_at
             """,
             (supplier, payload["source_hash"], payload["generated_at"], payload),
         )
@@ -677,7 +777,7 @@ class LocalDevClient:
         }
         store.setdefault("supplier_catalog_snapshots", {})[supplier] = row
         self._save(store)
-        return row
+        return _catalog_snapshot_metadata_only(row)
 
     def _storage_file(self, object_path: str) -> Path:
         safe_path = object_path.replace("\\", "/").lstrip("/")
@@ -1492,7 +1592,7 @@ def fetch_next_job(client: SupabaseClient) -> dict | None:
     rows = client.rest(
         "GET",
         "/saas_quote_jobs",
-        params={"status": "eq.queued", "select": "*", "order": "created_at.asc", "limit": "1"},
+        params={"status": "eq.queued", "select": "id", "order": "created_at.asc", "limit": "1"},
     )
     return rows[0] if rows else None
 
@@ -1646,7 +1746,12 @@ def recover_stale_jobs(client: SupabaseClient) -> int:
     legacy_cutoff = (now - timedelta(minutes=STALE_MINUTES)).isoformat()
     candidates = client.rest(
         "GET", "/saas_quote_jobs",
-        params={"status": "eq.processing", "select": "*", "order": "updated_at.asc", "limit": "100"},
+        params={
+            "status": "eq.processing",
+            "select": "id,status,attempt_token,lease_expires_at,updated_at",
+            "order": "updated_at.asc",
+            "limit": "100",
+        },
     )
     recovered = 0
     for candidate in candidates or []:
@@ -2058,6 +2163,7 @@ def sync_offiho_catalog_if_due(client, *, force: bool = False) -> bool:
 
 
 def run_once(*, job_id: str | None = None) -> bool:
+    global _LAST_STALE_RECOVERY_AT
     if job_id and not DEV_MODE:
         raise RuntimeError("La selección de una prueba sólo está habilitada en modo local")
     client = LocalDevClient() if DEV_MODE else (PostgresClient() if DATABASE_URL else SupabaseClient())
@@ -2070,13 +2176,18 @@ def run_once(*, job_id: str | None = None) -> bool:
             print(f"La prueba {job_id} no está en cola; no se procesó otro job.")
             return False
     else:
-        recover_stale_jobs(client)
+        now = time.monotonic()
+        if (
+            _LAST_STALE_RECOVERY_AT is None
+            or now - _LAST_STALE_RECOVERY_AT >= STALE_RECOVERY_INTERVAL_SECONDS
+        ):
+            _LAST_STALE_RECOVERY_AT = now
+            recover_stale_jobs(client)
         job = fetch_next_job(client)
     if not job:
         did_work = sync_tarkett_catalog_if_due(client)
         if not did_work:
             did_work = sync_offiho_catalog_if_due(client)
-        print("Sin jobs pendientes.")
         return did_work
     print(f"Procesando job {job['id']}...")
     process_job(client, job)
