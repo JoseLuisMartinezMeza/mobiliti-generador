@@ -232,14 +232,14 @@ test("sólo el 2xx validado es inmutable; errores y preflight son no-store", asy
   assert_no_store(preflight.response);
 });
 
-test("la configuración Free fija Workers Caching, binding privado y límite CPU", async () => {
+test("la configuración Free usa el límite CPU administrado por Cloudflare", async () => {
   const config = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
 
   assert.match(config, /^name\s*=\s*"mobiliti-catalog-assets"$/m);
   assert.match(config, /^compatibility_date\s*=\s*"2026-09-01"$/m);
   assert.match(config, /^workers_dev\s*=\s*true$/m);
   assert.match(config, /\[cache\]\s*\r?\nenabled\s*=\s*true/m);
-  assert.match(config, /\[limits\]\s*\r?\ncpu_ms\s*=\s*10/m);
+  assert.doesNotMatch(config, /\[limits\]|cpu_ms/i);
   assert.match(config, /\[\[r2_buckets\]\][\s\S]*?binding\s*=\s*"CATALOG_ASSETS"[\s\S]*?bucket_name\s*=\s*"catalog-assets"/m);
   assert.match(config, /^ALLOWED_ORIGIN\s*=\s*"https:\/\/web-lemon-one-45\.vercel\.app"$/m);
   assert.doesNotMatch(config, /r2\.dev|route\s*=|zones|account_id/i);

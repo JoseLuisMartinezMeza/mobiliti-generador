@@ -6,9 +6,6 @@ workers_dev = true
 [cache]
 enabled = true
 
-[limits]
-cpu_ms = 10
-
 [vars]
 ALLOWED_ORIGIN = "https://web-lemon-one-45.vercel.app"
 

@@ -19,6 +19,12 @@ rutas no cacheadas, pero no modela ese HEAD frío de producción.
 Sólo un 2xx validado usa `public, max-age=31536000, immutable`. Errores y
 preflights siempre responden `Cache-Control: no-store`.
 
+## Workers Free
+
+El plan Free aplica su límite de CPU de 10 ms automáticamente. No se debe añadir
+`[limits]`/`cpu_ms` a `wrangler.toml`: Cloudflare sólo admite configurar ese
+campo en Workers Paid y rechaza el despliegue Free con el error `100328`.
+
 Ejecutar las pruebas locales sin dependencias:
 
 ```powershell
