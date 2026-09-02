@@ -19,7 +19,10 @@ from mobiliti_saas.quote_engine.mixed_catalog import (
 )
 from mobiliti_saas.quote_engine.mobiliti_layout import SectionNeed, plan_mobiliti_layout
 from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage
-from mobiliti_saas.quote_engine.ooxml_worksheet import MobilitiSheetMutation
+from mobiliti_saas.quote_engine.ooxml_worksheet import (
+    MobilitiSheetMutation,
+    build_mobiliti_sheet,
+)
 from mobiliti_saas.quote_engine.official_composer import (
     CotizacionMetadata,
     CotizacionPriceTerm,
@@ -384,17 +387,17 @@ def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):
     workbook = load_workbook(output, data_only=False)
     try:
         mobiliti = workbook["Mobiliti"]
-        assert [mobiliti.cell(row, 4).value for row in (14, 15, 16)] == [
+        assert [mobiliti.cell(row, 4).value for row in (15, 16, 17)] == [
             "=Quotation!B9",
             "=Quotation!B10",
             "=Quotation!B11",
         ]
-        assert [mobiliti.cell(row, 8).value for row in (14, 15, 16)] == [
+        assert [mobiliti.cell(row, 8).value for row in (15, 16, 17)] == [
             "=Quotation!H9",
             "=Quotation!H10",
             "=Quotation!H11",
         ]
-        assert [mobiliti.cell(row, 10).value for row in (14, 15, 16)] == [
+        assert [mobiliti.cell(row, 10).value for row in (15, 16, 17)] == [
             "=Quotation!K9",
             "=Quotation!K10",
             "=Quotation!K11",
@@ -409,25 +412,25 @@ def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):
         product_rows = [
             row
             for row in range(1, cotizacion.max_row + 1)
-            if cotizacion.cell(row, 1).value == "=Mobiliti!D14"
+            if cotizacion.cell(row, 1).value == "=Mobiliti!D15"
         ]
         assert product_rows == [17]
         assert all(
             cotizacion.cell(row, 1).value not in {
-                "=Mobiliti!D15",
                 "=Mobiliti!D16",
+                "=Mobiliti!D17",
             }
             for row in range(1, cotizacion.max_row + 1)
         )
         assert cotizacion["F17"].value == (
-            "=Mobiliti!AA14"
-            "+Mobiliti!AA15*Mobiliti!H15/Mobiliti!H14"
-            "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H14"
+            "=Mobiliti!AA15"
+            "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H15"
+            "+Mobiliti!AA17*Mobiliti!H17/Mobiliti!H15"
         )
-        assert cotizacion["A17"].value == "=Mobiliti!D14"
+        assert cotizacion["A17"].value == "=Mobiliti!D15"
         assert cotizacion["C17"].value == "=Quotation!D9"
         assert cotizacion["D17"].value == "=Quotation!F9"
-        assert cotizacion["E17"].value == "=Mobiliti!H14"
+        assert cotizacion["E17"].value == "=Mobiliti!H15"
         processed_description = quotation["D9"].value
         assert "\n+ " in processed_description
         assert processed_description.count("\n+ ") == 2
@@ -725,9 +728,12 @@ def test_project_projection_distinguishes_catalog_lumbro_from_auto_accessory():
 
 def test_exact_auditor_requires_explicit_project_signal_for_grouped_rows():
     base = XlsxPackage.read(engine.OFFICIAL_TEMPLATE_PATH)
-    row_map = plan_mobiliti_layout(
-        (SectionNeed("section-1", "Recepción", 2),)
+    mobiliti = build_mobiliti_sheet(
+        base.parts[base.sheet_part("Mobiliti")],
+        [SectionNeed("section-1", "Recepción", 2)],
+        (),
     )
+    row_map = mobiliti.row_map
     grouped = CotizacionSheetEditor.from_xml(
         base.parts[base.sheet_part("Cotizacion")]
     ).compose(
@@ -750,16 +756,17 @@ def test_exact_auditor_requires_explicit_project_signal_for_grouped_rows():
                         description="Principal\n+ Complemento",
                         dimensions="600 x 600 mm",
                         quantity=Decimal("10"),
-                        mobiliti_row=14,
+                        mobiliti_row=row_map.item_rows[0],
                         discount=Decimal("0.4"),
                         price_terms=(
-                            CotizacionPriceTerm(14),
-                            CotizacionPriceTerm(15),
+                            CotizacionPriceTerm(row_map.item_rows[0]),
+                            CotizacionPriceTerm(row_map.item_rows[1]),
                         ),
                     ),
                 ),
             ),
         ),
+        mobiliti_row_map=row_map,
     )
 
     with pytest.raises(ValueError, match="filas de producto"):
@@ -775,9 +782,12 @@ def test_exact_auditor_requires_explicit_project_signal_for_grouped_rows():
 
 def test_exact_auditor_accepts_grouped_project_with_pending_component():
     base = XlsxPackage.read(engine.OFFICIAL_TEMPLATE_PATH)
-    row_map = plan_mobiliti_layout(
-        (SectionNeed("section-1", "Recepción", 2),)
+    mobiliti = build_mobiliti_sheet(
+        base.parts[base.sheet_part("Mobiliti")],
+        [SectionNeed("section-1", "Recepción", 2)],
+        (),
     )
+    row_map = mobiliti.row_map
     grouped = CotizacionSheetEditor.from_xml(
         base.parts[base.sheet_part("Cotizacion")]
     ).compose(
@@ -792,18 +802,21 @@ def test_exact_auditor_accepts_grouped_project_with_pending_component():
                         description="Principal\n+ Complemento pendiente",
                         dimensions="600 x 600 mm",
                         quantity=Decimal("10"),
-                        mobiliti_row=14,
+                        mobiliti_row=row_map.item_rows[0],
                         discount=Decimal("0.4"),
                         description_formula="=Quotation!D9",
                         price_terms=(
-                            CotizacionPriceTerm(14),
-                            CotizacionPriceTerm(15, denominator=Decimal("12")),
+                            CotizacionPriceTerm(row_map.item_rows[0]),
+                            CotizacionPriceTerm(
+                                row_map.item_rows[1], denominator=Decimal("12")
+                            ),
                         ),
                         price_pending=True,
                     ),
                 ),
             ),
         ),
+        mobiliti_row_map=row_map,
     )
 
     _validate_exact_cotizacion_surface(

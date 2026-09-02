@@ -60,6 +60,15 @@ def _official_xml() -> bytes:
         return archive.read(part)
 
 
+def _official_row_map(needs: list[SectionNeed]):
+    layout = WorksheetEditor.from_xml(_official_xml()).layout
+    return plan_mobiliti_layout(
+        needs,
+        first_section_row=layout.first_section_row,
+        canonical_auxiliary_row_count=layout.auxiliary_end - layout.total_row,
+    )
+
+
 def _cell(root: ET.Element, coordinate: str) -> ET.Element:
     cell = root.find(f".//{{{MAIN}}}c[@r='{coordinate}']")
     assert cell is not None
@@ -125,22 +134,24 @@ def _binding(
 
 def test_import_freight_exception_keeps_taxes_margins_and_manual_factor():
     needs = [SectionNeed("first", "SILLAS", 2), SectionNeed("second", "OTRAS", 1)]
+    row_map = _official_row_map(needs)
+    first_row, second_row, third_row = row_map.item_rows
     mutation = build_mobiliti_sheet(
         _official_xml(),
         needs,
         (
-            MobilitiCellWrite("F14", "text", "Alma - Exterior"),
-            MobilitiCellWrite("P14", "number", Decimal("0")),
-            MobilitiCellWrite("F15", "text", "Sunon Inc"),
-            MobilitiCellWrite("P15", "number", Decimal("0.42")),
-            MobilitiCellWrite("F49", "text", "Offiho"),
-            MobilitiCellWrite("P49", "number", Decimal("0")),
+            MobilitiCellWrite(f"F{first_row}", "text", "Alma - Exterior"),
+            MobilitiCellWrite(f"P{first_row}", "number", Decimal("0")),
+            MobilitiCellWrite(f"F{second_row}", "text", "Sunon Inc"),
+            MobilitiCellWrite(f"P{second_row}", "number", Decimal("0.42")),
+            MobilitiCellWrite(f"F{third_row}", "text", "Offiho"),
+            MobilitiCellWrite(f"P{third_row}", "number", Decimal("0")),
         ),
     )
     output = ET.fromstring(mutation.xml)
     official = ET.fromstring(_official_xml())
 
-    for row in (14, 15, 49):
+    for row in (first_row, second_row, third_row):
         formula = _cell(output, f"L{row}").find(f"{{{MAIN}}}f")
         assert formula is not None
         # También funciona si otros productos sí aportan m3 al mismo proyecto.
@@ -166,40 +177,43 @@ def test_import_freight_exception_keeps_taxes_margins_and_manual_factor():
 def test_frozen_cost_keeps_raw_price_and_applies_uniform_sale_price(
     original, rate, expected
 ):
-    row_map = plan_mobiliti_layout([SectionNeed("section-1", "SILLAS", 1)])
+    needs = [SectionNeed("section-1", "SILLAS", 1)]
+    row_map = _official_row_map(needs)
+    product_row = row_map.item_rows[0]
     rows = [_row("item-1", original=Decimal(original), rate=Decimal(rate), converted=expected)]
     writes = build_mobiliti_pricing_writes(
         rows,
         row_map,
-        bindings=(_binding("item-1", 14),),
+        bindings=(_binding("item-1", product_row),),
     )
 
-    assert writes == (MobilitiCellWrite("J14", "number", expected),)
+    assert writes == (MobilitiCellWrite(f"J{product_row}", "number", expected),)
     mutation = build_mobiliti_sheet(
         _official_xml(),
-        [SectionNeed("section-1", "SILLAS", 1)],
+        needs,
         writes,
     )
     official = ET.fromstring(_official_xml())
     output = ET.fromstring(mutation.xml)
 
-    j14 = _cell(output, "J14")
-    assert j14.attrib.get("t") is None
-    assert j14.find(f"{{{MAIN}}}f") is None
-    assert Decimal(j14.findtext(f"{{{MAIN}}}v")) == expected
-    assert _formula_signature(_cell(output, "Z14")) == _formula_signature(
-        _cell(official, "Z14")
+    cost_cell = _cell(output, f"J{product_row}")
+    assert cost_cell.attrib.get("t") is None
+    assert cost_cell.find(f"{{{MAIN}}}f") is None
+    assert Decimal(cost_cell.findtext(f"{{{MAIN}}}v")) == expected
+    assert _formula_signature(_cell(output, f"Z{product_row}")) == _formula_signature(
+        _cell(official, f"Z{product_row}")
     )
-    assert "_xlfn.MAXIFS(" in _cell(output, "AA14").findtext(f"{{{MAIN}}}f")
-    assert _cell(output, "AB14").findtext(f"{{{MAIN}}}f") == (
-        "IFERROR(AA14*H14,0)"
+    assert "_xlfn.MAXIFS(" in _cell(output, f"AA{product_row}").findtext(f"{{{MAIN}}}f")
+    assert _cell(output, f"AB{product_row}").findtext(f"{{{MAIN}}}f") == (
+        f"IFERROR(AA{product_row}*H{product_row},0)"
     )
     assert ET.tostring(_cell(output, "P6")) == ET.tostring(_cell(official, "P6"))
 
     # La fila amarilla sin producto conserva las fórmulas oficiales y no recibe costo.
-    assert _cell(output, "J15").find(f"{{{MAIN}}}v") is None
-    assert _cell(output, "Z15").find(f"{{{MAIN}}}f") is not None
-    assert _cell(output, "AA15").find(f"{{{MAIN}}}f") is not None
+    unused_row = product_row + 1
+    assert _cell(output, f"J{unused_row}").find(f"{{{MAIN}}}v") is None
+    assert _cell(output, f"Z{unused_row}").find(f"{{{MAIN}}}f") is not None
+    assert _cell(output, f"AA{unused_row}").find(f"{{{MAIN}}}f") is not None
 
 
 def test_same_name_uses_price_from_largest_quantity_and_totals_that_price():
@@ -207,7 +221,7 @@ def test_same_name_uses_price_from_largest_quantity_and_totals_that_price():
         SectionNeed("large", "SILLAS 60", 1),
         SectionNeed("small", "SILLAS 12", 1),
     ]
-    row_map = plan_mobiliti_layout(needs)
+    row_map = _official_row_map(needs)
     large_row, small_row = row_map.item_rows
     writes = [
         MobilitiCellWrite(f"D{large_row}", "text", "CHT85SW H2 Task Chair"),
@@ -224,11 +238,11 @@ def test_same_name_uses_price_from_largest_quantity_and_totals_that_price():
         uniform_formula = _cell(output, f"AA{row}").findtext(f"{{{MAIN}}}f")
         assert uniform_formula == (
             f"IF(Z{row}>=Y{row},"
-            f"_xlfn.MINIFS($Z$14:$Z${last_row},"
-            f"$D$14:$D${last_row},D{row},"
-            f"$H$14:$H${last_row},"
-            f"_xlfn.MAXIFS($H$14:$H${last_row},"
-            f"$D$14:$D${last_row},D{row})),"
+            f"_xlfn.MINIFS($Z${row_map.canonical_first_product_row}:$Z${last_row},"
+            f"$D${row_map.canonical_first_product_row}:$D${last_row},D{row},"
+            f"$H${row_map.canonical_first_product_row}:$H${last_row},"
+            f"_xlfn.MAXIFS($H${row_map.canonical_first_product_row}:$H${last_row},"
+            f"$D${row_map.canonical_first_product_row}:$D${last_row},D{row})),"
             '"NO SE ESTA RESPETANDO EL MARGEN")'
         )
         assert _cell(output, f"AB{row}").findtext(f"{{{MAIN}}}f") == (
@@ -657,6 +671,8 @@ def test_currency_selector_writes_only_p4_and_global_discount_idempotently(
     currency, expected_boolean
 ):
     editor = WorksheetEditor.from_xml(_official_xml())
+    discount_coordinate = f"AD{editor.layout.first_section_row}"
+    first_product_row = editor.layout.first_section_row + 1
     before = {
         cell.attrib["r"]: ET.tostring(cell)
         for cell in editor.root.findall(f".//{{{MAIN}}}c")
@@ -682,7 +698,7 @@ def test_currency_selector_writes_only_p4_and_global_discount_idempotently(
     p4 = _cell(output, "P4")
     assert p4.attrib["t"] == "b"
     assert p4.findtext(f"{{{MAIN}}}v") == expected_boolean
-    assert Decimal(_cell(output, "AD13").findtext(f"{{{MAIN}}}v")) == Decimal("0.4")
+    assert Decimal(_cell(output, discount_coordinate).findtext(f"{{{MAIN}}}v")) == Decimal("0.4")
     assert _cell(output, "P6").find(f"{{{MAIN}}}f") is not None
 
     after = {
@@ -692,7 +708,11 @@ def test_currency_selector_writes_only_p4_and_global_discount_idempotently(
     changed = {
         coordinate for coordinate in before if before[coordinate] != after[coordinate]
     }
-    assert changed <= {"P4", "AD13"}
-    assert changed == ({"P4", "AD13"} if expected_boolean == "0" else {"AD13"})
-    for forbidden in ("J6", "P6", "Z14", "AA14"):
+    assert changed <= {"P4", discount_coordinate}
+    assert changed == (
+        {"P4", discount_coordinate}
+        if expected_boolean == "0"
+        else {discount_coordinate}
+    )
+    for forbidden in ("J6", "P6", f"Z{first_product_row}", f"AA{first_product_row}"):
         assert after[forbidden] == before[forbidden]

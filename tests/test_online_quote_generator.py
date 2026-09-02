@@ -97,18 +97,32 @@ def test_generate_online_quote_creates_valid_xlsx(tmp_path):
     mob = wb["Mobiliti"]
     assert ws["B3"].value == "COT-001"
     assert ws["A16"].value == "Escritorios"
-    assert ws["A17"].value == "=Mobiliti!D14"
+    assert ws["A17"].value == "=Mobiliti!D15"
     assert ws["C17"].value == "=Quotation!D9"
     assert ws["D17"].value == "=Quotation!F9"
-    assert ws["E17"].value == "=Mobiliti!H14"
-    assert ws["G17"].value == 0.3
+    assert ws["E17"].value == "=Mobiliti!H15"
+    assert ws["F17"].value == "=Mobiliti!AA15"
+    assert ws["G17"].value == "=ROUND(Mobiliti!$AD$14,2)"
     assert ws["H17"].value == "=F17*G17"
     assert ws["I17"].value == "=F17-H17"
     assert ws["J17"].value == "=E17*I17"
-    assert mob["D14"].value == "=Quotation!B9"
-    assert mob["H14"].value == "=Quotation!H9"
-    assert mob["J14"].value == "=Quotation!K9"
-    assert mob["K14"].value == "=Quotation!I9"
+    assert mob["D15"].value == "=Quotation!B9"
+    assert mob["H15"].value == "=Quotation!H9"
+    assert mob["J15"].value == "=Quotation!K9"
+    assert mob["P15"].value == "=Quotation!I9"
+    assert mob["K15"].value == (
+        '=IFERROR(VLOOKUP(TRIM(F15), ProveedoreS_TC, 5, FALSE), "Not Found")'
+    )
+    assert mob["AA15"].value == (
+        '=IF(Z15>=Y15,_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D15,'
+        '$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,$D$15:$D$572,D15)),'
+        '"NO SE ESTA RESPETANDO EL MARGEN")'
+    )
+    assert mob["AD14"].value == 0.3
+    assert mob["P4"].value is False
+    assert getattr(mob["P6"].value, "text", None) == (
+        '=IF(P4=TRUE,_FV(J6,"Price"),0)'
+    )
     assert wb["Quotation_Data"].max_column == 16
     wb.close()
 
@@ -173,7 +187,11 @@ def test_generate_online_quote_uses_vol_for_mobiliti_m3(tmp_path):
 
     out = load_workbook(output, data_only=False)
     assert out["Cotizacion"]["D17"].value == "=Quotation!F9"
-    assert out["Mobiliti"]["H14"].value == "=Quotation!H9"
-    assert out["Mobiliti"]["J14"].value == "=Quotation!K9"
-    assert out["Mobiliti"]["K14"].value == "=Quotation!I9"
+    assert out["Mobiliti"]["H15"].value == "=Quotation!H9"
+    assert out["Mobiliti"]["J15"].value == "=Quotation!K9"
+    assert out["Mobiliti"]["P15"].value == "=Quotation!I9"
+    assert out["Quotation"]["I9"].value == 0.45
+    assert out["Mobiliti"]["K15"].value == (
+        '=IFERROR(VLOOKUP(TRIM(F15), ProveedoreS_TC, 5, FALSE), "Not Found")'
+    )
     out.close()

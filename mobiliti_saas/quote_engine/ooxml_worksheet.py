@@ -25,10 +25,6 @@ MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 X14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 XM = "http://schemas.microsoft.com/office/excel/2006/main"
 XML = "http://www.w3.org/XML/1998/namespace"
-CANONICAL_TOTAL_ROW = 573
-CANONICAL_AUXILIARY_START = 574
-CANONICAL_AUXILIARY_END = 610
-CANONICAL_SUBTOTAL_ROWS = tuple(range(47, 573, 35))
 XLSX_MAX_ROW = 1_048_576
 XLSX_MAX_COLUMN = 16_384
 MAX_EXCEL_CELL_TEXT_LENGTH = 32_767
@@ -37,6 +33,25 @@ _RANGE_REFERENCE = re.compile(
     r"(?:(?P<sheet>'(?:[^']|'')+'|[^'!]+)!)?"
     r"(?P<first>\$?[A-Z]{1,3}\$?[1-9][0-9]*)"
     r"(?::(?P<last>\$?[A-Z]{1,3}\$?[1-9][0-9]*))?$"
+)
+_E9_PRODUCT_RANGE_SIGNATURE = re.compile(
+    r"ROUND\(IFERROR\(1-SUMPRODUCT\(\(\$A\$(?P<first>14|15):"
+    r"\$A\$(?P<last>[1-9][0-9]*)=TRUE\)\*"
+    r"\(\$H\$(?P=first):\$H\$(?P=last)\)\*"
+    r"\(\$AI\$(?P=first):\$AI\$(?P=last)\)\)"
+    r"/SUMPRODUCT\(\(\$A\$(?P=first):\$A\$(?P=last)=TRUE\)\*"
+    r"\(\$H\$(?P=first):\$H\$(?P=last)\)\*"
+    r"\(\$Z\$(?P=first):\$Z\$(?P=last)\)\),0\),2\)"
+)
+_E6_PRODUCT_RANGE_SIGNATURE = re.compile(
+    r'IFERROR\(SUMPRODUCT\(\(\$F\$(?P<first>14|15):'
+    r'\$F\$(?P<last>[1-9][0-9]*)<>""\)\*'
+    r'\(ISNUMBER\(\$AB\$(?P=first):\$AB\$(?P=last)\)\),\s*'
+    r'\$AB\$(?P=first):\$AB\$(?P=last),\s*'
+    r'\$AC\$(?P=first):\$AC\$(?P=last)\)\s*/\s*'
+    r'SUMPRODUCT\(\(\$F\$(?P=first):\$F\$(?P=last)<>""\)\*'
+    r'\(ISNUMBER\(\$AB\$(?P=first):\$AB\$(?P=last)\)\),\s*'
+    r'\$AB\$(?P=first):\$AB\$(?P=last)\),\s*0\)'
 )
 
 for prefix, namespace in (
@@ -64,10 +79,17 @@ class MobilitiCellWrite:
 class MobilitiLayoutContract:
     """Coordenadas firmadas de cada generación de la hoja Mobiliti."""
 
-    id: Literal["legacy", "v17"]
+    id: Literal["legacy", "v17", "v18"]
     table_last_column: int
     total_last_column: int
     input_columns: frozenset[int]
+    first_section_row: int
+    total_row: int
+    auxiliary_end: int
+
+    @property
+    def auxiliary_start(self) -> int:
+        return self.total_row + 1
 
 
 LEGACY_MOBILITI_LAYOUT = MobilitiLayoutContract(
@@ -75,12 +97,27 @@ LEGACY_MOBILITI_LAYOUT = MobilitiLayoutContract(
     table_last_column=35,  # AI
     total_last_column=36,  # AJ
     input_columns=frozenset((4, 5, 6, 8, 10, 11, 16)),
+    first_section_row=13,
+    total_row=573,
+    auxiliary_end=610,
 )
 V17_MOBILITI_LAYOUT = MobilitiLayoutContract(
     id="v17",
     table_last_column=38,  # AL
     total_last_column=37,  # AK
     input_columns=frozenset((4, 5, 6, 8, 10, 16, 19)),
+    first_section_row=13,
+    total_row=573,
+    auxiliary_end=610,
+)
+V18_MOBILITI_LAYOUT = MobilitiLayoutContract(
+    id="v18",
+    table_last_column=38,  # AL
+    total_last_column=37,  # AK
+    input_columns=frozenset((4, 5, 6, 8, 10, 16, 19)),
+    first_section_row=14,
+    total_row=574,
+    auxiliary_end=614,
 )
 
 
@@ -157,11 +194,48 @@ class FormulaIndex:
 
 
 def _detect_mobiliti_layout(root: ET.Element) -> MobilitiLayoutContract:
-    """Falla cerrada si el XML no tiene una de las dos firmas conocidas."""
+    """Falla cerrada si el XML no tiene una única firma conocida."""
 
     p6 = root.find(f".//{{{MAIN}}}c[@r='P6']/{{{MAIN}}}f")
     if p6 is not None and p6.text == 'IF(P4=TRUE,_FV(J6,"Price"),0)':
-        return V17_MOBILITI_LAYOUT
+        k6 = root.find(f".//{{{MAIN}}}c[@r='K6']/{{{MAIN}}}f")
+        if k6 is not None and k6.text == '_FV(J6,"High")':
+            raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
+        e6 = root.find(f".//{{{MAIN}}}c[@r='E6']/{{{MAIN}}}f")
+        e6_signature = (
+            None
+            if e6 is None or not e6.text
+            else _E6_PRODUCT_RANGE_SIGNATURE.fullmatch(e6.text)
+        )
+        if e6_signature is None:
+            raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
+        first = int(e6_signature.group("first"))
+        last = int(e6_signature.group("last"))
+        e4 = root.find(f".//{{{MAIN}}}c[@r='E4']/{{{MAIN}}}f")
+        if (
+            not first <= last <= XLSX_MAX_ROW - 2
+            or e4 is None
+            or e4.text != f"AB{last + 2}"
+        ):
+            raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
+
+        e9 = root.find(f".//{{{MAIN}}}c[@r='E9']/{{{MAIN}}}f")
+        e9_signature = (
+            None
+            if e9 is None or not e9.text
+            else _E9_PRODUCT_RANGE_SIGNATURE.fullmatch(e9.text)
+        )
+        if e9 is None:
+            if first != 14:
+                raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
+            return V17_MOBILITI_LAYOUT
+        if (
+            e9_signature is None
+            or int(e9_signature.group("first")) != first
+            or int(e9_signature.group("last")) != last
+        ):
+            raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
+        return V18_MOBILITI_LAYOUT if first == 15 else V17_MOBILITI_LAYOUT
     k6 = root.find(f".//{{{MAIN}}}c[@r='K6']/{{{MAIN}}}f")
     if k6 is not None and k6.text == '_FV(J6,"High")':
         return LEGACY_MOBILITI_LAYOUT
@@ -332,12 +406,12 @@ class WorksheetEditor:
 
 def capture_official_mobiliti_block(
     editor: WorksheetEditor,
-    first_section_row: int = 13,
-    second_section_row: int = 48,
-    total_row: int = CANONICAL_TOTAL_ROW,
 ) -> OfficialMobilitiBlock:
     """Captura las siete filas canónicas y el bloque auxiliar oficial."""
 
+    first_section_row = editor.layout.first_section_row
+    second_section_row = first_section_row + 35
+    total_row = editor.layout.total_row
     merge_cells = editor.root.find(f"{{{MAIN}}}mergeCells")
     merges = tuple(deepcopy(node) for node in (() if merge_cells is None else merge_cells))
     return OfficialMobilitiBlock(
@@ -350,7 +424,7 @@ def capture_official_mobiliti_block(
         total_row=deepcopy(editor.require_row(total_row)),
         auxiliary_rows=tuple(
             deepcopy(editor.require_row(row))
-            for row in range(total_row + 1, CANONICAL_AUXILIARY_END + 1)
+            for row in range(total_row + 1, editor.layout.auxiliary_end + 1)
         ),
         merges=merges,
     )
@@ -360,8 +434,9 @@ def apply_mobiliti_layout(editor: WorksheetEditor, row_map: MobilitiRowMap) -> N
     """Limpia solo la tabla oficial que será reconstruida desde sus clones."""
 
     editor.row_map = row_map
-    if row_map.total_row != CANONICAL_TOTAL_ROW:
-        canonical_total = editor.require_row(CANONICAL_TOTAL_ROW)
+    canonical_total_row = row_map.canonical_total_row
+    if row_map.total_row != canonical_total_row:
+        canonical_total = editor.require_row(canonical_total_row)
         for cell in list(canonical_total.findall(f"{{{MAIN}}}c")):
             if _cell_column(cell) <= editor.layout.total_last_column:
                 canonical_total.remove(cell)
@@ -372,11 +447,14 @@ def apply_mobiliti_layout(editor: WorksheetEditor, row_map: MobilitiRowMap) -> N
     } | {row_map.total_row}
     for row in list(editor.sheet_data):
         number = int(row.attrib["r"])
-        if 13 <= number <= CANONICAL_TOTAL_ROW and number not in target_rows:
+        if (
+            row_map.canonical_first_section_row <= number <= canonical_total_row
+            and number not in target_rows
+        ):
             for cell in list(row.findall(f"{{{MAIN}}}c")):
                 if _cell_column(cell) <= editor.layout.table_last_column:
                     row.remove(cell)
-        if CANONICAL_AUXILIARY_START <= number <= CANONICAL_AUXILIARY_END:
+        if row_map.canonical_auxiliary_start <= number <= row_map.canonical_auxiliary_end:
             editor.sheet_data.remove(row)
 
 
@@ -387,11 +465,11 @@ def _translate_static_structural_formulas(
 
     for row in editor.sheet_data:
         row_number = int(row.attrib["r"])
-        if row_number > CANONICAL_TOTAL_ROW:
+        if row_number > row_map.canonical_total_row:
             continue
         for cell in row.findall(f"{{{MAIN}}}c"):
             if (
-                row_number >= 13
+                row_number >= row_map.canonical_first_section_row
                 and _cell_column(cell) <= editor.layout.table_last_column
             ):
                 continue
@@ -431,13 +509,13 @@ def relocate_official_auxiliary_rows(
     row_map: MobilitiRowMap,
     canonical: OfficialMobilitiBlock,
 ) -> None:
-    """Mueve las filas oficiales 574:610 inmediatamente después del total."""
+    """Mueve el bloque auxiliar oficial inmediatamente después del total."""
 
     for offset, source in enumerate(canonical.auxiliary_rows, start=1):
         editor.replace_whole_row(
             row_map.total_row + offset,
             source,
-            CANONICAL_TOTAL_ROW + offset,
+            row_map.canonical_total_row + offset,
             row_map,
         )
     _update_dimension(editor, row_map.total_row + len(canonical.auxiliary_rows))
@@ -474,7 +552,7 @@ def _preflight_cloneable_formulas(canonical: OfficialMobilitiBlock) -> None:
 def _preflight_static_special_formulas(
     editor: WorksheetEditor, row_map: MobilitiRowMap
 ) -> None:
-    if row_map.total_row == CANONICAL_TOTAL_ROW:
+    if row_map.total_row == row_map.canonical_total_row:
         return
     for cell in editor.sheet_data.findall(f".//{{{MAIN}}}c"):
         formula = cell.find(f"{{{MAIN}}}f")
@@ -491,14 +569,17 @@ def _preflight_static_special_formulas(
                 )
         if formula.attrib.get("ref") == coordinate:
             continue
-        if _special_formula_has_moved_structural_reference(formula):
+        if _special_formula_has_moved_structural_reference(formula, row_map):
             raise ValueError(
                 f"La fórmula {formula.attrib['t']} de {coordinate} requiere "
                 "preflight antes de mover el total"
             )
 
 
-def _special_formula_has_moved_structural_reference(formula: ET.Element) -> bool:
+def _special_formula_has_moved_structural_reference(
+    formula: ET.Element,
+    row_map: MobilitiRowMap,
+) -> bool:
     values = list(formula.attrib.values())
     if formula.text:
         values.extend(
@@ -515,7 +596,9 @@ def _special_formula_has_moved_structural_reference(formula: ET.Element) -> bool
             endpoints.append(match.group("last"))
         parsed = [_CELL_REFERENCE.fullmatch(endpoint) for endpoint in endpoints]
         if all(item is not None for item in parsed) and any(
-            CANONICAL_TOTAL_ROW <= int(item.group("row")) <= CANONICAL_AUXILIARY_END
+            row_map.canonical_total_row
+            <= int(item.group("row"))
+            <= row_map.canonical_auxiliary_end
             for item in parsed
             if item is not None
         ):
@@ -538,7 +621,9 @@ def clone_section_header(
     clone = editor.replace_table_row(
         target_row, canonical_row, source_row, effective_row_map
     )
-    title_column = 4 if source_row == 13 else 1
+    title_column = (
+        4 if source_row == effective_row_map.canonical_first_section_row else 1
+    )
     _set_cell_value(clone, f"{get_column_letter(title_column)}{target_row}", "text", title)
 
 
@@ -591,7 +676,7 @@ def clone_formula_row(
         row_map,
         editor.layout,
     )
-    if editor.layout.id == "v17":
+    if editor.layout.id in {"v17", "v18"}:
         # La excepción sin m3 omite solo el contenedor, no IVA ni otros costos.
         # Con volumen o factor manual explícito se mantiene el cálculo oficial.
         import_factor = _find_cell(clone, 12)
@@ -621,7 +706,7 @@ def _set_uniform_product_price_formulas(
 
     first_row = row_map.sections[0].product_start
     last_row = row_map.last_product_row
-    if layout.id == "v17":
+    if layout.id in {"v17", "v18"}:
         formulas = {
             27: (
                 f"IF(Z{target_row}>=Y{target_row},"
@@ -708,7 +793,7 @@ def clone_total_row(
     clone = editor.replace_table_row(
         target_row,
         canonical_row,
-        CANONICAL_TOTAL_ROW,
+        row_map.canonical_total_row,
         row_map,
         last_column=editor.layout.total_last_column,
     )
@@ -792,7 +877,9 @@ def translate_mobiliti_conditional_formatting(
     dynamic: list[tuple[int, ET.Element]] = []
     fixed: list[ET.Element] = []
     for node in original:
-        section_indices = _sqref_dynamic_indices(node.attrib.get("sqref", ""))
+        section_indices = _sqref_dynamic_indices(
+            node.attrib.get("sqref", ""), row_map
+        )
         if not section_indices:
             fixed.append(node)
         else:
@@ -814,7 +901,7 @@ def translate_mobiliti_conditional_formatting(
             )
             seen_nodes.add(id(node))
     second_templates = [node for index, node in dynamic if index == 1]
-    for section_index in range(len(CANONICAL_SUBTOTAL_ROWS), len(row_map.sections)):
+    for section_index in range(len(row_map.canonical_subtotal_rows), len(row_map.sections)):
         translated.extend(
             _translate_cf_node(node, section_index, row_map, source_section_index=1)
             for node in second_templates
@@ -843,17 +930,17 @@ def _translate_cf_node(
 ) -> ET.Element:
     clone = deepcopy(source)
     source_index = (
-        _sqref_section_index(source.attrib.get("sqref", ""))
+        _sqref_section_index(source.attrib.get("sqref", ""), row_map)
         if source_section_index is None
         else source_section_index
     )
     if source_index is None:
         return clone
-    source_start = 14 + source_index * 35
+    source_start = row_map.canonical_first_product_row + source_index * 35
     target_start = row_map.sections[target_section_index].product_start
     sqref_tokens: list[str] = []
     for token in source.attrib["sqref"].split():
-        token_index = _sqref_token_section_index(token)
+        token_index = _sqref_token_section_index(token, row_map)
         if token_index is None:
             if include_fixed and token not in sqref_tokens:
                 sqref_tokens.append(token)
@@ -1103,7 +1190,11 @@ def _structural_reference(
     if any(item is None for item in parsed):
         return translated
     rows = [int(item.group("row")) for item in parsed if item is not None]
-    if len(parsed) == 2 and rows == [14, 571]:
+    canonical_product_rows = [
+        row_map.canonical_first_product_row,
+        row_map.canonical_last_product_row,
+    ]
+    if len(parsed) == 2 and rows == canonical_product_rows:
         columns = {
             item.group("column").lstrip("$")
             for item in parsed
@@ -1120,19 +1211,24 @@ def _structural_reference(
         ):
             return _reference_with_rows(
                 original,
-                (14, row_map.last_product_row),
+                (row_map.canonical_first_product_row, row_map.last_product_row),
             )
-    if product_range is not None and (
-        rows == [14, 46] or rows == [49, 81]
+    first_product_row = row_map.canonical_first_product_row
+    if product_range is not None and rows in (
+        [first_product_row, first_product_row + 32],
+        [first_product_row + 35, first_product_row + 67],
     ):
         if product_range == (0, 0):
             return "0"
         first, last = product_range
         return _reference_with_rows(original, (first, last))
-    if all(CANONICAL_TOTAL_ROW <= row <= CANONICAL_AUXILIARY_END for row in rows):
+    if all(
+        row_map.canonical_total_row <= row <= row_map.canonical_auxiliary_end
+        for row in rows
+    ):
         return _reference_with_rows(
             original,
-            tuple(row_map.total_row + row - CANONICAL_TOTAL_ROW for row in rows),
+            tuple(row_map.total_row + row - row_map.canonical_total_row for row in rows),
         )
     return translated
 
@@ -1195,7 +1291,7 @@ def _translate_total_formula(
         ):
             continue
         cell = _CELL_REFERENCE.fullmatch(match.group("first"))
-        if cell is None or int(cell.group("row")) not in CANONICAL_SUBTOTAL_ROWS:
+        if cell is None or int(cell.group("row")) not in row_map.canonical_subtotal_rows:
             continue
         signature = (
             (match.group("sheet") or "").casefold(),
@@ -1211,8 +1307,8 @@ def _translate_total_formula(
         reference_indices.append(index)
         source_rows.append(int(cell.group("row")))
         source_references.append(token.value)
-    ascending = list(CANONICAL_SUBTOTAL_ROWS)
-    descending = list(reversed(CANONICAL_SUBTOTAL_ROWS))
+    ascending = list(row_map.canonical_subtotal_rows)
+    descending = list(reversed(row_map.canonical_subtotal_rows))
     if not reference_indices and any(
         (
             (match := _RANGE_REFERENCE.fullmatch(token.value)) is not None
@@ -1228,13 +1324,16 @@ def _translate_total_formula(
                 int(_CELL_REFERENCE.fullmatch(match.group("first")).group("row")),
                 int(_CELL_REFERENCE.fullmatch(match.group("last")).group("row")),
             ]
-            == [14, 571]
+            == [
+                row_map.canonical_first_product_row,
+                row_map.canonical_last_product_row,
+            ]
         )
         for token in tokens
         if token.type == "OPERAND" and token.subtype == "RANGE"
     ):
         return translated
-    if len(reference_indices) != len(CANONICAL_SUBTOTAL_ROWS) or source_rows not in (
+    if len(reference_indices) != len(row_map.canonical_subtotal_rows) or source_rows not in (
         ascending,
         descending,
     ):
@@ -1382,24 +1481,27 @@ def _translate_sqref(value: str, row_map: MobilitiRowMap) -> str:
     canonical_templates: list[str] = []
     for token in value.split():
         match = _RANGE_REFERENCE.fullmatch(token)
-        section_index = _sqref_token_section_index(token)
+        section_index = _sqref_token_section_index(token, row_map)
         if match is None or section_index is None:
             translated = token
         else:
             section = row_map.sections[section_index]
             translated = _translate_sqref_token(
-                token, 14 + section_index * 35, section.product_start, section.capacity
+                token,
+                row_map.canonical_first_product_row + section_index * 35,
+                section.product_start,
+                section.capacity,
             )
             if section_index == 1 and token not in canonical_templates:
                 canonical_templates.append(token)
         if translated not in seen:
             result.append(translated)
             seen.add(translated)
-    for section in row_map.sections[len(CANONICAL_SUBTOTAL_ROWS) :]:
+    for section in row_map.sections[len(row_map.canonical_subtotal_rows) :]:
         for template in canonical_templates:
             token = _translate_sqref_token(
                 template,
-                49,
+                row_map.canonical_first_product_row + 35,
                 section.product_start,
                 section.capacity,
             )
@@ -1429,7 +1531,10 @@ def _translate_sqref_token(
     )
 
 
-def _sqref_token_section_index(token: str) -> int | None:
+def _sqref_token_section_index(
+    token: str,
+    row_map: MobilitiRowMap,
+) -> int | None:
     match = _RANGE_REFERENCE.fullmatch(token)
     if match is None or match.group("last") is None:
         return None
@@ -1438,21 +1543,29 @@ def _sqref_token_section_index(token: str) -> int | None:
     if first is None or last is None:
         return None
     first_row, last_row = int(first.group("row")), int(last.group("row"))
-    if first_row < 14 or (first_row - 14) % 35 or last_row != first_row + 32:
+    canonical_start = row_map.canonical_first_product_row
+    if (
+        first_row < canonical_start
+        or (first_row - canonical_start) % 35
+        or last_row != first_row + 32
+    ):
         return None
-    index = (first_row - 14) // 35
-    return index if index < len(CANONICAL_SUBTOTAL_ROWS) else None
+    index = (first_row - canonical_start) // 35
+    return index if index < len(row_map.canonical_subtotal_rows) else None
 
 
-def _sqref_section_index(value: str) -> int | None:
-    indices = _sqref_dynamic_indices(value)
+def _sqref_section_index(value: str, row_map: MobilitiRowMap) -> int | None:
+    indices = _sqref_dynamic_indices(value, row_map)
     return indices[0] if len(indices) == 1 else None
 
 
-def _sqref_dynamic_indices(value: str) -> tuple[int, ...]:
+def _sqref_dynamic_indices(
+    value: str,
+    row_map: MobilitiRowMap,
+) -> tuple[int, ...]:
     result: list[int] = []
     for token in value.split():
-        index = _sqref_token_section_index(token)
+        index = _sqref_token_section_index(token, row_map)
         if index is not None and index not in result:
             result.append(index)
     return tuple(result)
@@ -1490,24 +1603,32 @@ def _replace_merges(
         min_col, min_row, max_col, max_row = bounds
         cross_boundary = min_col <= editor.layout.table_last_column < max_col
         canonical_total = (
-            min_row == max_row == CANONICAL_TOTAL_ROW
+            min_row == max_row == row_map.canonical_total_row
             and max_col <= editor.layout.total_last_column
         )
         dynamic_table = (
-            min_row >= 13
-            and max_row <= CANONICAL_TOTAL_ROW
+            min_row >= row_map.canonical_first_section_row
+            and max_row <= row_map.canonical_total_row
             and min_col <= editor.layout.table_last_column
             and not cross_boundary
         )
-        auxiliary = min_row >= CANONICAL_AUXILIARY_START and max_row <= CANONICAL_AUXILIARY_END
+        auxiliary = (
+            min_row >= row_map.canonical_auxiliary_start
+            and max_row <= row_map.canonical_auxiliary_end
+        )
         if not dynamic_table and not auxiliary and not canonical_total:
             preserved.append(deepcopy(merge))
     generated = []
     for index, section in enumerate(row_map.sections):
+        first_section = row_map.canonical_first_section_row
+        first_subtotal = row_map.canonical_first_subtotal_row
         templates = (
-            ((13, section.section_row), (47, section.subtotal_row))
+            ((first_section, section.section_row), (first_subtotal, section.subtotal_row))
             if index == 0
-            else ((48, section.section_row), (82, section.subtotal_row))
+            else (
+                (first_section + 35, section.section_row),
+                (first_subtotal + 35, section.subtotal_row),
+            )
         )
         for source_row, target_row in templates:
             generated.extend(
@@ -1518,7 +1639,7 @@ def _replace_merges(
                     editor.layout.table_last_column,
                 )
             )
-        product_source = 14 if index == 0 else 49
+        product_source = row_map.canonical_first_product_row + (0 if index == 0 else 35)
         for target_row in range(
             section.product_start, section.product_start + section.capacity
         ):
@@ -1533,15 +1654,21 @@ def _replace_merges(
     generated.extend(
         _row_merges(
             canonical.merges,
-            CANONICAL_TOTAL_ROW,
+            row_map.canonical_total_row,
             row_map.total_row,
             editor.layout.total_last_column,
         )
     )
     for merge in canonical.merges:
         bounds = _merge_bounds(merge.attrib["ref"])
-        if bounds and bounds[1] >= CANONICAL_AUXILIARY_START and bounds[3] <= CANONICAL_AUXILIARY_END:
-            generated.append(_shift_merge(merge, row_map.total_row - CANONICAL_TOTAL_ROW))
+        if (
+            bounds
+            and bounds[1] >= row_map.canonical_auxiliary_start
+            and bounds[3] <= row_map.canonical_auxiliary_end
+        ):
+            generated.append(
+                _shift_merge(merge, row_map.total_row - row_map.canonical_total_row)
+            )
     by_reference: dict[str, ET.Element] = {}
     for merge in (*preserved, *generated):
         by_reference.setdefault(merge.attrib["ref"], merge)
@@ -1604,8 +1731,14 @@ def build_mobiliti_sheet(
 ) -> MobilitiSheetMutation:
     """Construye la mutación de ``Mobiliti`` a partir del XML oficial."""
 
-    row_map = plan_mobiliti_layout(needs)
     editor = WorksheetEditor.from_xml(official_sheet_xml)
+    row_map = plan_mobiliti_layout(
+        needs,
+        first_section_row=editor.layout.first_section_row,
+        canonical_auxiliary_row_count=(
+            editor.layout.auxiliary_end - editor.layout.total_row
+        ),
+    )
     canonical = capture_official_mobiliti_block(editor)
     _preflight_cloneable_formulas(canonical)
     _preflight_static_special_formulas(editor, row_map)
@@ -1625,15 +1758,24 @@ def build_mobiliti_sheet(
     for index, section in enumerate(row_map.sections):
         first = index == 0
         header = canonical.first_section_header if first else canonical.section_header
-        # La fila 49 del archivo oficial no contiene la superficie completa de
+        # La segunda fila de producto oficial no contiene la superficie completa de
         # formulas (L/N estan vacias), aunque secciones oficiales posteriores
-        # si las contienen y calcChain las declara. La fila 14 es la plantilla
+        # si las contienen y calcChain las declara. La primera fila de producto es
+        # la plantilla
         # oficial completa y el traductor estructural la adapta a cada bloque.
         product = canonical.first_product_row
         subtotal = canonical.first_subtotal_row if first else canonical.subtotal_row
-        header_source_row = 13 if first else 48
-        product_source_row = 14
-        subtotal_source_row = 47 if first else 82
+        header_source_row = (
+            row_map.canonical_first_section_row
+            if first
+            else row_map.canonical_first_section_row + 35
+        )
+        product_source_row = row_map.canonical_first_product_row
+        subtotal_source_row = (
+            row_map.canonical_first_subtotal_row
+            if first
+            else row_map.canonical_first_subtotal_row + 35
+        )
         clone_section_header(
             editor,
             header,

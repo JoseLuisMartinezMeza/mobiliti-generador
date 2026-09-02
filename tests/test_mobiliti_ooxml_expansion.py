@@ -12,6 +12,9 @@ from openpyxl.formula.tokenizer import Tokenizer
 
 from mobiliti_saas.quote_engine.mobiliti_layout import SectionNeed, plan_mobiliti_layout
 from mobiliti_saas.quote_engine.ooxml_formula import translate_formula
+from mobiliti_saas.quote_engine.mobiliti_pricing import (
+    write_official_currency_selector,
+)
 from mobiliti_saas.quote_engine.ooxml_package import (
     PackageMutation,
     XlsxPackage,
@@ -81,6 +84,26 @@ def _part_bytes(path: Path, part: str) -> bytes:
         return archive.read(part)
 
 
+def _frozen_v17_mobiliti_xml() -> bytes:
+    """Fixture mínimo con la firma estructural de la plantilla v17 real."""
+
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<worksheet xmlns="{MAIN}">
+  <sheetData>
+    <row r="4">
+      <c r="E4"><f>AB573</f><v>0</v></c>
+      <c r="P4" t="b"><v>1</v></c>
+    </row>
+    <row r="6">
+      <c r="E6"><f>IFERROR(SUMPRODUCT(($F$14:$F$571&lt;&gt;"")*(ISNUMBER($AB$14:$AB$571)), $AB$14:$AB$571, $AC$14:$AC$571) / SUMPRODUCT(($F$14:$F$571&lt;&gt;"")*(ISNUMBER($AB$14:$AB$571)), $AB$14:$AB$571), 0)</f><v>0</v></c>
+      <c r="P6"><f>IF(P4=TRUE,_FV(J6,"Price"),0)</f><v>17.032</v></c>
+    </row>
+    <row r="9"><c r="E9"/></row>
+    <row r="13"><c r="AD13"><f>E6</f><v>0</v></c></row>
+  </sheetData>
+</worksheet>""".encode()
+
+
 def _official_root() -> ET.Element:
     part = _official_part(TEMPLATE, "Mobiliti")
     return ET.fromstring(_part_bytes(TEMPLATE, part))
@@ -134,6 +157,83 @@ def _official_formula(coordinate: str) -> str:
     formula = root.find(f".//{{{MAIN}}}c[@r='{coordinate}']/{{{MAIN}}}f")
     assert formula is not None and formula.text
     return "=" + formula.text
+
+
+def test_v18_detection_survives_currency_selector_write_and_reparse():
+    part = _official_part(OFFICIAL_TEMPLATE, "Mobiliti")
+    editor = WorksheetEditor.from_xml(_part_bytes(OFFICIAL_TEMPLATE, part))
+
+    assert editor.layout.id == "v18"
+    write_official_currency_selector(
+        editor,
+        "MXN",
+        "Guadalajara",
+        Decimal("0.35"),
+    )
+
+    assert WorksheetEditor.from_xml(editor.to_xml()).layout.id == "v18"
+
+
+def test_seventeenth_section_output_reparses_as_v18():
+    needs = [
+        SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
+        for index in range(17)
+    ]
+    part = _official_part(OFFICIAL_TEMPLATE, "Mobiliti")
+    mutation = build_mobiliti_sheet(
+        _part_bytes(OFFICIAL_TEMPLATE, part),
+        needs,
+        [],
+    )
+
+    assert mutation.row_map.last_product_row == 607
+    assert WorksheetEditor.from_xml(mutation.xml).layout.id == "v18"
+
+
+def test_real_frozen_v17_survives_currency_selector_write_and_reparse():
+    editor = WorksheetEditor.from_xml(_frozen_v17_mobiliti_xml())
+
+    assert editor.layout.id == "v17"
+    assert editor.root.find(f".//{{{MAIN}}}c[@r='E9']/{{{MAIN}}}f") is None
+    write_official_currency_selector(
+        editor,
+        "MXN",
+        "Guadalajara",
+        Decimal("0.35"),
+    )
+
+    assert WorksheetEditor.from_xml(editor.to_xml()).layout.id == "v17"
+
+
+def test_legacy_layout_signature_remains_detectable():
+    legacy_part = _official_part(TEMPLATE, "Mobiliti")
+
+    assert (
+        WorksheetEditor.from_xml(_part_bytes(TEMPLATE, legacy_part)).layout.id
+        == "legacy"
+    )
+
+
+def test_layout_detection_fails_closed_when_e6_and_e9_ranges_disagree():
+    part = _official_part(OFFICIAL_TEMPLATE, "Mobiliti")
+    inconsistent = ET.fromstring(_part_bytes(OFFICIAL_TEMPLATE, part))
+    e6 = inconsistent.find(f".//{{{MAIN}}}c[@r='E6']/{{{MAIN}}}f")
+    assert e6 is not None and e6.text
+    e6.text = e6.text.replace("$15", "$14").replace("$572", "$571")
+
+    with pytest.raises(ValueError, match="layout firmado"):
+        WorksheetEditor.from_xml(ET.tostring(inconsistent))
+
+
+def test_layout_detection_fails_closed_when_v18_and_legacy_signatures_coexist():
+    part = _official_part(OFFICIAL_TEMPLATE, "Mobiliti")
+    ambiguous = ET.fromstring(_part_bytes(OFFICIAL_TEMPLATE, part))
+    k6 = ambiguous.find(f".//{{{MAIN}}}c[@r='K6']")
+    assert k6 is not None
+    ET.SubElement(k6, f"{{{MAIN}}}f").text = '_FV(J6,"High")'
+
+    with pytest.raises(ValueError, match="layout firmado"):
+        WorksheetEditor.from_xml(ET.tostring(ambiguous))
 
 
 def _formula_rows(formula: str, column: str) -> list[int]:
@@ -282,7 +382,7 @@ def test_more_than_sixteen_sections_clone_official_blocks(tmp_path, section_coun
         workbook.close()
 
 
-def test_seventeenth_section_extends_official_x_global_product_ranges():
+def test_seventeenth_section_extends_official_uniform_price_global_ranges():
     needs = [
         SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
         for index in range(17)
@@ -295,22 +395,44 @@ def test_seventeenth_section_extends_official_x_global_product_ranges():
     )
     root = ET.fromstring(mutation.xml)
     last_row = mutation.row_map.sections[-1].product_start
-    formula = root.find(f".//{{{MAIN}}}c[@r='X{last_row}']/{{{MAIN}}}f")
+    formula = root.find(f".//{{{MAIN}}}c[@r='AA{last_row}']/{{{MAIN}}}f")
 
     assert formula is not None and formula.text
+    first_product_row = mutation.row_map.sections[0].product_start
     assert (
-        f"$W$14:$W${mutation.row_map.last_product_row}"
+        f"$Z${first_product_row}:$Z${mutation.row_map.last_product_row}"
         in formula.text
     )
     assert (
-        f"$D$14:$D${mutation.row_map.last_product_row}"
+        f"$D${first_product_row}:$D${mutation.row_map.last_product_row}"
         in formula.text
     )
     assert (
-        f"$H$14:$H${mutation.row_map.last_product_row}"
+        f"$H${first_product_row}:$H${mutation.row_map.last_product_row}"
         in formula.text
     )
     assert "_xlfn.MAXIFS(" in formula.text
+
+
+def test_seventeenth_section_extends_official_e9_global_ranges():
+    needs = [
+        SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
+        for index in range(17)
+    ]
+    part = _official_part(OFFICIAL_TEMPLATE, "Mobiliti")
+    mutation = build_mobiliti_sheet(
+        _part_bytes(OFFICIAL_TEMPLATE, part),
+        needs,
+        [],
+    )
+    root = ET.fromstring(mutation.xml)
+    formula = root.find(f".//{{{MAIN}}}c[@r='E9']/{{{MAIN}}}f")
+
+    assert mutation.row_map.last_product_row == 607
+    assert formula is not None and formula.text
+    for column in ("A", "H", "AI", "Z"):
+        assert f"${column}$15:${column}$607" in formula.text
+        assert f"${column}$14:${column}$571" not in formula.text
 
 
 def test_validations_and_conditional_formatting_reach_twentieth_section(tmp_path):

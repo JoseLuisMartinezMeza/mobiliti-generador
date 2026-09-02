@@ -40,15 +40,17 @@ def test_minimal_composition_preserves_linked_usd_mxn_metadata_and_pricing_formu
 
     package = XlsxPackage.read(OFFICIAL_TEMPLATE)
     official = ET.fromstring(package.parts[package.sheet_part("Mobiliti")])
+    first_product_row = 15
     mutation = build_mobiliti_sheet(
         package.parts[package.sheet_part("Mobiliti")],
         [SectionNeed("sillas", "SILLAS", 1)],
         (
-            MobilitiCellWrite("D14", "text", "Silla de prueba"),
-            MobilitiCellWrite("J14", "number", Decimal("100.00")),
+            MobilitiCellWrite(f"D{first_product_row}", "text", "Silla de prueba"),
+            MobilitiCellWrite(f"J{first_product_row}", "number", Decimal("100.00")),
         ),
     )
     composed = ET.fromstring(mutation.xml)
+    last_product_row = mutation.row_map.last_product_row
 
     # J6 es un rich-value vinculado: ``vm`` lo conecta con xl/metadata.xml.
     assert _cell(composed, "J6").attrib.get("vm") == _cell(official, "J6").attrib["vm"]
@@ -61,12 +63,18 @@ def test_minimal_composition_preserves_linked_usd_mxn_metadata_and_pricing_formu
         'IF(P4=TRUE,_FV(J6,"Price"),0)'
     )
 
-    assert _formula_payload(_cell(composed, "Z14")) == _formula_payload(
-        _cell(official, "Z14")
+    assert _formula_payload(_cell(composed, f"Z{first_product_row}")) == _formula_payload(
+        _cell(official, f"Z{first_product_row}")
     )
-    assert _formula_payload(_cell(composed, "AA14"))[1] == (
-        "IF(Z14>=Y14,_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D14,"
-        "$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,$D$14:$D$571,D14))"
+    assert _formula_payload(_cell(composed, f"AA{first_product_row}"))[1] == (
+        f"IF(Z{first_product_row}>=Y{first_product_row},"
+        f"_xlfn.MINIFS($Z${first_product_row}:$Z${last_product_row},"
+        f"$D${first_product_row}:$D${last_product_row},D{first_product_row},"
+        f"$H${first_product_row}:$H${last_product_row},"
+        f"_xlfn.MAXIFS($H${first_product_row}:$H${last_product_row},"
+        f"$D${first_product_row}:$D${last_product_row},D{first_product_row}))"
         ',"NO SE ESTA RESPETANDO EL MARGEN")'
     )
-    assert _formula_payload(_cell(composed, "AB14"))[1] == "IFERROR(AA14*H14,0)"
+    assert _formula_payload(_cell(composed, f"AB{first_product_row}"))[1] == (
+        f"IFERROR(AA{first_product_row}*H{first_product_row},0)"
+    )

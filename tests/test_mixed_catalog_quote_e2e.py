@@ -1240,8 +1240,8 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
         assert mobiliti.cell(mobiliti_row, 19).value == "Centro"
         assert mobiliti.cell(mobiliti_row, 6).value == "Sunon Inc"
         assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
-        assert mobiliti["AD13"].value == 0.4
-        assert cotizacion.cell(cotizacion_row, 7).value == "=ROUND(Mobiliti!$AD$13,2)"
+        assert mobiliti["AD14"].value == 0.4
+        assert cotizacion.cell(cotizacion_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
         assert cotizacion.cell(cotizacion_row, 8).value == (
             f"=F{cotizacion_row}*G{cotizacion_row}"
         )
@@ -1567,10 +1567,10 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         assert mobiliti_rows == sorted(mobiliti_rows)
         assert cotizacion_rows == sorted(cotizacion_rows)
         first_product_row = cotizacion_rows[0]
-        assert mobiliti["AD13"].value == 0.4
+        assert mobiliti["AD14"].value == 0.4
         assert mobiliti["P4"].value is (quote_currency in {"USD", "EUR"})
         assert [cotizacion.cell(row, 7).value for row in cotizacion_rows] == [
-            "=ROUND(Mobiliti!$AD$13,2)" for _ in cotizacion_rows
+            "=ROUND(Mobiliti!$AD$14,2)" for _ in cotizacion_rows
         ]
         for canonical, mobiliti_row, cotizacion_row in zip(
             canonical_rows,
@@ -1606,9 +1606,9 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
             assert str(mobiliti.cell(mobiliti_row, 26).value).startswith("=ROUNDUP(IF(")
             assert mobiliti.cell(mobiliti_row, 27).value == (
                 f"=IF(Z{mobiliti_row}>=Y{mobiliti_row},"
-                f"_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D{mobiliti_row},"
-                f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
-                f'$D$14:$D$571,D{mobiliti_row})),"NO SE ESTA RESPETANDO EL MARGEN")'
+                f"_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D{mobiliti_row},"
+                f"$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,"
+                f'$D$15:$D$572,D{mobiliti_row})),"NO SE ESTA RESPETANDO EL MARGEN")'
             )
             assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
             assert cotizacion.cell(cotizacion_row, 8).value == (
@@ -1982,7 +1982,7 @@ def _assert_task9_final_workbook(
         1,
         [f"=Mobiliti!D{row}" for row in mobiliti_rows],
     )
-    assert mobiliti_rows == list(range(14, 22))
+    assert mobiliti_rows == list(range(15, 23))
     assert cotizacion_rows == list(range(17, 25))
 
     processed_by_cotizacion_row = {}
@@ -2002,9 +2002,9 @@ def _assert_task9_final_workbook(
         assert str(mobiliti.cell(mobiliti_row, 25).value).startswith("=ROUNDUP(IF(")
         assert mobiliti.cell(mobiliti_row, 27).value == (
             f"=IF(Z{mobiliti_row}>=Y{mobiliti_row},"
-            f"_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D{mobiliti_row},"
-            f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
-            f'$D$14:$D$571,D{mobiliti_row})),"NO SE ESTA RESPETANDO EL MARGEN")'
+            f"_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D{mobiliti_row},"
+            f"$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,"
+            f'$D$15:$D$572,D{mobiliti_row})),"NO SE ESTA RESPETANDO EL MARGEN")'
         )
         quantity_match = re.fullmatch(
             r"=Quotation!H([1-9][0-9]*)",
@@ -2048,9 +2048,9 @@ def _assert_task9_final_workbook(
             f"=E{cotizacion_row}*I{cotizacion_row}"
         )
     first_product = cotizacion_rows[0]
-    assert mobiliti["AD13"].value == 0.4
+    assert mobiliti["AD14"].value == 0.4
     assert [cotizacion.cell(row, 7).value for row in cotizacion_rows] == [
-        "=ROUND(Mobiliti!$AD$13,2)"
+        "=ROUND(Mobiliti!$AD$14,2)"
     ] * len(cotizacion_rows)
     assert not any(
         str(cotizacion.cell(row, 1).value or "").startswith("=Quotation!")

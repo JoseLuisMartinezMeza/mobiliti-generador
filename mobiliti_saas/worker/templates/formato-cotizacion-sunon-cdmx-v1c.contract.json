@@ -1,14 +1,15 @@
 {
-  "sha256": "4c150193ce0c59de68f1091741d82b0ddf3fc439c1966ca31f35d92a336a0247",
-  "defined_name_count": 32,
+  "sha256": "4babce296ecc9d6941264563644501bb00f50161cdce02d3504b0067788d6320",
+  "defined_name_count": 34,
   "external_link_parts": 12,
   "spec_formula_count": 1314,
   "sheet_states": {
     "Cotizacion": "visible",
     "Mobiliti": "visible",
+    "Control Administrativo": "visible",
     "Estrategia Comercial ": "visible",
-    "Fletes": "visible",
     "Cantidades Lumbro ": "visible",
+    "Fletes": "hidden",
     "Proveedores": "hidden",
     "SPEC LAMINADO JOME": "hidden",
     "SPEC-GUIDE-LUMBRO": "hidden",
@@ -24,15 +25,27 @@
   ],
   "mutable_cells": {
     "Mobiliti": [
-      "K4",
-      "K8"
+      "P4",
+      "P8",
+      "AD14"
+    ],
+    "Cotizacion": [
+      "D64"
     ],
     "Fletes": [
-      "D19"
+      "D19",
+      "B61:B68",
+      "M18:N21",
+      "Q18:R21"
     ],
     "Estrategia Comercial ": [
-      "B7:C37",
-      "D59"
+      "B6:F39",
+      "B62:B70",
+      "C96:C115"
+    ],
+    "Control Administrativo": [
+      "B3:H5",
+      "B9:B14"
     ]
   },
   "mutable_drawing_regions": {

@@ -25,7 +25,7 @@ TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 Oficial.xlsx"
 )
-OFFICIAL_SHA256 = "7df7df6d13168b95ea665f68d8ac7dbc7697044e281debf161f87cf283fd097d"
+OFFICIAL_SHA256 = "39f5cebd3cbe3e7356f4d4174161e8599bf7158e7b495a789c9fc04850928ee4"
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
@@ -70,16 +70,28 @@ def test_official_template_uses_latest_sharepoint_price_columns() -> None:
     package = XlsxPackage.read(TEMPLATE)
     mobiliti = ET.fromstring(package.parts[package.sheet_part("Mobiliti")])
     cotizacion = ET.fromstring(package.parts[package.sheet_part("Cotizacion")])
+    fletes = ET.fromstring(package.parts[package.sheet_part("Fletes")])
 
-    assert mobiliti.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A1:AZ610"
-    assert _formula(mobiliti, "Y14").startswith("ROUNDUP(IF(OR(F14=\"Offiho\"")
-    assert _formula(mobiliti, "Z14").startswith("ROUNDUP(IF(OR(F14=\"Offiho\"")
-    assert _formula(mobiliti, "AA14") == (
-        'IF(Z14>=Y14,_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D14),'
+    assert mobiliti.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A1:AZ614"
+    assert _formula(mobiliti, "E9") == (
+        "ROUND(IFERROR(1-SUMPRODUCT(($A$15:$A$572=TRUE)*($H$15:$H$572)*"
+        "($AI$15:$AI$572))/SUMPRODUCT(($A$15:$A$572=TRUE)*($H$15:$H$572)*"
+        "($Z$15:$Z$572)),0),2)"
+    )
+    assert _formula(mobiliti, "AD14") == "E6"
+    assert _formula(mobiliti, "Y15").startswith("ROUNDUP(IF(OR(F15=\"Offiho\"")
+    assert _formula(mobiliti, "Z15").startswith("ROUNDUP(IF(OR(F15=\"Offiho\"")
+    assert _formula(mobiliti, "AA15") == (
+        'IF(Z15>=Y15,_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D15),'
         '"NO SE ESTA RESPETANDO EL MARGEN")'
     )
-    assert _formula(mobiliti, "AD14") == "IF(H14>0,$E$5,0)"
-    assert _formula(cotizacion, "F17") == "Mobiliti!AA14"
+    assert _formula(mobiliti, "AD15") == "IF(H15>0,$E$5,0)"
+    assert _formula(cotizacion, "F17") == "Mobiliti!AA15"
+    assert _formula(cotizacion, "G17") == "ROUND(Mobiliti!$AD$14,2)"
+    assert _formula(fletes, "B66") == (
+        'MIN(110%, IF(E60="MANUAL", E63, IF(E60="PRORRATEADO", '
+        '(B61*B65+E62+B78)/B61, (B61*B65+B64+B78)/B61)))'
+    )
 
 
 def test_modified_template_fails_before_output(tmp_path):

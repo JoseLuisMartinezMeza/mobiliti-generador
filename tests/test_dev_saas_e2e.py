@@ -280,31 +280,46 @@ def test_dev_mode_import_preview_mixed_checkout_worker_and_xlsx(tmp_path, monkey
             if str(cotizacion.cell(row, 1).value or "").startswith("=Mobiliti!D")
         ]
         assert len(product_rows) == 8
-        assert cotizacion.cell(product_rows[0], 7).value == 0.4
-        assert [cotizacion.cell(row, 7).value for row in product_rows[1:]] == [
-            f"=$G${product_rows[0]}"
-        ] * 7
+        assert [cotizacion.cell(row, 7).value for row in product_rows] == [
+            "=ROUND(Mobiliti!$AD$14,2)"
+        ] * 8
         mobiliti = workbook["Mobiliti"]
+        assert mobiliti["AD14"].value == 0.4
+        assert mobiliti["P4"].value is False
+        assert getattr(mobiliti["P6"].value, "text", None) == (
+            '=IF(P4=TRUE,_FV(J6,"Price"),0)'
+        )
         official_blank_rows = [
             row for row in range(1, mobiliti.max_row + 1)
             if mobiliti.cell(row, 4).value is None
-            and str(mobiliti.cell(row, 23).value or "").startswith("=IF(F")
-            and str(mobiliti.cell(row, 24).value or "").startswith("=_xlfn.MINIFS(")
+            and str(mobiliti.cell(row, 25).value or "").startswith("=ROUNDUP(IF(OR(F")
+            and str(mobiliti.cell(row, 27).value or "").startswith("=IF(Z")
         ]
         assert official_blank_rows
         blank_row = official_blank_rows[0]
         assert all(
             mobiliti.cell(blank_row, column).value is None
-            for column in (4, 5, 6, 8, 10, 11, 16)
+            for column in (4, 5, 6, 8, 10, 16, 19)
         )
-        assert str(mobiliti.cell(blank_row, 23).value).startswith(
-            f'=IF(F{blank_row}="Offiho",J{blank_row},'
+        assert mobiliti.cell(blank_row, 11).value == (
+            f'=IFERROR(VLOOKUP(TRIM(F{blank_row}), ProveedoreS_TC, 5, FALSE), "Not Found")'
         )
-        assert str(mobiliti.cell(blank_row, 24).value).startswith(
-            "=_xlfn.MINIFS("
+        assert mobiliti.cell(blank_row, 25).value == (
+            f'=ROUNDUP(IF(OR(F{blank_row}="Offiho",F{blank_row}="Lauco Sofas",'
+            f'F{blank_row}="Requiez",F{blank_row}="Labenze",F{blank_row}="Sunon Mty"),'
+            f'J{blank_row},IF(K{blank_row}="Nacional",O{blank_row}/(1-30%),'
+            f'IF(K{blank_row}="Importado",O{blank_row}/(1-40%),'
+            f'IF(OR(F{blank_row}="Lumbro",F{blank_row}="Idelika"),'
+            f'O{blank_row}/(1-20%))))),0)'
         )
-        assert mobiliti.cell(blank_row, 35).value == (
-            f'=IF(AH{blank_row}<30%,"ERROR","OK")'
+        assert mobiliti.cell(blank_row, 27).value == (
+            f'=IF(Z{blank_row}>=Y{blank_row},'
+            f'_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D{blank_row},'
+            f'$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,'
+            f'$D$15:$D$572,D{blank_row})),"NO SE ESTA RESPETANDO EL MARGEN")'
+        )
+        assert mobiliti.cell(blank_row, 38).value == (
+            f'=IF(AK{blank_row}<30%,"ERROR","OK")'
         )
         assert all(
             "$K$6" not in str(cell.value or "")

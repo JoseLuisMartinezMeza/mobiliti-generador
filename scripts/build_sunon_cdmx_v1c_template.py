@@ -10,7 +10,9 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import time
 from uuid import uuid4
+from xml.parsers import expat
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,9 +47,20 @@ OFFICIAL_CONTRACT = (
     / "templates"
     / "formato-cotizacion-2026-oficial.contract.json"
 )
-OFFICIAL_SHA256 = "25f79e3ae533aa8f560be3e80586c19993ea65c0a07c500eb458738f9915b251"
+OFFICIAL_SHA256 = "39f5cebd3cbe3e7356f4d4174161e8599bf7158e7b495a789c9fc04850928ee4"
 XL_LINK_TYPE_EXCEL = 1
 XL_PASTE_FORMATS = -4122
+RPC_E_CALL_REJECTED = -2147418111
+XLSX_MAX_ROW = 1_048_576
+CDMX_PRINT_END_ROW = 76
+WORKBOOK_PART = "xl/workbook.xml"
+MC_NAMESPACE = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+X15AC_NAMESPACE = (
+    "http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac"
+)
+MC_ALTERNATE_CONTENT = f"{MC_NAMESPACE}}}AlternateContent"
+X15AC_ABS_PATH = f"{X15AC_NAMESPACE}}}absPath"
+LOCAL_USER_PATH_MARKER = b"c:\\users\\"
 
 
 def _sha256(path: Path) -> str:
@@ -137,9 +150,14 @@ def _copy_formats(
     target_sheet,
     source_address: str,
     target_address: str,
+    retry_com,
 ) -> None:
-    source_sheet.Range(source_address).Copy()
-    target_sheet.Range(target_address).PasteSpecial(Paste=XL_PASTE_FORMATS)
+    retry_com(lambda: source_sheet.Range(source_address).Copy())
+    retry_com(
+        lambda: target_sheet.Range(target_address).PasteSpecial(
+            Paste=XL_PASTE_FORMATS
+        )
+    )
 
 
 def _copy_all(
@@ -147,6 +165,7 @@ def _copy_all(
     target_sheet,
     source_address: str,
     target_address: str,
+    retry_com,
 ) -> None:
     """Copia contenido y presentación con Excel nativo.
 
@@ -154,8 +173,27 @@ def _copy_all(
     estilos que no pueden reproducirse fielmente asignando ``Value``.
     """
 
-    source_sheet.Range(source_address).Copy(
-        Destination=target_sheet.Range(target_address)
+    retry_com(
+        lambda: source_sheet.Range(source_address).Copy(
+            Destination=target_sheet.Range(target_address)
+        )
+    )
+
+
+def _copy_formula_with_retry(
+    source_sheet,
+    target_sheet,
+    source_address: str,
+    target_address: str,
+    retry_com,
+) -> None:
+    formula = retry_com(lambda: source_sheet.Range(source_address).Formula)
+    retry_com(
+        lambda: setattr(
+            target_sheet.Range(target_address),
+            "Formula",
+            formula,
+        )
     )
 
 
@@ -165,11 +203,63 @@ def _copy_row_heights(
     source_start: int,
     target_start: int,
     count: int,
+    retry_com,
 ) -> None:
     for offset in range(count):
-        target_sheet.Rows(target_start + offset).RowHeight = source_sheet.Rows(
-            source_start + offset
-        ).RowHeight
+        source_row = source_start + offset
+        target_row = target_start + offset
+        row_height = retry_com(
+            lambda: source_sheet.Rows(source_row).RowHeight
+        )
+        retry_com(
+            lambda: setattr(
+                target_sheet.Rows(target_row),
+                "RowHeight",
+                row_height,
+            )
+        )
+
+
+def _clear_cotizacion_tail(
+    target_sheet,
+    retry_com,
+    *,
+    print_end: int = CDMX_PRINT_END_ROW,
+) -> None:
+    """Vacía sólo A:J fuera del layout CDMX y conserva sidecars K+."""
+
+    used_range = retry_com(lambda: target_sheet.UsedRange)
+    first_used_row = retry_com(lambda: used_range.Row)
+    used_row_count = retry_com(lambda: used_range.Rows.Count)
+    if (
+        type(first_used_row) is not int
+        or type(used_row_count) is not int
+        or first_used_row < 1
+        or used_row_count < 1
+    ):
+        raise ValueError("UsedRange de Cotizacion inválido")
+    last_used_row = first_used_row + used_row_count - 1
+    if last_used_row > XLSX_MAX_ROW:
+        raise ValueError("UsedRange de Cotizacion excede XLSX")
+    if last_used_row <= print_end:
+        return
+
+    tail = retry_com(
+        lambda: target_sheet.Range(f"A{print_end + 1}:J{last_used_row}")
+    )
+    # Son mutaciones sobre el candidato: si Excel las rechaza, el build falla
+    # y se rehace completo; nunca se reejecutan sobre estado parcial.
+    tail.UnMerge()
+    tail.ClearContents()
+
+
+def _clear_cotizacion_residue(target_sheet, retry_com) -> None:
+    """Vacía payload oficial A19:J27 sin tocar estilos, J18 ni sidecars K+."""
+
+    residue = retry_com(lambda: target_sheet.Range("A19:J27"))
+    # Mutación no idempotente frente a una respuesta COM ambigua: si falla,
+    # se descarta el candidato completo en vez de repetirla.
+    residue.ClearContents()
 
 
 def _copy_column_widths(source_sheet, target_sheet) -> None:
@@ -223,7 +313,7 @@ def _replace_merge(sheet, address: str) -> None:
     sheet.Range(address).Merge()
 
 
-def _copy_single_logo(source_sheet, target_sheet) -> None:
+def _copy_single_logo(source_sheet, target_sheet, retry_com) -> None:
     """Sustituye los dibujos canónicos por el único logo de la fuente CDMX."""
 
     pictures = [
@@ -240,7 +330,7 @@ def _copy_single_logo(source_sheet, target_sheet) -> None:
 
     source_logo = pictures[0]
     source_sheet.Activate()
-    source_logo.Copy()
+    retry_com(source_logo.Copy)
     target_sheet.Parent.Activate()
     target_sheet.Activate()
     target_sheet.Paste()
@@ -252,36 +342,48 @@ def _copy_single_logo(source_sheet, target_sheet) -> None:
             continue
 
 
-def _copy_cotizacion_presentation(source_sheet, target_sheet) -> None:
+def _copy_cotizacion_presentation(
+    source_sheet,
+    target_sheet,
+    retry_com,
+) -> None:
     # La fuente CDMX usa otro layout lógico. Se traslada su presentación a las
     # filas canónicas que el motor ya conoce y se conservan íntegros los bloques
     # propios de CDMX: subtotal por área y condiciones comerciales.
-    _copy_formats(source_sheet, target_sheet, "A2:J2", "A3:J3")
-    _copy_formats(source_sheet, target_sheet, "A3:J3", "A4:J4")
-    _copy_formats(source_sheet, target_sheet, "A4:J4", "A7:J7")
-    _copy_formats(source_sheet, target_sheet, "A8:J8", "A8:J9")
-    _copy_formats(source_sheet, target_sheet, "A7:J7", "A10:J10")
-    _copy_formats(source_sheet, target_sheet, "A6:J6", "A11:J11")
-    _copy_formats(source_sheet, target_sheet, "A5:J5", "A12:J12")
-    _copy_formats(source_sheet, target_sheet, "A9:J9", "A14:J14")
+    _copy_formats(source_sheet, target_sheet, "A2:J2", "A3:J3", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A3:J3", "A4:J4", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A4:J4", "A7:J7", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A8:J8", "A8:J9", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A7:J7", "A10:J10", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A6:J6", "A11:J11", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A5:J5", "A12:J12", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A9:J9", "A14:J14", retry_com)
 
-    _copy_formats(source_sheet, target_sheet, "A12:J12", "A15:J15")
-    _copy_formats(source_sheet, target_sheet, "A11:J11", "A16:J16")
-    _copy_formats(source_sheet, target_sheet, "A13:J13", "A17:J17")
-    _copy_all(source_sheet, target_sheet, "A16:J16", "A18:J18")
+    _copy_formats(source_sheet, target_sheet, "A12:J12", "A15:J15", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A11:J11", "A16:J16", retry_com)
+    _copy_formats(source_sheet, target_sheet, "A13:J13", "A17:J17", retry_com)
+    _copy_all(source_sheet, target_sheet, "A16:J16", "A18:J18", retry_com)
     # Excel traduce referencias relativas al copiar hacia otra fila. Este
     # renglón es un prototipo firmado, por lo que debe conservar literalmente
     # la fórmula oficial; el compositor la sustituye por el rango real.
-    target_sheet.Range("J18").Formula = source_sheet.Range("J16").Formula
-    _copy_formats(source_sheet, target_sheet, "A27:J31", "A20:J24")
-    _copy_all(source_sheet, target_sheet, "A35:J83", "A28:J76")
+    _copy_formula_with_retry(
+        source_sheet,
+        target_sheet,
+        "J16",
+        "J18",
+        retry_com,
+    )
+    _copy_formats(source_sheet, target_sheet, "A27:J31", "A20:J24", retry_com)
+    _clear_cotizacion_residue(target_sheet, retry_com)
+    _copy_all(source_sheet, target_sheet, "A35:J83", "A28:J76", retry_com)
+    _clear_cotizacion_tail(target_sheet, retry_com)
 
-    _copy_row_heights(source_sheet, target_sheet, 12, 15, 1)
-    _copy_row_heights(source_sheet, target_sheet, 11, 16, 1)
-    _copy_row_heights(source_sheet, target_sheet, 13, 17, 1)
-    _copy_row_heights(source_sheet, target_sheet, 16, 18, 1)
-    _copy_row_heights(source_sheet, target_sheet, 27, 20, 5)
-    _copy_row_heights(source_sheet, target_sheet, 35, 28, 49)
+    _copy_row_heights(source_sheet, target_sheet, 12, 15, 1, retry_com)
+    _copy_row_heights(source_sheet, target_sheet, 11, 16, 1, retry_com)
+    _copy_row_heights(source_sheet, target_sheet, 13, 17, 1, retry_com)
+    _copy_row_heights(source_sheet, target_sheet, 16, 18, 1, retry_com)
+    _copy_row_heights(source_sheet, target_sheet, 27, 20, 5, retry_com)
+    _copy_row_heights(source_sheet, target_sheet, 35, 28, 49, retry_com)
     _copy_column_widths(source_sheet, target_sheet)
     _copy_page_presentation(source_sheet, target_sheet, "$A$1:$J$76")
 
@@ -289,23 +391,49 @@ def _copy_cotizacion_presentation(source_sheet, target_sheet) -> None:
     _replace_merge(target_sheet, "A16:J16")
     _replace_merge(target_sheet, "B11:G11")
     _replace_merge(target_sheet, "B12:G12")
-    _copy_single_logo(source_sheet, target_sheet)
+    _copy_single_logo(source_sheet, target_sheet, retry_com)
 
     target_sheet.Activate()
     target_sheet.Application.ActiveWindow.Zoom = 40
 
 
-def _copy_lumbro_surfaces(source_workbook, target_workbook) -> None:
-    after = target_workbook.Worksheets(target_workbook.Worksheets.Count)
-    source_workbook.Worksheets("Cantidades Lumbro ").Copy(None, after)
+def _copy_cotizacion_from_workbooks(
+    source_workbook,
+    target_workbook,
+    retry_com,
+) -> None:
+    source_sheet = retry_com(
+        lambda: source_workbook.Worksheets("Cotizacion")
+    )
+    target_sheet = retry_com(
+        lambda: target_workbook.Worksheets("Cotizacion")
+    )
+    _copy_cotizacion_presentation(source_sheet, target_sheet, retry_com)
 
-    sheet = target_workbook.Worksheets("Cantidades Lumbro ")
+
+def _copy_lumbro_surfaces(
+    source_workbook,
+    target_workbook,
+    retry_com,
+) -> None:
+    target_count = retry_com(lambda: target_workbook.Worksheets.Count)
+    after = retry_com(lambda: target_workbook.Worksheets(target_count))
+    source_sheet = retry_com(
+        lambda: source_workbook.Worksheets("Cantidades Lumbro ")
+    )
+    source_sheet.Copy(None, after)
+
+    sheet = retry_com(
+        lambda: target_workbook.Worksheets("Cantidades Lumbro ")
+    )
     sheet.UsedRange.ClearContents()
-    for index in range(sheet.Shapes.Count, 0, -1):
-        sheet.Shapes.Item(index).Delete()
+    shape_count = retry_com(lambda: sheet.Shapes.Count)
+    for index in range(shape_count, 0, -1):
+        shape = retry_com(lambda index=index: sheet.Shapes.Item(index))
+        shape.Delete()
 
 
-def _populate_live_lumbro_quantities(workbook) -> None:
+def _populate_live_lumbro_quantities(workbook, retry_com) -> None:
     """Restaura la superficie visual con referencias vivas a ``Mobiliti``.
 
     El formato recibido contenía datos de muestra y dividía entre una tasa
@@ -313,10 +441,9 @@ def _populate_live_lumbro_quantities(workbook) -> None:
     los renglones Lumbro disponibles, sin truncarlos a doce espacios.
     """
 
-    sheet = workbook.Worksheets("Cantidades Lumbro ")
+    sheet = retry_com(lambda: workbook.Worksheets("Cantidades Lumbro "))
     sheet.Range("H2:P40").ClearContents()
-    sheet.Range("H4:P4").Copy()
-    sheet.Range("H4:P28").PasteSpecial(Paste=XL_PASTE_FORMATS)
+    _copy_formats(sheet, sheet, "H4:P4", "H4:P28", retry_com)
     workbook.Application.CutCopyMode = False
     sheet.Rows("4:28").RowHeight = 18
     sheet.PageSetup.PrintArea = "$H$1:$P$28"
@@ -350,8 +477,7 @@ def _populate_live_lumbro_quantities(workbook) -> None:
     sheet.Range("M4").Formula2 = '=IF(L4#="","",L4#/(1-$M$2))'
     sheet.Range("N4").Formula2 = '=IF(H4#="","",M4#*K4#)'
     sheet.Range("P4").Formula2 = '=SUM(N4#)'
-    sheet.Range("P4").Copy()
-    sheet.Range("P4:P28").PasteSpecial(Paste=XL_PASTE_FORMATS)
+    _copy_formats(sheet, sheet, "P4", "P4:P28", retry_com)
     workbook.Application.CutCopyMode = False
     sheet.Columns("O").Hidden = True
 
@@ -369,6 +495,52 @@ def _break_only_visual_source_links(workbook, visual_source: Path) -> None:
             workbook.BreakLink(Name=link_text, Type=XL_LINK_TYPE_EXCEL)
 
 
+def _retry_rejected_com(
+    action,
+    *,
+    com_error_type,
+    max_attempts: int = 5,
+    sleep=time.sleep,
+    pump_waiting_messages=None,
+):
+    """Reintenta sólo rechazos transitorios de llamadas COM idempotentes."""
+
+    for attempt in range(max_attempts):
+        try:
+            return action()
+        except com_error_type as error:
+            if (
+                error.hresult != RPC_E_CALL_REJECTED
+                or attempt == max_attempts - 1
+            ):
+                raise
+            if pump_waiting_messages is not None:
+                try:
+                    pump_waiting_messages()
+                except Exception as pump_error:
+                    raise error from pump_error
+            sleep(0.25)
+
+
+def _open_workbook_with_retry(
+    workbooks,
+    *open_args,
+    com_error_type,
+    max_attempts: int = 5,
+    sleep=time.sleep,
+    pump_waiting_messages=None,
+):
+    """Abre un workbook usando el retry COM acotado."""
+
+    return _retry_rejected_com(
+        lambda: workbooks.Open(*open_args),
+        com_error_type=com_error_type,
+        max_attempts=max_attempts,
+        sleep=sleep,
+        pump_waiting_messages=pump_waiting_messages,
+    )
+
+
 def _build_with_excel(
     official: Path,
     visual_source: Path,
@@ -376,6 +548,7 @@ def _build_with_excel(
 ) -> None:
     try:
         import pythoncom
+        import pywintypes
         import win32com.client
     except ImportError as error:
         raise RuntimeError("Microsoft Excel y pywin32 son obligatorios") from error
@@ -395,7 +568,19 @@ def _build_with_excel(
         except Exception:
             pass
 
-        target = application.Workbooks.Open(
+        def retry_com(action):
+            return _retry_rejected_com(
+                action,
+                com_error_type=pywintypes.com_error,
+                pump_waiting_messages=getattr(
+                    pythoncom,
+                    "PumpWaitingMessages",
+                    None,
+                ),
+            )
+
+        target = _open_workbook_with_retry(
+            application.Workbooks,
             str(candidate),
             0,
             False,
@@ -409,9 +594,16 @@ def _build_with_excel(
             False,
             None,
             False,
+            com_error_type=pywintypes.com_error,
+            pump_waiting_messages=getattr(
+                pythoncom,
+                "PumpWaitingMessages",
+                None,
+            ),
         )
         workbooks.append(target)
-        source = application.Workbooks.Open(
+        source = _open_workbook_with_retry(
+            application.Workbooks,
             str(visual_source),
             0,
             True,
@@ -425,15 +617,18 @@ def _build_with_excel(
             False,
             None,
             False,
+            com_error_type=pywintypes.com_error,
+            pump_waiting_messages=getattr(
+                pythoncom,
+                "PumpWaitingMessages",
+                None,
+            ),
         )
         workbooks.append(source)
 
-        _copy_cotizacion_presentation(
-            source.Worksheets("Cotizacion"),
-            target.Worksheets("Cotizacion"),
-        )
-        _copy_lumbro_surfaces(source, target)
-        _populate_live_lumbro_quantities(target)
+        _copy_cotizacion_from_workbooks(source, target, retry_com)
+        _copy_lumbro_surfaces(source, target, retry_com)
+        _populate_live_lumbro_quantities(target, retry_com)
         _break_only_visual_source_links(target, visual_source)
         application.CutCopyMode = False
         target.Save()
@@ -449,6 +644,115 @@ def _build_with_excel(
             except Exception:
                 pass
         pythoncom.CoUninitialize()
+
+
+def _private_alternate_content_spans(
+    workbook_xml: bytes,
+) -> tuple[tuple[int, int], ...]:
+    """Localiza bloques privados por nombre expandido sin reserializar XML."""
+
+    if not isinstance(workbook_xml, bytes):
+        raise TypeError("workbook.xml debe recibirse como bytes")
+    parser = expat.ParserCreate(namespace_separator="}")
+    stack: list[dict[str, object]] = []
+    spans: list[tuple[int, int]] = []
+    unscoped_abs_path = False
+
+    def start_element(name: str, _attributes: dict[str, str]) -> None:
+        nonlocal unscoped_abs_path
+        frame: dict[str, object] = {
+            "name": name,
+            "start": parser.CurrentByteIndex,
+            "private": False,
+        }
+        stack.append(frame)
+        if name != X15AC_ABS_PATH:
+            return
+        for ancestor in reversed(stack[:-1]):
+            if ancestor["name"] == MC_ALTERNATE_CONTENT:
+                ancestor["private"] = True
+                break
+        else:
+            unscoped_abs_path = True
+
+    def end_element(name: str) -> None:
+        frame = stack.pop()
+        if frame["name"] != name:
+            raise ValueError("workbook.xml tiene una estructura inconsistente")
+        if name != MC_ALTERNATE_CONTENT or not frame["private"]:
+            return
+        closing_end = workbook_xml.find(b">", parser.CurrentByteIndex)
+        if closing_end < 0:
+            raise ValueError("No se pudo delimitar mc:AlternateContent")
+        spans.append((int(frame["start"]), closing_end + 1))
+
+    parser.StartElementHandler = start_element
+    parser.EndElementHandler = end_element
+    try:
+        parser.Parse(workbook_xml, True)
+    except (expat.ExpatError, IndexError) as error:
+        raise ValueError("workbook.xml no es XML válido") from error
+    if unscoped_abs_path:
+        raise ValueError(
+            "x15ac:absPath privado está fuera de mc:AlternateContent"
+        )
+    return tuple(spans)
+
+
+def _sanitize_workbook_xml(workbook_xml: bytes) -> bytes:
+    """Elimina sólo AlternateContent con x15ac:absPath y conserva los demás bytes."""
+
+    spans = _private_alternate_content_spans(workbook_xml)
+    sanitized = workbook_xml
+    for start, end in sorted(spans, reverse=True):
+        sanitized = sanitized[:start] + sanitized[end:]
+
+    if _private_alternate_content_spans(sanitized):
+        raise ValueError("No se pudo eliminar x15ac:absPath de workbook.xml")
+    lowered = sanitized.lower()
+    if b"abspath" in lowered or LOCAL_USER_PATH_MARKER in lowered:
+        raise ValueError("workbook.xml conserva una ruta local privada")
+    return sanitized
+
+
+def _sanitize_candidate_privacy(candidate: Path) -> None:
+    """Sanea workbook.xml mediante un candidato OOXML auditado y reemplazo atómico."""
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from mobiliti_saas.quote_engine.ooxml_package import (
+        PackageMutation,
+        XlsxPackage,
+        assert_packages_preserved,
+    )
+
+    before = XlsxPackage.read(candidate)
+    try:
+        workbook_xml = before.parts[WORKBOOK_PART]
+    except KeyError as error:
+        raise ValueError("El candidato no contiene xl/workbook.xml") from error
+    sanitized = _sanitize_workbook_xml(workbook_xml)
+    if sanitized == workbook_xml:
+        return
+
+    sanitized_candidate = candidate.with_name(
+        f".{candidate.name}.sanitizing-{uuid4().hex}.xlsx"
+    )
+    try:
+        before.write_new(
+            sanitized_candidate,
+            PackageMutation(replacements={WORKBOOK_PART: sanitized}),
+        )
+        after = XlsxPackage.read(sanitized_candidate)
+        audit = assert_packages_preserved(before, after, {WORKBOOK_PART})
+        if audit.changed_parts != frozenset({WORKBOOK_PART}):
+            raise RuntimeError("La sanitización no cambió únicamente workbook.xml")
+        if _sanitize_workbook_xml(after.parts[WORKBOOK_PART]) != sanitized:
+            raise RuntimeError("La sanitización de workbook.xml no es estable")
+        os.replace(sanitized_candidate, candidate)
+    except Exception:
+        _preserve_failed_file(sanitized_candidate, "failed-sanitization")
+        raise
 
 
 def _contract_payload(output: Path) -> dict[str, object]:
@@ -530,6 +834,7 @@ def build(
     publication_started = False
     try:
         _build_with_excel(official, visual_source, candidate)
+        _sanitize_candidate_privacy(candidate)
         payload = _contract_payload(candidate)
         contract_candidate.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

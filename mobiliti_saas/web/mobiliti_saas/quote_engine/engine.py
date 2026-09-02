@@ -2800,7 +2800,7 @@ def _official_delivery_place(
         or DEFAULT_DELIVERY_PLACE
     )
     normalized = " ".join(requested.split()).casefold()
-    if variant == "official_v17":
+    if variant in {"official_v17", "sunon_cdmx_v1c"}:
         place = V17_DELIVERY_ALIASES.get(normalized)
     else:
         places = {
@@ -2822,16 +2822,24 @@ def _build_official_mobiliti(
     quotation_rows: Mapping[str, int],
     quotation_rates: Mapping[str, Decimal],
 ) -> MobilitiSheetMutation:
-    row_map = plan_mobiliti_layout(needs)
+    base_editor = WorksheetEditor.from_xml(
+        base.parts[base.sheet_part("Mobiliti")]
+    )
+    row_map = plan_mobiliti_layout(
+        needs,
+        first_section_row=base_editor.layout.first_section_row,
+        canonical_auxiliary_row_count=(
+            base_editor.layout.auxiliary_end - base_editor.layout.total_row
+        ),
+    )
     if len(lines) != len(row_map.item_rows):
         raise ValueError("Presentacion Mobiliti inconsistente")
     writes: list[MobilitiCellWrite] = []
     bindings: list[PricingRowBinding] = []
-    base_editor = WorksheetEditor.from_xml(
-        base.parts[base.sheet_part("Mobiliti")]
-    )
     volume_column, region_column = (
-        ("P", "S") if base_editor.layout.id == "v17" else ("K", "P")
+        ("P", "S")
+        if base_editor.layout.id in {"v17", "v18"}
+        else ("K", "P")
     )
     for position, (line, target_row) in enumerate(
         zip(lines, row_map.item_rows, strict=True),
@@ -2901,6 +2909,7 @@ def _build_official_mobiliti(
         _official_quote_currency(metadata),
         delivery_place,
         _mixed_metadata_discount_fraction(metadata),
+        composer_variant=composer_variant,
     )
     return MobilitiSheetMutation(editor.to_xml(), mutation.row_map)
 
@@ -3269,6 +3278,7 @@ def _build_official_cotizacion(
             ),
         ),
         sections=sections,
+        mobiliti_row_map=mobiliti.row_map,
         composer_variant=composer_variant,
     )
     return mutation, sections

@@ -421,11 +421,21 @@ def _request_for_sections(
 ) -> ComposeRequest:
     contract = load_template_contract(CONTRACT_PATH)
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    mobiliti_editor = WorksheetEditor.from_xml(
+        base.parts[base.sheet_part("Mobiliti")]
+    )
     needs = [
         SectionNeed(f"section-{index}", f"Sección {index}", size)
         for index, size in enumerate(section_sizes, start=1)
     ]
-    planned = plan_mobiliti_layout(needs)
+    planned = plan_mobiliti_layout(
+        needs,
+        first_section_row=mobiliti_editor.layout.first_section_row,
+        canonical_auxiliary_row_count=(
+            mobiliti_editor.layout.auxiliary_end
+            - mobiliti_editor.layout.total_row
+        ),
+    )
     writes: list[MobilitiCellWrite] = []
     cotizacion_sections: list[CotizacionSection] = []
     global_position = 0
@@ -488,6 +498,7 @@ def _request_for_sections(
             delivery_place="CDMX",
         ),
         sections=tuple(cotizacion_sections),
+        mobiliti_row_map=mobiliti.row_map,
     )
     return ComposeRequest(
         template=OFFICIAL_TEMPLATE.resolve(),
@@ -698,8 +709,9 @@ def test_composer_handles_imported_goods_without_shipping_volume(tmp_path: Path)
         "=IF(B67=0,0,MIN(1,B67/(B62*B71+B63*B74)))"
     )
     assert _cell_formula_in_root(fletes, "B66") == (
-        '=IF(E60="MANUAL",E63,IF(B61=0,0,IF(E60="PRORRATEADO",'
-        '(B61*B65+E62+B78)/B61,(B61*B65+B64+B78)/B61)))'
+        '=MIN(110%,IF(E60="MANUAL",E63,IF(B61=0,0,'
+        'IF(E60="PRORRATEADO",(B61*B65+E62+B78)/B61,'
+        '(B61*B65+B64+B78)/B61))))'
     )
     for coordinate in ("B62", "B63", "B64", "B65", "E62"):
         assert _cell_formula_in_root(fletes, coordinate) == (
@@ -718,8 +730,10 @@ def test_cotizacion_clears_contamination_uses_master_discount_and_keeps_terms(
 
     first_discount = _cell(candidate, f"G{first_row}")
     second_discount = _cell(candidate, f"G{second_row}")
-    assert first_discount.findtext(f"{{{MAIN}}}f") == "ROUND(Mobiliti!$AD$13,2)"
-    assert second_discount.findtext(f"{{{MAIN}}}f") == "ROUND(Mobiliti!$AD$13,2)"
+    discount_row = request.mobiliti.row_map.canonical_first_section_row
+    expected_discount = f"ROUND(Mobiliti!$AD${discount_row},2)"
+    assert first_discount.findtext(f"{{{MAIN}}}f") == expected_discount
+    assert second_discount.findtext(f"{{{MAIN}}}f") == expected_discount
     for row in (first_row, second_row):
         assert _cell(candidate, f"A{row}").attrib["t"] == "inlineStr"
         assert _cell(candidate, f"C{row}").attrib["t"] == "inlineStr"
@@ -840,6 +854,21 @@ def test_composer_handles_twenty_sections_and_one_hundred_product_section(
 
 def test_cdmx_composer_emits_section_subtotals_without_double_counting() -> None:
     base = XlsxPackage.read(CDMX_TEMPLATE)
+    mobiliti_editor = WorksheetEditor.from_xml(
+        base.parts[base.sheet_part("Mobiliti")]
+    )
+    row_map = plan_mobiliti_layout(
+        (
+            SectionNeed("recepcion", "Recepción", 2),
+            SectionNeed("operativos", "Operativos", 1),
+        ),
+        first_section_row=mobiliti_editor.layout.first_section_row,
+        canonical_auxiliary_row_count=(
+            mobiliti_editor.layout.auxiliary_end
+            - mobiliti_editor.layout.total_row
+        ),
+    )
+    recepcion_first, recepcion_second, operativos_first = row_map.item_rows
     sections = (
         CotizacionSection(
             title="Recepción",
@@ -850,7 +879,7 @@ def test_cdmx_composer_emits_section_subtotals_without_double_counting() -> None
                     description="Descripción 1",
                     dimensions="60 x 60 cm",
                     quantity=Decimal("1"),
-                    mobiliti_row=14,
+                    mobiliti_row=recepcion_first,
                     discount=Decimal("0.40"),
                 ),
                 CotizacionProduct(
@@ -859,7 +888,7 @@ def test_cdmx_composer_emits_section_subtotals_without_double_counting() -> None
                     description="Descripción 2",
                     dimensions="70 x 70 cm",
                     quantity=Decimal("2"),
-                    mobiliti_row=15,
+                    mobiliti_row=recepcion_second,
                     discount=Decimal("0.40"),
                 ),
             ),
@@ -873,7 +902,7 @@ def test_cdmx_composer_emits_section_subtotals_without_double_counting() -> None
                     description="Descripción 3",
                     dimensions="80 x 80 cm",
                     quantity=Decimal("3"),
-                    mobiliti_row=49,
+                    mobiliti_row=operativos_first,
                     discount=Decimal("0.40"),
                 ),
             ),
@@ -885,6 +914,7 @@ def test_cdmx_composer_emits_section_subtotals_without_double_counting() -> None
     ).compose(
         metadata=CotizacionMetadata(project="Proyecto CDMX"),
         sections=sections,
+        mobiliti_row_map=row_map,
         composer_variant="sunon_cdmx_v1c",
     )
     worksheet = ET.fromstring(mutation.xml)
@@ -917,7 +947,10 @@ def test_composer_moves_only_mobiliti_auxiliary_shapes_after_section_sixteen(
         "Mobiliti",
     )
     result_drawing = ET.fromstring(result.parts[result_drawing_part])
-    delta = request.mobiliti.row_map.total_row - 573
+    delta = (
+        request.mobiliti.row_map.total_row
+        - request.mobiliti.row_map.canonical_total_row
+    )
 
     def anchors_by_name(root: ET.Element) -> dict[str, tuple[int, int]]:
         rows: dict[str, tuple[int, int]] = {}
@@ -998,7 +1031,17 @@ def test_composer_uses_task7_numeric_price_once_for_import_catalog_and_lumbro(
 ) -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     need = SectionNeed("section-prices", "Precios", 3)
-    row_map = plan_mobiliti_layout((need,))
+    mobiliti_editor = WorksheetEditor.from_xml(
+        base.parts[base.sheet_part("Mobiliti")]
+    )
+    row_map = plan_mobiliti_layout(
+        (need,),
+        first_section_row=mobiliti_editor.layout.first_section_row,
+        canonical_auxiliary_row_count=(
+            mobiliti_editor.layout.auxiliary_end
+            - mobiliti_editor.layout.total_row
+        ),
+    )
     definitions = (
         ("catalog", None, "", Decimal("100"), Decimal("1"), Decimal("100.00")),
         ("imported", 9, "b" * 64, Decimal("10"), Decimal("18.5"), Decimal("185.00")),
@@ -1096,6 +1139,7 @@ def test_composer_uses_task7_numeric_price_once_for_import_catalog_and_lumbro(
                 ),
             ),
         ),
+        mobiliti_row_map=mobiliti.row_map,
     )
     output = tmp_path / "all-price-origins.xlsx"
     compose_official_quote(
@@ -1377,6 +1421,18 @@ def test_active_engine_references_visible_quotation_and_mobiliti_fields(
     source_workbook.save(source)
     source_workbook.close()
     output = tmp_path / "m3-official.xlsx"
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    mobiliti_layout = WorksheetEditor.from_xml(
+        base.parts[base.sheet_part("Mobiliti")]
+    ).layout
+    row_map = plan_mobiliti_layout(
+        (SectionNeed("sillas", "Sillas", 2),),
+        first_section_row=mobiliti_layout.first_section_row,
+        canonical_auxiliary_row_count=(
+            mobiliti_layout.auxiliary_end - mobiliti_layout.total_row
+        ),
+    )
+    first_mobiliti_row, second_mobiliti_row = row_map.item_rows
 
     generate_quote(source, output, {"cotizacion": "M3-E2E"}, OFFICIAL_TEMPLATE)
 
@@ -1412,24 +1468,24 @@ def test_active_engine_references_visible_quotation_and_mobiliti_fields(
         assert quotation["K9"].value == 1000
         assert quotation["L9"].value == "=H9*K9"
         assert quotation_data.max_column == 16
-        assert mobiliti["D14"].value == "=Quotation!B9"
-        assert mobiliti["H14"].value == "=Quotation!H9"
-        assert mobiliti["J14"].value == "=Quotation!K9"
-        assert mobiliti["P14"].value == "=Quotation!I9"
-        assert mobiliti["S14"].value == "Centro"
-        assert mobiliti["D15"].value == "=Quotation!B10"
-        assert mobiliti["H15"].value == "=Quotation!H10"
-        assert mobiliti["J15"].value == "=Quotation!K10"
-        assert mobiliti["P15"].value == "=Quotation!I10"
-        assert mobiliti["S15"].value == "Centro"
-        assert cotizacion["A17"].value == "=Mobiliti!D14"
-        assert cotizacion["A18"].value == "=Mobiliti!D15"
+        assert mobiliti[f"D{first_mobiliti_row}"].value == "=Quotation!B9"
+        assert mobiliti[f"H{first_mobiliti_row}"].value == "=Quotation!H9"
+        assert mobiliti[f"J{first_mobiliti_row}"].value == "=Quotation!K9"
+        assert mobiliti[f"P{first_mobiliti_row}"].value == "=Quotation!I9"
+        assert mobiliti[f"S{first_mobiliti_row}"].value == "Centro"
+        assert mobiliti[f"D{second_mobiliti_row}"].value == "=Quotation!B10"
+        assert mobiliti[f"H{second_mobiliti_row}"].value == "=Quotation!H10"
+        assert mobiliti[f"J{second_mobiliti_row}"].value == "=Quotation!K10"
+        assert mobiliti[f"P{second_mobiliti_row}"].value == "=Quotation!I10"
+        assert mobiliti[f"S{second_mobiliti_row}"].value == "Centro"
+        assert cotizacion["A17"].value == f"=Mobiliti!D{first_mobiliti_row}"
+        assert cotizacion["A18"].value == f"=Mobiliti!D{second_mobiliti_row}"
         assert cotizacion["C17"].value == "=Quotation!D9"
         assert cotizacion["C18"].value == "=Quotation!D10"
         assert cotizacion["D17"].value == "=Quotation!F9"
         assert cotizacion["D18"].value == "=Quotation!F10"
-        assert cotizacion["E17"].value == "=Mobiliti!H14"
-        assert cotizacion["E18"].value == "=Mobiliti!H15"
+        assert cotizacion["E17"].value == f"=Mobiliti!H{first_mobiliti_row}"
+        assert cotizacion["E18"].value == f"=Mobiliti!H{second_mobiliti_row}"
     finally:
         workbook.close()
 
@@ -1646,6 +1702,11 @@ def test_active_engine_uses_authoritative_imported_canonical_identity(
         region="imported",
     )
     output = tmp_path / "imported-official.xlsx"
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    mobiliti_layout = WorksheetEditor.from_xml(
+        base.parts[base.sheet_part("Mobiliti")]
+    ).layout
+    first_product_row = mobiliti_layout.first_section_row + 1
 
     def legacy_validator_forbidden(*_args, **_kwargs):
         raise AssertionError("el handoff imported no depende del validador legacy")
@@ -1680,7 +1741,8 @@ def test_active_engine_uses_authoritative_imported_canonical_identity(
         product_row = next(
             row
             for row in range(16, cotizacion.max_row + 1)
-            if cotizacion.cell(row, 1).value == "=Mobiliti!D14"
+            if cotizacion.cell(row, 1).value
+            == f"=Mobiliti!D{first_product_row}"
         )
         assert cotizacion.cell(product_row, 3).value == "=Quotation!D9"
     finally:
@@ -1792,8 +1854,8 @@ def test_active_engine_explicit_none_keeps_visible_quotation_for_live_formulas(
     assert package.sheet_part("Quotation")
     workbook = load_workbook(output, data_only=False, keep_links=False)
     try:
-        assert workbook["Mobiliti"]["D14"].value == "=Quotation!B9"
-        assert workbook["Mobiliti"]["J14"].value == "=Quotation!K9"
+        assert workbook["Mobiliti"]["D15"].value == "=Quotation!B9"
+        assert workbook["Mobiliti"]["J15"].value == "=Quotation!K9"
     finally:
         workbook.close()
 
@@ -2211,6 +2273,11 @@ def test_cotizacion_sheet_editor_expands_complement_sources_in_order() -> None:
         return stream.getvalue()
 
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    row_map = plan_mobiliti_layout(
+        (SectionNeed("recepcion", "Recepción", 1),),
+        first_section_row=14,
+        canonical_auxiliary_row_count=40,
+    )
     principal = png_payload((20, 80, 180))
     first = png_payload((20, 170, 90))
     second = png_payload((190, 90, 30))
@@ -2228,7 +2295,7 @@ def test_cotizacion_sheet_editor_expands_complement_sources_in_order() -> None:
                         description="Principal + complementos",
                         dimensions="600 x 600 mm",
                         quantity=Decimal("1"),
-                        mobiliti_row=14,
+                        mobiliti_row=row_map.item_rows[0],
                         image_content=principal,
                         image_content_type="image/png",
                         complement_images=(
@@ -2245,6 +2312,7 @@ def test_cotizacion_sheet_editor_expands_complement_sources_in_order() -> None:
                 ),
             ),
         ),
+        mobiliti_row_map=row_map,
     )
 
     assert [
@@ -3313,7 +3381,7 @@ def test_output_contract_rejects_unexpected_defined_name(tmp_path: Path) -> None
 def test_cotizacion_contract_uses_uniform_price_from_largest_quantity() -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
-    assert _cell(source, "F17").findtext(f"{{{MAIN}}}f") == "Mobiliti!AA14"
+    assert _cell(source, "F17").findtext(f"{{{MAIN}}}f") == "Mobiliti!AA15"
     assert _cell(source, "F17").findtext(f"{{{MAIN}}}v") == "0"
     assert _cell(source, "I17").findtext(f"{{{MAIN}}}f") == "F17-H17"
     assert _cell(source, "I17").findtext(f"{{{MAIN}}}v") == "0"
@@ -3325,7 +3393,7 @@ def test_cotizacion_contract_uses_uniform_price_from_largest_quantity() -> None:
         description="",
         dimensions="",
         quantity=Decimal("1"),
-        mobiliti_row=14,
+        mobiliti_row=15,
     )
     formulas = contract.product_formulas(
         price_terms=product.price_terms,
@@ -3333,10 +3401,76 @@ def test_cotizacion_contract_uses_uniform_price_from_largest_quantity() -> None:
     )
 
     assert formulas == {
-        "F": "=Mobiliti!AA14",
+        "F": "=Mobiliti!AA15",
         "I": "=F17-H17",
     }
     assert all("#REF!" not in formula for formula in formulas.values())
+
+
+def test_cotizacion_signature_uses_mobiliti_row_map_first_product_row() -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    mobiliti = build_mobiliti_sheet(
+        base.parts[base.sheet_part("Mobiliti")],
+        [SectionNeed("sillas", "Sillas", 1)],
+        (),
+    )
+    row_map = mobiliti.row_map
+    mutation = CotizacionSheetEditor.from_xml(
+        base.parts[base.sheet_part("Cotizacion")]
+    ).compose(
+        metadata=CotizacionMetadata(),
+        sections=(
+            CotizacionSection(
+                "Sillas",
+                (
+                    CotizacionProduct(
+                        item_key="silla-v18",
+                        name="Silla v18",
+                        description="",
+                        dimensions="",
+                        quantity=Decimal("1"),
+                        mobiliti_row=row_map.item_rows[0],
+                    ),
+                ),
+            ),
+        ),
+        mobiliti_row_map=row_map,
+        composer_variant="official_v17",
+    )
+
+    worksheet = ET.fromstring(mutation.xml)
+    assert _cell_formula_in_root(worksheet, "F17") == "=Mobiliti!AA15"
+
+
+def test_cotizacion_signature_rejects_mismatched_mobiliti_row_map() -> None:
+    base = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    legacy_row_map = plan_mobiliti_layout(
+        (SectionNeed("sillas", "Sillas", 1),),
+    )
+
+    with pytest.raises(ValueError, match="Firma oficial F/I inesperada"):
+        CotizacionSheetEditor.from_xml(
+            base.parts[base.sheet_part("Cotizacion")]
+        ).compose(
+            metadata=CotizacionMetadata(),
+            sections=(
+                CotizacionSection(
+                    "Sillas",
+                    (
+                        CotizacionProduct(
+                            item_key="silla-v17",
+                            name="Silla v17",
+                            description="",
+                            dimensions="",
+                            quantity=Decimal("1"),
+                            mobiliti_row=legacy_row_map.item_rows[0],
+                        ),
+                    ),
+                ),
+            ),
+            mobiliti_row_map=legacy_row_map,
+            composer_variant="official_v17",
+        )
 
 
 def test_composed_product_formula_uses_row_prices_and_live_quantities() -> None:
@@ -3399,6 +3533,11 @@ def test_composed_product_formula_rejects_592_terms_before_writing(
     terms = tuple(CotizacionPriceTerm(row) for row in range(14, 14 + 592))
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
+    row_map = plan_mobiliti_layout(
+        (SectionNeed("proyecto", "Proyecto", 1),),
+        first_section_row=14,
+        canonical_auxiliary_row_count=40,
+    )
     formulas_written: list[str] = []
     original_set_formula = official_composer_module._set_formula
 
@@ -3432,6 +3571,7 @@ def test_composed_product_formula_rejects_592_terms_before_writing(
                     products=(product,),
                 ),
             ),
+            mobiliti_row_map=row_map,
         )
     assert formulas_written == []
 
@@ -3510,6 +3650,11 @@ def test_cotizacion_price_term_requires_valid_xlsx_row(
 def test_cotizacion_translation_preserves_reference_like_formula_literals() -> None:
     base = XlsxPackage.read(OFFICIAL_TEMPLATE)
     source = ET.fromstring(base.parts[base.sheet_part("Cotizacion")])
+    row_map = plan_mobiliti_layout(
+        (SectionNeed("sillas", "Sillas", 1),),
+        first_section_row=14,
+        canonical_auxiliary_row_count=40,
+    )
     _cell(source, "H17").find(f"{{{MAIN}}}f").text = (
         'IF("F17*G17"="literal",F17*G17,0)'
     )
@@ -3525,7 +3670,7 @@ def test_cotizacion_translation_preserves_reference_like_formula_literals() -> N
                 description="Descripción",
                 dimensions="60 x 60 cm",
                 quantity=Decimal("1"),
-                mobiliti_row=14,
+                mobiliti_row=row_map.item_rows[0],
             ),
         ),
     )
@@ -3533,6 +3678,7 @@ def test_cotizacion_translation_preserves_reference_like_formula_literals() -> N
     result = CotizacionSheetEditor(source).compose(
         metadata=CotizacionMetadata(),
         sections=(section,),
+        mobiliti_row_map=row_map,
     )
     worksheet = ET.fromstring(result.xml)
 
@@ -3637,11 +3783,17 @@ import sys
 from xml.etree import ElementTree as ET
 
 import mobiliti_saas.quote_engine.official_composer as composer
+from mobiliti_saas.quote_engine.mobiliti_layout import SectionNeed, plan_mobiliti_layout
 from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage
 
 template = Path(sys.argv[1])
 image = Path(sys.argv[2])
 base = XlsxPackage.read(template)
+row_map = plan_mobiliti_layout(
+    (SectionNeed("sillas", "Sillas", 1),),
+    first_section_row=14,
+    canonical_auxiliary_row_count=40,
+)
 section = composer.CotizacionSection(
     title="Sillas",
     products=(composer.CotizacionProduct(
@@ -3650,12 +3802,16 @@ section = composer.CotizacionSection(
         description="Descripción",
         dimensions="60 x 60 cm",
         quantity=Decimal("1"),
-        mobiliti_row=14,
+        mobiliti_row=row_map.item_rows[0],
     ),),
 )
 mutation = composer.CotizacionSheetEditor.from_xml(
     base.parts[base.sheet_part("Cotizacion")]
-).compose(metadata=composer.CotizacionMetadata(), sections=(section,))
+).compose(
+    metadata=composer.CotizacionMetadata(),
+    sections=(section,),
+    mobiliti_row_map=row_map,
+)
 mutation = replace(
     mutation,
     images=(composer.CotizacionProductImage(image.resolve(), 17),),

@@ -461,9 +461,9 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
                 f"=Quotation!K{source_row}"
             )
             assert wb["Quotation"].cell(source_row, 11).value == expected_price
-        assert mobiliti["AD13"].value == 0.4
+        assert mobiliti["AD14"].value == 0.4
         for row in (tarkett_cot, alma_cot, imported_cot):
-            assert cot.cell(row, 7).value == "=ROUND(Mobiliti!$AD$13,2)"
+            assert cot.cell(row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
         for row in (tarkett_mob, alma_mob, imported_mob):
             assert mobiliti[f"AD{row}"].value == f"=IF(H{row}>0,$E$5,0)"
             assert mobiliti[f"AE{row}"].value == f"=IFERROR(AA{row}*AD{row},0)"
@@ -1084,12 +1084,12 @@ def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets
     try:
         cot = wb["Cotizacion"]
         mobiliti = wb["Mobiliti"]
-        assert mobiliti["AD13"].value == pytest.approx(0.12345678)
+        assert mobiliti["AD14"].value == pytest.approx(0.12345678)
         for source_row in (9, 10):
             cot_row = _row_for_formula(cot, 1, f"=Quotation!B{source_row}")
             mobiliti_row = _row_for_formula(mobiliti, 4, f"=Quotation!B{source_row}")
             # El usuario confirmó conservar ROUND de la plantilla oficial.
-            assert cot.cell(cot_row, 7).value == "=ROUND(Mobiliti!$AD$13,2)"
+            assert cot.cell(cot_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
             assert mobiliti.cell(mobiliti_row, 10).value == (
                 f"=Quotation!K{source_row}"
             )
@@ -1104,9 +1104,9 @@ def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets
             )
             assert mobiliti[f"AA{mobiliti_row}"].value == (
                 f"=IF(Z{mobiliti_row}>=Y{mobiliti_row},"
-                f"_xlfn.MINIFS($Z$14:$Z$571,$D$14:$D$571,D{mobiliti_row},"
-                f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
-                f"$D$14:$D$571,D{mobiliti_row})),"
+                f"_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D{mobiliti_row},"
+                f"$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,"
+                f"$D$15:$D$572,D{mobiliti_row})),"
                 '"NO SE ESTA RESPETANDO EL MARGEN")'
             )
             assert mobiliti[f"AB{mobiliti_row}"].value == (

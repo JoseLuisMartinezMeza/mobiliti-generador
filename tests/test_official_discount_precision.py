@@ -66,7 +66,7 @@ def test_official_generation_accepts_decimal_discounts_without_float_residue(
     )
 
     root = ET.fromstring(result.xml)
-    value = root.findtext(f".//{{{MAIN}}}c[@r='AD13']/{{{MAIN}}}v")
+    value = root.findtext(f".//{{{MAIN}}}c[@r='AD14']/{{{MAIN}}}v")
     assert value is not None
     assert Decimal(value) == expected
     assert root.findtext(f".//{{{MAIN}}}c[@r='P4']/{{{MAIN}}}v") == "0"

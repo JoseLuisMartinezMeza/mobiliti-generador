@@ -199,6 +199,8 @@ def write_official_currency_selector(
     quote_currency: str,
     delivery_place: str,
     discount: Decimal | None = None,
+    *,
+    composer_variant: str = "official",
 ) -> None:
     """Escribe únicamente los selectores firmados del layout activo."""
 
@@ -208,11 +210,19 @@ def write_official_currency_selector(
         raise TypeError("Moneda de cotización inválida")
     if quote_currency not in QUOTE_CURRENCIES:
         raise ValueError("Moneda de cotización inválida")
+    if composer_variant not in {
+        "official",
+        "official_v17",
+        "sunon_cdmx_v1c",
+    }:
+        raise ValueError("Variante de compositor Mobiliti inválida")
     safe_place = _safe_delivery_text(delivery_place)
-    if editor.layout.id == "v17":
+    if editor.layout.id in {"v17", "v18"}:
         writes = [
             MobilitiCellWrite("P4", "boolean", quote_currency != "MXN"),
         ]
+        if composer_variant == "sunon_cdmx_v1c":
+            writes.append(MobilitiCellWrite("P8", "text", safe_place))
         if discount is not None:
             # El porcentaje admite seis decimales; su fracción necesita ocho.
             validated_discount = _numeric_contract(
@@ -224,7 +234,13 @@ def write_official_currency_selector(
             )
             if validated_discount > 1:
                 raise ValueError("descuento global debe estar entre cero y uno")
-            writes.append(MobilitiCellWrite("AD13", "number", validated_discount))
+            writes.append(
+                MobilitiCellWrite(
+                    f"AD{editor.layout.first_section_row}",
+                    "number",
+                    validated_discount,
+                )
+            )
         editor.set_typed_values(tuple(writes))
         return
 

@@ -42,7 +42,7 @@ def test_layout_expands_one_section_to_one_hundred_products_without_truncation()
     assert layout.total_row < 1_048_576
 
 
-def test_official_composer_clones_row_14_formula_surface_into_twenty_sections():
+def test_official_composer_clones_canonical_product_formula_surface_into_twenty_sections():
     package = XlsxPackage.read(OFFICIAL_TEMPLATE)
     mutation = build_mobiliti_sheet(
         package.parts[package.sheet_part("Mobiliti")],
@@ -50,7 +50,7 @@ def test_official_composer_clones_row_14_formula_surface_into_twenty_sections():
         (),
     )
     root = ET.fromstring(mutation.xml)
-    canonical_columns = _formula_columns(root, 14)
+    canonical_columns = _formula_columns(root, mutation.row_map.canonical_first_product_row)
 
     assert {"L", "N", "O"}.issubset(canonical_columns)
     assert len(mutation.row_map.sections) == 20

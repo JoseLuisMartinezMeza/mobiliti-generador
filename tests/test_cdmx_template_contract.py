@@ -18,7 +18,7 @@ TEMPLATES = ROOT / "mobiliti_saas" / "worker" / "templates"
 OFFICIAL = TEMPLATES / "Formato Cotizacion 2026 Oficial.xlsx"
 CDMX = TEMPLATES / "Formato Cotizacion Sunon CDMX V1C.xlsx"
 CONTRACT = TEMPLATES / "formato-cotizacion-sunon-cdmx-v1c.contract.json"
-OFFICIAL_SHA256 = "25f79e3ae533aa8f560be3e80586c19993ea65c0a07c500eb458738f9915b251"
+OFFICIAL_SHA256 = "39f5cebd3cbe3e7356f4d4174161e8599bf7158e7b495a789c9fc04850928ee4"
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 FIXED_RATE = re.compile(r"/\s*(?:18(?:\.0+)?|18\.5(?:0+)?)\b")
 

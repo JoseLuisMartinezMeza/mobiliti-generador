@@ -25,7 +25,7 @@ TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 Oficial.xlsx"
 )
-EXPECTED_SHA256 = "7df7df6d13168b95ea665f68d8ac7dbc7697044e281debf161f87cf283fd097d"
+EXPECTED_SHA256 = "39f5cebd3cbe3e7356f4d4174161e8599bf7158e7b495a789c9fc04850928ee4"
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 X14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 XM = "http://schemas.microsoft.com/office/excel/2006/main"
@@ -57,12 +57,12 @@ def test_active_official_asset_is_the_signed_v17_workbook() -> None:
     )
 
     assert cotizacion.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A3:BA184"
-    assert mobiliti.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A1:AZ610"
-    assert _formula(cotizacion, "G17") == "ROUND(Mobiliti!$AD$13,2)"
+    assert mobiliti.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A1:AZ614"
+    assert _formula(cotizacion, "G17") == "ROUND(Mobiliti!$AD$14,2)"
     assert _formula(cotizacion, "H38") == "H37*$N$39"
     assert _formula(mobiliti, "P6") == 'IF(P4=TRUE,_FV(J6,"Price"),0)'
-    assert _formula(mobiliti, "AD13") == "E6"
-    assert _formula(mobiliti, "AD14") == "IF(H14>0,$E$5,0)"
+    assert _formula(mobiliti, "AD14") == "E6"
+    assert _formula(mobiliti, "AD15") == "IF(H15>0,$E$5,0)"
     assert _formula(control, "E4") == "Cotizacion!$H$41"
 
 
@@ -72,7 +72,11 @@ def test_v17_dynamic_rows_keep_the_uniform_price_from_the_largest_quantity() -> 
         SectionNeed("large", "SILLAS 60", 1),
         SectionNeed("small", "SILLAS 12", 1),
     )
-    row_map = plan_mobiliti_layout(needs)
+    row_map = plan_mobiliti_layout(
+        needs,
+        first_section_row=14,
+        canonical_auxiliary_row_count=40,
+    )
     large_row, small_row = row_map.item_rows
     mutation = build_mobiliti_sheet(
         package.parts[package.sheet_part("Mobiliti")],
@@ -90,11 +94,11 @@ def test_v17_dynamic_rows_keep_the_uniform_price_from_the_largest_quantity() -> 
     for row in (large_row, small_row):
         assert _formula(output, f"AA{row}") == (
             f"IF(Z{row}>=Y{row},"
-            f"_xlfn.MINIFS($Z$14:$Z${last_row},"
-            f"$D$14:$D${last_row},D{row},"
-            f"$H$14:$H${last_row},"
-            f"_xlfn.MAXIFS($H$14:$H${last_row},"
-            f"$D$14:$D${last_row},D{row})),"
+            f"_xlfn.MINIFS($Z$15:$Z${last_row},"
+            f"$D$15:$D${last_row},D{row},"
+            f"$H$15:$H${last_row},"
+            f"_xlfn.MAXIFS($H$15:$H${last_row},"
+            f"$D$15:$D${last_row},D{row})),"
             '"NO SE ESTA RESPETANDO EL MARGEN")'
         )
         assert _formula(output, f"AB{row}") == f"IFERROR(AA{row}*H{row},0)"
@@ -170,8 +174,8 @@ def test_v17_end_to_end_links_new_financial_and_control_surfaces(
         result.parts[result.sheet_part("Estrategia Comercial ")]
     )
 
-    assert _formula(cotizacion, "F17") == "Mobiliti!AA14"
-    assert _formula(cotizacion, "G17") == "ROUND(Mobiliti!$AD$13,2)"
+    assert _formula(cotizacion, "F17") == "Mobiliti!AA15"
+    assert _formula(cotizacion, "G17") == "ROUND(Mobiliti!$AD$14,2)"
     total_row = int(_formula(control, "E4").removeprefix("Cotizacion!$H$"))
     assert total_row == 23
     delta = total_row - 41
@@ -190,9 +194,9 @@ def test_v17_end_to_end_links_new_financial_and_control_surfaces(
 
     rendered = load_workbook(output, data_only=False, keep_links=False)
     try:
-        assert rendered["Mobiliti"]["P14"].value == "=Quotation!I9"
-        assert rendered["Mobiliti"]["S14"].value == "Centro"
-        assert rendered["Mobiliti"]["AD13"].value == pytest.approx(0.35)
+        assert rendered["Mobiliti"]["P15"].value == "=Quotation!I9"
+        assert rendered["Mobiliti"]["S15"].value == "Centro"
+        assert rendered["Mobiliti"]["AD14"].value == pytest.approx(0.35)
         assert rendered["Cotizacion"]["D46"].value == "Nuevo León"
     finally:
         rendered.close()

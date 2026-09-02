@@ -28,6 +28,7 @@ from mobiliti_saas.quote_engine.mobiliti_layout import (
 from mobiliti_saas.quote_engine.ooxml_formula import translate_formula
 from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage
 from mobiliti_saas.quote_engine.ooxml_package import assert_package_preserved
+from mobiliti_saas.quote_engine.ooxml_worksheet import WorksheetEditor
 from mobiliti_saas.quote_engine.quotation_import import (
     MAX_QUOTE_REQUEST_BYTES,
     MOBILITI_RESERVED_ROWS_AFTER_TOTAL,
@@ -441,6 +442,10 @@ def _run_persisted_project_case(
         output.write_bytes(output_bytes)
         assert ZipFile(output).testzip() is None
         XlsxPackage.read(output)
+        base_package = XlsxPackage.read(OFFICIAL_TEMPLATE)
+        base_editor = WorksheetEditor.from_xml(
+            base_package.parts[base_package.sheet_part("Mobiliti")]
+        )
         layout = plan_mobiliti_layout(
             [
                 SectionNeed(
@@ -449,7 +454,11 @@ def _run_persisted_project_case(
                     len(section["line_ids"]),
                 )
                 for section in frozen_payload["sections"]
-            ]
+            ],
+            first_section_row=base_editor.layout.first_section_row,
+            canonical_auxiliary_row_count=(
+                base_editor.layout.auxiliary_end - base_editor.layout.total_row
+            ),
         )
         return PersistedQuoteResult(
             output=output,
@@ -533,7 +542,7 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
         cotizacion = workbook["Cotizacion"]
         quotation = workbook["Quotation"]
         quotation_rows = []
-        for row in (14, 15, 16):
+        for row in (15, 16, 17):
             formula = str(mobiliti.cell(row, 10).value)
             assert formula.startswith("=Quotation!K")
             quotation_rows.append(int(formula.removeprefix("=Quotation!K")))
@@ -541,7 +550,7 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
             Decimal(str(quotation.cell(row, 11).value))
             for row in quotation_rows
         ] == [expected_unit_cost, expected_unit_cost, expected_unit_cost]
-        assert [mobiliti.cell(row, 8).value for row in (14, 15, 16)] == [
+        assert [mobiliti.cell(row, 8).value for row in (15, 16, 17)] == [
             f"=Quotation!H{quotation_row}"
             for quotation_row in quotation_rows
         ]
@@ -550,14 +559,14 @@ def test_project_quote_opens_without_repair_and_totals_equal_components(
             for row in quotation_rows
         ] == list(physical_quantities)
         assert cotizacion["F17"].value == (
-            "=Mobiliti!AA14"
-            "+Mobiliti!AA15*Mobiliti!H15/Mobiliti!H14"
-            "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H14"
+            "=Mobiliti!AA15"
+            "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H15"
+            "+Mobiliti!AA17*Mobiliti!H17/Mobiliti!H15"
         )
-        assert cotizacion["A17"].value == "=Mobiliti!D14"
+        assert cotizacion["A17"].value == "=Mobiliti!D15"
         assert cotizacion["C17"].value == f"=Quotation!D{quotation_rows[0]}"
         assert cotizacion["D17"].value == f"=Quotation!F{quotation_rows[0]}"
-        assert cotizacion["E17"].value == "=Mobiliti!H14"
+        assert cotizacion["E17"].value == "=Mobiliti!H15"
         assert quotation.cell(quotation_rows[0], 4).value.count("\n+ ") == 2
     finally:
         workbook.close()
@@ -715,8 +724,9 @@ def test_project_quote_preserves_original_quotation_and_template_contract(
     }
     assert output_formulas["E61"] == "IF(B67=0,0,MIN(1,B67/(B62*B71+B63*B74)))"
     assert output_formulas["B66"] == (
-        'IF(E60="MANUAL",E63,IF(B61=0,0,IF(E60="PRORRATEADO",'
-        "(B61*B65+E62+B78)/B61,(B61*B65+B64+B78)/B61)))"
+        'MIN(110%,IF(E60="MANUAL",E63,IF(B61=0,0,'
+        'IF(E60="PRORRATEADO",(B61*B65+E62+B78)/B61,'
+        "(B61*B65+B64+B78)/B61))))"
     )
     expected_category_formulas = {
         "N18": "IF(Mobiliti!$P$4=TRUE,(56/Mobiliti!$P$6),56)",
@@ -791,9 +801,9 @@ def test_project_quote_expands_past_16_sections_and_33_components(
     assert len(visible_formula_rows) == 698
     first_visible_row = visible_formula_rows[0]
     assert _formula(cotizacion[f"F{first_visible_row}"]) == (
-        "Mobiliti!AA14"
-        "+Mobiliti!AA15*Mobiliti!H15/Mobiliti!H14"
-        "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H14"
+        "Mobiliti!AA15"
+        "+Mobiliti!AA16*Mobiliti!H16/Mobiliti!H15"
+        "+Mobiliti!AA17*Mobiliti!H17/Mobiliti!H15"
     )
 
 
@@ -819,19 +829,21 @@ def _excel_acceptance_surface(
             coordinate = f"{column}{row}"
             if column == "AA":
                 last_row = result.layout.last_product_row
+                first_row = result.layout.canonical_first_product_row
                 expected = (
                     f"=IF(Z{row}>=Y{row},"
-                    f"_xlfn.MINIFS($Z$14:$Z${last_row},"
-                    f"$D$14:$D${last_row},D{row},"
-                    f"$H$14:$H${last_row},"
-                    f"_xlfn.MAXIFS($H$14:$H${last_row},"
-                    f"$D$14:$D${last_row},D{row})),"
+                    f"_xlfn.MINIFS($Z${first_row}:$Z${last_row},"
+                    f"$D${first_row}:$D${last_row},D{row},"
+                    f"$H${first_row}:$H${last_row},"
+                    f"_xlfn.MAXIFS($H${first_row}:$H${last_row},"
+                    f"$D${first_row}:$D${last_row},D{row})),"
                     '"NO SE ESTA RESPETANDO EL MARGEN")'
                 )
             else:
+                first_row = result.layout.canonical_first_product_row
                 expected = translate_formula(
-                    f"={_formula(official_mobiliti[f'{column}14'])}",
-                    origin=f"{column}14",
+                    f"={_formula(official_mobiliti[f'{column}{first_row}'])}",
+                    origin=f"{column}{first_row}",
                     target=coordinate,
                     sheet="Mobiliti",
                 )

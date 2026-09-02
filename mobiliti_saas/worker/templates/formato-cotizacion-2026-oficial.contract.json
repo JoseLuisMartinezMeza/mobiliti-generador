@@ -1,5 +1,5 @@
 {
-  "sha256": "7df7df6d13168b95ea665f68d8ac7dbc7697044e281debf161f87cf283fd097d",
+  "sha256": "39f5cebd3cbe3e7356f4d4174161e8599bf7158e7b495a789c9fc04850928ee4",
   "defined_name_count": 31,
   "external_link_parts": 12,
   "spec_formula_count": 1314,
@@ -19,7 +19,7 @@
   },
   "mutable_sheets": ["Mobiliti", "Cotizacion"],
   "mutable_cells": {
-    "Mobiliti": ["P4", "P8", "AD13"],
+    "Mobiliti": ["P4", "P8", "AD14"],
     "Cotizacion": ["D64"],
     "Fletes": ["D19", "B61:B68", "M18:N21", "Q18:R21"],
     "Estrategia Comercial ": ["B6:F39", "B62:B70", "C96:C115"],

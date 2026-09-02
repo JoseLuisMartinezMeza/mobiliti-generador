@@ -553,7 +553,8 @@ def test_mixed_drawer_explains_currency_conversion_and_general_discount():
     source = Path("mobiliti_saas/web/src/MixedCartDrawer.jsx").read_text(encoding="utf-8")
     assert "Todos los precios se convierten una sola vez a la moneda seleccionada." in source
     assert "Descuento general (%)" in source
-    assert "El primer producto controla el descuento de todos los productos en Excel." in source
+    assert "El descuento global se aplica según las fórmulas y el redondeo de la plantilla seleccionada." in source
+    assert "El primer producto controla el descuento de todos los productos en Excel." not in source
     assert "Descuento Tarkett y Offiho (%)" not in source
     assert "conservan precio neto sin descuento adicional" not in source
 

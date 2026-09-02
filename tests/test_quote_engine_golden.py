@@ -395,7 +395,7 @@ def test_supplier_final_workbook_uses_official_template_and_frozen_price_contrac
     cot = wb["Cotizacion"]
     mobiliti = wb["Mobiliti"]
     quotation = wb["Quotation"]
-    # El paquete oficial, no el writer legacy, gobierna B4, K4/K6 y las
+    # El paquete oficial v18 gobierna B4, P4/P6 y el descuento global;
     # fórmulas visibles; J contiene el único costo congelado por producto.
     assert cot["B4"].value is None
     mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, 9)
@@ -407,13 +407,16 @@ def test_supplier_final_workbook_uses_official_template_and_frozen_price_contrac
     assert mobiliti.cell(mobiliti_row, 6).value == "Alma - Exterior"
     assert mobiliti.cell(mobiliti_row, 10).value == "=Quotation!K9"
     assert quotation["K9"].value == pytest.approx(123.46)
-    assert mobiliti["K4"].value is False
-    assert getattr(mobiliti["K6"].value, "text", None) == '=_FV(J6,"High")'
-    assert cot.cell(product_row, 7).value == 0.4
+    assert mobiliti["P4"].value is False
+    assert getattr(mobiliti["P6"].value, "text", None) == (
+        '=IF(P4=TRUE,_FV(J6,"Price"),0)'
+    )
+    assert mobiliti["AD14"].value == pytest.approx(0.4)
+    assert cot.cell(product_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
     assert cot.cell(product_row, 3).value == "=Quotation!D9"
     assert cot.cell(product_row, 4).value == "=Quotation!F9"
     assert cot.cell(product_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
-    assert cot.cell(product_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+    assert cot.cell(product_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
     assert cot.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
     assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
     assert cot.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
@@ -452,7 +455,7 @@ def test_mixed_final_workbook_uses_official_formulas_and_one_frozen_cost_per_ite
         cot = wb["Cotizacion"]
         mobiliti = wb["Mobiliti"]
         # Las identidades conservan referencias vivas Quotation -> Mobiliti y
-        # Cotizacion referencia el precio físico W de cada fila Mobiliti.
+        # Cotizacion referencia el precio físico AA de cada fila Mobiliti.
         product_row_map = []
         for source_row in (9, 10):
             mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, source_row)
@@ -467,13 +470,16 @@ def test_mixed_final_workbook_uses_official_formulas_and_one_frozen_cost_per_ite
             assert cot.cell(cot_row, 3).value == f"=Quotation!D{source_row}"
             assert cot.cell(cot_row, 4).value == f"=Quotation!F{source_row}"
             assert cot.cell(cot_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
-            assert cot.cell(cot_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+            assert cot.cell(cot_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
             assert cot.cell(cot_row, 8).value == f"=F{cot_row}*G{cot_row}"
             assert cot.cell(cot_row, 9).value == f"=F{cot_row}-H{cot_row}"
             assert cot.cell(cot_row, 10).value == f"=E{cot_row}*I{cot_row}"
             assert mobiliti.cell(mobiliti_row, 10).value == f"=Quotation!K{source_row}"
-        assert cot.cell(first_product, 7).value == 0.4
-        assert cot.cell(product_row_map[1][1], 7).value == f"=$G${first_product}"
+        assert mobiliti["AD14"].value == pytest.approx(0.4)
+        assert cot.cell(first_product, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+        assert cot.cell(product_row_map[1][1], 7).value == (
+            "=ROUND(Mobiliti!$AD$14,2)"
+        )
         assert wb["Quotation_Data"].sheet_state == "veryHidden"
         assert reference_totals(
             [
@@ -554,13 +560,15 @@ def test_real_task5_mixed_workbook_preserves_structured_description_and_identity
             f"=Quotation!K{alma_source_row}"
         )
         assert quotation.cell(alma_source_row, 11).value == pytest.approx(5274.35)
-        assert str(mobiliti.cell(mobiliti_row, 23).value).startswith("=IF(")
-        assert mobiliti.cell(mobiliti_row, 24).value == (
-            f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{mobiliti_row},"
-            f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
-            f"$D$14:$D$571,D{mobiliti_row}))"
+        assert str(mobiliti.cell(mobiliti_row, 24).value).startswith("=IF(")
+        assert mobiliti.cell(mobiliti_row, 27).value == (
+            f"=IF(Z{mobiliti_row}>=Y{mobiliti_row},"
+            f"_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D{mobiliti_row},"
+            f"$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,"
+            f"$D$15:$D$572,D{mobiliti_row})),"
+            '"NO SE ESTA RESPETANDO EL MARGEN")'
         )
-        assert cot.cell(cot_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+        assert cot.cell(cot_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
         assert wb["Quotation_Data"].sheet_state == "veryHidden"
     finally:
         wb.close()
@@ -589,23 +597,27 @@ def test_standard_workbook_keeps_official_provider_header_and_formulas(tmp_path)
     assert cot.cell(product_row, 3).value == "=Quotation!D9"
     assert cot.cell(product_row, 4).value == "=Quotation!F9"
     assert cot.cell(product_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
-    assert cot.cell(product_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+    assert cot.cell(product_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
     assert cot.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
     assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
     assert cot.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
     unused_row = mobiliti_row + 1
     assert all(
         mobiliti.cell(unused_row, column).value is None
-        for column in (4, 5, 6, 8, 10, 11, 16)
+        for column in (4, 5, 6, 8, 10, 16, 19)
     )
-    assert str(mobiliti.cell(unused_row, 23).value).startswith("=IF(")
-    assert mobiliti.cell(unused_row, 24).value == (
-        f"=_xlfn.MINIFS($W$14:$W$571,$D$14:$D$571,D{unused_row},"
-        f"$H$14:$H$571,_xlfn.MAXIFS($H$14:$H$571,"
-        f"$D$14:$D$571,D{unused_row}))"
+    assert str(mobiliti.cell(unused_row, 24).value).startswith("=IF(")
+    assert mobiliti.cell(unused_row, 27).value == (
+        f"=IF(Z{unused_row}>=Y{unused_row},"
+        f"_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D{unused_row},"
+        f"$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,"
+        f"$D$15:$D$572,D{unused_row})),"
+        '"NO SE ESTA RESPETANDO EL MARGEN")'
     )
-    assert mobiliti["K4"].value is False
-    assert getattr(mobiliti["K6"].value, "text", None) == '=_FV(J6,"High")'
+    assert mobiliti["P4"].value is False
+    assert getattr(mobiliti["P6"].value, "text", None) == (
+        '=IF(P4=TRUE,_FV(J6,"Price"),0)'
+    )
     assert wb["Quotation_Data"].sheet_state == "veryHidden"
     wb.close()
 

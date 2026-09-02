@@ -3,10 +3,15 @@ from __future__ import annotations
 import hashlib
 from copy import copy
 from pathlib import Path
+import re
+from xml.etree import ElementTree as ET
 
 from openpyxl.cell.cell import MergedCell
 from openpyxl import load_workbook
+from openpyxl.utils.cell import column_index_from_string, range_boundaries
 from openpyxl.worksheet.formula import ArrayFormula
+
+from mobiliti_saas.quote_engine.ooxml_package import XlsxPackage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +49,26 @@ def _row_style_signature(sheet, row: int) -> tuple[int, ...]:
         sheet.cell(row=row, column=column).style_id
         for column in range(8, 17)
     )
+
+
+def _effective_style_owner(sheet, row: int, column: int):
+    """Resuelve la herencia OOXML celda -> fila -> columna para celdas vacías."""
+
+    cell = sheet.cell(row=row, column=column)
+    if isinstance(cell, MergedCell):
+        return cell
+    if cell.has_style:
+        return cell
+    row_dimension = sheet.row_dimensions.get(row)
+    if row_dimension is not None and row_dimension.has_style:
+        return row_dimension
+    for column_dimension in sheet.column_dimensions.values():
+        if (
+            column_dimension.has_style
+            and column_dimension.min <= column <= column_dimension.max
+        ):
+            return column_dimension
+    return cell
 
 
 def _merged_ranges_relative_to(
@@ -99,6 +124,8 @@ def test_cotizacion_preserves_official_cdmx_terms_presentation() -> None:
     cdmx_workbook = load_workbook(CDMX, data_only=False, read_only=False)
     source = source_workbook["Cotizacion"]
     cdmx = cdmx_workbook["Cotizacion"]
+    assert (36, 1) not in source._cells
+    assert source.column_dimensions["A"].has_style
 
     for source_row, cdmx_row in zip(range(35, 84), range(28, 77)):
         # Excel cuantiza ciertas alturas al cuarto de punto al guardar. Una
@@ -110,6 +137,8 @@ def test_cotizacion_preserves_official_cdmx_terms_presentation() -> None:
         for column in range(1, 11):
             source_cell = source.cell(source_row, column)
             cdmx_cell = cdmx.cell(cdmx_row, column)
+            source_style = _effective_style_owner(source, source_row, column)
+            cdmx_style = _effective_style_owner(cdmx, cdmx_row, column)
             for style_component in (
                 "font",
                 "fill",
@@ -117,10 +146,10 @@ def test_cotizacion_preserves_official_cdmx_terms_presentation() -> None:
                 "alignment",
                 "protection",
             ):
-                assert copy(getattr(cdmx_cell, style_component)) == copy(
-                    getattr(source_cell, style_component)
+                assert copy(getattr(cdmx_style, style_component)) == copy(
+                    getattr(source_style, style_component)
                 )
-            assert cdmx_cell.number_format == source_cell.number_format
+            assert cdmx_style.number_format == source_style.number_format
             source_link = (
                 source_cell.hyperlink.target
                 if source_cell.hyperlink
@@ -142,6 +171,61 @@ def test_cotizacion_preserves_official_cdmx_terms_presentation() -> None:
         first_row=35,
         last_row=83,
     )
+
+
+def test_cotizacion_has_no_visible_payload_or_merges_after_print_layout() -> None:
+    package = XlsxPackage.read(CDMX)
+    root = ET.fromstring(package.parts[package.sheet_part("Cotizacion")])
+    main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    sidecar_after_print_end = False
+
+    for cell in root.findall(f".//{{{main}}}c"):
+        match = re.fullmatch(r"([A-Z]{1,3})([1-9][0-9]*)", cell.attrib["r"])
+        assert match is not None
+        column = column_index_from_string(match.group(1))
+        row = int(match.group(2))
+        if row <= 76:
+            continue
+        if column > 10:
+            sidecar_after_print_end = True
+            continue
+        assert cell.find(f"{{{main}}}f") is None
+        assert cell.find(f"{{{main}}}v") is None
+        assert cell.find(f"{{{main}}}is") is None
+
+    merge_refs = [
+        node.attrib["ref"]
+        for node in root.findall(f"{{{main}}}mergeCells/{{{main}}}mergeCell")
+    ]
+    assert len(merge_refs) == len(set(merge_refs))
+    assert not any(
+        min_column <= 10 and max_row > 76
+        for min_column, _min_row, _max_column, max_row in map(
+            range_boundaries,
+            merge_refs,
+        )
+    )
+    assert sidecar_after_print_end
+
+
+def test_cotizacion_has_no_official_payload_in_cdmx_residue_rows() -> None:
+    package = XlsxPackage.read(CDMX)
+    root = ET.fromstring(package.parts[package.sheet_part("Cotizacion")])
+    main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    for cell in root.findall(f".//{{{main}}}c"):
+        match = re.fullmatch(r"([A-Z]{1,3})([1-9][0-9]*)", cell.attrib["r"])
+        assert match is not None
+        column = column_index_from_string(match.group(1))
+        row = int(match.group(2))
+        if column > 10 or not 19 <= row <= 27:
+            continue
+        assert cell.find(f"{{{main}}}f") is None
+        assert cell.find(f"{{{main}}}v") is None
+        assert cell.find(f"{{{main}}}is") is None
+
+    prototype = root.find(f".//{{{main}}}c[@r='J18']/{{{main}}}f")
+    assert prototype is not None and prototype.text == "SUM(J13:J15)"
 
 
 def test_cotizacion_exposes_cdmx_section_subtotal_prototype() -> None:

@@ -36,9 +36,10 @@ def test_official_mobiliti_keeps_formula_surface_in_all_33_product_rows():
         (),
     )
     root = ET.fromstring(mutation.xml)
+    first_product_row = mutation.row_map.sections[0].product_start
     expected_columns = {
         coordinate.rstrip("0123456789")
-        for coordinate in _formula_coordinates(root, 14)
+        for coordinate in _formula_coordinates(root, first_product_row)
     }
 
     assert all(
@@ -47,11 +48,11 @@ def test_official_mobiliti_keeps_formula_surface_in_all_33_product_rows():
             for coordinate in _formula_coordinates(root, row)
         }
         == expected_columns
-        for row in range(14, 47)
+        for row in range(first_product_row, first_product_row + 33)
     )
 
 
-def test_official_mobiliti_preserves_k6_and_lumbro_spec_sheet():
+def test_official_mobiliti_preserves_linked_currency_formula_and_lumbro_spec_sheet():
     package = XlsxPackage.read(OFFICIAL_TEMPLATE)
     mutation = build_mobiliti_sheet(
         package.parts[package.sheet_part("Mobiliti")],
@@ -59,7 +60,7 @@ def test_official_mobiliti_preserves_k6_and_lumbro_spec_sheet():
         (),
     )
     root = ET.fromstring(mutation.xml)
-    k6 = root.find(f".//{{{MAIN}}}c[@r='K6']/{{{MAIN}}}f")
+    p6 = root.find(f".//{{{MAIN}}}c[@r='P6']/{{{MAIN}}}f")
 
-    assert k6 is not None and k6.text == '_FV(J6,"High")'
+    assert p6 is not None and p6.text == 'IF(P4=TRUE,_FV(J6,"Price"),0)'
     assert package.sheet_part("SPEC-GUIDE-LUMBRO")

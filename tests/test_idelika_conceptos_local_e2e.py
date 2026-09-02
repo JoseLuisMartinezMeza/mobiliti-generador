@@ -638,6 +638,11 @@ def test_proyecto_mixto_local_cubre_busqueda_configuracion_reemplazo_y_conversio
             assert quotation.cell(source_row, 12).value == f"=H{source_row}*K{source_row}"
 
         mobiliti = workbook["Mobiliti"]
+        assert mobiliti["AD14"].value == 0.4
+        assert mobiliti["P4"].value is True
+        assert getattr(mobiliti["P6"].value, "text", None) == (
+            '=IF(P4=TRUE,_FV(J6,"Price"),0)'
+        )
         pending_mobiliti_row = next(
             row for row in range(1, mobiliti.max_row + 1)
             if mobiliti.cell(row, 4).value == f"=Quotation!B{pending_row}"
@@ -653,6 +658,9 @@ def test_proyecto_mixto_local_cubre_busqueda_configuracion_reemplazo_y_conversio
             mobiliti_rows[numeric_line["line_id"]] = mobiliti_row
             assert mobiliti.cell(mobiliti_row, 8).value == f"=Quotation!H{source_row}"
             assert mobiliti.cell(mobiliti_row, 10).value == f"=Quotation!K{source_row}"
+            assert mobiliti.cell(mobiliti_row, 11).value == (
+                f'=IFERROR(VLOOKUP(TRIM(F{mobiliti_row}), ProveedoreS_TC, 5, FALSE), "Not Found")'
+            )
 
         cotizacion = workbook["Cotizacion"]
         pending_cotizacion_row = next(
@@ -674,7 +682,8 @@ def test_proyecto_mixto_local_cubre_busqueda_configuracion_reemplazo_y_conversio
                 f"=Quotation!D{quotation_rows[numeric_line['line_id']]}"
             )
             assert cotizacion.cell(cotizacion_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
-            assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!X{mobiliti_row}"
+            assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
+            assert cotizacion.cell(cotizacion_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
             assert cotizacion.cell(cotizacion_row, 10).value == (
                 f"=E{cotizacion_row}*I{cotizacion_row}"
             )

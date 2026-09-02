@@ -595,6 +595,19 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         assert "URL: https://www.lumbromx.com/productos-1" in quotation["E9"].value
         assert len(quotation._images) == 1
 
+        mobiliti = workbook["Mobiliti"]
+        mobiliti_row = next(
+            row for row in range(1, mobiliti.max_row + 1)
+            if mobiliti.cell(row, 4).value == "=Quotation!B9"
+        )
+        assert mobiliti["AD14"].value == 0
+        assert mobiliti["P4"].value is False
+        assert getattr(mobiliti["P6"].value, "text", None) == (
+            '=IF(P4=TRUE,_FV(J6,"Price"),0)'
+        )
+        assert mobiliti.cell(mobiliti_row, 11).value == (
+            f'=IFERROR(VLOOKUP(TRIM(F{mobiliti_row}), ProveedoreS_TC, 5, FALSE), "Not Found")'
+        )
         cotizacion = workbook["Cotizacion"]
         product_row = next(
             row
@@ -602,7 +615,10 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
             if str(cotizacion.cell(row, 1).value or "").startswith("=Mobiliti!D")
         )
         assert cotizacion["B7"].value == "'=Proyecto Lumbro E2E"
-        assert cotizacion.cell(product_row, 7).value == 0
+        assert cotizacion.cell(product_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
+        assert cotizacion.cell(product_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+        assert cotizacion.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
+        assert cotizacion.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
         assert cotizacion.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
         product_images = [
             image

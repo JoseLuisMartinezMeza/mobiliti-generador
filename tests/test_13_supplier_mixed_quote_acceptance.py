@@ -48,10 +48,9 @@ OFFICIAL_PDF_SHA256 = {
     ),
 }
 EXPECTED_TEMPLATE_REF_DEBT = (
-    "Cotizacion!P21: =#REF!-#REF!",
-    "Cotizacion!L121: =IF(ROUND(#REF!,2)=ROUND('Estrategia Comercial '!B70,2),"
-    "\"ESTRATEGIA CORRECTA\",\"REVISA TU ESTRATEGIA\")",
     "SPEC-GUIDE ESTRUCTURAS!E474: ='[4]COSTO CDMX,QRO,GDL '!#REF!",
+    "Meses Sin Intereses Tarjetas!F13: ='Estrategia Comercial '!#REF!",
+    "Meses Sin Intereses Tarjetas!F30: ='Estrategia Comercial '!#REF!",
 )
 SUPPLIER_LABELS = {
     "tarkett": "Tarkett",

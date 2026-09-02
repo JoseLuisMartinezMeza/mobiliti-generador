@@ -23,6 +23,7 @@ from mobiliti_saas.quote_engine.ooxml_package import (
     XlsxPackage,
     assert_package_preserved,
 )
+from mobiliti_saas.quote_engine.ooxml_worksheet import WorksheetEditor
 from mobiliti_saas.quote_engine.quotation_sheets import (
     QuotationDataRow,
     _with_canonical_hash,
@@ -949,6 +950,9 @@ def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
     output = run_local_worker_job(tmp_path, request, monkeypatch)
     package = XlsxPackage.read(output)
     official = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    official_editor = WorksheetEditor.from_xml(
+        official.parts[official.sheet_part("Mobiliti")]
+    )
     layout = plan_mobiliti_layout(
         [
             SectionNeed(section_id, f"Stress Section {index}", count)
@@ -960,7 +964,11 @@ def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
                 ),
                 start=1,
             )
-        ]
+        ],
+        first_section_row=official_editor.layout.first_section_row,
+        canonical_auxiliary_row_count=(
+            official_editor.layout.auxiliary_end - official_editor.layout.total_row
+        ),
     )
 
     context = request.metadata["project_context"]
@@ -973,9 +981,9 @@ def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
     ) == Counter({"principal": 115, "complement": 2})
     assert len(context["compositions"]) == 115
     assert layout.sections[0].capacity == 37
-    assert layout.sections[0].subtotal_row == 51
+    assert layout.sections[0].subtotal_row == 52
     assert layout.sections[-1].id == "section-22"
-    assert layout.total_row == 647
+    assert layout.total_row == 648
     assert all(
         current.section_row == previous.subtotal_row + 1
         for previous, current in zip(
@@ -995,13 +1003,17 @@ def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
         request.names,
         request.quotation_data,
     )
+    global_first_product_row = layout.canonical_first_product_row
     global_last_product_row = layout.last_product_row
-    expected_w_range = f"$W$14:$W${global_last_product_row}"
-    expected_d_range = f"$D$14:$D${global_last_product_row}"
+    expected_z_range = f"$Z${global_first_product_row}:$Z${global_last_product_row}"
+    expected_d_range = f"$D${global_first_product_row}:$D${global_last_product_row}"
+    expected_h_range = f"$H${global_first_product_row}:$H${global_last_product_row}"
     assert all(
-        expected_w_range in _formula(mobiliti[f"X{row}"])
-        and expected_d_range in _formula(mobiliti[f"X{row}"])
-        and _formula(mobiliti[f"W{row}"])
+        expected_z_range in _formula(mobiliti[f"AA{row}"])
+        and expected_d_range in _formula(mobiliti[f"AA{row}"])
+        and expected_h_range in _formula(mobiliti[f"AA{row}"])
+        and _formula(mobiliti[f"AA{row}"]).startswith(f"IF(Z{row}>=Y{row},")
+        and _formula(mobiliti[f"Z{row}"])
         for row in (
             *layout.item_rows,
             layout.sections[-1].subtotal_row - 1,
@@ -1020,24 +1032,24 @@ def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
         and (formula := _formula(cell)).startswith("Mobiliti!D")
     )
     assert len(visible_name_rows) == 115
-    referenced_x_rows = Counter(
+    referenced_aa_rows = Counter(
         int(row)
         for formula in cotizacion_formulas
-        for row in re.findall(r"Mobiliti!X\$?(\d+)", formula)
+        for row in re.findall(r"Mobiliti!AA\$?(\d+)", formula)
     )
-    referenced_w_rows = Counter(
+    referenced_z_rows = Counter(
         int(row)
         for formula in cotizacion_formulas
-        for row in re.findall(r"Mobiliti!W\$?(\d+)", formula)
+        for row in re.findall(r"Mobiliti!Z\$?(\d+)", formula)
     )
     compound_rows = layout.item_rows[:3]
-    assert not referenced_w_rows
-    assert set(layout.item_rows) <= set(referenced_x_rows)
+    assert not referenced_z_rows
+    assert set(layout.item_rows) <= set(referenced_aa_rows)
     assert (
-        f"Mobiliti!X{compound_rows[0]}"
-        f"+Mobiliti!X{compound_rows[1]}"
+        f"Mobiliti!AA{compound_rows[0]}"
+        f"+Mobiliti!AA{compound_rows[1]}"
         f"*Mobiliti!H{compound_rows[1]}/Mobiliti!H{compound_rows[0]}"
-        f"+Mobiliti!X{compound_rows[2]}"
+        f"+Mobiliti!AA{compound_rows[2]}"
         f"*Mobiliti!H{compound_rows[2]}/Mobiliti!H{compound_rows[0]}"
     ) in cotizacion_formulas
     _assert_subtotals_cover_all_items(
@@ -1046,51 +1058,51 @@ def test_prueba_project_shape_preserves_identity_capacity_formulas_and_format(
         [row for row, _formula_text in visible_name_rows],
     )
 
-    assert _row_presentation_signature(package, "Mobiliti", 13) == (
-        _row_presentation_signature(official, "Mobiliti", 13)
+    assert _row_presentation_signature(package, "Mobiliti", 14) == (
+        _row_presentation_signature(official, "Mobiliti", 14)
     )
-    assert _row_presentation_signature(package, "Mobiliti", 14)[0] == (
-        _row_presentation_signature(official, "Mobiliti", 14)[0]
+    assert _row_presentation_signature(package, "Mobiliti", 15)[0] == (
+        _row_presentation_signature(official, "Mobiliti", 15)[0]
     )
     assert _row_presentation_signature(
         package,
         "Mobiliti",
         layout.sections[0].product_start + layout.sections[0].capacity - 1,
-    ) == _row_presentation_signature(package, "Mobiliti", 15)
+    ) == _row_presentation_signature(package, "Mobiliti", 16)
     assert _row_presentation_signature(
         package,
         "Mobiliti",
         layout.sections[0].subtotal_row,
-    ) == _row_presentation_signature(official, "Mobiliti", 47)
-    assert _row_presentation_signature(
-        package,
-        "Mobiliti",
-        layout.sections[-1].section_row,
     ) == _row_presentation_signature(official, "Mobiliti", 48)
     assert _row_presentation_signature(
         package,
         "Mobiliti",
+        layout.sections[-1].section_row,
+    ) == _row_presentation_signature(official, "Mobiliti", 49)
+    assert _row_presentation_signature(
+        package,
+        "Mobiliti",
         layout.sections[-1].product_start,
-    ) == _row_presentation_signature(package, "Mobiliti", 15)
+    ) == _row_presentation_signature(package, "Mobiliti", 16)
     assert _row_presentation_signature(
         package,
         "Mobiliti",
         layout.sections[-1].product_start + layout.sections[-1].item_count,
-    ) == _row_presentation_signature(package, "Mobiliti", 15)
+    ) == _row_presentation_signature(package, "Mobiliti", 16)
     assert _row_presentation_signature(
         package,
         "Mobiliti",
         layout.sections[-1].subtotal_row,
-    ) == _row_presentation_signature(official, "Mobiliti", 82)
+    ) == _row_presentation_signature(official, "Mobiliti", 83)
 
-    footer_shift = layout.total_row - 573
+    footer_shift = layout.total_row - official_editor.layout.total_row
     official_mobiliti = _cell_map(official, "Mobiliti")
     assert _cell_package_signature(
-        mobiliti[f"D{578 + footer_shift}"]
-    ) == _cell_package_signature(official_mobiliti["D578"])
+        mobiliti[f"D{579 + footer_shift}"]
+    ) == _cell_package_signature(official_mobiliti["D579"])
     assert _cell_package_signature(
-        mobiliti[f"AK{578 + footer_shift}"]
-    ) == _cell_package_signature(official_mobiliti["AK578"])
+        mobiliti[f"AK{579 + footer_shift}"]
+    ) == _cell_package_signature(official_mobiliti["AK579"])
     _assert_calc_chain_targets_formula_cells(package, layout.item_rows)
     assert_package_preserved(
         OFFICIAL_TEMPLATE,
@@ -1117,11 +1129,19 @@ def test_large_quotes_preserve_every_line_and_official_contract(
     )
     output = run_local_worker_job(tmp_path, request, monkeypatch)
     package = XlsxPackage.read(output)
+    official = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    official_editor = WorksheetEditor.from_xml(
+        official.parts[official.sheet_part("Mobiliti")]
+    )
     layout = plan_mobiliti_layout(
         [
             SectionNeed(f"stress-section-{index}", f"Stress Section {index}", count)
             for index, count in enumerate(shape.section_counts, start=1)
-        ]
+        ],
+        first_section_row=official_editor.layout.first_section_row,
+        canonical_auxiliary_row_count=(
+            official_editor.layout.auxiliary_end - official_editor.layout.total_row
+        ),
     )
 
     keys = _quotation_data_keys(package)
@@ -1147,7 +1167,6 @@ def test_large_quotes_preserve_every_line_and_official_contract(
         f"Mobiliti!D{row}" for row in layout.item_rows
     ]
     cotizacion_rows = [row for row, _ in cotizacion_name_references]
-    official = XlsxPackage.read(OFFICIAL_TEMPLATE)
     # El formato oficial contiene referencias historicas en superficies
     # protegidas. La generacion no puede inventar ninguna adicional.
     assert not (
@@ -1157,7 +1176,7 @@ def test_large_quotes_preserve_every_line_and_official_contract(
     assert all(
         "#REF!" not in _formula(mobiliti[f"{column}{row}"])
         for row in layout.item_rows
-        for column in ("W", "X")
+        for column in ("Z", "AA")
     )
     quotation = _cell_map(package, "Quotation")
     _assert_subtotals_cover_all_items(package, layout, cotizacion_rows)
