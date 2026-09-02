@@ -79,6 +79,7 @@ from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
 )
 from mobiliti_saas.quote_engine.catalog_search import search_catalog_products  # noqa: E402
 from mobiliti_saas.quote_engine.catalog_collections import resolve_catalog_collection  # noqa: E402
+from mobiliti_saas.quote_engine.snapshot_cache import SnapshotCache  # noqa: E402
 from mobiliti_saas.quote_engine.project_model import (  # noqa: E402
     ASSET_KEY,
     normalize_project_payload,
@@ -142,6 +143,7 @@ R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
 R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
 R2_BUCKET = os.environ.get("R2_BUCKET", QUOTE_STORAGE_BUCKET).strip() or QUOTE_STORAGE_BUCKET
 R2_REGION = os.environ.get("R2_REGION", "auto").strip() or "auto"
+CATALOG_SNAPSHOT_CACHE_ENABLED = _env_bool("CATALOG_SNAPSHOT_CACHE_ENABLED", False)
 MAX_QUOTE_UPLOAD_MB = int(os.environ.get("MAX_QUOTE_UPLOAD_MB", "25"))
 MAX_QUOTE_HISTORY_PER_USER = int(os.environ.get("MAX_QUOTE_HISTORY_PER_USER", "5"))
 MAX_ACTIVE_QUOTE_JOBS_PER_USER = max(1, min(20, int(os.environ.get("MAX_ACTIVE_QUOTE_JOBS_PER_USER", "5"))))
@@ -439,6 +441,7 @@ def _storage_key() -> str:
 
 _R2_CLIENT = None
 _CATALOG_ASSET_R2_CLIENT = None
+_CATALOG_SNAPSHOT_CACHE = SnapshotCache()
 
 
 def _use_r2_storage() -> bool:
@@ -2331,6 +2334,38 @@ def db_get_published_catalog_snapshot(supplier: str, version_id: str | None = No
     return row
 
 
+def db_get_published_catalog_metadata(supplier: str) -> dict | None:
+    """Lee la identidad publicada actual, sin transferir su payload."""
+    supplier = _catalog_supplier(supplier)
+    source = db_get_catalog_source(supplier)
+    version_id = str(source.get("published_version_id") or "").strip() if isinstance(source, dict) else ""
+    if not version_id:
+        return None
+    if DEV_MODE:
+        row = _dev_load().setdefault("catalog_published_snapshots", {}).get(supplier)
+        if not isinstance(row, dict) or str(row.get("id") or "").strip() != version_id:
+            return None
+        return {key: row.get(key) for key in ("id", "supplier", "source_hash", "generated_at", "status")}
+    if _use_postgres():
+        return _pg_one(
+            """
+            SELECT id, supplier, source_hash, generated_at, status
+            FROM saas_catalog_snapshot_versions
+            WHERE id = %s AND supplier = %s AND status = 'published'
+            LIMIT 1
+            """,
+            (version_id, supplier),
+        )
+    rows = _supabase_req(
+        "GET", "/saas_catalog_snapshot_versions",
+        params={
+            "id": f"eq.{version_id}", "supplier": f"eq.{supplier}",
+            "status": "eq.published", "select": "id,supplier,source_hash,generated_at,status", "limit": "1",
+        },
+    )
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
 def db_list_catalog_reservations(supplier: str, status: str = "active") -> list[dict]:
     supplier = _catalog_supplier(supplier)
     if status not in {"active", "released"}:
@@ -3242,31 +3277,77 @@ def _catalog_run_detailed_diff(run: dict) -> dict:
     return _catalog_detailed_diff(candidate["payload"], base.get("payload") if base else None)
 
 
+def _catalog_snapshot_namespace() -> str:
+    if isinstance(SUPABASE_URL, str) and SUPABASE_URL.strip():
+        return SUPABASE_URL.strip().rstrip("/").lower()
+    if isinstance(DATABASE_URL, str) and DATABASE_URL.strip():
+        return "postgres:" + hashlib.sha256(DATABASE_URL.strip().encode("utf-8")).hexdigest()
+    return ""
+
+
+def _private_snapshot_cache_available() -> bool:
+    return bool(
+        CATALOG_SNAPSHOT_CACHE_ENABLED
+        and _catalog_snapshot_namespace()
+        and R2_BUCKET
+        and R2_BUCKET != CATALOG_ASSET_BUCKET
+        and _r2_configured()
+    )
+
+
+def _modern_snapshot_matches(metadata: dict, row: object) -> bool:
+    return bool(
+        isinstance(row, dict)
+        and all(row.get(key) == metadata.get(key) for key in ("id", "supplier", "source_hash", "generated_at", "status"))
+        and row.get("status") == "published"
+        and isinstance(row.get("payload"), dict)
+    )
+
+
 def _load_supplier_catalog_cached(supplier: str) -> dict:
     supplier = _catalog_supplier(supplier)
-    version_id = db_get_published_catalog_version_id(supplier)
-    if not version_id:
-        raise RuntimeError("Catalogo publicado no disponible")
+    if _private_snapshot_cache_available():
+        snapshot = None
+        revision = ""
+        for _attempt in range(2):
+            metadata = db_get_published_catalog_metadata(supplier)
+            if not isinstance(metadata, dict) or metadata.get("supplier") != supplier or metadata.get("status") != "published":
+                raise RuntimeError("Catalogo publicado no disponible")
+            version_id = str(metadata.get("id") or "").strip()
+            if not version_id:
+                raise RuntimeError("Catalogo publicado no disponible")
+            revision = ":".join(str(metadata.get(key) or "") for key in ("id", "source_hash", "generated_at"))
+            snapshot = _CATALOG_SNAPSHOT_CACHE.load(
+                namespace=_catalog_snapshot_namespace(), supplier=supplier, revision=revision,
+                loader=lambda: db_get_published_catalog_snapshot(supplier, version_id),
+                validator=lambda row: _modern_snapshot_matches(metadata, row),
+                client_factory=_r2_client, bucket=R2_BUCKET,
+            )
+            if snapshot is not None:
+                break
+        if snapshot is None:
+            raise RuntimeError("Catalogo publicado no disponible")
+    else:
+        version_id = db_get_published_catalog_version_id(supplier)
+        if not version_id:
+            raise RuntimeError("Catalogo publicado no disponible")
+        snapshot = db_get_published_catalog_snapshot(supplier, version_id)
+        revision = version_id
+        if not isinstance(snapshot, dict) or str(snapshot.get("id") or "").strip() != version_id:
+            raise RuntimeError("Catalogo publicado no disponible")
     storage_fingerprint = _catalog_asset_storage_fingerprint()
     cached = _SUPPLIER_CATALOG_CACHE.get(supplier)
-    if (
-        cached
-        and cached.get("published_version_id") == version_id
-        and cached.get("storage_fingerprint") == storage_fingerprint
-    ):
+    if cached and cached.get("revision") == revision and cached.get("storage_fingerprint") == storage_fingerprint:
         return cached["catalog"]
-    snapshot = db_get_published_catalog_snapshot(supplier, version_id)
     payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
     if not isinstance(payload, dict):
-        raise RuntimeError("Catalogo publicado no disponible")
-    if str(snapshot.get("id") or "").strip() != version_id:
         raise RuntimeError("Catalogo publicado no disponible")
     try:
         catalog = load_supplier_catalog_data(_hydrate_catalog_asset_urls(payload), expected_supplier=supplier)
     except (TypeError, ValueError, KeyError) as exc:
         raise RuntimeError("Catalogo publicado invalido") from exc
     _SUPPLIER_CATALOG_CACHE[supplier] = {
-        "published_version_id": version_id,
+        "revision": revision,
         "storage_fingerprint": storage_fingerprint,
         "catalog": catalog,
     }
@@ -3882,6 +3963,68 @@ def db_get_supplier_catalog_snapshot(supplier: str) -> dict | None:
     return rows[0] if rows else None
 
 
+def db_get_supplier_catalog_snapshot_metadata(supplier: str) -> dict | None:
+    """Lee la revisión legacy sin descargar el payload del snapshot."""
+    clean_supplier = str(supplier or "").strip().lower()
+    if clean_supplier not in {"tarkett", "offiho"}:
+        raise RuntimeError("Proveedor de catalogo no permitido")
+    if DEV_MODE:
+        row = _dev_load().get("supplier_catalog_snapshots", {}).get(clean_supplier)
+        if not isinstance(row, dict):
+            return None
+        return {key: row.get(key) for key in ("supplier", "source_hash", "generated_at", "updated_at")}
+    if DATABASE_URL:
+        return _pg_one(
+            """
+            SELECT supplier, source_hash, generated_at, updated_at
+            FROM saas_supplier_catalog_snapshots
+            WHERE supplier = %s
+            LIMIT 1
+            """,
+            (clean_supplier,),
+        )
+    rows = _supabase_req(
+        "GET", "/saas_supplier_catalog_snapshots",
+        params={"supplier": f"eq.{clean_supplier}", "select": "supplier,source_hash,generated_at,updated_at", "limit": "1"},
+    )
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def _legacy_snapshot_matches(metadata: dict, row: object) -> bool:
+    return bool(
+        isinstance(row, dict)
+        and all(row.get(key) == metadata.get(key) for key in ("supplier", "source_hash", "generated_at", "updated_at"))
+        and isinstance(row.get("payload"), dict)
+    )
+
+
+def _load_legacy_snapshot_cached(supplier: str) -> dict | None:
+    """Obtiene un snapshot legacy tras validar su revisión autoritativa."""
+    clean_supplier = str(supplier or "").strip().lower()
+    if clean_supplier not in {"tarkett", "offiho"}:
+        raise RuntimeError("Proveedor de catalogo no permitido")
+    if not _private_snapshot_cache_available():
+        return db_get_supplier_catalog_snapshot(clean_supplier)
+    for _attempt in range(2):
+        metadata = db_get_supplier_catalog_snapshot_metadata(clean_supplier)
+        if not isinstance(metadata, dict) or metadata.get("supplier") != clean_supplier:
+            return None
+        source_hash = str(metadata.get("source_hash") or "").strip()
+        updated_at = str(metadata.get("updated_at") or "").strip()
+        if not source_hash or not updated_at:
+            return None
+        revision = f"{source_hash}:{updated_at}"
+        snapshot = _CATALOG_SNAPSHOT_CACHE.load(
+            namespace=_catalog_snapshot_namespace(), supplier=clean_supplier, revision=revision,
+            loader=lambda: db_get_supplier_catalog_snapshot(clean_supplier),
+            validator=lambda row: _legacy_snapshot_matches(metadata, row),
+            client_factory=_r2_client, bucket=R2_BUCKET,
+        )
+        if snapshot is not None:
+            return snapshot
+    return None
+
+
 def db_upsert_supplier_catalog_snapshot(supplier: str, payload: dict) -> dict:
     clean_supplier = str(supplier or "").strip().lower()
     if clean_supplier not in {"tarkett", "offiho"}:
@@ -3904,7 +4047,7 @@ def db_upsert_supplier_catalog_snapshot(supplier: str, payload: dict) -> dict:
         _dev_save(data)
         return row
     if DATABASE_URL:
-        return _pg_write(
+        stored = _pg_write(
             """
             INSERT INTO saas_supplier_catalog_snapshots
                 (supplier, source_hash, generated_at, payload, updated_at)
@@ -3914,21 +4057,24 @@ def db_upsert_supplier_catalog_snapshot(supplier: str, payload: dict) -> dict:
                 generated_at = EXCLUDED.generated_at,
                 payload = EXCLUDED.payload,
                 updated_at = NOW()
-            RETURNING supplier, source_hash, generated_at, payload, updated_at
+            RETURNING supplier, source_hash, generated_at, updated_at
             """,
             (clean_supplier, catalog["source_hash"], catalog["generated_at"], payload),
-        ) or row
-    existing = db_get_supplier_catalog_snapshot(clean_supplier)
+        ) or {key: row[key] for key in ("supplier", "source_hash", "generated_at", "updated_at")}
+        return {**stored, "payload": payload}
+    existing = db_get_supplier_catalog_snapshot_metadata(clean_supplier)
+    result_params = {"select": "supplier,source_hash,generated_at,updated_at"}
     if existing:
         rows = _supabase_req(
             "PATCH",
             "/saas_supplier_catalog_snapshots",
-            params={"supplier": f"eq.{clean_supplier}"},
+            params={"supplier": f"eq.{clean_supplier}", **result_params},
             json_data=row,
         )
     else:
-        rows = _supabase_req("POST", "/saas_supplier_catalog_snapshots", json_data=row)
-    return rows[0] if isinstance(rows, list) and rows else row
+        rows = _supabase_req("POST", "/saas_supplier_catalog_snapshots", params=result_params, json_data=row)
+    stored = rows[0] if isinstance(rows, list) and rows else {key: row[key] for key in ("supplier", "source_hash", "generated_at", "updated_at")}
+    return {**stored, "payload": payload}
 
 
 def _catalog_file_fingerprint(catalog_path: Path) -> dict:
@@ -3975,6 +4121,25 @@ def _load_catalog_cached(cache: dict, catalog_path: Path, loader, label: str) ->
 def _load_tarkett_catalog_cached() -> dict:
     now = time.monotonic()
     if TARKETT_CATALOG_DB_ENABLED:
+        if _private_snapshot_cache_available():
+            snapshot = _load_legacy_snapshot_cached("tarkett")
+            payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
+            if isinstance(payload, dict):
+                try:
+                    catalog = load_tarkett_catalog_data(payload)
+                except (ValueError, TypeError, KeyError) as exc:
+                    raise RuntimeError("Catalogo Tarkett invalido") from exc
+                _TARKETT_CATALOG_CACHE.clear()
+                _TARKETT_CATALOG_CACHE.update(
+                    {
+                        "path": "private-r2:catalog-snapshots/tarkett",
+                        "fingerprint": {"source_hash": catalog.get("source_hash")},
+                        "source_hash": catalog.get("source_hash"),
+                        "catalog": catalog,
+                        "db_checked_at": now,
+                    }
+                )
+                return catalog
         checked_at = float(_TARKETT_CATALOG_CACHE.get("db_checked_at") or 0)
         if _TARKETT_CATALOG_CACHE.get("catalog") is not None and now - checked_at < TARKETT_CATALOG_DB_TTL_SECONDS:
             return _TARKETT_CATALOG_CACHE["catalog"]
@@ -4044,6 +4209,25 @@ _OFFIHO_CATALOG_CACHE = {
 def _load_offiho_catalog_cached(*, force_refresh: bool = False) -> dict:
     now = time.monotonic()
     if OFFIHO_CATALOG_DB_ENABLED:
+        if _private_snapshot_cache_available():
+            snapshot = _load_legacy_snapshot_cached("offiho")
+            payload = snapshot.get("payload") if isinstance(snapshot, dict) else None
+            if isinstance(payload, dict):
+                try:
+                    catalog = load_offiho_catalog_data(payload)
+                except (ValueError, TypeError, KeyError) as exc:
+                    raise RuntimeError("Catalogo Offiho invalido") from exc
+                _OFFIHO_CATALOG_CACHE.clear()
+                _OFFIHO_CATALOG_CACHE.update(
+                    {
+                        "path": "private-r2:catalog-snapshots/offiho",
+                        "fingerprint": {"source_hash": catalog.get("source_hash")},
+                        "source_hash": catalog.get("source_hash"),
+                        "catalog": catalog,
+                        "db_checked_at": now,
+                    }
+                )
+                return catalog
         checked_at = float(_OFFIHO_CATALOG_CACHE.get("db_checked_at") or 0)
         if (
             not force_refresh
