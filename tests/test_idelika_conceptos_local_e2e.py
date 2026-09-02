@@ -146,6 +146,18 @@ class RepositorioLocalDesechable:
         self.assets.setdefault(object_name, content)
         return object_name
 
+    def catalog_asset_matches(
+        self, object_name, expected_sha256, expected_size, expected_mime
+    ):
+        content = self.assets.get(object_name)
+        if content is None:
+            return None
+        return (
+            expected_mime == "image/png"
+            and len(content) == expected_size
+            and hashlib.sha256(content).hexdigest() == expected_sha256
+        )
+
     def stage_candidate(self, run_id, snapshot, metrics, delta_link):
         assert run_id == RUN_ID and delta_link == "local-e2e-delta"
         stored = dict(snapshot)

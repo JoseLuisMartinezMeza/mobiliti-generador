@@ -237,7 +237,7 @@ def _search_query(value: object) -> str:
 
 def _supplier(value: object) -> str | None:
     if value is None:
-        return None
+        raise ValueError("proveedor requerido")
     if not isinstance(value, str):
         raise ValueError("supplier invalido")
     clean = value.strip().lower()

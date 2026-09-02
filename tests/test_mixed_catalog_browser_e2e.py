@@ -304,9 +304,10 @@ def test_project_survives_reload_and_supports_replacements_and_complements(
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
 
-    def add_product(code):
+    def add_product(code, supplier):
         page.get_by_role("button", name="Agregar producto", exact=True).click()
         picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Proveedor", exact=True).select_option(supplier)
         picker.get_by_label("Buscar producto", exact=True).fill(code)
         picker.get_by_role("button", name=re.compile(code, re.IGNORECASE)).click()
         picker.get_by_role("button", name="Agregar al Proyecto", exact=True).click()
@@ -319,12 +320,13 @@ def test_project_survives_reload_and_supports_replacements_and_complements(
             "QA Proyecto persistente"
         )
 
-        add_product("OLIVE-II")
-        add_product("OLIVE-II")
+        add_product("OLIVE-II", "sunon")
+        add_product("OLIVE-II", "sunon")
         assert page.get_by_text("OLIVE-II", exact=True).count() == 2
 
         page.get_by_role("button", name="Agregar complemento", exact=True).first.click()
         picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Proveedor", exact=True).select_option("alma")
         picker.get_by_label("Buscar producto", exact=True).fill("HEAD-1")
         picker.get_by_role(
             "button", name=re.compile("HEAD-1", re.IGNORECASE)
@@ -413,9 +415,10 @@ def test_configurable_project_picker_keeps_confirmation_visible_and_adds_lauco_a
         browser, {"width": 1600, "height": 900}, stub, vite_url
     )
 
-    def add_product(query, base_option_id=None):
+    def add_product(query, supplier, base_option_id=None):
         page.get_by_role("button", name="Agregar producto", exact=True).click()
         picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Proveedor", exact=True).select_option(supplier)
         picker.get_by_label("Buscar producto", exact=True).fill(query)
         result = picker.locator(".project-picker-result", has_text=query).first
         result.wait_for(state="visible")
@@ -441,10 +444,10 @@ def test_configurable_project_picker_keeps_confirmation_visible_and_adds_lauco_a
             "button", name="Datos de cotización", exact=True
         ).is_visible()
 
-        add_product("A4 1.5PRAM", "lauco:a4-1-5pram:82")
+        add_product("A4 1.5PRAM", "lauco", "lauco:a4-1-5pram:82")
         assert page.locator(".project-principal", has_text="A4 1.5PRAM").count() == 1
 
-        add_product("kun:kt8605b63cer:1cc19505cd61d72c")
+        add_product("kun:kt8605b63cer:1cc19505cd61d72c", "alma")
         assert page.locator(".project-principal").count() == 2
         assert stub.saved_project["payload"]["lines"][0]["catalog"] == "lauco"
         assert stub.saved_project["payload"]["lines"][1]["catalog"] == "alma"
@@ -474,6 +477,7 @@ def test_project_section_controls_persist_the_complete_reordered_sections(
     def add_product(section, code):
         section.get_by_role("button", name="Agregar producto", exact=True).click()
         picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Proveedor", exact=True).select_option("sunon")
         picker.get_by_label("Buscar producto", exact=True).fill(code)
         picker.get_by_role("button", name=re.compile(code, re.IGNORECASE)).click()
         picker.get_by_role("button", name="Agregar al Proyecto", exact=True).click()
@@ -488,6 +492,7 @@ def test_project_section_controls_persist_the_complete_reordered_sections(
             "button", name="Agregar complemento", exact=True
         ).click()
         picker = page.get_by_role("dialog", name="Seleccionar producto")
+        picker.get_by_label("Proveedor", exact=True).select_option("alma")
         picker.get_by_label("Buscar producto", exact=True).fill("HEAD-1")
         picker.get_by_role(
             "button", name=re.compile("HEAD-1", re.IGNORECASE)
