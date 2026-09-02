@@ -2,6 +2,19 @@
 
 Estado: DONE_WITH_CONCERNS
 
+## Ronda 1 de revisión
+
+- RED: `python -B .codex/egress_safe_pytest.py tests/test_worker_egress.py -q`
+  produjo 1 fallo esperado: PostgreSQL generaba `SELECT *` pese a pedir
+  `select=id` o la proyección de lease.
+- GREEN: el mismo comando produjo `6 passed in 0.65s`.
+- Regresión adicional: `python -B .codex/egress_safe_pytest.py tests/test_quote_worker.py -q -k "postgres_client_threads_attempt or catalog_snapshot or fetch_next_job or recover_stale_jobs or nonisolated_worker"`
+  produjo `9 passed, 98 deselected in 0.81s`.
+
+`PostgresClient.rest` ahora transforma `select` únicamente con una lista
+interna permitida de columnas de `saas_quote_jobs`; sin `select` (o con `*`)
+conserva `SELECT *`. El claim sigue recibiendo la fila completa desde PATCH.
+
 ## RED → GREEN
 
 - RED: `python -B .codex/egress_safe_pytest.py tests/test_worker_egress.py -q`

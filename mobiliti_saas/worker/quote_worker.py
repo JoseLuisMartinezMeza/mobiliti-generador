@@ -100,6 +100,11 @@ CATALOG_SNAPSHOT_INTERNAL_PATHS = {
     "tarkett": "/internal/catalogs/tarkett",
     "offiho": "/internal/catalogs/offiho",
 }
+_QUOTE_JOB_SELECT_COLUMNS = frozenset({
+    "id", "usuario_id", "input_path", "output_path", "metadata", "status",
+    "attempt_token", "lease_expires_at", "updated_at", "created_at",
+    "error_message", "completed_at",
+})
 
 from mobiliti_saas.quote_engine.offiho_inventory import (  # noqa: E402
     download_offiho_inventory,
@@ -532,6 +537,14 @@ class PostgresClient(SupabaseClient):
         params = params or {}
         data = data or {}
         if method == "GET" and path == "/saas_quote_jobs":
+            requested_select = str(params.get("select", "*")).strip()
+            if requested_select in {"", "*"}:
+                select_clause = "*"
+            else:
+                columns = tuple(column.strip() for column in requested_select.split(","))
+                if not columns or any(column not in _QUOTE_JOB_SELECT_COLUMNS for column in columns):
+                    raise RuntimeError("Proyeccion Postgres de saas_quote_jobs no permitida")
+                select_clause = ",".join(columns)
             limit = int(params.get("limit", "1") or 1)
             where = []
             values = []
@@ -545,7 +558,7 @@ class PostgresClient(SupabaseClient):
                 values.append(str(id_filter).split(".", 1)[1])
             where_sql = " WHERE " + " AND ".join(where) if where else ""
             return self._rows(
-                f"SELECT * FROM saas_quote_jobs{where_sql} ORDER BY created_at ASC LIMIT %s",
+                f"SELECT {select_clause} FROM saas_quote_jobs{where_sql} ORDER BY created_at ASC LIMIT %s",
                 tuple(values) + (limit,),
             )
 

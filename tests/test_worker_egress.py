@@ -166,6 +166,39 @@ def test_worker_job_queries_use_minimum_projections_and_claim_still_has_authorit
     assert calls[2][2]["select"] == "id,status,attempt_token,lease_expires_at,updated_at"
 
 
+def test_postgres_job_reads_honor_safe_queued_and_processing_projections(monkeypatch):
+    """Mutación detectada: ignorar select y volver a ejecutar SELECT * en DATABASE_URL."""
+    client = quote_worker.PostgresClient.__new__(quote_worker.PostgresClient)
+    statements = []
+    monkeypatch.setattr(
+        client,
+        "_rows",
+        lambda sql, params: statements.append((sql, params)) or [],
+    )
+
+    client.rest(
+        "GET",
+        "/saas_quote_jobs",
+        params={"status": "eq.queued", "select": "id", "limit": "1"},
+    )
+    client.rest(
+        "GET",
+        "/saas_quote_jobs",
+        params={
+            "status": "eq.processing",
+            "select": "id,status,attempt_token,lease_expires_at,updated_at",
+            "limit": "100",
+        },
+    )
+
+    assert statements[0][0].startswith("SELECT id FROM saas_quote_jobs")
+    assert statements[0][1] == ("queued", 1)
+    assert statements[1][0].startswith(
+        "SELECT id,status,attempt_token,lease_expires_at,updated_at FROM saas_quote_jobs"
+    )
+    assert statements[1][1] == ("processing", 100)
+
+
 def test_idle_cycles_keep_fast_queue_polling_but_bound_recovery(monkeypatch):
     """Mutación detectada: recuperar leases en cada ciclo o demorar el sondeo de queued."""
     class Clock:
