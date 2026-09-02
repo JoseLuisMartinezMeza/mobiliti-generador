@@ -61,7 +61,12 @@ fi
 
 COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
 if docker container inspect "${ACTIVE_CONTAINER}" >/dev/null 2>&1; then
-  mapfile -t ACTIVE_NETWORKS < <(
+  ACTIVE_NETWORKS=()
+  while IFS= read -r network_name; do
+    if [[ -n "${network_name}" ]]; then
+      ACTIVE_NETWORKS+=("${network_name}")
+    fi
+  done < <(
     docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
       "${ACTIVE_CONTAINER}"
   )

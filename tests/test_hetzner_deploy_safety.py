@@ -780,7 +780,7 @@ fi
             'printf "%s\\n" "$*" >> "$DOCKER_LOG"\n'
             'if [[ "$1 $2" == "container inspect" ]]; then exit 0; fi\n'
             'if [[ "$1 $2" == "inspect --format" ]]; then '
-            'printf "verified-runtime-network\\n"; exit 0; fi\n'
+            'printf "verified-runtime-network\\n\\n"; exit 0; fi\n'
             'if [[ "$1" == "compose" ]]; then exit 37; fi\n'
             'exit 38\n'
         ),
