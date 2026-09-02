@@ -39,6 +39,7 @@ git -C "${APP_DIR}" fetch origin "${GIT_REF}"
 TARGET_COMMIT="$(git -C "${APP_DIR}" rev-parse FETCH_HEAD)"
 RELEASE_DIR="${RELEASES_DIR}/${TARGET_COMMIT}"
 COMPOSE_FILE="${RELEASE_DIR}/deploy/hetzner/docker-compose.yml"
+NETWORK_OVERRIDE_FILE="${RELEASE_DIR}/deploy/hetzner/docker-compose.existing-network.yml"
 
 if [[ -L "${GRAPH_HOST_DIR}" ]] ||
   [[ -e "${GRAPH_HOST_DIR}" && ! -d "${GRAPH_HOST_DIR}" ]]; then
@@ -58,7 +59,26 @@ if [[ ! -d "${RELEASE_DIR}/.git" && ! -f "${RELEASE_DIR}/.git" ]]; then
   git -C "${APP_DIR}" worktree add --detach "${RELEASE_DIR}" "${TARGET_COMMIT}"
 fi
 
-WORKER_IMAGE_TAG="${TARGET_COMMIT}" docker compose -f "${COMPOSE_FILE}" build
+COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+if docker container inspect "${ACTIVE_CONTAINER}" >/dev/null 2>&1; then
+  mapfile -t ACTIVE_NETWORKS < <(
+    docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' \
+      "${ACTIVE_CONTAINER}"
+  )
+  if [[ "${#ACTIVE_NETWORKS[@]}" -ne 1 ]] ||
+    [[ ! "${ACTIVE_NETWORKS[0]}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
+    echo "Active worker must have exactly one valid Docker network." >&2
+    exit 1
+  fi
+  if [[ ! -f "${NETWORK_OVERRIDE_FILE}" ]]; then
+    echo "Missing existing-network Compose override at ${NETWORK_OVERRIDE_FILE}." >&2
+    exit 1
+  fi
+  export WORKER_NETWORK_NAME="${ACTIVE_NETWORKS[0]}"
+  COMPOSE_ARGS+=(-f "${NETWORK_OVERRIDE_FILE}")
+fi
+
+WORKER_IMAGE_TAG="${TARGET_COMMIT}" docker compose "${COMPOSE_ARGS[@]}" build
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_PREFIX:-mobiliti-worker}-${TARGET_COMMIT:0:12}"
 TARGET_IMAGE="mobiliti-worker:${TARGET_COMMIT}"
 BACKUP_CONTAINER=""
@@ -89,7 +109,7 @@ fi
 
 if ! WORKER_IMAGE_TAG="${TARGET_COMMIT}" docker compose \
   --project-name "${COMPOSE_PROJECT_NAME}" \
-  -f "${COMPOSE_FILE}" up -d; then
+  "${COMPOSE_ARGS[@]}" up -d; then
   restore_previous_worker
   exit 1
 fi
@@ -111,7 +131,7 @@ fi
 
 WORKER_IMAGE_TAG="${TARGET_COMMIT}" docker compose \
   --project-name "${COMPOSE_PROJECT_NAME}" \
-  -f "${COMPOSE_FILE}" ps
+  "${COMPOSE_ARGS[@]}" ps
 curl --fail --silent --show-error http://127.0.0.1:10000/health
 echo
 printf '%s\n' "${TARGET_COMMIT}" >"${RELEASES_DIR}/CURRENT"

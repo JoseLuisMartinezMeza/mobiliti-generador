@@ -614,3 +614,93 @@ fi
     assert result.returncode != 0
     assert call_log.read_text(encoding="utf-8").splitlines() == expected_calls, result.stderr
     assert "docker" not in call_log.read_text(encoding="utf-8")
+
+
+def test_deploy_reuses_the_active_worker_network_instead_of_allocating_a_new_subnet(tmp_path):
+    """Un release nuevo debe adjuntarse a la red verificada del worker activo."""
+
+    git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    bash = str(git_bash) if git_bash.is_file() else shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is required to exercise the deploy network selection")
+
+    commit = "0123456789abcdef0123456789abcdef01234567"
+    app = tmp_path / "app"
+    deploy_dir = app / "deploy" / "hetzner"
+    deploy_dir.mkdir(parents=True)
+    (app / ".git").mkdir()
+    deploy = (ROOT / "deploy" / "hetzner" / "deploy.sh").read_text(encoding="utf-8")
+    root_guard = '''if [[ "${EUID}" -ne 0 ]]; then
+  echo "Run as root: sudo mobiliti-worker-deploy" >&2
+  exit 1
+fi
+
+'''
+    assert root_guard in deploy
+    script = deploy_dir / "deploy.sh"
+    script.write_text(
+        deploy.replace(root_guard, 'PATH="${DEPLOY_TEST_BIN}:${PATH}"\n'),
+        encoding="utf-8",
+    )
+
+    release_deploy = tmp_path / "releases" / commit / "deploy" / "hetzner"
+    release_deploy.mkdir(parents=True)
+    (release_deploy / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (release_deploy / "docker-compose.existing-network.yml").write_text(
+        "networks:\n  default:\n    name: ${WORKER_NETWORK_NAME}\n    external: true\n",
+        encoding="utf-8",
+    )
+    (release_deploy.parents[1] / ".git").write_text("gitdir: fixture\n", encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker_log = tmp_path / "docker.log"
+    for name, body in {
+        "python3": 'cat >/dev/null\nexit 0\n',
+        "git": (
+            'case "$*" in\n'
+            '  *fetch*) exit 0;;\n'
+            f'  *"rev-parse FETCH_HEAD"*) printf "{commit}\\n"; exit 0;;\n'
+            '  *show*) printf "raise SystemExit(0)\\n"; exit 0;;\n'
+            'esac\nexit 24\n'
+        ),
+        "install": "exit 0\n",
+        "docker": (
+            'printf "%s\\n" "$*" >> "$DOCKER_LOG"\n'
+            'if [[ "$1 $2" == "container inspect" ]]; then exit 0; fi\n'
+            'if [[ "$1 $2" == "inspect --format" ]]; then '
+            'printf "verified-runtime-network\\n"; exit 0; fi\n'
+            'if [[ "$1" == "compose" ]]; then exit 37; fi\n'
+            'exit 38\n'
+        ),
+    }.items():
+        command = bin_dir / name
+        command.write_text(f"#!/usr/bin/env bash\n{body}", encoding="utf-8")
+        command.chmod(0o755)
+
+    env_file = tmp_path / "worker.env"
+    values = _runtime_catalog_env() | {
+        "SUPABASE_ANON_KEY": "test-anon-key",
+        "MOBILITI_REST_SECRET": "test-rest-secret",
+        "QUOTE_STORAGE_BUCKET": "quote-files",
+    }
+    env_file.write_text("\n".join(f"{key}={value}" for key, value in values.items()), encoding="utf-8")
+    env = os.environ | {
+        "APP_DIR": _bash_path(app),
+        "ENV_FILE": _bash_path(env_file),
+        "RELEASES_DIR": _bash_path(tmp_path / "releases"),
+        "DEPLOY_TEST_BIN": _bash_path(bin_dir),
+        "DOCKER_LOG": _bash_path(docker_log),
+    }
+
+    result = subprocess.run(
+        [bash, _bash_path(script)], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 37, result.stderr
+    compose_call = next(
+        call for call in docker_log.read_text(encoding="utf-8").splitlines()
+        if call.startswith("compose ")
+    )
+    assert "docker-compose.existing-network.yml" in compose_call
+    assert "verified-runtime-network" not in compose_call
