@@ -86,7 +86,7 @@ def test_modern_snapshot_checks_metadata_without_payload_before_private_cache_re
 
     assert first["source_hash"] == second["source_hash"] == "a" * 64
     assert payload_reads == [("alma", "version-1")]
-    assert metadata_calls == ["alma", "alma"]
+    assert metadata_calls == ["alma", "alma", "alma", "alma"]
 
 
 def test_modern_snapshot_never_returns_resident_copy_after_depublication(monkeypatch):
@@ -189,3 +189,71 @@ def test_private_snapshot_cache_rejects_the_public_catalog_asset_bucket(monkeypa
     monkeypatch.setattr(api, "_r2_configured", lambda: True)
 
     assert api._private_snapshot_cache_available() is False
+
+
+def test_modern_snapshot_retries_when_publication_changes_after_cache_load(monkeypatch):
+    _enable_private_cache(monkeypatch)
+    first = {"id": "version-1", "supplier": "alma", "source_hash": "a" * 64,
+             "generated_at": "2026-09-02T00:00:00Z", "status": "published"}
+    second = {"id": "version-2", "supplier": "alma", "source_hash": "b" * 64,
+              "generated_at": "2026-09-02T00:01:00Z", "status": "published"}
+    metadata = iter([first, second, second, second])
+    payload_reads = []
+
+    monkeypatch.setattr(api, "db_get_published_catalog_metadata", lambda supplier: next(metadata))
+    monkeypatch.setattr(
+        api, "db_get_published_catalog_snapshot",
+        lambda supplier, version: payload_reads.append(version) or {
+            **(first if version == "version-1" else second),
+            "payload": {"supplier": "alma", "source_hash": "a" * 64 if version == "version-1" else "b" * 64,
+                        "generated_at": "2026-09-02T00:00:00Z", "items": []},
+        },
+    )
+    monkeypatch.setattr(api, "_catalog_asset_storage_fingerprint", lambda: ("supabase", ""))
+    monkeypatch.setattr(api, "_hydrate_catalog_asset_urls", lambda payload: payload)
+    monkeypatch.setattr(api, "load_supplier_catalog_data", lambda payload, expected_supplier: payload)
+
+    catalog = api._load_supplier_catalog_cached("alma")
+
+    assert catalog["source_hash"] == "b" * 64
+    assert payload_reads == ["version-1", "version-2"]
+
+
+def test_legacy_snapshot_retries_when_metadata_changes_after_cache_load(monkeypatch):
+    _enable_private_cache(monkeypatch)
+    first = {"supplier": "offiho", "source_hash": "a" * 64,
+             "generated_at": "2026-09-02T00:00:00Z", "updated_at": "2026-09-02T00:01:00Z"}
+    second = {"supplier": "offiho", "source_hash": "b" * 64,
+              "generated_at": "2026-09-02T00:01:00Z", "updated_at": "2026-09-02T00:02:00Z"}
+    metadata = iter([first, second, second, second])
+    reads = []
+
+    monkeypatch.setattr(api, "db_get_supplier_catalog_snapshot_metadata", lambda supplier: next(metadata))
+    monkeypatch.setattr(
+        api, "db_get_supplier_catalog_snapshot",
+        lambda supplier: reads.append(1) or {**(first if len(reads) == 1 else second), "payload": {"items": []}},
+    )
+
+    snapshot = api._load_legacy_snapshot_cached("offiho")
+
+    assert snapshot["source_hash"] == "b" * 64
+    assert len(reads) == 2
+
+
+@pytest.mark.parametrize(
+    ("loader_name", "cache_name", "enabled_name"),
+    [
+        ("_load_tarkett_catalog_cached", "_TARKETT_CATALOG_CACHE", "TARKETT_CATALOG_DB_ENABLED"),
+        ("_load_offiho_catalog_cached", "_OFFIHO_CATALOG_CACHE", "OFFIHO_CATALOG_DB_ENABLED"),
+    ],
+)
+def test_legacy_catalog_does_not_serve_resident_ttl_copy_when_metadata_is_absent(
+    monkeypatch, loader_name, cache_name, enabled_name
+):
+    monkeypatch.setattr(api, "_private_snapshot_cache_available", lambda: True)
+    monkeypatch.setattr(api, enabled_name, True)
+    monkeypatch.setattr(api, "db_get_supplier_catalog_snapshot_metadata", lambda supplier: None)
+    getattr(api, cache_name).update({"catalog": {"stale": True}, "db_checked_at": 999999999})
+
+    with pytest.raises(RuntimeError, match="Catalogo.*no disponible"):
+        getattr(api, loader_name)()

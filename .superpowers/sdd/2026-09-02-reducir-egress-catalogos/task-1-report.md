@@ -24,3 +24,11 @@ Estado: DONE.
 
 - No hubo acceso de red, secretos, producción ni despliegue. La medición real de egress y el canary quedan para coordinación de raíz.
 - Los contadores reflejan bytes de contenido cargado desde DB, no bytes facturados por proveedores.
+
+## Revisión ronda 1
+
+- Se añadió una lectura autoritativa final tras cada `SnapshotCache.load` moderno y legacy. Si la identidad cambió, el resultado se descarta y se repite una sola vez bajo la nueva revisión; nunca se acepta la clave inmutable previa como vigente.
+- En modo de caché privada, metadata legacy ausente o inválida ahora provoca un error controlado y no puede caer al cache TTL residente de Tarkett u Offiho.
+- RED: `python -B -m pytest -p no:cacheprovider tests/test_api_snapshot_egress.py -q` → 4 fallos esperados (dos carreras y dos fallbacks TTL).
+- GREEN: `python -B -m pytest -p no:cacheprovider tests/test_snapshot_cache.py tests/test_api_snapshot_egress.py -q` → `24 passed in 1.18s`.
+- Regresión segura repetida de cinco flujos API → `5 passed in 1.73s`; sin borrados bloqueados ni reciclados. SHA API final: `18833459AAF340D09AF5DD5D6B5847F5C04047ADA9AC65DD349759E7BB431C2A`.

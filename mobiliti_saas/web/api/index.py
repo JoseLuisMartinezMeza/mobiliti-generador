@@ -3304,6 +3304,13 @@ def _modern_snapshot_matches(metadata: dict, row: object) -> bool:
     )
 
 
+def _metadata_is_current(expected: dict, current: object, fields: tuple[str, ...]) -> bool:
+    return bool(
+        isinstance(current, dict)
+        and all(current.get(field) == expected.get(field) for field in fields)
+    )
+
+
 def _load_supplier_catalog_cached(supplier: str) -> dict:
     supplier = _catalog_supplier(supplier)
     if _private_snapshot_cache_available():
@@ -3323,8 +3330,12 @@ def _load_supplier_catalog_cached(supplier: str) -> dict:
                 validator=lambda row: _modern_snapshot_matches(metadata, row),
                 client_factory=_r2_client, bucket=R2_BUCKET,
             )
-            if snapshot is not None:
+            current = db_get_published_catalog_metadata(supplier)
+            if snapshot is not None and _metadata_is_current(
+                metadata, current, ("id", "supplier", "source_hash", "generated_at", "status")
+            ):
                 break
+            snapshot = None
         if snapshot is None:
             raise RuntimeError("Catalogo publicado no disponible")
     else:
@@ -4008,11 +4019,11 @@ def _load_legacy_snapshot_cached(supplier: str) -> dict | None:
     for _attempt in range(2):
         metadata = db_get_supplier_catalog_snapshot_metadata(clean_supplier)
         if not isinstance(metadata, dict) or metadata.get("supplier") != clean_supplier:
-            return None
+            raise RuntimeError("Catalogo legacy no disponible")
         source_hash = str(metadata.get("source_hash") or "").strip()
         updated_at = str(metadata.get("updated_at") or "").strip()
         if not source_hash or not updated_at:
-            return None
+            raise RuntimeError("Catalogo legacy no disponible")
         revision = f"{source_hash}:{updated_at}"
         snapshot = _CATALOG_SNAPSHOT_CACHE.load(
             namespace=_catalog_snapshot_namespace(), supplier=clean_supplier, revision=revision,
@@ -4020,9 +4031,12 @@ def _load_legacy_snapshot_cached(supplier: str) -> dict | None:
             validator=lambda row: _legacy_snapshot_matches(metadata, row),
             client_factory=_r2_client, bucket=R2_BUCKET,
         )
-        if snapshot is not None:
+        current = db_get_supplier_catalog_snapshot_metadata(clean_supplier)
+        if snapshot is not None and _metadata_is_current(
+            metadata, current, ("supplier", "source_hash", "generated_at", "updated_at")
+        ):
             return snapshot
-    return None
+    raise RuntimeError("Catalogo legacy no disponible")
 
 
 def db_upsert_supplier_catalog_snapshot(supplier: str, payload: dict) -> dict:
