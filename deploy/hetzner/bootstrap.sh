@@ -71,13 +71,17 @@ if [[ ! -f "${ENV_DIR}/worker.env" ]]; then
   echo "Created ${ENV_DIR}/worker.env. Fill SUPABASE_ANON_KEY and MOBILITI_REST_SECRET before deploy."
 fi
 
-cat >/usr/local/bin/mobiliti-worker-deploy <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-git -C "${APP_DIR}" fetch origin "${GIT_REF}"
-git -C "${APP_DIR}" show FETCH_HEAD:deploy/hetzner/deploy.sh | APP_DIR="${APP_DIR}" GIT_REF="${GIT_REF}" bash -s -- "\$@"
-EOF
-chmod 0755 /usr/local/bin/mobiliti-worker-deploy
+WRAPPER_PATH="/usr/local/bin/mobiliti-worker-deploy"
+WRAPPER_CANDIDATE="${ENV_DIR}/mobiliti-worker-deploy.candidate"
+git -C "${APP_DIR}" show \
+  FETCH_HEAD:deploy/hetzner/mobiliti-worker-deploy.sh > "${WRAPPER_CANDIDATE}"
+bash -n "${WRAPPER_CANDIDATE}"
+if [[ -f "${WRAPPER_PATH}" ]]; then
+  install -d -m 0700 "${ENV_DIR}/backups"
+  cp --preserve=mode,ownership,timestamps "${WRAPPER_PATH}" \
+    "${ENV_DIR}/backups/mobiliti-worker-deploy.$(date -u +%Y%m%dT%H%M%SZ).bak"
+fi
+install -m 0755 "${WRAPPER_CANDIDATE}" "${WRAPPER_PATH}"
 
 echo "Bootstrap complete."
 echo "Next:"

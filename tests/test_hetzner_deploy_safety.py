@@ -142,9 +142,104 @@ def test_hetzner_bootstrap_creates_graph_credentials_directory_without_a_certifi
 
     assert 'install -d -o root -g 10001 -m 0750 "${ENV_DIR}/graph"' in bootstrap
     assert "client-cert.pem" not in bootstrap
-    wrapper = bootstrap[bootstrap.index("cat >/usr/local/bin/mobiliti-worker-deploy") :]
+    wrapper = (
+        ROOT / "deploy" / "hetzner" / "mobiliti-worker-deploy.sh"
+    ).read_text(encoding="utf-8")
     fetch = wrapper.index('git -C "${APP_DIR}" fetch')
     assert "preflight.py" not in wrapper[:fetch]
+
+
+def test_hetzner_bootstrap_installs_a_self_refreshing_deploy_wrapper():
+    bootstrap = (ROOT / "deploy" / "hetzner" / "bootstrap.sh").read_text(
+        encoding="utf-8"
+    )
+    wrapper = (
+        ROOT / "deploy" / "hetzner" / "mobiliti-worker-deploy.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'git -C "${APP_DIR}" show' in bootstrap
+    assert (
+        'FETCH_HEAD:deploy/hetzner/mobiliti-worker-deploy.sh > "${WRAPPER_CANDIDATE}"'
+        in bootstrap
+    )
+    assert 'bash -n "${WRAPPER_CANDIDATE}"' in bootstrap
+    assert 'install -m 0755 "${WRAPPER_CANDIDATE}" "${WRAPPER_PATH}"' in bootstrap
+    assert 'cp --preserve=mode,ownership,timestamps "${WRAPPER_PATH}"' in bootstrap
+    assert 'APP_DIR="${APP_DIR:-/opt/mobiliti-worker/app}"' in wrapper
+    assert 'GIT_REF="${GIT_REF:-master}"' in wrapper
+    assert 'git -C "${APP_DIR}" fetch origin "${GIT_REF}"' in wrapper
+    assert 'git -C "${APP_DIR}" show FETCH_HEAD:deploy/hetzner/deploy.sh' in wrapper
+    assert 'APP_DIR="${APP_DIR}" GIT_REF="${GIT_REF}" bash -s -- "$@"' in wrapper
+    assert 'exec bash "${APP_DIR}/deploy/hetzner/deploy.sh"' not in wrapper
+
+
+def test_self_refreshing_deploy_wrapper_honors_runtime_ref_and_arguments(tmp_path):
+    git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    bash = str(git_bash) if git_bash.is_file() else shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is required to exercise the deploy wrapper")
+
+    wrapper_source = (
+        ROOT / "deploy" / "hetzner" / "mobiliti-worker-deploy.sh"
+    ).read_text(encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    call_log = tmp_path / "calls.log"
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    wrapper = tmp_path / "mobiliti-worker-deploy.sh"
+    wrapper.write_text(
+        wrapper_source.replace(
+            "set -euo pipefail\n",
+            'set -euo pipefail\nPATH="${DEPLOY_TEST_BIN}:${PATH}"\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    git = bin_dir / "git"
+    git.write_text(
+        "#!/bin/bash\n"
+        'printf "git|%s\\n" "$*" >> "$CALL_LOG"\n'
+        'if [[ "$*" == *" show FETCH_HEAD:deploy/hetzner/deploy.sh" ]]; then\n'
+        '  printf "fetched deploy payload\\n"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    git.chmod(0o755)
+
+    nested_bash = bin_dir / "bash"
+    nested_bash.write_text(
+        "#!/bin/bash\n"
+        'payload="$(cat)"\n'
+        'printf "bash|%s|%s|%s|%s\\n" "$APP_DIR" "$GIT_REF" "$*" "$payload" '
+        '>> "$CALL_LOG"\n',
+        encoding="utf-8",
+    )
+    nested_bash.chmod(0o755)
+
+    env = os.environ | {
+        "APP_DIR": _bash_path(app_dir),
+        "GIT_REF": "codex/test-runtime-ref",
+        "CALL_LOG": _bash_path(call_log),
+        "DEPLOY_TEST_BIN": _bash_path(bin_dir),
+    }
+    result = subprocess.run(
+        [bash, _bash_path(wrapper), "--probe", "value"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    assert calls[0].endswith("fetch origin codex/test-runtime-ref")
+    assert calls[1].endswith("show FETCH_HEAD:deploy/hetzner/deploy.sh")
+    assert calls[2] == (
+        f"bash|{_bash_path(app_dir)}|codex/test-runtime-ref|-s -- --probe value|"
+        "fetched deploy payload"
+    )
 
 
 def test_worker_example_disables_catalog_sync_and_uses_container_certificate_path():
