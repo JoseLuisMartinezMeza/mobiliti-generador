@@ -4,6 +4,21 @@ Worker mínimo de sólo lectura para `catalog-assets`, publicado únicamente med
 `workers.dev`. El binding privado `CATALOG_ASSETS` no debe compartir bucket ni
 credenciales con `quote-files`.
 
+## Caché y validación
+
+Workers Caching se sitúa delante del handler. La validación de metadatos y el
+stream de cuerpo ocurre sólo durante un **fill/miss**, antes de devolver un 2xx
+inmutable. Un **HIT sirve la representación ya validada** e inmutable por ese
+fill/miss; no vuelve a invocar el Worker ni a validar R2.
+
+`GET` y `HEAD` para la misma URL comparten una sola entrada. Un `HEAD` frío se
+normaliza internamente a `GET` antes del handler para llenar la entrada con el
+asset completo; el handler directo conserva `head()` para pruebas locales y
+rutas no cacheadas, pero no modela ese HEAD frío de producción.
+
+Sólo un 2xx validado usa `public, max-age=31536000, immutable`. Errores y
+preflights siempre responden `Cache-Control: no-store`.
+
 Ejecutar las pruebas locales sin dependencias:
 
 ```powershell

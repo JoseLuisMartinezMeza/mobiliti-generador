@@ -73,7 +73,7 @@ test("el Worker sirve un asset válido con CORS determinista y cache inmutable",
   assert.equal(response.headers.get("Vary"), null);
 });
 
-test("HEAD valida el objeto pero no devuelve cuerpo", async () => {
+test("el handler directo HEAD valida metadatos sin devolver cuerpo", async () => {
   const { response, calls, head_calls } = await solicitar(
     `https://assets.example.workers.dev/${KEY}`,
     { method: "HEAD" },
@@ -102,6 +102,16 @@ test("las rutas no canónicas y cualquier query se rechazan antes de consultar R
     assert_no_store(response);
     assert.deepEqual(calls, [], url);
   }
+});
+
+test("un delimitador query vacío se rechaza antes de consultar R2", async () => {
+  const { response, calls } = await solicitar(
+    `https://assets.example.workers.dev/${KEY}?`,
+  );
+
+  assert.equal(response.status, 400);
+  assert_no_store(response);
+  assert.deepEqual(calls, []);
 });
 
 test("los métodos fuera de GET, HEAD y OPTIONS no consultan R2", async () => {
@@ -188,6 +198,40 @@ test("un error de R2 se reduce a una respuesta estructurada no cacheable", async
   assert.equal(await response.text(), "Asset unavailable");
 });
 
+test("sólo el 2xx validado es inmutable; errores y preflight son no-store", async () => {
+  const valid = await solicitar(`https://assets.example.workers.dev/${KEY}`);
+  assert.equal(valid.response.status, 200);
+  assert.equal(valid.response.headers.get("Cache-Control"), CACHE_CONTROL);
+
+  const failures = [
+    await solicitar(`https://assets.example.workers.dev/${KEY}?`),
+    await solicitar(`https://assets.example.workers.dev/${KEY}`, { method: "POST" }),
+    await solicitar(`https://assets.example.workers.dev/${KEY}`, {
+      method: "OPTIONS",
+      headers: { Origin: "https://evil.example" },
+    }),
+    await solicitar(`https://assets.example.workers.dev/${KEY}`, undefined, null),
+    await solicitar(
+      `https://assets.example.workers.dev/${KEY}`,
+      undefined,
+      objeto_valido({ httpEtag: "" }),
+    ),
+  ];
+
+  for (const { response } of failures) {
+    assert.ok(response.status >= 400, `unexpected status ${response.status}`);
+    assert_no_store(response);
+    assert.notEqual(response.headers.get("Cache-Control"), CACHE_CONTROL);
+  }
+
+  const preflight = await solicitar(`https://assets.example.workers.dev/${KEY}`, {
+    method: "OPTIONS",
+    headers: { Origin: PRODUCTION_ORIGIN },
+  });
+  assert.equal(preflight.response.status, 204);
+  assert_no_store(preflight.response);
+});
+
 test("la configuración Free fija Workers Caching, binding privado y límite CPU", async () => {
   const config = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
 
@@ -206,4 +250,14 @@ test("el código no contiene operaciones mutantes ni usa caches.default", async 
 
   assert.doesNotMatch(source, /CATALOG_ASSETS\.(?:put|delete|list)\s*\(/);
   assert.doesNotMatch(source, /caches\.default/);
+});
+
+test("el README describe la validación sólo en fill o miss y la semántica real de HEAD", async () => {
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+
+  assert.match(readme, /fill\/miss/i);
+  assert.match(readme, /HIT[^\n]*representación ya validada/i);
+  assert.match(readme, /`GET` y `HEAD`[^\n]*comparten una sola entrada/i);
+  assert.match(readme, /`HEAD` frío[\s\S]*?`GET`[\s\S]*?antes del handler/i);
+  assert.doesNotMatch(readme, /cada HIT[^\n]*valida R2/i);
 });

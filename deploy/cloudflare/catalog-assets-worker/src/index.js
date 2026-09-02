@@ -28,7 +28,7 @@ function allowed_origin(env) {
 
 function asset_path(request) {
   const url = new URL(request.url);
-  if (url.search || url.hash) {
+  if (request.url.includes("?") || url.search || url.hash) {
     return null;
   }
 
