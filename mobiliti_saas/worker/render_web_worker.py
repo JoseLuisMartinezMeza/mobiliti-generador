@@ -151,7 +151,7 @@ def _build_client():
 
 def _has_pending_job() -> bool:
     client = _build_client()
-    quote_worker.recover_stale_jobs(client)
+    quote_worker.recover_stale_jobs_if_due(client)
     return quote_worker.fetch_next_job(client) is not None
 
 
@@ -266,7 +266,6 @@ def _run_once_isolated() -> bool:
         if _run_rate_sync_isolated():
             return True
         did_work = _run_catalog_sync_isolated()
-        print("Sin jobs pendientes.")
         return did_work
 
     cmd = [sys.executable, str(WORKER_SCRIPT), "--once"]

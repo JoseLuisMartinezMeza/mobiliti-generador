@@ -318,6 +318,8 @@ class SupabaseClient:
             return self._catalog_snapshot_payload_get(supplier)
         for _attempt in range(2):
             metadata = self._catalog_snapshot_metadata_get(supplier)
+            if metadata is None:
+                return None
             if not isinstance(metadata, dict) or metadata.get("supplier") != supplier:
                 raise RuntimeError("Catalogo legacy no disponible")
             source_hash = str(metadata.get("source_hash") or "").strip()
@@ -360,6 +362,8 @@ class SupabaseClient:
                 "limit": "1",
             },
         )
+        if not isinstance(rows, list) or (rows and not isinstance(rows[0], dict)):
+            raise RuntimeError("Catalogo legacy no disponible")
         return rows[0] if rows else None
 
     def catalog_snapshot_upsert(self, supplier: str, payload: dict) -> dict:
@@ -2175,8 +2179,18 @@ def sync_offiho_catalog_if_due(client, *, force: bool = False) -> bool:
     return True
 
 
-def run_once(*, job_id: str | None = None) -> bool:
+def recover_stale_jobs_if_due(client) -> None:
     global _LAST_STALE_RECOVERY_AT
+    now = time.monotonic()
+    if (
+        _LAST_STALE_RECOVERY_AT is None
+        or now - _LAST_STALE_RECOVERY_AT >= STALE_RECOVERY_INTERVAL_SECONDS
+    ):
+        _LAST_STALE_RECOVERY_AT = now
+        recover_stale_jobs(client)
+
+
+def run_once(*, job_id: str | None = None) -> bool:
     if job_id and not DEV_MODE:
         raise RuntimeError("La selección de una prueba sólo está habilitada en modo local")
     client = LocalDevClient() if DEV_MODE else (PostgresClient() if DATABASE_URL else SupabaseClient())
@@ -2189,13 +2203,7 @@ def run_once(*, job_id: str | None = None) -> bool:
             print(f"La prueba {job_id} no está en cola; no se procesó otro job.")
             return False
     else:
-        now = time.monotonic()
-        if (
-            _LAST_STALE_RECOVERY_AT is None
-            or now - _LAST_STALE_RECOVERY_AT >= STALE_RECOVERY_INTERVAL_SECONDS
-        ):
-            _LAST_STALE_RECOVERY_AT = now
-            recover_stale_jobs(client)
+        recover_stale_jobs_if_due(client)
         job = fetch_next_job(client)
     if not job:
         did_work = sync_tarkett_catalog_if_due(client)

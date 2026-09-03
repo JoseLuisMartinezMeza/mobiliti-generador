@@ -755,6 +755,8 @@ def _jsonable_row(row: dict | None) -> dict | None:
     for key, value in dict(row).items():
         if isinstance(value, (date, datetime)):
             clean[key] = value.isoformat()
+        elif isinstance(value, uuid.UUID):
+            clean[key] = str(value)
         else:
             clean[key] = value
     return clean

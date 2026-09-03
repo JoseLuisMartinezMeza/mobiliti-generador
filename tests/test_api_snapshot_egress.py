@@ -1,6 +1,11 @@
 import copy
 import importlib.util
+import sys
+import uuid
+from contextlib import nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -366,5 +371,86 @@ def test_dev_disabled_source_does_not_return_resident_catalog(monkeypatch):
         "alma": {"revision": "snapshot-1", "storage_fingerprint": ("supabase", ""), "catalog": {"stale": True}}
     })
 
+    with pytest.raises(RuntimeError, match="publicado no disponible"):
+        api._load_supplier_catalog_cached("alma")
+
+
+def test_postgres_uuid_snapshot_identity_survives_api_memory_and_r2_reuse(monkeypatch):
+    """Mutación detectada: UUID nativo queda sin normalizar en metadata/fila PostgreSQL."""
+    r2 = _enable_private_cache(monkeypatch)
+    version_id = uuid.UUID("12345678-1234-5678-1234-567812345678")
+    generated_at = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    payload = {
+        "supplier": "alma", "source_hash": "a" * 64,
+        "generated_at": "2026-09-02T00:00:00+00:00",
+        "items": [{
+            "internal_id": "alma:silla:one", "supplier": "alma", "product_key": "silla-one",
+            "sku": "SILLA-ONE", "code_status": "verified", "brand": "Alma", "collection": "Sillas",
+            "name": "Silla", "description": "Silla de oficina", "unit": "pieza",
+            "availability_type": "made_to_order", "stock": None, "lead_time": "Sobre pedido",
+            "base_price_options": [], "add_on_options": [], "base_currency": "USD",
+            "price_net": "199.990000", "tax_rate": "0.160000", "attributes": {},
+            "image_url": "https://example.test/silla.webp", "image_kind": "official",
+            "product_url": "https://example.test/silla", "warnings": [], "source_reference": "Catalogo:1",
+        }],
+    }
+    row = {"id": version_id, "supplier": "alma", "source_hash": "a" * 64,
+           "generated_at": generated_at, "status": "published", "payload": payload, "created_at": generated_at}
+    state = {"enabled": True, "payload_reads": 0, "metadata_reads": 0}
+
+    class Cursor:
+        def execute(self, sql, params):
+            if "FROM saas_catalog_sources" in sql:
+                assert params == ("alma",)
+                self.rows = [{"id": uuid.UUID("aaaaaaaa-1234-5678-1234-567812345678"),
+                              "supplier": "alma", "label": "Alma", "adapter": "alma",
+                              "enabled": True, "published_version_id": row["id"]}] if state["enabled"] else []
+            else:
+                assert "FROM saas_catalog_snapshot_versions" in sql
+                assert params == (str(row["id"]), "alma")
+                fields = ("id", "supplier", "source_hash", "generated_at", "status")
+                if "payload" in sql:
+                    state["payload_reads"] += 1
+                    fields += ("payload", "created_at")
+                else:
+                    state["metadata_reads"] += 1
+                self.rows = [{key: copy.deepcopy(row[key]) for key in fields}]
+
+        def fetchall(self):
+            return self.rows
+
+    driver = SimpleNamespace(
+        connect=lambda *args, **kwargs: nullcontext(SimpleNamespace(cursor=lambda: nullcontext(Cursor()))),
+        Error=RuntimeError,
+    )
+    monkeypatch.setitem(sys.modules, "psycopg", driver)
+    monkeypatch.setitem(sys.modules, "psycopg.rows", SimpleNamespace(dict_row=object()))
+    monkeypatch.setattr(api, "DEV_MODE", False)
+    monkeypatch.setattr(api, "DATABASE_URL", "postgresql://catalog.example/database")
+    monkeypatch.setattr(api, "SUPABASE_URL", None)
+    monkeypatch.setattr(api, "_SUPPLIER_CATALOG_CACHE", {})
+    monkeypatch.setattr(api, "_catalog_asset_storage_fingerprint", lambda: ("supabase", ""))
+
+    first = api._load_supplier_catalog_cached("alma")
+    assert first["by_internal_id"]["alma:silla:one"]["name"] == "Silla"
+    assert api._load_supplier_catalog_cached("alma") == first
+    assert state["payload_reads"] == 1
+    assert state["metadata_reads"] == 4
+    assert api._CATALOG_SNAPSHOT_CACHE.counters["memory_hit"] == 1
+    assert len(r2.objects) == 1
+
+    monkeypatch.setattr(api, "_CATALOG_SNAPSHOT_CACHE", api.SnapshotCache())
+    monkeypatch.setattr(api, "_SUPPLIER_CATALOG_CACHE", {})
+    assert api._load_supplier_catalog_cached("alma") == first
+    assert state["payload_reads"] == 1
+    assert state["metadata_reads"] == 6
+    assert api._CATALOG_SNAPSHOT_CACHE.counters["r2_hit"] == 1
+
+    row["id"] = uuid.UUID("87654321-1234-5678-1234-567812345678")
+    row["source_hash"] = "b" * 64
+    row["payload"]["source_hash"] = "b" * 64
+    assert api._load_supplier_catalog_cached("alma")["source_hash"] == "b" * 64
+    assert state["payload_reads"] == 2
+    state["enabled"] = False
     with pytest.raises(RuntimeError, match="publicado no disponible"):
         api._load_supplier_catalog_cached("alma")
