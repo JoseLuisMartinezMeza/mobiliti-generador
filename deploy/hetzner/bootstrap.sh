@@ -54,25 +54,33 @@ ufw allow OpenSSH
 ufw --force enable
 
 install -d -m 0755 "$(dirname "${APP_DIR}")"
-if [[ -d "${APP_DIR}/.git" ]]; then
-  git -C "${APP_DIR}" fetch origin "${GIT_REF}"
-  git -C "${APP_DIR}" reset --hard "origin/${GIT_REF}"
-else
-  rm -rf "${APP_DIR}"
+if [[ ! -d "${APP_DIR}/.git" ]]; then
+  if [[ -e "${APP_DIR}" ]]; then
+    echo "Refusing to replace non-git path ${APP_DIR}. Move it aside first." >&2
+    exit 1
+  fi
   git clone --branch "${GIT_REF}" --single-branch "${GIT_REPO}" "${APP_DIR}"
 fi
+git -C "${APP_DIR}" fetch origin "${GIT_REF}"
 
 install -d -m 0700 "${ENV_DIR}"
+install -d -o root -g 10001 -m 0750 "${ENV_DIR}/graph"
 if [[ ! -f "${ENV_DIR}/worker.env" ]]; then
   install -m 0600 "${APP_DIR}/deploy/hetzner/worker.env.example" "${ENV_DIR}/worker.env"
   echo "Created ${ENV_DIR}/worker.env. Fill SUPABASE_ANON_KEY and MOBILITI_REST_SECRET before deploy."
 fi
 
-cat >/usr/local/bin/mobiliti-worker-deploy <<EOF
-#!/usr/bin/env bash
-exec bash "${APP_DIR}/deploy/hetzner/deploy.sh" "\$@"
-EOF
-chmod 0755 /usr/local/bin/mobiliti-worker-deploy
+WRAPPER_PATH="/usr/local/bin/mobiliti-worker-deploy"
+WRAPPER_CANDIDATE="${ENV_DIR}/mobiliti-worker-deploy.candidate"
+git -C "${APP_DIR}" show \
+  FETCH_HEAD:deploy/hetzner/mobiliti-worker-deploy.sh > "${WRAPPER_CANDIDATE}"
+bash -n "${WRAPPER_CANDIDATE}"
+if [[ -f "${WRAPPER_PATH}" ]]; then
+  install -d -m 0700 "${ENV_DIR}/backups"
+  cp --preserve=mode,ownership,timestamps "${WRAPPER_PATH}" \
+    "${ENV_DIR}/backups/mobiliti-worker-deploy.$(date -u +%Y%m%dT%H%M%SZ).bak"
+fi
+install -m 0755 "${WRAPPER_CANDIDATE}" "${WRAPPER_PATH}"
 
 echo "Bootstrap complete."
 echo "Next:"

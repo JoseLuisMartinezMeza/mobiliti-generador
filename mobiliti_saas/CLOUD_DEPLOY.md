@@ -20,17 +20,38 @@ codigo legado de escritorio/API vieja. Targets correctos:
 ## 1. Supabase
 
 1. Rota claves compartidas por chat.
-2. Ejecuta SQL base/migraciones:
+2. Para una **base de datos nueva**, ejecuta el bootstrap explícito:
 
 ```powershell
 $env:DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres"
-python scripts\apply_supabase_sql.py
 pip install psycopg[binary]
-python scripts\apply_supabase_sql.py --apply
+python scripts\apply_supabase_sql.py --bootstrap-new-project
+python scripts\apply_supabase_sql.py --bootstrap-new-project --apply
 ```
 
-   Alternativa manual: ejecuta `mobiliti_saas/supabase_setup/create_tables.sql`
-   en Supabase SQL Editor.
+   `create_tables.sql` es sólo para una base de datos nueva. La alternativa
+   manual es copiarlo al SQL Editor únicamente en ese caso.
+
+   Este runner ejecuta únicamente el bootstrap, A y B canónicos, con ruta y
+   contenido verificados. SQL adicional requiere un proceso separado o una
+   ejecución manual revisada; no existe un flag de bypass en este runner.
+
+   Para un **proyecto existente**, nunca uses el bootstrap y nunca apliques A+B
+   juntas. El orden obligatorio es:
+
+   1. aplicar A, `2026_09_catalog_asset_registry_r2.sql`;
+   2. completar Gate 7A y ejecutar/certificar Gate 6 (Task 6) con los 2,214
+      objetos del manifiesto fijado;
+   3. aplicar B, `2026_09_catalog_asset_registry_r2_cutover.sql`, confirmando
+      exactamente el batch `470442fc-3dc3-5948-b0e4-1dd34c1fcd30`.
+
+```powershell
+python scripts\apply_supabase_sql.py --file mobiliti_saas\supabase_setup\2026_09_catalog_asset_registry_r2.sql
+python scripts\apply_supabase_sql.py --file mobiliti_saas\supabase_setup\2026_09_catalog_asset_registry_r2.sql --apply
+# Gate 7A + scripts\migrate_catalog_assets_to_r2.py --execute + certificación Gate 6
+python scripts\apply_supabase_sql.py --file mobiliti_saas\supabase_setup\2026_09_catalog_asset_registry_r2_cutover.sql --confirm-cutover-batch 470442fc-3dc3-5948-b0e4-1dd34c1fcd30
+python scripts\apply_supabase_sql.py --file mobiliti_saas\supabase_setup\2026_09_catalog_asset_registry_r2_cutover.sql --confirm-cutover-batch 470442fc-3dc3-5948-b0e4-1dd34c1fcd30 --apply
+```
 
 3. Si sigues con Supabase Storage, confirma bucket privado `quote-files`.
    Para produccion con cuota chica de Supabase, mueve los Excel/PDF a
@@ -89,7 +110,7 @@ JWT_SECRET_KEY=[LONG_RANDOM_SECRET]
 CORS_ORIGINS=https://TU-WEB.vercel.app
 QUOTE_STORAGE_BUCKET=quote-files
 MAX_QUOTE_UPLOAD_MB=25
-MAX_QUOTE_OUTPUT_MB=100
+MAX_QUOTE_OUTPUT_MB=150
 QUOTE_STORAGE_PROVIDER=r2
 R2_ACCOUNT_ID=[CLOUDFLARE_ACCOUNT_ID]
 R2_ACCESS_KEY_ID=[R2_S3_ACCESS_KEY_ID]
@@ -97,6 +118,32 @@ R2_SECRET_ACCESS_KEY=[R2_S3_SECRET_ACCESS_KEY]
 R2_BUCKET=quote-files
 R2_REGION=auto
 ```
+
+Las variables de catálogo son server-only y están separadas de todas las
+`QUOTE_STORAGE_*`/`R2_*` anteriores. En el primer deploy compatible conserva
+`CATALOG_ASSET_STORAGE_PROVIDER=supabase`; no cambies el proveedor durante la
+aplicación de A ni antes de certificar Gate 6.
+
+```env
+CATALOG_ASSET_STORAGE_PROVIDER=supabase
+CATALOG_ASSET_PUBLIC_BASE_URL=https://[PROJECT_REF].supabase.co/storage/v1/object/public/catalog-assets
+CATALOG_ASSET_R2_ACCOUNT_ID=[CATALOG_CLOUDFLARE_ACCOUNT_ID]
+CATALOG_ASSET_R2_ENDPOINT_URL=https://[CATALOG_CLOUDFLARE_ACCOUNT_ID].r2.cloudflarestorage.com
+CATALOG_ASSET_R2_ACCESS_KEY_ID=[CATALOG_R2_S3_ACCESS_KEY_ID]
+CATALOG_ASSET_R2_SECRET_ACCESS_KEY=[CATALOG_R2_S3_SECRET_ACCESS_KEY]
+CATALOG_ASSET_R2_SESSION_TOKEN=[CATALOG_R2_OPTIONAL_SESSION_TOKEN]
+CATALOG_ASSET_R2_BUCKET=catalog-assets
+CATALOG_ASSET_R2_REGION=auto
+```
+
+`CATALOG_ASSET_R2_SESSION_TOKEN` es opcional y se omite cuando las credenciales
+no lo entregan. Las credenciales y el bucket deben pertenecer sólo a catálogo;
+nunca reutilices el bucket `quote-files` ni sus credenciales. El orden de
+canary/readiness es: desplegar código dual con provider `supabase`, comprobar
+`/health`, completar A → Gate 7A → Gate 6 → B, configurar la misma public base
+R2 en preview y worker canary, comprobar `catalog_asset_ready=true`, y sólo
+entonces coordinar el cambio único a provider `r2`. Mantén ambos hosts exactos
+en allowlist durante la ventana de rollback.
 
 Comandos:
 
@@ -116,7 +163,7 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-saas.ps1 -Prod -ApiUrl h
 `saas_doctor.py` debe confirmar:
 
 - `saas_quote_jobs` accesible por REST
-- bucket `quote-files` privado con `file_size_limit` de 100 MB para permitir outputs XLSX con imagenes
+- bucket `quote-files` privado con `file_size_limit` de 150 MB para permitir outputs XLSX con imagenes
 - env vars reales, sin placeholders
 
 ## 3. Web en Vercel
@@ -150,13 +197,29 @@ Cloud Run o cualquier host Docker con salida HTTPS.
 Build local:
 
 ```powershell
-docker build -f mobiliti_saas\worker\Dockerfile -t mobiliti-worker .
+docker build --pull -f mobiliti_saas\worker\Dockerfile -t mobiliti-worker .
 ```
+
+El contexto del build usa la allowlist del `.dockerignore` raiz; no cambies el
+contexto a un directorio mas amplio ni reincorpores `.git`, historiales,
+catalogos fuente o archivos de entorno. La imagen instala
+`mobiliti_saas/worker/requirements.lock`, usa una base Debian slim/glibc
+fijada por digest y ejecuta el runtime como UID/GID `10001`, no como `root`.
+El runtime reserva `/tmp` para la caché de Numba y el modelo local de
+segmentación de imágenes; en producción ese directorio debe conservar el
+volumen temporal declarado en `deploy/hetzner/docker-compose.yml`.
 
 Run local contra Supabase:
 
 ```powershell
 docker run --rm `
+  --read-only `
+  --tmpfs /tmp:rw,noexec,nosuid,size=256m `
+  --memory 768m `
+  --cpus 1 `
+  --pids-limit 256 `
+  --cap-drop ALL `
+  --security-opt no-new-privileges:true `
   -e SUPABASE_URL="https://[PROJECT_REF].supabase.co" `
   -e SUPABASE_SERVICE_KEY="[SERVICE_ROLE_OR_SECRET_KEY]" `
   -e QUOTE_ENGINE="python" `
@@ -200,7 +263,84 @@ DEZGO_IMAGE_STRENGTH=0.58
 `image2image` por defecto para que la opcion Dezgo produzca imagenes retocadas
 y falle de forma visible si la clave o la API no funcionan.
 
-## 5. Smoke test produccion
+## 5. Sincronizacion de catalogos
+
+Antes del smoke productivo, el worker de catalogos requiere la migracion
+`2026_07_multi_supplier_catalogs.sql` y debe ejecutar
+`mobiliti_saas/worker/render_web_worker.py`. La sincronizacion se habilita de
+forma gradual mediante una lista explicita; vacia o desactivada no accede a
+SharePoint. La base de datos reclama primero solicitudes manuales, aplica el
+intervalo de seis horas y evita dos runs activos para una misma fuente.
+
+Variables adicionales del worker, documentadas solo por nombre:
+
+- `MS_GRAPH_TENANT_ID`
+- `MS_GRAPH_CLIENT_ID`
+- `MS_GRAPH_CERT_PATH`
+- `MS_GRAPH_CERT_THUMBPRINT`
+- `SHAREPOINT_HOSTNAME`
+- `SHAREPOINT_SITE_PATH`
+- `SHAREPOINT_DRIVE_NAME`
+- `SHAREPOINT_CATALOG_ROOT`
+- `BANXICO_SIE_TOKEN`
+- `CATALOG_SYNC_ENABLED`
+- `CATALOG_ENABLED_SUPPLIERS`
+- `CATALOG_SYNC_TIMEOUT_SECONDS`
+- `CATALOG_ASSET_PUBLIC_BASE_URL`
+
+Los proveedores habilitables son `cr-global`, `sonara`, `sunon`, `alma`,
+`lumbro`, `jome`, `lauco`, `idelika`, `conceptos`, `labenze` y `requiez`.
+El valor vacío mantiene todos los catálogos
+deshabilitados; configura solo una lista CSV de estos identificadores, sin
+duplicados ni espacios.
+
+`jome` requiere los dos XLSX oficiales de Estructuras y Laminado; usa solo el
+costo E, ignora el precio comercial I y publica MXN. Las etiquetas USD de MA02
+y MA03 se corrigen a MXN sin conversion, conservando la moneda declarada en la
+procedencia. `lauco` requiere su XLSB oficial y `pyxlsb==1.0.10`; usa costo F,
+conserva G como procedencia, ignora K y publica MXN. Estos archivos se procesan
+solo en el worker: se aplican los limites ZIP/OOXML, se bloquean relaciones o
+vinculos externos y una fuente invalida no publica un snapshot parcial.
+Vercel no descarga ni parsea archivos de SharePoint: esa responsabilidad queda
+en el worker. Verifica `/health` y sus campos `last_catalog_sync_at` y
+`last_catalog_sync_status` antes de ampliar la lista. El mismo health expone
+`last_rate_sync_at` y `last_rate_sync_status`; nunca expone el token.
+
+El refresco Banxico se ejecuta en un subproceso separado solo cuando la cola de
+cotizaciones esta libre. Consulta USD/MXN y EUR/MXN para los ultimos 14 dias,
+inserta observaciones append-only y se limita a una ejecucion cada seis horas.
+Un fallo usa reintento de 15 minutos y timeout de 30 segundos, sin impedir una
+cotizacion o el siguiente catalogo. Antes de habilitarlo, guarda
+`BANXICO_SIE_TOKEN` exclusivamente en el secret manager del host.
+
+El scheduler recupera en base de datos los runs `running` con lease vencido de
+45 minutos antes de reclamar trabajo. El timeout configurable del subprocess
+siempre se limita por debajo de ese lease. Un resultado `no_work` no cambia el
+timestamp ni borra un estado `failed/timeout`; solo una sincronizacion real
+exitosa limpia el degradado. El `HEALTHCHECK` usa el `PORT` efectivo del runtime.
+
+Gate local completado el 17 de julio de 2026: la imagen OCI se construyo con el
+contexto allowlist, paso `pip check`, importo todas las dependencias de runtime
+y Docker Scout reporto cero vulnerabilidades conocidas. Un smoke aislado
+API -> cola -> worker -> XLSX completo un job con filesystem raiz de solo
+lectura, capacidades eliminadas, `no-new-privileges`, 768 MiB de memoria y un
+CPU. El pico observado fue 360,812,544 bytes, sin OOM ni reinicios. Conserva
+como gates separados la concurrencia PostgreSQL, servicios externos y el
+canary en el host real; este resultado no autoriza un despliegue productivo.
+
+Gate PostgreSQL aislado completado el 17 de julio de 2026: el bootstrap real y
+las carreras de claim, staging, publicacion, reservas y tipos de cambio pasaron
+en PostgreSQL Supabase 17 sin puertos de host. La prueba corrigio el lock
+determinista de la primera insercion FX y la liberacion idempotente de reservas
+genericas. Este resultado tampoco aplica la migracion a Supabase productivo.
+
+La lectura delegada de SharePoint confirmo que los 12 archivos allowlisted
+existen y que sus encabezados/contenido representan CR Global, Sonara, Sunon y
+ALMA. Para el runtime sigue siendo obligatorio crear una aplicacion Entra con
+certificado y `Sites.Selected`, probar Graph delta y Storage en preproduccion y
+aprobar cada snapshot antes de ampliar el canary.
+
+## 6. Smoke test produccion
 
 1. Login en web.
 2. Subir `Quotation.xlsx`.

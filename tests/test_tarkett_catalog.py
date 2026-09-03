@@ -1,0 +1,487 @@
+import json
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+from openpyxl import load_workbook
+
+from mobiliti_saas.quote_engine.parser import read_items
+from mobiliti_saas.quote_engine.tarkett_catalog import (
+    TarkettCatalogItem,
+    build_tarkett_cart_payload,
+    create_tarkett_quotation_workbook,
+    load_tarkett_catalog,
+)
+import scripts.build_tarkett_catalog as tarkett_builder
+from scripts.build_tarkett_catalog import InventoryRow
+from scripts.build_tarkett_catalog import parse_inventory_html
+from scripts.build_tarkett_catalog import resolve_tarkett_product
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _sample_catalog():
+    item = TarkettCatalogItem(
+        code="25731726",
+        name="Aurea Tech Cadiz 6.0mm",
+        unit="MTK - metro cuadrado",
+        available_quantity=Decimal("970.200"),
+        product_url="https://tarkett.com.mx/producto/cadiz/",
+        image_url="",
+        match_status="name_match",
+        unit_price=Decimal("472.63"),
+        price_source="tarkettnet_code_match",
+        stock_source="tarkettnet_code_match",
+    )
+    return {
+        "source_hash": "hash-1",
+        "generated_at": "2026-07-08T00:00:00+00:00",
+        "items": [item],
+        "by_code": {item.code: item},
+    }
+
+
+@pytest.fixture
+def mocked_tarkett_network_fallbacks(monkeypatch):
+    monkeypatch.setattr(tarkett_builder, "_fetch_media", lambda term, cache, no_network=False: [])
+    monkeypatch.setattr(tarkett_builder, "_fetch_products", lambda term, cache: [])
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_professional_sitemap_urls",
+        lambda cache, no_network=False: [],
+    )
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_professional_page_snapshot",
+        lambda url, cache, no_network=False: {"codes": [], "image_url": "", "title": "", "text": ""},
+    )
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_secondary_official_page_snapshot",
+        lambda url, cache, no_network=False: {
+            "image_url": "",
+            "images": [],
+            "text": "",
+            "windows_by_code": {},
+        },
+    )
+
+
+def test_inventory_html_parser_reads_expected_tarkett_rows(tmp_path):
+    inventory = tmp_path / "tarkett-inventory.xls"
+    inventory.write_text(
+        """
+        <table>
+          <tr><th>Clave</th><th>Producto</th><th>Unidad base</th><th>Cant disponible</th></tr>
+          <tr><td>25731726</td><td>Aurea Tech Cadiz 6.0mm</td><td>MTK - metro cuadrado</td><td>970.200</td></tr>
+          <tr><td>711533007</td><td>Desso Essence Structure</td><td>FOT - pie</td><td>12</td></tr>
+          <tr><td>2102002000</td><td>Catalogo Eclipse Premium</td><td>H87 - pieza</td><td>3</td></tr>
+          <tr><td>666214</td><td>Ultrabond Eco 4 LVT</td><td>KGM - kilogramo</td><td>14</td></tr>
+        </table>
+        """,
+        encoding="utf-8",
+    )
+
+    rows = parse_inventory_html(inventory)
+
+    assert len(rows) == 4
+    assert rows[0].code == "25731726"
+    assert rows[0].name == "Aurea Tech Cadiz 6.0mm"
+    assert rows[0].available_quantity == Decimal("970.200")
+    assert all(row.available_quantity > 0 for row in rows)
+    assert {row.unit for row in rows} == {
+        "FOT - pie",
+        "H87 - pieza",
+        "KGM - kilogramo",
+        "MTK - metro cuadrado",
+    }
+
+
+def test_generated_catalog_contains_cadiz_url_and_image():
+    catalog = load_tarkett_catalog(ROOT / "mobiliti_saas" / "quote_engine" / "data" / "tarkett_catalog.json")
+    first = catalog["items"][0]
+    by_code = catalog["by_code"]
+
+    assert len(catalog["items"]) == 125
+    assert first.code == "25731726"
+    assert first.match_status == "tarkettnet_code_match"
+    assert first.unit_price > 0
+    assert "/25731726-" in first.product_url
+    assert "25731726" in first.image_url
+    for code in ("24173722", "711533007", "711793003", "25731101", "666214"):
+        item = by_code[code]
+        assert item.match_status == "tarkettnet_code_match"
+        assert item.unit_price > 0
+        assert f"/{code}-" in item.product_url
+    assert by_code["24174124"].match_status == "sku_match"
+    assert by_code["24174124"].unit_price == 0
+    assert "24174124" in by_code["24174124"].image_url
+    assert by_code["7100910014"].match_status == "professional_es_collection_match"
+    assert sum(1 for item in catalog["items"] if item.image_url) >= 122
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("code", ""),
+        ("name", " "),
+        ("unit", None),
+        ("available_quantity", -1),
+        ("available_quantity", "NaN"),
+        ("available_quantity", "invalid"),
+    ],
+)
+def test_tarkett_loader_rejects_missing_fields_and_invalid_stock(tmp_path, field, value):
+    raw = json.loads((ROOT / "mobiliti_saas" / "quote_engine" / "data" / "tarkett_catalog.json").read_text(encoding="utf-8"))
+    raw["items"][0][field] = value
+    path = tmp_path / "invalid-tarkett.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=field):
+        load_tarkett_catalog(path)
+
+
+def test_tarkett_loader_rejects_empty_and_duplicate_catalogs(tmp_path):
+    raw = json.loads((ROOT / "mobiliti_saas" / "quote_engine" / "data" / "tarkett_catalog.json").read_text(encoding="utf-8"))
+    empty_path = tmp_path / "empty-tarkett.json"
+    empty_path.write_text(json.dumps({**raw, "items": []}), encoding="utf-8")
+    duplicate_path = tmp_path / "duplicate-tarkett.json"
+    duplicate_path.write_text(json.dumps({**raw, "items": [raw["items"][0], raw["items"][0]]}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="vacio"):
+        load_tarkett_catalog(empty_path)
+    with pytest.raises(ValueError, match="duplicad"):
+        load_tarkett_catalog(duplicate_path)
+
+
+def test_tarkett_cart_payload_validates_stock_and_uses_catalog_price():
+    payload = build_tarkett_cart_payload([{"code": "25731726", "quantity": "2.5"}], catalog=_sample_catalog())
+
+    assert payload["source_type"] == "tarkett_cart"
+    assert payload["catalog_source_hash"] == "hash-1"
+    assert payload["items"][0]["unit_price"] == 472.63
+    assert payload["items"][0]["price_source"] == "tarkettnet_code_match"
+    assert payload["items"][0]["quantity"] == 2.5
+    assert payload["items"][0]["product_url"] == "https://tarkett.com.mx/producto/cadiz/"
+
+
+def test_tarkett_cart_payload_rejects_unknown_and_excess_quantity():
+    catalog = _sample_catalog()
+
+    try:
+        build_tarkett_cart_payload([{"code": "missing", "quantity": 1}], catalog=catalog)
+    except ValueError as exc:
+        assert "no encontrado" in str(exc)
+    else:
+        raise AssertionError("unknown product should fail")
+
+    try:
+        build_tarkett_cart_payload([{"code": "25731726", "quantity": 9999}], catalog=catalog)
+    except ValueError as exc:
+        assert "mayor a existencia" in str(exc)
+    else:
+        raise AssertionError("quantity over stock should fail")
+
+
+@pytest.mark.parametrize("quantity", ["1e5000"])
+def test_tarkett_cart_rejects_extreme_or_overprecise_quantity(quantity):
+    with pytest.raises(ValueError, match="Cantidad invalida"):
+        build_tarkett_cart_payload([{"code": "25731726", "quantity": quantity}], catalog=_sample_catalog())
+
+
+def test_tarkett_cart_accepts_200_unique_lines_and_rejects_201():
+    from mobiliti_saas.quote_engine.tarkett_catalog import MAX_CART_LINES
+
+    items = [
+        TarkettCatalogItem(
+            code=f"TK-{index:03d}",
+            name=f"Producto Tarkett {index}",
+            unit="MTK - metro cuadrado",
+            available_quantity=Decimal("1"),
+        )
+        for index in range(MAX_CART_LINES + 1)
+    ]
+    catalog = {
+        "source_hash": "hash-limit",
+        "generated_at": "2026-07-08T00:00:00+00:00",
+        "items": items,
+        "by_code": {item.code: item for item in items},
+    }
+    raw_items = [{"code": item.code, "quantity": "0.0001"} for item in items]
+
+    payload = build_tarkett_cart_payload(raw_items[:MAX_CART_LINES], catalog=catalog)
+
+    assert len(payload["items"]) == 200
+    assert all(line["quantity"] == 0.0001 for line in payload["items"])
+    with pytest.raises(ValueError, match="200"):
+        build_tarkett_cart_payload(raw_items, catalog=catalog)
+
+
+def test_tarkett_cart_rejects_duplicate_code_before_processing_duplicate_quantity():
+    raw_items = [
+        {"code": "25731726", "quantity": "0.0001"},
+        {"code": "25731726", "quantity": "invalid"},
+    ]
+
+    with pytest.raises(ValueError, match="duplicad"):
+        build_tarkett_cart_payload(raw_items, catalog=_sample_catalog())
+
+
+def test_tarkett_cart_preserves_historical_four_decimal_quantity(tmp_path):
+    payload = build_tarkett_cart_payload(
+        [{"code": "25731726", "quantity": "0.0001"}],
+        catalog=_sample_catalog(),
+    )
+
+    assert payload["items"][0]["quantity"] == 0.0001
+    output = create_tarkett_quotation_workbook(payload, tmp_path / "tarkett-four-decimals.xlsx")
+    wb = load_workbook(output)
+    assert wb["Quotation"]["G9"].value == 0.0001
+    wb.close()
+
+
+def test_tarkett_cart_workbook_is_readable_by_quote_parser(tmp_path):
+    payload = build_tarkett_cart_payload([{"code": "25731726", "quantity": "3.5"}], catalog=_sample_catalog())
+    output = tmp_path / "tarkett.xlsx"
+
+    create_tarkett_quotation_workbook(payload, output)
+    items, column_map = read_items(output)
+    products = [item for item in items if item.tipo == "producto"]
+
+    assert "cantidad" in column_map
+    assert products[0].nombre == "Aurea Tech Cadiz 6.0mm"
+    assert products[0].cantidad == 3.5
+    assert products[0].precio == 472.63
+    assert products[0].categoria == "Tarkett"
+
+
+def test_tarkett_workbook_delegates_to_shared_catalog_adapter(monkeypatch, tmp_path):
+    import mobiliti_saas.quote_engine.tarkett_catalog as tarkett_catalog
+
+    payload = build_tarkett_cart_payload([{"code": "25731726", "quantity": "3.5"}], catalog=_sample_catalog())
+    seen = {}
+
+    def fake_adapter(cart_payload, output_path, *, source_type, category_label, image_dir=None):
+        seen.update(
+            {
+                "payload": cart_payload,
+                "output": output_path,
+                "source_type": source_type,
+                "category_label": category_label,
+                "image_dir": image_dir,
+            }
+        )
+        return Path(output_path)
+
+    monkeypatch.setattr(tarkett_catalog, "create_catalog_quotation_workbook", fake_adapter)
+
+    output = tarkett_catalog.create_tarkett_quotation_workbook(payload, tmp_path / "tarkett.xlsx")
+
+    assert output == tmp_path / "tarkett.xlsx"
+    assert seen["source_type"] == "tarkett_cart"
+    assert seen["category_label"] == "Tarkett"
+    assert seen["payload"]["items"][0]["unit_price"] == 472.63
+
+
+def test_tarkett_workbook_rejects_invalid_untrusted_price(tmp_path):
+    payload = build_tarkett_cart_payload([{"code": "25731726", "quantity": "3.5"}], catalog=_sample_catalog())
+    payload["items"][0]["unit_price"] = "NaN"
+
+    with pytest.raises(ValueError, match="precio"):
+        create_tarkett_quotation_workbook(payload, tmp_path / "tarkett-untrusted-price.xlsx")
+
+
+def test_tarkett_scraper_resolves_typo_name_by_sku_index():
+    row = InventoryRow(
+        code="24174124",
+        name="Piso Ambienta Stone Grafitto Porcelain 600x600mm",
+        unit="MTK - metro cuadrado",
+        available_quantity=Decimal("10.8"),
+    )
+    product_index = [
+        {
+            "slug": "grafito-porcelain",
+            "link": "https://tarkett.com.mx/producto/grafito-porcelain/",
+            "title": {"rendered": "Grafito Porcelain"},
+            "content": {"rendered": ""},
+            "excerpt": {"rendered": ""},
+            "_embedded": {
+                "wp:featuredmedia": [
+                    {
+                        "source_url": "https://tarkett.com.mx/wp-content/uploads/2025/06/ambienta-stone_0009_Grafito-Porcelain-24174124-24175124.jpg",
+                        "title": {"rendered": "Grafito Porcelain"},
+                    }
+                ]
+            },
+        }
+    ]
+
+    match = resolve_tarkett_product(row, {}, no_network=True, product_index=product_index)
+
+    assert match["match_status"] == "sku_match"
+    assert match["product_url"] == "https://tarkett.com.mx/producto/grafito-porcelain/"
+    assert "24174124-24175124" in match["image_url"]
+
+
+def test_tarkett_scraper_uses_official_media_by_sku(monkeypatch):
+    row = InventoryRow(
+        code="24173722",
+        name="Piso Aurea Tech Alicante",
+        unit="MTK - metro cuadrado",
+        available_quantity=Decimal("1298.26"),
+    )
+
+    def fake_fetch_media(term, cache, *, no_network=False):
+        if term != "24173722":
+            return []
+        return [
+            {
+                "link": "https://tarkett.com.mx/24173722-alicante/",
+                "source_url": "https://tarkett.com.mx/wp-content/uploads/2022/03/24173722-Alicante-scaled.jpg",
+                "slug": "24173722-alicante",
+                "title": {"rendered": "24173722 Alicante"},
+                "mime_type": "image/jpeg",
+            }
+        ]
+
+    monkeypatch.setattr(tarkett_builder, "_fetch_media", fake_fetch_media)
+
+    match = resolve_tarkett_product(row, {}, no_network=False, product_index=[], sku_index={})
+
+    assert match["match_status"] == "media_sku_match"
+    assert match["product_url"] == "https://tarkett.com.mx/24173722-alicante/"
+    assert match["image_url"].endswith("24173722-Alicante-scaled.jpg")
+
+
+def test_tarkett_scraper_uses_professional_es_sitemap_sku_match(monkeypatch, mocked_tarkett_network_fallbacks):
+    row = InventoryRow(
+        code="711533007",
+        name="Desso Ess Strct AA92 9502 B1 100x25",
+        unit="MTK - metro cuadrado",
+        available_quantity=Decimal("12"),
+    )
+    page_url = "https://profesional.tarkett.es/es_ES/coleccion-C001042-essence-structure/essence-structure-aa92-9502"
+
+    monkeypatch.setattr(tarkett_builder, "_fetch_professional_sitemap_urls", lambda cache, no_network=False: [page_url])
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_professional_page_snapshot",
+        lambda url, cache, no_network=False: {
+            "codes": ["711533007"],
+            "image_url": "https://media.tarkett-image.com/large/TH_EssenceStructure_9502.jpg",
+            "title": "Essence Structure AA92 9502",
+            "text": "Ref. 711533007",
+        },
+    )
+
+    match = resolve_tarkett_product(row, {}, no_network=False, product_index=[], sku_index={})
+
+    assert match["match_status"] == "professional_es_sku_match"
+    assert match["product_url"] == page_url
+    assert match["image_url"].endswith("TH_EssenceStructure_9502.jpg")
+
+
+def test_tarkett_professional_es_fallback_rejects_page_without_sku(monkeypatch, mocked_tarkett_network_fallbacks):
+    row = InventoryRow(
+        code="711533007",
+        name="Desso Ess Strct AA92 9502 B1 100x25",
+        unit="MTK - metro cuadrado",
+        available_quantity=Decimal("12"),
+    )
+    page_url = "https://profesional.tarkett.es/es_ES/coleccion-C001042-essence-structure/essence-structure-aa92-9502"
+
+    monkeypatch.setattr(tarkett_builder, "_fetch_professional_sitemap_urls", lambda cache, no_network=False: [page_url])
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_professional_page_snapshot",
+        lambda url, cache, no_network=False: {
+            "codes": ["711533008"],
+            "image_url": "https://media.tarkett-image.com/large/TH_EssenceStructure_9502.jpg",
+            "title": "Essence Structure AA92 9502",
+            "text": "Ref. 711533008",
+        },
+    )
+
+    match = resolve_tarkett_product(row, {}, no_network=False, product_index=[], sku_index={})
+
+    assert match["match_status"] == "unmatched"
+    assert match["image_url"] == ""
+
+
+def test_tarkett_professional_es_collection_fallback_for_catalog_items(monkeypatch, mocked_tarkett_network_fallbacks):
+    row = InventoryRow(
+        code="2102002000",
+        name="CATALOGO ECLIPSE PREMIUM",
+        unit="H87 - pieza",
+        available_quantity=Decimal("10"),
+    )
+    page_url = "https://profesional.tarkett.es/es_ES/coleccion-C000043-eclipse-premium"
+
+    monkeypatch.setattr(tarkett_builder, "_fetch_media", lambda term, cache, no_network=False: [])
+    monkeypatch.setattr(tarkett_builder, "_fetch_professional_sitemap_urls", lambda cache, no_network=False: [page_url])
+    monkeypatch.setattr(
+        tarkett_builder,
+        "_fetch_professional_page_snapshot",
+        lambda url, cache, no_network=False: {
+            "codes": ["000043"],
+            "image_url": "https://media.tarkett-image.com/large/IN_HP_Eclipse_Premium.jpg",
+            "title": "Eclipse Premium",
+            "text": "Coleccion Eclipse Premium",
+        },
+    )
+
+    match = resolve_tarkett_product(row, {}, no_network=False, product_index=[], sku_index={})
+
+    assert match["match_status"] == "professional_es_collection_match"
+    assert match["product_url"] == page_url
+    assert match["image_url"].endswith("IN_HP_Eclipse_Premium.jpg")
+
+
+def test_tarkett_secondary_official_fallback_matches_line_name_variant(monkeypatch, mocked_tarkett_network_fallbacks):
+    row = InventoryRow(
+        code="25731101",
+        name="Aurea Tech Maiorca 6.0mm",
+        unit="MTK - metro cuadrado",
+        available_quantity=Decimal("1"),
+    )
+
+    monkeypatch.setattr(tarkett_builder, "_fetch_media", lambda term, cache, no_network=False: [])
+    monkeypatch.setattr(tarkett_builder, "_fetch_secondary_official_page_snapshot", lambda url, cache, no_network=False: {
+        "image_url": "",
+        "images": [
+            "https://tarkett.com.mx/wp-content/uploads/elementor/thumbs/Aurea-Tech-Mallorca-thumb.jpg",
+            "https://tarkett.com.mx/wp-content/uploads/2022/03/Aurea-Tech-Mallorca.jpg",
+        ],
+        "text": "Aurea Tech Mallorca",
+        "windows_by_code": {},
+    })
+
+    match = resolve_tarkett_product(row, {}, no_network=False, product_index=[], sku_index={})
+
+    assert match["match_status"] == "tarkett_mx_line_name_match"
+    assert match["image_url"].endswith("Aurea-Tech-Mallorca.jpg")
+
+
+def test_tarkett_secondary_official_fallback_matches_accessory_sku(monkeypatch, mocked_tarkett_network_fallbacks):
+    row = InventoryRow(
+        code="666214",
+        name="Ultrabond Eco 4 LVT bucket 14 kg",
+        unit="KGM - kilogramo",
+        available_quantity=Decimal("1"),
+    )
+
+    monkeypatch.setattr(tarkett_builder, "_fetch_media", lambda term, cache, no_network=False: [])
+    monkeypatch.setattr(tarkett_builder, "_fetch_secondary_official_page_snapshot", lambda url, cache, no_network=False: {
+        "image_url": "https://tarkett.com.ar/wp-content/uploads/2023/11/tarkett-logo-web.png",
+        "images": ["https://tarkett.com.ar/prod/acc/ultrabond-4-lvt-14kg.jpg"],
+        "text": "Ultrabond 4 LVT 14kg 666214",
+        "windows_by_code": {
+            "666214": '<img data-src="https://tarkett.com.ar/prod/acc/ultrabond-4-lvt-14kg.jpg" /><h6>666214</h6>'
+        },
+    })
+
+    match = resolve_tarkett_product(row, {}, no_network=False, product_index=[], sku_index={})
+
+    assert match["match_status"] == "tarkett_ar_accessory_sku_match"
+    assert match["image_url"].endswith("ultrabond-4-lvt-14kg.jpg")

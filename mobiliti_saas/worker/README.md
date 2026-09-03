@@ -8,6 +8,28 @@ en Linux/Windows/macOS y es la ruta preparada para Docker/cloud.
 El generador antiguo `xlwings` queda archivado en `versiones historial` como
 referencia historica. No es ruta productiva.
 
+## Proyectos persistentes
+
+La API web guarda los Proyectos por usuario mediante `/projects`; las rutas de
+detalle solo exponen recursos del usuario autenticado. Las actualizaciones usan
+revision optimista: `PATCH /projects/{id}`, el archivado y la restauracion
+requieren la revision esperada y responden con conflicto ante una version vieja.
+
+`POST /projects/{id}/archive` archiva sin eliminacion permanente, mientras que
+`GET /projects` lista los Proyectos activos o archivados. `GET /catalogs/search`
+alimenta el selector unificado. Al importar una Quotation,
+`POST /projects/{id}/imports/{job_id}` promueve su fuente e imagenes a recursos
+durables, privados y asociados al Proyecto del usuario.
+
+Esta fase no cambia todavia el motor XLSX.
+
+Al cotizar una revision guardada, el JSON descargado por el worker es la
+autoridad inmutable. Despues de validar el payload mixto, el worker entrega al
+generador oficial una copia profunda de `project_context` junto con
+`project_id`, `project_revision` y `project_payload_hash`. No consulta el
+Proyecto actual, no reconstruye su composicion y no recalcula las tasas de
+cambio congeladas durante este handoff.
+
 Variables requeridas:
 
 ```powershell
@@ -21,11 +43,21 @@ Variables opcionales:
 $env:QUOTE_STORAGE_PROVIDER="supabase"
 $env:QUOTE_STORAGE_BUCKET="quote-files"
 $env:QUOTE_ENGINE="python"
-$env:MAX_QUOTE_OUTPUT_MB="100"
-$env:TEMPLATE_PATH="C:\ruta\Formato Cotizacion 2026 GDL (1).xlsx"
+$env:MAX_QUOTE_OUTPUT_MB="150"
+$env:TEMPLATE_PATH="C:\ruta\Formato Cotizacion 2026 Oficial.xlsx"
 $env:WORKER_POLL_SECONDS="10"
 $env:WORKER_STALE_MINUTES="30"
+$env:OFFIHO_SYNC_ENABLED="true"
+$env:OFFIHO_SYNC_INTERVAL_SECONDS="3600"
 ```
+
+Con `OFFIHO_SYNC_ENABLED=true`, cuando no hay cotizaciones pendientes el
+worker descarga directamente `https://www.offiho.com/existencias.xls`, valida
+el inventario y publica un snapshot nuevo solo si cambia su hash. El intervalo
+minimo admitido es de 900 segundos y el valor predeterminado es 3600. Un fallo
+conserva el ultimo snapshot valido y no recurre a SharePoint.
+Activa la bandera solo despues de aplicar `2026_08_offiho_stock_snapshot.sql`
+y desplegar las rutas internas Offiho de la API.
 
 Para guardar inputs/outputs en Cloudflare R2 en lugar de Supabase Storage,
 usa credenciales S3 de R2, no el API token general de Cloudflare:
@@ -82,9 +114,82 @@ categoria, dimensiones y descripcion del producto usando `DEZGO_TEXT_ENDPOINT`.
 Ejecucion:
 
 ```powershell
-python mobiliti_saas\worker\quote_worker.py --once
-python mobiliti_saas\worker\quote_worker.py
+python mobiliti_saas\worker\render_web_worker.py
 ```
+
+El proceso HTTP atiende `/health`, da prioridad a las cotizaciones y solo
+intenta sincronizar un catalogo cuando la cola esta libre. La sincronizacion
+aislada procesa como maximo un proveedor por invocacion:
+
+```powershell
+python -m mobiliti_saas.worker.catalog_sync.service --due
+```
+
+Cuando la cola queda libre, el mismo worker intenta primero el refresco oficial
+USD/MXN y EUR/MXN de Banxico en un subproceso aislado. Consulta solo los ultimos
+14 dias, inserta observaciones de forma append-only y vuelve a intentarlo cada
+seis horas; un fallo usa reintento acotado a 15 minutos y no bloquea
+cotizaciones ni sincronizaciones de proveedores:
+
+```powershell
+python -m mobiliti_saas.worker.catalog_sync.rate_service
+```
+
+Sin `BANXICO_SIE_TOKEN` el refresco queda `misconfigured` en `/health`; el
+token solo se lee del entorno y nunca se imprime.
+
+La sincronizacion queda desactivada si `CATALOG_SYNC_ENABLED` no esta activo o
+si `CATALOG_ENABLED_SUPPLIERS` esta vacio/invalido. Los identificadores
+permitidos son `cr-global`, `sonara`, `sunon`, `alma`, `lumbro`, `jome`,
+`lauco`, `idelika`, `conceptos`, `labenze` y `requiez`; la base de datos aplica
+el intervalo de seis horas y reclama primero los runs manuales. Antes de cada
+claim, un RPC atomico cierra como `failed` los runs `running` de proveedores
+habilitados cuyo lease fijo de 45 minutos vencio.
+
+Nombres de variables para el worker de catalogos, sin valores ni secretos:
+
+- `MS_GRAPH_TENANT_ID`
+- `MS_GRAPH_CLIENT_ID`
+- `MS_GRAPH_CERT_PATH`
+- `MS_GRAPH_CERT_THUMBPRINT`
+- `SHAREPOINT_HOSTNAME`
+- `SHAREPOINT_SITE_PATH`
+- `SHAREPOINT_DRIVE_NAME`
+- `SHAREPOINT_CATALOG_ROOT`
+- `BANXICO_SIE_TOKEN`
+- `CATALOG_SYNC_ENABLED`
+- `CATALOG_ENABLED_SUPPLIERS`
+- `CATALOG_SYNC_TIMEOUT_SECONDS`
+- `CATALOG_ASSET_PUBLIC_BASE_URL`
+
+El health solo publica estados acotados y timestamps. Un timeout o fallo de
+catalogo deja el worker en estado degradado, pero no detiene el procesamiento
+posterior de cotizaciones. `CATALOG_SYNC_TIMEOUT_SECONDS` usa 1800 segundos por
+defecto, acepta solo valores validos y siempre queda por debajo del lease. El
+hijo usa codigos de salida acotados: `0` trabajo exitoso, `1` fallo, `2` sin
+trabajo y `3` desactivado o mal configurado. Solo `0` limpia un fallo previo y
+actualiza `last_catalog_sync_at`.
+
+### Fuentes JOME y Lauco
+
+El catalogo `jome` se sincroniza desde dos XLSX oficiales: Estructuras y
+Laminado. El importador solo toma el costo proveedor de la columna E y conserva
+la moneda declarada de H en la procedencia; la columna I es precio comercial y
+se ignora. Todos los costos JOME se publican en MXN. Las etiquetas USD de MA02
+y MA03 son errores conocidos de la fuente: se normalizan a MXN sin aplicar tipo
+de cambio y se registra la correccion en la procedencia.
+
+El catalogo `lauco` se sincroniza desde el XLSB oficial con
+`pyxlsb==1.0.10`, leyendo valores cacheados sin ejecutar formulas. Toma el costo
+de F y conserva G como moneda declarada; K es precio comercial y se ignora.
+Todos los costos Lauco se publican en MXN desde origen.
+
+Ambas fuentes se validan antes de abrirse: limites ZIP y de expansion, rutas y
+relaciones OOXML, tipos de archivo, imagenes y vinculos externos. En JOME, las
+imagenes WDP/HD Photo internas no compatibles se descartan de forma acotada;
+las imagenes PNG, JPEG y TIFF validas se conservan. Un libro inseguro, una hoja
+requerida ausente o un costo invalido rechaza la sincronizacion completa, sin
+publicar un snapshot parcial.
 
 Prueba local del motor online sin Supabase:
 
@@ -102,3 +207,67 @@ Dependencias minimas del worker online:
 ```powershell
 pip install -r mobiliti_saas\worker\requirements.txt
 ```
+
+El contenedor productivo usa `requirements.lock`, no el archivo de rangos
+anterior. Para actualizarlo, resuelve y prueba las dependencias en una imagen
+aislada, fija el resultado completo y repite `pip check`, importaciones,
+Docker Scout y el smoke de generacion. La imagen corre como UID/GID `10001` y
+debe desplegarse con filesystem raiz de solo lectura, `cap-drop=ALL` y
+`no-new-privileges`; `/tmp` es el unico espacio temporal requerido. También
+aloja `NUMBA_CACHE_DIR` y `U2NET_HOME` para que la limpieza local de fondos
+funcione con el usuario no privilegiado y reutilice el modelo descargado.
+
+## Contrato de plantilla oficial y capacidad dinámica
+
+El worker falla cerrado si la plantilla promovida no tiene SHA-256
+`fc87b105b2809fbb892986e084bf1aaeffc77ff7d2b7e4b5da7ef6d8c4d028f5`.
+La promoción local, siempre hacia un destino nuevo, se ejecuta así:
+
+```powershell
+python scripts\promote_official_quote_template.py `
+  --source "C:\ruta\plantilla-auditada.xlsx" `
+  --destination "mobiliti_saas\worker\templates\Formato Cotizacion 2026 Oficial.xlsx" `
+  --contract "mobiliti_saas\worker\templates\formato-cotizacion-2026-oficial.contract.json"
+```
+
+El compositor parte de esos bytes y sólo puede cambiar las partes declaradas
+por el contrato: `Mobiliti`, `Cotizacion`, `Fletes`, `Estrategia Comercial `,
+`workbook.xml`, relaciones/contenidos del workbook, `calcChain.xml`, el dibujo
+de productos y las partes nuevas de `Quotation`/`Quotation_Data`. Todo lo demás
+se audita byte a byte. `Quotation` conserva exclusivamente la fuente importada;
+el orden combinado vive en `Quotation_Data`, que queda `veryHidden`.
+
+`Mobiliti!J` recibe cada costo convertido una sola vez como número congelado.
+Las fórmulas oficiales desde `W`, incluido `K6`, calculan desde ese valor y no
+vuelven a convertirlo. No hay topes comerciales de 33/500 líneas ni 16/32
+secciones: se valida la capacidad física de 1,048,576 filas XLSX menos las
+filas reservadas y un request máximo de 25 MiB; nunca se truncan productos.
+
+Gate local de estrés:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\dev-start.ps1
+python -m pytest tests\test_project_quote_acceptance.py tests\test_official_quote_stress.py tests\test_official_template_contract.py tests\test_quotation_sheet_transplant.py -q
+```
+
+El gate anterior atraviesa persistencia de Proyecto, storage de entrada
+inmutable, claim del worker y descarga del XLSX. Para comprobar con Microsoft
+Excel los cuatro artefactos generados sin sobrescribirlos:
+
+```powershell
+python -m pytest tests\test_project_quote_acceptance.py::test_project_quote_excel_desktop_acceptance_for_four_persisted_cases -q -rs
+```
+
+La prueba falla ante recovery logs, fórmulas dinámicas alteradas, `#REF!`,
+`#VALUE!` o vínculos externos en esas fórmulas; después recalcula, guarda una
+copia y la reabre. Sólo hace `skip` con la razón registrada si Excel COM no
+está disponible.
+
+En la interfaz local, valida un Proyecto con código repetido, una Quotation
+importada, reemplazo individual y masivo, y complementos `per_parent_unit` y
+`fixed_project`. Recarga antes de cotizar para comprobar el autoguardado. El
+XLSX final debe agrupar descripción, imagen y precio en `Cotizacion`, pero
+mantener principal y complementos en filas separadas de `Mobiliti`.
+
+Este handoff es sólo local. No promueve artefactos, no escribe en SharePoint,
+Supabase o Storage y no despliega Vercel/worker sin autorización nueva.

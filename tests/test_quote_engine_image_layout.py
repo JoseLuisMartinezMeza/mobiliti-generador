@@ -20,6 +20,8 @@ from mobiliti_saas.quote_engine.images import (  # noqa: E402
 )
 from mobiliti_saas.quote_engine.engine import _align_image_map_to_product_rows  # noqa: E402
 from mobiliti_saas.quote_engine.engine import _generate_missing_dezgo_images  # noqa: E402
+from mobiliti_saas.quote_engine.engine import _resolve_sunon_catalog_images  # noqa: E402
+from mobiliti_saas.quote_engine.engine import _resolve_sunon_web_images  # noqa: E402
 from mobiliti_saas.quote_engine.parser import QuoteItem  # noqa: E402
 
 
@@ -135,9 +137,133 @@ def test_generate_missing_dezgo_images_only_fills_missing_rows(monkeypatch, tmp_
     assert Path(image_map[9]).exists()
 
 
+def test_sunon_web_provider_replaces_local_image_by_product_code(monkeypatch, tmp_path):
+    local = tmp_path / "local.png"
+    sunon = tmp_path / "sunon.png"
+    _image(local, (20, 20))
+    _image(sunon, (40, 40))
+    items = [QuoteItem(tipo="producto", row=9, nombre="CHJ80SW H7 Task Chair")]
+
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.fetch_sunon_product_image",
+        lambda _name, _output_dir, **_kwargs: sunon,
+    )
+
+    stats = {}
+    result = _resolve_sunon_web_images(
+        {9: str(local)},
+        items,
+        tmp_path,
+        {"image_provider": "sunon_web"},
+        stats=stats,
+    )
+
+    assert result[9] == str(sunon)
+    assert stats["image_sunon_attempted_count"] == 1
+    assert stats["image_sunon_found_count"] == 1
+
+
+def test_sunon_web_provider_deduplicates_codes(monkeypatch, tmp_path):
+    sunon = tmp_path / "sunon.png"
+    _image(sunon, (40, 40))
+    items = [
+        QuoteItem(tipo="producto", row=9, nombre="CHJ80SW H7 Task Chair"),
+        QuoteItem(tipo="producto", row=13, nombre="CHJ80SW H7 Task Chair duplicate"),
+    ]
+    calls = []
+
+    def fake_fetch(name, _output_dir, **_kwargs):
+        calls.append(name)
+        return sunon
+
+    monkeypatch.setattr("mobiliti_saas.quote_engine.engine.fetch_sunon_product_image", fake_fetch)
+    stats = {}
+
+    result = _resolve_sunon_web_images({}, items, tmp_path, {"image_provider": "sunon_web"}, stats=stats)
+
+    assert len(calls) == 1
+    assert result == {9: str(sunon), 13: str(sunon)}
+    assert stats["image_sunon_attempted_count"] == 1
+    assert stats["image_sunon_cache_hit_count"] == 1
+
+
+def test_sunon_web_provider_caps_remote_lookups(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUNON_MAX_LOOKUPS_PER_JOB", "2")
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.fetch_sunon_product_image",
+        lambda *_args, **_kwargs: None,
+    )
+    items = [
+        QuoteItem(tipo="producto", row=9, nombre="AAA1 Product"),
+        QuoteItem(tipo="producto", row=13, nombre="BBB2 Product"),
+        QuoteItem(tipo="producto", row=17, nombre="CCC3 Product"),
+    ]
+    stats = {}
+
+    _resolve_sunon_web_images({}, items, tmp_path, {"image_provider": "sunon_web"}, stats=stats)
+
+    assert stats["image_sunon_attempted_count"] == 2
+    assert stats["image_sunon_skipped_limit_count"] == 1
+
+
+def test_sunon_catalog_provider_obeys_job_time_budget(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUNON_LOOKUP_BUDGET_SECONDS", "30")
+    clock = iter([0.0, 0.0, 31.0])
+    monkeypatch.setattr("mobiliti_saas.quote_engine.engine.time.monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.find_sunon_catalog_match",
+        lambda code: ({"code": code}, code, "exact_code"),
+    )
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.fetch_sunon_catalog_product_image",
+        lambda *_args, **_kwargs: None,
+    )
+    items = [
+        QuoteItem(tipo="producto", row=9, nombre="AAA1 Product"),
+        QuoteItem(tipo="producto", row=13, nombre="BBB2 Product"),
+    ]
+    stats = {}
+
+    _resolve_sunon_catalog_images({}, items, tmp_path, {"image_provider": "sunon_catalog"}, stats=stats)
+
+    assert stats["image_sunon_catalog_attempted_count"] == 1
+    assert stats["image_sunon_catalog_skipped_limit_count"] == 1
+
+
+def test_sunon_catalog_provider_replaces_only_exact_catalog_matches(monkeypatch, tmp_path):
+    local = tmp_path / "local.png"
+    sunon = tmp_path / "sunon.png"
+    _image(local, (20, 20))
+    _image(sunon, (40, 40))
+    items = [
+        QuoteItem(tipo="producto", row=9, nombre="CHJ80SW H7 Task Chair"),
+        QuoteItem(tipo="producto", row=13, nombre="SIN CODIGO"),
+    ]
+
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine.fetch_sunon_catalog_product_image",
+        lambda name, _output_dir, **_kwargs: sunon if "CHJ80SW" in name else None,
+    )
+
+    stats = {}
+    result = _resolve_sunon_catalog_images(
+        {9: str(local), 13: str(local)},
+        items,
+        tmp_path,
+        {"image_provider": "sunon_catalog"},
+        stats=stats,
+    )
+
+    assert result[9] == str(sunon)
+    assert result[13] == str(local)
+    assert stats["image_sunon_catalog_attempted_count"] == 1
+    assert stats["image_sunon_catalog_exact_code_count"] == 1
+
+
 def test_generate_missing_dezgo_images_raises_when_explicit_provider_fails(monkeypatch, tmp_path):
     items = [QuoteItem(tipo="producto", row=9, nombre="Double Seat Workstation", descripcion="office workstation")]
     monkeypatch.setenv("DEZGO_API_KEY", "fake-key")
+    monkeypatch.setenv("IMAGE_PROVIDER_STRICT", "true")
 
     def fake_generate(_prompt, _output_path, _config):
         raise RuntimeError("dezgo generation failed")

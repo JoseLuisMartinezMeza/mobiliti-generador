@@ -1,0 +1,1264 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-17",
+  "source_url": "https://www.kundesign.com/products",
+  "fallback_url": "https://www.kundesign.com/products",
+  "provenance": {
+    "algorithm": "sha256",
+    "source_sha256": "679cbae3b791e39baa20fd00e046fdd8ccd042d4e94e45d8009f3cd2004d6fc8",
+    "source_product_count": 287
+  },
+  "products": [
+    {
+      "collection": "Palm",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/301/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Float",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/296/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Float",
+      "type": "Footstool",
+      "detail_url": "https://www.kundesign.com/s/297/Footstool.html"
+    },
+    {
+      "collection": "Float",
+      "type": "Side Table",
+      "detail_url": "https://www.kundesign.com/s/298/Side%20Table.html"
+    },
+    {
+      "collection": "Float",
+      "type": "Coffee Table",
+      "detail_url": "https://www.kundesign.com/s/299/Coffee%20Table.html"
+    },
+    {
+      "collection": "Float",
+      "type": "Coffee Table",
+      "detail_url": "https://www.kundesign.com/s/300/Coffee%20Table.html"
+    },
+    {
+      "collection": "Bali",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/295/Dining%20Chair.html"
+    },
+    {
+      "collection": "Bali",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/294/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Bali",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/293/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Bali",
+      "type": "3-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/292/3-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Bali",
+      "type": "3-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/291/3-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Bali",
+      "type": "Footstool",
+      "detail_url": "https://www.kundesign.com/s/290/Footstool.html"
+    },
+    {
+      "collection": "Bali",
+      "type": "Sun Lounger",
+      "detail_url": "https://www.kundesign.com/s/289/Sun%20Lounger.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "Center Module",
+      "detail_url": "https://www.kundesign.com/s/283/Center%20Module.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "Center Module",
+      "detail_url": "https://www.kundesign.com/s/284/Center%20Module.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "Center Module",
+      "detail_url": "https://www.kundesign.com/s/285/Center%20Module.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/286/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/287/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/288/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/280/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/281/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/282/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/279/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "Sun Lounger",
+      "detail_url": "https://www.kundesign.com/s/278/Sun%20Lounger.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "Bench",
+      "detail_url": "https://www.kundesign.com/s/273/Bench.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "Coffee Table",
+      "detail_url": "https://www.kundesign.com/s/274/Coffee%20Table.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "Side Table",
+      "detail_url": "https://www.kundesign.com/s/275/Side%20Table.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "Coffee Table",
+      "detail_url": "https://www.kundesign.com/s/276/Coffee%20Table.html"
+    },
+    {
+      "collection": "Cove",
+      "type": "COFFEE TABLE (GAS STOVE)",
+      "detail_url": "https://www.kundesign.com/s/277/COFFEE%20TABLE%20(GAS%20STOVE).html"
+    },
+    {
+      "collection": "Shell",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/266/Dining%20Chair.html"
+    },
+    {
+      "collection": "Shell",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/267/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Shell",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/268/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Shell",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/269/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Shell",
+      "type": "3-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/270/3-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Shell",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/271/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Shell",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/272/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/265/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Footstool",
+      "detail_url": "https://www.kundesign.com/s/264/Footstool.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/259/Dining%20Chair.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/260/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "3-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/261/3-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/262/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "3-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/263/3-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "Coffee Table",
+      "detail_url": "https://www.kundesign.com/s/254/Coffee%20Table.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "Dining Table",
+      "detail_url": "https://www.kundesign.com/s/255/Dining%20Table.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "Dining Table",
+      "detail_url": "https://www.kundesign.com/s/258/Dining%20Table.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "Dining Table",
+      "detail_url": "https://www.kundesign.com/s/257/Dining%20Table.html"
+    },
+    {
+      "collection": "Nara",
+      "type": "Dining Table",
+      "detail_url": "https://www.kundesign.com/s/256/Dining%20Table.html"
+    },
+    {
+      "collection": "String",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/250/Dining%20Chair.html"
+    },
+    {
+      "collection": "String",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/251/Dining%20Chair.html"
+    },
+    {
+      "collection": "String",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/252/Lounge%20Chair.html"
+    },
+    {
+      "collection": "String",
+      "type": "3-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/253/3-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Band",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/249/Dining%20Chair.html"
+    },
+    {
+      "collection": "Band",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/248/Dining%20Chair.html"
+    },
+    {
+      "collection": "Band",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/247/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Band",
+      "type": "Footstool",
+      "detail_url": "https://www.kundesign.com/s/246/Footstool.html"
+    },
+    {
+      "collection": "Band",
+      "type": "3-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/245/3-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Jumbo II",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/244/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Jumbo II",
+      "type": "Sun Lounger",
+      "detail_url": "https://www.kundesign.com/s/243/Sun%20Lounger.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/242/Dining%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/241/Dining%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/237/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/238/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Footstool",
+      "detail_url": "https://www.kundesign.com/s/239/Footstool.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Bar Chair",
+      "detail_url": "https://www.kundesign.com/s/240/Bar%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/236/Dining%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/235/Dining%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/234/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/233/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Footstool",
+      "detail_url": "https://www.kundesign.com/s/231/Footstool.html"
+    },
+    {
+      "collection": "Loop",
+      "type": "Bar Chair",
+      "detail_url": "https://www.kundesign.com/s/232/Bar%20Chair.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Side Table",
+      "detail_url": "https://www.kundesign.com/s/230/Side%20Table.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Coffee Table",
+      "detail_url": "https://www.kundesign.com/s/229/Coffee%20Table.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Coffee Table",
+      "detail_url": "https://www.kundesign.com/s/228/Coffee%20Table.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table",
+      "detail_url": "https://www.kundesign.com/s/227/Dining%20Table.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table",
+      "detail_url": "https://www.kundesign.com/s/226/Dining%20Table.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table",
+      "detail_url": "https://www.kundesign.com/s/225/Dining%20Table.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table（M）",
+      "detail_url": "https://www.kundesign.com/s/223/Dining%20Table%EF%BC%88M%EF%BC%89.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table（L）",
+      "detail_url": "https://www.kundesign.com/s/224/Dining%20Table%EF%BC%88L%EF%BC%89.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table（M）",
+      "detail_url": "https://www.kundesign.com/s/222/Dining%20Table%EF%BC%88M%EF%BC%89.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table（L）",
+      "detail_url": "https://www.kundesign.com/s/221/Dining%20Table%EF%BC%88L%EF%BC%89.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table（M）",
+      "detail_url": "https://www.kundesign.com/s/220/Dining%20Table%EF%BC%88M%EF%BC%89.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table（L）",
+      "detail_url": "https://www.kundesign.com/s/219/Dining%20Table%EF%BC%88L%EF%BC%89.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Dining Table",
+      "detail_url": "https://www.kundesign.com/s/218/Dining%20Table.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Extendable Table W/Ceramic Top（semi-automatic）",
+      "detail_url": "https://www.kundesign.com/s/217/Extendable%20Table%20W/Ceramic%20Top%EF%BC%88semi-automatic%EF%BC%89.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Extendable Table W/Ceramic Top（full-automatic）",
+      "detail_url": "https://www.kundesign.com/s/216/Extendable%20Table%20W/Ceramic%20Top%EF%BC%88full-automatic%EF%BC%89.html"
+    },
+    {
+      "collection": "Mono",
+      "type": "Planter",
+      "detail_url": "https://www.kundesign.com/s/215/Planter.html"
+    },
+    {
+      "collection": "Balance Light",
+      "type": "Floor Lamp",
+      "detail_url": "https://www.kundesign.com/s/214/Floor%20Lamp.html"
+    },
+    {
+      "collection": "Shell Light",
+      "type": "Floor Lamp",
+      "detail_url": "https://www.kundesign.com/s/212/Floor%20Lamp.html"
+    },
+    {
+      "collection": "Shell Light",
+      "type": "Floor Lamp",
+      "detail_url": "https://www.kundesign.com/s/213/Floor%20Lamp.html"
+    },
+    {
+      "collection": "Shell Light",
+      "type": "Ceiling Lamp",
+      "detail_url": "https://www.kundesign.com/s/211/Ceiling%20Lamp.html"
+    },
+    {
+      "collection": "Mono Light",
+      "type": "Floor Lamp",
+      "detail_url": "https://www.kundesign.com/s/210/Floor%20Lamp.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Lamps",
+      "detail_url": "https://www.kundesign.com/s/200/Lamps.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Floor Lamp（M）",
+      "detail_url": "https://www.kundesign.com/s/206/Floor%20Lamp%EF%BC%88M%EF%BC%89.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Floor Lamp（L）",
+      "detail_url": "https://www.kundesign.com/s/205/Floor%20Lamp%EF%BC%88L%EF%BC%89.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Floor Lamp（XL）",
+      "detail_url": "https://www.kundesign.com/s/204/Floor%20Lamp%EF%BC%88XL%EF%BC%89.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Wall Lamp（M）",
+      "detail_url": "https://www.kundesign.com/s/207/Wall%20Lamp%EF%BC%88M%EF%BC%89.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Wall Lamp（L）",
+      "detail_url": "https://www.kundesign.com/s/208/Wall%20Lamp%EF%BC%88L%EF%BC%89.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Wall Lamp（XL）",
+      "detail_url": "https://www.kundesign.com/s/209/Wall%20Lamp%EF%BC%88XL%EF%BC%89.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Floor Lamp（M）",
+      "detail_url": "https://www.kundesign.com/s/203/Floor%20Lamp%EF%BC%88M%EF%BC%89.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Floor Lamp（L）",
+      "detail_url": "https://www.kundesign.com/s/202/Floor%20Lamp%EF%BC%88L%EF%BC%89.html"
+    },
+    {
+      "collection": "Halo",
+      "type": "Floor Lamp（XL）",
+      "detail_url": "https://www.kundesign.com/s/201/Floor%20Lamp%EF%BC%88XL%EF%BC%89.html"
+    },
+    {
+      "collection": "Lantern",
+      "type": "Floor Lamps（L）",
+      "detail_url": "https://www.kundesign.com/s/198/Floor%20Lamps%EF%BC%88L%EF%BC%89.html"
+    },
+    {
+      "collection": "Lantern",
+      "type": "Floor Lamps（XL）",
+      "detail_url": "https://www.kundesign.com/s/199/Floor%20Lamps%EF%BC%88XL%EF%BC%89.html"
+    },
+    {
+      "collection": "Drape",
+      "type": "FLOOR LAMP (M)",
+      "detail_url": "https://www.kundesign.com/s/304/FLOOR%20LAMP%20(M).html"
+    },
+    {
+      "collection": "Drape",
+      "type": "FLOOR LAMP (L)",
+      "detail_url": "https://www.kundesign.com/s/303/FLOOR%20LAMP%20(L).html"
+    },
+    {
+      "collection": "Drape",
+      "type": "FLOOR LAMP (XL)",
+      "detail_url": "https://www.kundesign.com/s/302/FLOOR%20LAMP%20(XL).html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Lounge Chair",
+      "detail_url": "https://www.kundesign.com/s/132/Lounge%20Chair.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Rocking Chair",
+      "detail_url": "https://www.kundesign.com/s/168/Rocking%20Chair.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Center Module",
+      "detail_url": "https://www.kundesign.com/s/169/Center%20Module.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Dining Chair",
+      "detail_url": "https://www.kundesign.com/s/131/Dining%20Chair.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Picnic Table with Sunshade",
+      "detail_url": "https://www.kundesign.com/s/170/Picnic%20Table%20with%20Sunshade.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Coffee Table A with Planter",
+      "detail_url": "https://www.kundesign.com/s/171/Coffee%20Table%20A%20with%20Planter.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Coffee Table A",
+      "detail_url": "https://www.kundesign.com/s/134/Coffee%20Table%20A.html"
+    },
+    {
+      "collection": "Clogs",
+      "type": "Coffee Table B",
+      "detail_url": "https://www.kundesign.com/s/133/Coffee%20Table%20B.html"
+    },
+    {
+      "collection": "Block",
+      "type": "Center Module",
+      "detail_url": "https://www.kundesign.com/s/4/Center%20Module.html"
+    },
+    {
+      "collection": "Block",
+      "type": "Corner Module",
+      "detail_url": "https://www.kundesign.com/s/10/Corner%20Module.html"
+    },
+    {
+      "collection": "Block",
+      "type": "Footstool",
+      "detail_url": "https://www.kundesign.com/s/16/Footstool.html"
+    },
+    {
+      "collection": "Block",
+      "type": "2 Seater Module",
+      "detail_url": "https://www.kundesign.com/s/172/2%20Seater%20Module.html"
+    },
+    {
+      "collection": "Block",
+      "type": "2 Seater Module with Right Back",
+      "detail_url": "https://www.kundesign.com/s/174/2%20Seater%20Module%20with%20Right%20Back.html"
+    },
+    {
+      "collection": "Block",
+      "type": "2 Seater Module with Left Back",
+      "detail_url": "https://www.kundesign.com/s/173/2%20Seater%20Module%20with%20Left%20Back.html"
+    },
+    {
+      "collection": "Block",
+      "type": "Coffee Table",
+      "detail_url": "https://www.kundesign.com/s/136/Coffee%20Table.html"
+    },
+    {
+      "collection": "Block",
+      "type": "Dining Armchair",
+      "detail_url": "https://www.kundesign.com/s/135/Dining%20Armchair.html"
+    },
+    {
+      "collection": "Block",
+      "type": "Lounge Armchair",
+      "detail_url": "https://www.kundesign.com/s/153/Lounge%20Armchair.html"
+    },
+    {
+      "collection": "Block",
+      "type": "2-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/154/2-Seater%20Sofa.html"
+    },
+    {
+      "collection": "Block",
+      "type": "3-Seater Sofa",
+      "detail_url": "https://www.kundesign.com/s/155/3-Seater%20Sofa.html"
+    },
+    {"collection":"Shell","type":"Lounge Chair","detail_url":"https://www.kundesign.com/s/137/Lounge%20Chair.html"},
+    {"collection":"Shell","type":"Dining Chair","detail_url":"https://www.kundesign.com/s/8/Dining%20Chair.html"},
+    {"collection":"Shell","type":"Bar Chair","detail_url":"https://www.kundesign.com/s/11/Bar%20Chair.html"},
+    {"collection":"String","type":"Dining Side Chair","detail_url":"https://www.kundesign.com/s/175/Dining%20Side%20Chair.html"},
+    {"collection":"String","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/176/Dining%20Armchair.html"},
+    {"collection":"String","type":"Lounge Chair","detail_url":"https://www.kundesign.com/s/177/Lounge%20Chair.html"},
+    {"collection":"String","type":"Footstool","detail_url":"https://www.kundesign.com/s/178/Footstool.html"},
+    {"collection":"String","type":"Dining Side Chair","detail_url":"https://www.kundesign.com/s/179/Dining%20Side%20Chair.html"},
+    {"collection":"String","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/180/Dining%20Armchair.html"},
+    {"collection":"String","type":"Lounge Chair","detail_url":"https://www.kundesign.com/s/181/Lounge%20Chair.html"},
+    {"collection":"String","type":"Footstool","detail_url":"https://www.kundesign.com/s/182/Footstool.html"},
+    {"collection":"String","type":"Dining Chair","detail_url":"https://www.kundesign.com/s/20/Dining%20Chair.html"},
+    {"collection":"String","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/139/Dining%20Armchair.html"},
+    {"collection":"String","type":"Lounge Chair","detail_url":"https://www.kundesign.com/s/21/Lounge%20Chair.html"},
+    {"collection":"String","type":"Lounge Chair","detail_url":"https://www.kundesign.com/s/195/Lounge%20Chair.html"},
+    {"collection":"String","type":"Lounge Chair","detail_url":"https://www.kundesign.com/s/140/Lounge%20Chair.html"},
+    {"collection":"String","type":"Footstool","detail_url":"https://www.kundesign.com/s/22/Footstool.html"},
+    {"collection":"String","type":"2-Seater Lounge Chair","detail_url":"https://www.kundesign.com/s/141/2-Seater%20Lounge%20Chair.html"},
+    {"collection":"String","type":"3-Seater Lounge Chair","detail_url":"https://www.kundesign.com/s/142/3-Seater%20Lounge%20Chair.html"},
+    {"collection":"String","type":"Sun Lounger","detail_url":"https://www.kundesign.com/s/143/Sun%20Lounger.html"},
+    {"collection":"String","type":"Dining Table","detail_url":"https://www.kundesign.com/s/144/Dining%20Table.html"},
+    {"collection":"String","type":"Extendable Dining Table with U-Shaped Legs","detail_url":"https://www.kundesign.com/s/183/Extendable%20Dining%20Table%20with%20U-Shaped%20Legs.html"},
+    {"collection":"String","type":"Side Table","detail_url":"https://www.kundesign.com/s/157/Side%20Table.html"},
+    {"collection":"String","type":"Side Table","detail_url":"https://www.kundesign.com/s/156/Side%20Table.html"},
+    {"collection":"String","type":"Side Table","detail_url":"https://www.kundesign.com/s/158/Side%20Table.html"},
+    {"collection":"String","type":"Coffee Table","detail_url":"https://www.kundesign.com/s/159/Coffee%20Table.html"},
+    {"collection":"Wings","type":"Swivel Chair","detail_url":"https://www.kundesign.com/s/196/Swivel%20Chair.html"},
+    {"collection":"Bagel","type":"Lounge Armchair","detail_url":"https://www.kundesign.com/s/24/Lounge%20Armchair.html"},
+    {"collection":"Bagel","type":"Dining Armchair (ALU base)","detail_url":"https://www.kundesign.com/s/23/Dining%20Armchair%20(ALU%20base).html"},
+    {"collection":"Bagel","type":"Highback Lounge Armchair","detail_url":"https://www.kundesign.com/s/25/Highback%20Lounge%20Armchair.html"},
+    {"collection":"Bagel","type":"2-Seater Sofa","detail_url":"https://www.kundesign.com/s/26/2-Seater%20Sofa.html"},
+    {"collection":"Bagel","type":"Bar Chair","detail_url":"https://www.kundesign.com/s/197/Bar%20Chair.html"},
+    {"collection":"Bagel","type":"Footstool","detail_url":"https://www.kundesign.com/s/27/Footstool.html"},
+    {"collection":"Bagel","type":"Coffee Table","detail_url":"https://www.kundesign.com/s/28/Coffee%20Table.html"},
+    {"collection":"Bagel","type":"Coffee Table","detail_url":"https://www.kundesign.com/s/29/Coffee%20Table.html"},
+    {"collection":"Bagel","type":"Side Table","detail_url":"https://www.kundesign.com/s/30/Side%20Table.html"},
+    {"collection":"Bagel","type":"Dining Table","detail_url":"https://www.kundesign.com/s/45/Dining%20Table.html"},
+    {"collection":"Bagel","type":"Dining Table","detail_url":"https://www.kundesign.com/s/31/Dining%20Table.html"},
+    {"collection":"Bagel","type":"Dining Table","detail_url":"https://www.kundesign.com/s/61/Dining%20Table.html"},
+    {"collection":"Bagel","type":"Extendable Table","detail_url":"https://www.kundesign.com/s/62/Extendable%20Table.html"},
+    {"collection":"Bagel","type":"Dining Table","detail_url":"https://www.kundesign.com/s/138/Dining%20Table.html"},
+    {"collection":"Jumbo II","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/184/Dining%20Armchair.html"},
+    {"collection":"Jumbo II","type":"Lounge Armchair","detail_url":"https://www.kundesign.com/s/185/Lounge%20Armchair.html"},
+    {"collection":"Jumbo II","type":"3-Seater Sofa","detail_url":"https://www.kundesign.com/s/186/3-Seater%20Sofa.html"},
+    {"collection":"Jumbo II","type":"Bar Chair","detail_url":"https://www.kundesign.com/s/187/Bar%20Chair.html"},
+    {"collection":"Jumbo II","type":"Sunlounger","detail_url":"https://www.kundesign.com/s/188/Sunlounger.html"},
+    {"collection":"Jumbo","type":"3-Seater Sofa","detail_url":"https://www.kundesign.com/s/189/3-Seater%20Sofa.html"},
+    {"collection":"Jumbo","type":"Bar Chair","detail_url":"https://www.kundesign.com/s/190/Bar%20Chair.html"},
+    {"collection":"Jumbo","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/38/Dining%20Armchair.html"},
+    {"collection":"Jumbo","type":"Lounge Armchair","detail_url":"https://www.kundesign.com/s/39/Lounge%20Armchair.html"},
+    {"collection":"Jumbo","type":"Highback Lounge Armchair","detail_url":"https://www.kundesign.com/s/40/Highback%20Lounge%20Armchair.html"},
+    {"collection":"Jumbo","type":"2-Seater Sofa","detail_url":"https://www.kundesign.com/s/41/2-Seater%20Sofa.html"},
+    {"collection":"Jumbo","type":"3-Seater Sofa","detail_url":"https://www.kundesign.com/s/42/3-Seater%20Sofa.html"},
+    {"collection":"Jumbo","type":"Footstool","detail_url":"https://www.kundesign.com/s/43/Footstool.html"},
+    {"collection":"Pillow","type":"Single Sofa","detail_url":"https://www.kundesign.com/s/46/Single%20Sofa.html"},
+    {"collection":"Pillow","type":"Corner Module","detail_url":"https://www.kundesign.com/s/47/Corner%20Module.html"},
+    {"collection":"Pillow","type":"Center Module","detail_url":"https://www.kundesign.com/s/48/Center%20Module.html"},
+    {"collection":"Pillow","type":"2-Seater Module","detail_url":"https://www.kundesign.com/s/49/2-Seater%20Module.html"},
+    {"collection":"Pillow","type":"Chaise Lounge Left Arm Module","detail_url":"https://www.kundesign.com/s/50/Chaise%20Lounge%20Left%20Arm%20Module.html"},
+    {"collection":"Pillow","type":"2-Seater Sofa Right Arm Module","detail_url":"https://www.kundesign.com/s/63/2-Seater%20Sofa%20Right%20Arm%20Module.html"},
+    {"collection":"Pillow","type":"2-Seater Sofa","detail_url":"https://www.kundesign.com/s/64/2-Seater%20Sofa.html"},
+    {"collection":"Pillow","type":"Sun Lounger","detail_url":"https://www.kundesign.com/s/65/Sun%20Lounger.html"},
+    {"collection":"Pillow","type":"Footstool","detail_url":"https://www.kundesign.com/s/66/Footstool.html"},
+    {"collection":"Pillow","type":"Coffee Table","detail_url":"https://www.kundesign.com/s/67/Coffee%20Table.html"},
+    {"collection":"Pillow","type":"Side Table","detail_url":"https://www.kundesign.com/s/68/Side%20Table.html"},
+    {"collection":"Chic","type":"Folding Chair A","detail_url":"https://www.kundesign.com/s/76/Folding%20Chair%20A.html"},
+    {"collection":"Chic","type":"Folding Chair B","detail_url":"https://www.kundesign.com/s/12/Folding%20Chair%20B.html"},
+    {"collection":"Chic","type":"Folding Chair C","detail_url":"https://www.kundesign.com/s/160/Folding%20Chair%20C.html"},
+    {"collection":"Loop","type":"Highback Lounge Armchair","detail_url":"https://www.kundesign.com/s/192/Highback%20Lounge%20Armchair.html"},
+    {"collection":"Loop","type":"Rocking Armchair","detail_url":"https://www.kundesign.com/s/193/Rocking%20Armchair.html"},
+    {"collection":"Loop","type":"Lounge Chair","detail_url":"https://www.kundesign.com/s/78/Lounge%20Chair.html"},
+    {"collection":"Loop","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/77/Dining%20Armchair.html"},
+    {"collection":"Loop","type":"Bar Chair","detail_url":"https://www.kundesign.com/s/79/Bar%20Chair.html"},
+    {"collection":"Oval","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/80/Dining%20Armchair.html"},
+    {"collection":"Oval","type":"Lounge Armchair","detail_url":"https://www.kundesign.com/s/81/Lounge%20Armchair.html"},
+    {"collection":"Oval","type":"Dining Chair","detail_url":"https://www.kundesign.com/s/145/Dining%20Chair.html"},
+    {"collection":"Oval","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/146/Dining%20Armchair.html"},
+    {"collection":"Oval","type":"Dining Chair","detail_url":"https://www.kundesign.com/s/147/Dining%20Chair.html"},
+    {"collection":"Oval","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/148/Dining%20Armchair.html"},
+    {"collection":"Oval","type":"Dining Chair","detail_url":"https://www.kundesign.com/s/149/Dining%20Chair.html"},
+    {"collection":"Oval","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/150/Dining%20Armchair.html"},
+    {"collection":"Oval","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/151/Dining%20Armchair.html"},
+    {"collection":"Oval","type":"Bar Chair","detail_url":"https://www.kundesign.com/s/152/Bar%20Chair.html"},
+    {"collection":"Rugby","type":"Center Module","detail_url":"https://www.kundesign.com/s/82/Center%20Module.html"},
+    {"collection":"Rugby","type":"Lounge Armchair","detail_url":"https://www.kundesign.com/s/83/Lounge%20Armchair.html"},
+    {"collection":"Rugby","type":"Corner Module","detail_url":"https://www.kundesign.com/s/84/Corner%20Module.html"},
+    {"collection":"Rugby","type":"2-Seater Sofa Right Arm Module","detail_url":"https://www.kundesign.com/s/85/2-Seater%20Sofa%20Right%20Arm%20Module.html"},
+    {"collection":"Rugby","type":"2-Seater Sofa","detail_url":"https://www.kundesign.com/s/86/2-Seater%20Sofa.html"},
+    {"collection":"Rugby","type":"Lounge Height Coffee Table","detail_url":"https://www.kundesign.com/s/87/Lounge%20Height%20Coffee%20Table.html"},
+    {"collection":"Rugby","type":"Coffee Table","detail_url":"https://www.kundesign.com/s/88/Coffee%20Table.html"},
+    {"collection":"Rugby","type":"End Table","detail_url":"https://www.kundesign.com/s/89/End%20Table.html"},
+    {"collection":"Nest","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/90/Dining%20Armchair.html"},
+    {"collection":"Nest","type":"Lounge Armchair","detail_url":"https://www.kundesign.com/s/91/Lounge%20Armchair.html"},
+    {"collection":"Nest","type":"Highback Lounge Armchair","detail_url":"https://www.kundesign.com/s/92/Highback%20Lounge%20Armchair.html"},
+    {"collection":"Banyan Tree","type":"Dining Armchair","detail_url":"https://www.kundesign.com/s/93/Dining%20Armchair.html"},
+    {"collection":"Banyan Tree","type":"Lounge Armchair","detail_url":"https://www.kundesign.com/s/94/Lounge%20Armchair.html"},
+    {"collection":"Banyan Tree","type":"Highback Lounge Armchair A","detail_url":"https://www.kundesign.com/s/95/Highback%20Lounge%20Armchair%20A.html"},
+    {"collection":"Banyan Tree","type":"Highback Lounge Armchair B","detail_url":"https://www.kundesign.com/s/96/Highback%20Lounge%20Armchair%20B.html"},
+    {"collection":"Banyan Tree","type":"Rocking Armchair A","detail_url":"https://www.kundesign.com/s/97/Rocking%20Armchair%20A.html"},
+    {"collection":"Banyan Tree","type":"Rocking Armchair B","detail_url":"https://www.kundesign.com/s/98/Rocking%20Armchair%20B.html"},
+    {"collection":"Banyan Tree","type":"2-Seater Sofa","detail_url":"https://www.kundesign.com/s/99/2-Seater%20Sofa.html"},
+    {"collection":"Banyan Tree","type":"Footstool","detail_url":"https://www.kundesign.com/s/100/Footstool.html"},
+    {"collection":"Flow","type":"Flow Swing","detail_url":"https://www.kundesign.com/s/101/Flow%20Swing.html"},
+    {"collection":"Ribbon","type":"Stool A","detail_url":"https://www.kundesign.com/s/102/Stool%20A.html"},
+    {"collection":"Ribbon","type":"Stool B","detail_url":"https://www.kundesign.com/s/103/Stool%20B.html"},
+    {"collection":"Mooncake","type":"Side Table","detail_url":"https://www.kundesign.com/s/104/Side%20Table.html"},
+    {"collection":"Mooncake","type":"Stool","detail_url":"https://www.kundesign.com/s/194/Stool.html"},
+    {"collection":"Balance","type":"Side Table A","detail_url":"https://www.kundesign.com/s/105/Side%20Table%20A.html"},
+    {"collection":"Balance","type":"Side Table B","detail_url":"https://www.kundesign.com/s/106/Side%20Table%20B.html"},
+    {"collection":"Balance","type":"Side Table C","detail_url":"https://www.kundesign.com/s/161/Side%20Table%20C.html"},
+    {"collection":"Balance","type":"Dining Table A","detail_url":"https://www.kundesign.com/s/107/Dining%20Table%20A.html"},
+    {"collection":"Balance","type":"Dining Table B","detail_url":"https://www.kundesign.com/s/108/Dining%20Table%20B.html"},
+    {"collection":"Balance","type":"Dining Table C","detail_url":"https://www.kundesign.com/s/109/Dining%20Table%20C.html"},
+    {"collection":"Balance","type":"Dining Table D","detail_url":"https://www.kundesign.com/s/110/Dining%20Table%20D.html"},
+    {"collection":"Balance","type":"Dining Table E","detail_url":"https://www.kundesign.com/s/111/Dining%20Table%20E.html"},
+    {"collection":"Bergen","type":"Dining Table A","detail_url":"https://www.kundesign.com/s/112/Dining%20Table%20A.html"},
+    {"collection":"Bergen","type":"Dining Table B","detail_url":"https://www.kundesign.com/s/113/Dining%20Table%20B.html"},
+    {"collection":"Bergen","type":"Bar Table","detail_url":"https://www.kundesign.com/s/114/Bar%20Table.html"},
+    {"collection":"Bergen","type":"Side Table A","detail_url":"https://www.kundesign.com/s/115/Side%20Table%20A.html"},
+    {"collection":"Bergen","type":"Side Table B","detail_url":"https://www.kundesign.com/s/116/Side%20Table%20B.html"},
+    {"collection":"Bergen","type":"Dining Table C","detail_url":"https://www.kundesign.com/s/117/Dining%20Table%20C.html"},
+    {"collection":"Lotus","type":"Side Table A","detail_url":"https://www.kundesign.com/s/123/Side%20Table%20A.html"},
+    {"collection":"Lotus","type":"Side Table B","detail_url":"https://www.kundesign.com/s/129/Side%20Table%20B.html"},
+    {"collection":"Lotus","type":"Side Table C","detail_url":"https://www.kundesign.com/s/162/Side%20Table%20C.html"},
+    {"collection":"Lotus","type":"Coffee Table A","detail_url":"https://www.kundesign.com/s/122/Coffee%20Table%20A.html"},
+    {"collection":"Lotus","type":"Coffee Table B","detail_url":"https://www.kundesign.com/s/124/Coffee%20Table%20B.html"},
+    {"collection":"Lotus","type":"Coffee Table C","detail_url":"https://www.kundesign.com/s/125/Coffee%20Table%20C.html"},
+    {"collection":"Lotus","type":"Dining Table A","detail_url":"https://www.kundesign.com/s/163/Dining%20Table%20A.html"},
+    {"collection":"Lotus","type":"Dining Table B","detail_url":"https://www.kundesign.com/s/118/Dining%20Table%20B.html"},
+    {
+      "collection": "Lotus",
+      "type": "Dining Table C",
+      "detail_url": "https://www.kundesign.com/s/164/Dining%20Table%20C.html"
+    },
+    {
+      "collection": "Lotus",
+      "type": "Dining Table D",
+      "detail_url": "https://www.kundesign.com/s/165/Dining%20Table%20D.html"
+    },
+    {
+      "collection": "Lotus",
+      "type": "Dining Table E",
+      "detail_url": "https://www.kundesign.com/s/120/Dining%20Table%20E.html"
+    },
+    {
+      "collection": "Lotus",
+      "type": "Dining Table F",
+      "detail_url": "https://www.kundesign.com/s/121/Dining%20Table%20F.html"
+    },
+    {
+      "collection": "Lotus",
+      "type": "Bar Table",
+      "detail_url": "https://www.kundesign.com/s/167/Bar%20Table.html"
+    },
+    {
+      "collection": "Lotus",
+      "type": "Bar Table",
+      "detail_url": "https://www.kundesign.com/s/119/Bar%20Table.html"
+    },
+    {
+      "collection": "Lotus",
+      "type": "Bar Table",
+      "detail_url": "https://www.kundesign.com/s/166/Bar%20Table.html"
+    },
+    {
+      "collection": "Pipe Barcart",
+      "type": "Bar Cart",
+      "detail_url": "https://www.kundesign.com/s/126/Bar%20Cart.html"
+    },
+    {
+      "collection": "Root Planter",
+      "type": "Planter(L)",
+      "detail_url": "https://www.kundesign.com/s/60/Planter(L).html"
+    },
+    {
+      "collection": "Root Planter",
+      "type": "Planter(XL)",
+      "detail_url": "https://www.kundesign.com/s/59/Planter(XL).html"
+    },
+    {
+      "collection": "Lotus Planter",
+      "type": "Planter(L)",
+      "detail_url": "https://www.kundesign.com/s/73/Planter(L).html"
+    },
+    {
+      "collection": "Lotus Planter",
+      "type": "Planter(XL)",
+      "detail_url": "https://www.kundesign.com/s/72/Planter(XL).html"
+    },
+    {
+      "collection": "Lotus Planter",
+      "type": "Planter(H)",
+      "detail_url": "https://www.kundesign.com/s/71/Planter(H).html"
+    },
+    {
+      "collection": "Lotus Planter",
+      "type": "Planter(XXL)",
+      "detail_url": "https://www.kundesign.com/s/70/Planter(XXL).html"
+    },
+    {
+      "collection": "Lotus Planter",
+      "type": "Planter(XXXL)",
+      "detail_url": "https://www.kundesign.com/s/69/Planter(XXXL).html"
+    },
+    {
+      "collection": "Lantern",
+      "type": "Hand Lamp(L)",
+      "detail_url": "https://www.kundesign.com/s/52/Hand%20Lamp(L).html"
+    },
+    {
+      "collection": "Lantern",
+      "type": "Hand Lamp(XL)",
+      "detail_url": "https://www.kundesign.com/s/51/Hand%20Lamp(XL).html"
+    },
+    {
+      "collection": "Lantern",
+      "type": "Floor Lamp(L)",
+      "detail_url": "https://www.kundesign.com/s/56/Floor%20Lamp(L).html"
+    },
+    {
+      "collection": "Lantern",
+      "type": "Floor Lamp(XL)",
+      "detail_url": "https://www.kundesign.com/s/55/Floor%20Lamp(XL).html"
+    },
+    {
+      "collection": "Lantern",
+      "type": "Hand Lamp(L)",
+      "detail_url": "https://www.kundesign.com/s/54/Hand%20Lamp(L).html"
+    },
+    {
+      "collection": "Lantern",
+      "type": "Hand Lamp(XL)",
+      "detail_url": "https://www.kundesign.com/s/53/Hand%20Lamp(XL).html"
+    },
+    {
+      "collection": "Island",
+      "type": "Island A",
+      "detail_url": "https://www.kundesign.com/s/57/Island%20A.html"
+    },
+    {
+      "collection": "Island",
+      "type": "Island B",
+      "detail_url": "https://www.kundesign.com/s/58/Island%20B.html"
+    },
+    {
+      "collection": "Lotus Outdoor Function Island",
+      "type": "Lotus Outdoor Function Island A",
+      "detail_url": "https://www.kundesign.com/s/127/Lotus%20Outdoor%20Function%20Island%20A.html"
+    },
+    {
+      "collection": "Lotus Outdoor Function Island",
+      "type": "Lotus Outdoor Function Island B",
+      "detail_url": "https://www.kundesign.com/s/128/Lotus%20Outdoor%20Function%20Island%20B.html"
+    },
+    {
+      "collection": "Pavilion",
+      "type": "Pavilion A",
+      "detail_url": "https://www.kundesign.com/s/32/Pavilion%20A.html"
+    },
+    {
+      "collection": "Pavilion",
+      "type": "Pavilion B",
+      "detail_url": "https://www.kundesign.com/s/33/Pavilion%20B.html"
+    },
+    {
+      "collection": "Pavilion",
+      "type": "Pavilion C",
+      "detail_url": "https://www.kundesign.com/s/34/Pavilion%20C.html"
+    },
+    {
+      "collection": "Pavilion",
+      "type": "Pavilion D",
+      "detail_url": "https://www.kundesign.com/s/35/Pavilion%20D.html"
+    },
+    {
+      "collection": "Pavilion",
+      "type": "Bar  Counter",
+      "detail_url": "https://www.kundesign.com/s/36/Bar%20%20Counter.html"
+    },
+    {
+      "collection": "Pavilion",
+      "type": "Bar Counter(XL)",
+      "detail_url": "https://www.kundesign.com/s/37/Bar%20Counter(XL).html"
+    },
+    {
+      "collection": "Pavilion",
+      "type": "Towel Service House",
+      "detail_url": "https://www.kundesign.com/s/44/Towel%20Service%20House.html"
+    }
+  ],
+  "overrides": [
+    {
+      "source_key": "bagel|2 seat sofa",
+      "target_key": "bagel|2 seater sofa",
+      "detail_url": "https://www.kundesign.com/s/26/2-Seater%20Sofa.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "bagel|barstool",
+      "target_key": "bagel|bar chair",
+      "detail_url": "https://www.kundesign.com/s/197/Bar%20Chair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "bagel|barstool counter height",
+      "target_key": "bagel|bar chair",
+      "detail_url": "https://www.kundesign.com/s/197/Bar%20Chair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "bagel|dining armchair",
+      "target_key": "bagel|dining armchair alu base",
+      "detail_url": "https://www.kundesign.com/s/23/Dining%20Armchair%20(ALU%20base).html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "bagel|high back lounge armchair",
+      "target_key": "bagel|highback lounge armchair",
+      "detail_url": "https://www.kundesign.com/s/25/Highback%20Lounge%20Armchair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "balance|end table a",
+      "target_key": "balance|side table a",
+      "detail_url": "https://www.kundesign.com/s/105/Side%20Table%20A.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "balance|end table c",
+      "target_key": "balance|side table c",
+      "detail_url": "https://www.kundesign.com/s/161/Side%20Table%20C.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "balance|round dining table c",
+      "target_key": "balance|dining table c",
+      "detail_url": "https://www.kundesign.com/s/109/Dining%20Table%20C.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "balance|square dining table c",
+      "target_key": "balance|dining table c",
+      "detail_url": "https://www.kundesign.com/s/109/Dining%20Table%20C.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "banyan tree|2 seat sofa",
+      "target_key": "banyan tree|2 seater sofa",
+      "detail_url": "https://www.kundesign.com/s/99/2-Seater%20Sofa.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "block|2 seat sofa with strap back",
+      "target_key": "block|2 seater sofa",
+      "detail_url": "https://www.kundesign.com/s/154/2-Seater%20Sofa.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "block|3 seat sofa with strap back",
+      "target_key": "block|3 seater sofa",
+      "detail_url": "https://www.kundesign.com/s/155/3-Seater%20Sofa.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "block|center module with aluminium back",
+      "target_key": "block|center module",
+      "detail_url": "https://www.kundesign.com/s/4/Center%20Module.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "block|center module with strap back",
+      "target_key": "block|center module",
+      "detail_url": "https://www.kundesign.com/s/4/Center%20Module.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "block|corner module with aluminium back",
+      "target_key": "block|corner module",
+      "detail_url": "https://www.kundesign.com/s/10/Corner%20Module.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "block|corner module with strap back",
+      "target_key": "block|corner module",
+      "detail_url": "https://www.kundesign.com/s/10/Corner%20Module.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "block|lounge armchair with strap back",
+      "target_key": "block|lounge armchair",
+      "detail_url": "https://www.kundesign.com/s/153/Lounge%20Armchair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "chic|deluxe folding armchair c",
+      "target_key": "chic|folding chair c",
+      "detail_url": "https://www.kundesign.com/s/160/Folding%20Chair%20C.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "clogs|coffee table a l basic",
+      "target_key": "clogs|coffee table a",
+      "detail_url": "https://www.kundesign.com/s/134/Coffee%20Table%20A.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "clogs|coffee table b l high version basic",
+      "target_key": "clogs|coffee table b",
+      "detail_url": "https://www.kundesign.com/s/133/Coffee%20Table%20B.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "clogs|coffee table b l high version with planter",
+      "target_key": "clogs|coffee table b",
+      "detail_url": "https://www.kundesign.com/s/133/Coffee%20Table%20B.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "clogs|coffee table b l low version basic",
+      "target_key": "clogs|coffee table b",
+      "detail_url": "https://www.kundesign.com/s/133/Coffee%20Table%20B.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "clogs|coffee table b l low version with planter",
+      "target_key": "clogs|coffee table b",
+      "detail_url": "https://www.kundesign.com/s/133/Coffee%20Table%20B.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "clogs|coffee table l with planter",
+      "target_key": "clogs|coffee table a with planter",
+      "detail_url": "https://www.kundesign.com/s/171/Coffee%20Table%20A%20with%20Planter.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "clogs|dining side chair",
+      "target_key": "clogs|dining chair",
+      "detail_url": "https://www.kundesign.com/s/131/Dining%20Chair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "flow|swing double chair",
+      "target_key": "flow|flow swing",
+      "detail_url": "https://www.kundesign.com/s/101/Flow%20Swing.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "jumbo ii|bar chair bar height",
+      "target_key": "jumbo ii|bar chair",
+      "detail_url": "https://www.kundesign.com/s/187/Bar%20Chair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "jumbo|2 seat sofa",
+      "target_key": "jumbo|2 seater sofa",
+      "detail_url": "https://www.kundesign.com/s/41/2-Seater%20Sofa.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "jumbo|highback lounge chair",
+      "target_key": "jumbo|highback lounge armchair",
+      "detail_url": "https://www.kundesign.com/s/40/Highback%20Lounge%20Armchair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "jumbo|lounge chair",
+      "target_key": "jumbo|lounge armchair",
+      "detail_url": "https://www.kundesign.com/s/39/Lounge%20Armchair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus planter|h",
+      "target_key": "lotus planter|planter h",
+      "detail_url": "https://www.kundesign.com/s/71/Planter(H).html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus planter|l",
+      "target_key": "lotus planter|planter l",
+      "detail_url": "https://www.kundesign.com/s/73/Planter(L).html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus planter|xl",
+      "target_key": "lotus planter|planter xl",
+      "detail_url": "https://www.kundesign.com/s/72/Planter(XL).html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus planter|xxl",
+      "target_key": "lotus planter|planter xxl",
+      "detail_url": "https://www.kundesign.com/s/70/Planter(XXL).html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus planter|xxxl",
+      "target_key": "lotus planter|planter xxxl",
+      "detail_url": "https://www.kundesign.com/s/69/Planter(XXXL).html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus|dining table b lounge height",
+      "target_key": "lotus|dining table b",
+      "detail_url": "https://www.kundesign.com/s/118/Dining%20Table%20B.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus|long dining table f",
+      "target_key": "lotus|dining table f",
+      "detail_url": "https://www.kundesign.com/s/121/Dining%20Table%20F.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus|round dining table f",
+      "target_key": "lotus|dining table f",
+      "detail_url": "https://www.kundesign.com/s/121/Dining%20Table%20F.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "lotus|square side table b",
+      "target_key": "lotus|side table b",
+      "detail_url": "https://www.kundesign.com/s/129/Side%20Table%20B.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "mooncake|end table",
+      "target_key": "mooncake|side table",
+      "detail_url": "https://www.kundesign.com/s/104/Side%20Table.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "pillow|2 seat sofa",
+      "target_key": "pillow|2 seater sofa",
+      "detail_url": "https://www.kundesign.com/s/64/2-Seater%20Sofa.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "pillow|2 seat sofa right arm module",
+      "target_key": "pillow|2 seater sofa right arm module",
+      "detail_url": "https://www.kundesign.com/s/63/2-Seater%20Sofa%20Right%20Arm%20Module.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "pillow|sunlounger with wheels",
+      "target_key": "pillow|sun lounger",
+      "detail_url": "https://www.kundesign.com/s/65/Sun%20Lounger.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "pipe|barcart",
+      "target_key": "pipe barcart|bar cart",
+      "detail_url": "https://www.kundesign.com/s/126/Bar%20Cart.html",
+      "reason": "Correccion explicita de coleccion en la fuente XLSX."
+    },
+    {
+      "source_key": "root planter|l",
+      "target_key": "root planter|planter l",
+      "detail_url": "https://www.kundesign.com/s/60/Planter(L).html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "root planter|xl",
+      "target_key": "root planter|planter xl",
+      "detail_url": "https://www.kundesign.com/s/59/Planter(XL).html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "rugby|2 seat sofa",
+      "target_key": "rugby|2 seater sofa",
+      "detail_url": "https://www.kundesign.com/s/86/2-Seater%20Sofa.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "rugby|2 seat sofa right arm module",
+      "target_key": "rugby|2 seater sofa right arm module",
+      "detail_url": "https://www.kundesign.com/s/85/2-Seater%20Sofa%20Right%20Arm%20Module.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "shell|barstool",
+      "target_key": "shell|bar chair",
+      "detail_url": "https://www.kundesign.com/s/11/Bar%20Chair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "shell|barstool counter height",
+      "target_key": "shell|bar chair",
+      "detail_url": "https://www.kundesign.com/s/11/Bar%20Chair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "string|2 seat chair",
+      "target_key": "string|2 seater lounge chair",
+      "detail_url": "https://www.kundesign.com/s/141/2-Seater%20Lounge%20Chair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "string|3 seat chair",
+      "target_key": "string|3 seater lounge chair",
+      "detail_url": "https://www.kundesign.com/s/142/3-Seater%20Lounge%20Chair.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "string|bagel extendable dining table with u shaped legs",
+      "target_key": "string|extendable dining table with u shaped legs",
+      "detail_url": "https://www.kundesign.com/s/183/Extendable%20Dining%20Table%20with%20U-Shaped%20Legs.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    },
+    {
+      "source_key": "string|rugby coffee table",
+      "target_key": "rugby|coffee table",
+      "detail_url": "https://www.kundesign.com/s/88/Coffee%20Table.html",
+      "reason": "Correccion explicita de coleccion en la fuente XLSX."
+    },
+    {
+      "source_key": "string|sunlounger",
+      "target_key": "string|sun lounger",
+      "detail_url": "https://www.kundesign.com/s/143/Sun%20Lounger.html",
+      "reason": "Alias editorial explicito entre el XLSX y el indice oficial."
+    }
+  ]
+}

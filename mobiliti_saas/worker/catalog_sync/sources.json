@@ -1,0 +1,117 @@
+[
+  {
+    "supplier": "cr-global",
+    "label": "CR Global",
+    "adapter": "cr_global",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "CR GLOBAL/CRG_FT_General_Dist_2026-04.pdf", "kind": "catalog"},
+      {"path": "CR GLOBAL/CRG_LP_General_Dist_2026-04.pdf", "kind": "price_list"},
+      {"path": "SPEC GUIDES 2026/CR Global/Spec guide-CR Global-2026.xlsx", "kind": "spec_guide"}
+    ]
+  },
+  {
+    "supplier": "sonara",
+    "label": "Sonara",
+    "adapter": "sonara",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SONARA/Catalogo-Sonara.pdf", "kind": "catalog"},
+      {"path": "SONARA/Lista de precios Sonara 2026.pdf", "kind": "price_list"}
+    ]
+  },
+  {
+    "supplier": "sunon",
+    "label": "Sunon",
+    "adapter": "sunon",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC GUIDES 2026/SUNON MTY/Spec guide-Sunon MTY-2026.xlsx", "kind": "spec_guide"},
+      {"path": "SUNON MTY/2026 updated price-Chairs _ Mexico Stock Reserves （4-6 weeks).xlsx", "kind": "inventory"},
+      {"path": "SUNON MTY/2026 updated price-Fast inventory(1-2 Weeks) 02-09.xlsx", "kind": "inventory"},
+      {"path": "SUNON MTY/2026 updated price-Raw material preparation ★ Mexican inventory list （4-6 weeks).xlsx", "kind": "inventory"},
+      {"path": "SUNON MTY/INVENTORY MALL 1 （4-6weeks).xlsx", "kind": "inventory"}
+    ]
+  },
+  {
+    "supplier": "alma",
+    "label": "ALMA",
+    "adapter": "alma",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC Guide-Alma-KUN.xlsx", "kind": "spec_guide", "brand": "KUN"},
+      {"path": "SPEC GUIDES 2026/ALMA/Spec guide-Alma-KUN Design.xlsx", "kind": "spec_guide", "brand": "KUN"},
+      {"path": "SPEC Guide-Alma-Mondecasa.xlsx", "kind": "spec_guide", "brand": "Mondecasa"}
+    ]
+  },
+  {
+    "supplier": "lumbro",
+    "label": "Lumbro",
+    "adapter": "lumbro",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "LUMBRO/LP/LISTA DE PRECIOS MULTICONTACTOS 2026.pdf", "kind": "price_list", "drive_item_id": "01DHXXN73PQIV3NEC74BFIAXGF7HN3S3NE"},
+      {"path": "LUMBRO/LP/LISTA DE PRECIOS NUEVOS PRODUCTOS LUMBRO 2025.pdf", "kind": "price_list", "drive_item_id": "01DHXXN72MMCJPX2ENKRCLIVOLPBNYLFX7"},
+      {"path": "LUMBRO/LP/Precios Interconexión Sunón act.xlsx", "kind": "price_list", "drive_item_id": "01DHXXN7Y4QLJBB6BVO5CLJR5WQHD6ETGY"},
+      {"path": "SPEC GUIDES 2026/LUMBRO/Spec guide-Lumbro-2026.xlsx", "kind": "spec_guide", "drive_item_id": "01DHXXN726RRTWDBVGDZH3DHSR4XUGGYNG"},
+      {"path": "LUMBRO/CATALOGO/CATALOGO LUMBRO 2024 DIGITAL (1).pdf", "kind": "catalog", "drive_item_id": "01DHXXN7YFOCIP7S2WR5F3AFZF3Z5ITB3J"}
+    ]
+  },
+  {
+    "supplier": "jome",
+    "label": "JOME",
+    "adapter": "jome",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC GUIDES 2026/JOME/Spec guide-Estructuras Jome-2026.xlsx", "kind": "spec_guide", "brand": "estructuras", "drive_item_id": "01DHXXN73FNX632SXL3JBZ5O6FNNULR67U"},
+      {"path": "SPEC GUIDES 2026/JOME/Spec guide-Laminado-2026.xlsx", "kind": "spec_guide", "brand": "laminado", "drive_item_id": "01DHXXN72IXFY22JUPD5GJT5B6PPGWE7ZX"}
+    ]
+  },
+  {
+    "supplier": "lauco",
+    "label": "Lauco",
+    "adapter": "lauco",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC GUIDES 2026/LAUCO/Spec Guide Lauco-2026.xlsb", "kind": "spec_guide", "brand": "Lauco", "drive_item_id": "01DHXXN73QZOUEEWNH4BE2NO5YPBUJ5HNK"}
+    ]
+  },
+  {
+    "supplier": "idelika",
+    "label": "IDÉLIKA",
+    "adapter": "idelika",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "IDELIKA/1 CATALOGO FABRICACION 2026B.pdf", "kind": "catalog", "mime_type": "application/pdf", "drive_item_id": "01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"},
+      {"path": "IDELIKA/2 CATALOGO STOCK 2026.pdf", "kind": "inventory", "mime_type": "application/pdf", "drive_item_id": "01DHXXN7YASXKBZPOLSBHIX2N2T3PB4G2R"},
+      {"path": "IDELIKA/4 SCHOOL SERIES 2026.pdf", "kind": "catalog", "mime_type": "application/pdf", "drive_item_id": "01DHXXN7YTQLPUZXRUN5E3J62UE2JQUWNC"}
+    ]
+  },
+  {
+    "supplier": "conceptos",
+    "label": "Conceptos",
+    "adapter": "conceptos",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "SPEC GUIDES 2026/CONCEPTOS/Spec guide - Conceptos - Sofas - CdMx - Gdl - Qro - 2021.xlsx", "kind": "spec_guide", "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "drive_item_id": "01DHXXN76XWGQOWSKX2RDL5YG6GTS355BO"}
+    ]
+  },
+  {
+    "supplier": "labenze",
+    "label": "Labenze",
+    "adapter": "labenze",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "LABENZE/LP Labenze B26.pdf", "kind": "price_list", "mime_type": "application/pdf", "drive_item_id": "01DHXXN77SAPUFK56QHVBLKXH7BBV7DOL7", "sha256": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3"}
+    ]
+  },
+  {
+    "supplier": "requiez",
+    "label": "Requiez",
+    "adapter": "requiez",
+    "root_path": "PROYECTOS CET - 2026/LISTAS DE PRECIOS PROVEEDORES",
+    "files": [
+      {"path": "REQUIEZ/Lista de precios A-26.pdf", "kind": "price_list", "mime_type": "application/pdf", "drive_item_id": "01DHXXN74NDZ6P4EL3B5CI2G2HFZ47ISNT", "sha256": "7f3281d1965c67a234bac55112800067019ad471f835de59ff758e759eca56ba"}
+    ]
+  }
+]

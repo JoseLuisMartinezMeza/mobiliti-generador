@@ -2,6 +2,11 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "functions": {
+    "api/**/*.py": {
+      "excludeFiles": "public/catalog-assets/**"
+    }
+  },
   "rewrites": [
     {
       "source": "/login",
@@ -25,6 +30,34 @@
     },
     {
       "source": "/cotizaciones/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/internal/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/tarkett/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/offiho/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/catalogs",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/catalogs/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/projects",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/projects/:path*",
       "destination": "/api/index"
     },
     {

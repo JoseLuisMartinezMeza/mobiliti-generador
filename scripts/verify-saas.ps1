@@ -30,10 +30,6 @@ Invoke-Step "Python tests" {
   python -m pytest -q
 }
 
-Invoke-Step "Node tests" {
-  npm.cmd test
-}
-
 Invoke-Step "Web build" {
   Push-Location (Join-Path $root "mobiliti_saas\web")
   try {

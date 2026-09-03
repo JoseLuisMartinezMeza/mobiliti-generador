@@ -211,6 +211,61 @@ solo en historial como referencia antigua.
 | `/cotizaciones` | GET | Token | Lista historial web |
 | `/cotizaciones/{id}` | GET | Token | Estado de una cotizacion |
 | `/cotizaciones/{id}/download` | GET | Token | URL firmada de descarga |
+| `/projects` | POST, GET | Token | Crea o lista los Proyectos persistentes del usuario |
+| `/projects/{id}` | GET, PATCH | Token | Consulta o actualiza un Proyecto propio |
+| `/projects/{id}/archive` | POST | Token | Archiva un Proyecto sin eliminarlo |
+| `/projects/{id}/restore` | POST | Token | Restaura un Proyecto archivado |
+| `/projects/{id}/imports/{job_id}` | POST | Token | Promueve una Quotation importada y sus imagenes a recursos durables del Proyecto |
+| `/catalogs/search` | GET | Token | Busca en el catalogo unificado para el selector web |
+
+## Proyectos persistentes
+
+Los Proyectos se guardan por usuario mediante `/projects`; las rutas de detalle
+solo devuelven recursos que pertenecen al usuario autenticado. Las actualizaciones
+usan revision optimista: cada `PATCH /projects/{id}`, archivado o restauracion
+requiere la revision esperada y devuelve conflicto si otro cambio ya la actualizo.
+
+`POST /projects/{id}/archive` archiva el Proyecto sin eliminacion permanente, y
+`GET /projects` permite consultar por separado los estados activos o archivados.
+`GET /catalogs/search` alimenta el selector unificado. Al importar una Quotation,
+`POST /projects/{id}/imports/{job_id}` promueve su fuente e imagenes a recursos
+durables, privados y asociados al Proyecto del usuario.
+
+Esta fase no cambia todavia el motor XLSX.
+
+### Aceptacion local del editor de Proyectos
+
+El escenario browser crea un Proyecto, agrega dos ocurrencias independientes del
+mismo producto, configura y confirma un complemento, espera el autosave y
+comprueba que el estado persiste despues de recargar y reabrir el Proyecto.
+Tambien valida el editor a `390 x 844`: ocupa el viewport completo y no genera
+overflow horizontal.
+
+La prueba usa el mismo servidor Vite y el guard de red del resto de la suite. Su
+stub en memoria respeta los contratos de `/projects` y `/catalogs/search`,
+incluida la revision optimista; no requiere levantar un segundo backend ni
+permite solicitudes sin declarar.
+
+```powershell
+python -m pytest tests/test_mixed_catalog_browser_e2e.py -k "project_survives_reload" -q
+python -m pytest tests/test_mixed_catalog_browser_e2e.py tests/test_project_ui.py tests/test_project_model_ui.py -q
+npm --prefix mobiliti_saas/web run build
+```
+
+La aceptación de `test_project_quote_acceptance.py` crea y recarga el Proyecto,
+cotiza por `POST /projects/{id}/quote`, consume el payload inmutable guardado y
+ejecuta el claim real del worker. En Windows con Excel instalado también puede
+ejecutarse aisladamente el gate de escritorio:
+
+```powershell
+python -m pytest tests\test_project_quote_acceptance.py::test_project_quote_excel_desktop_acceptance_for_four_persisted_cases -q -rs
+```
+
+Ese gate abre los cuatro resultados (MXN, USD, importado y stress), detecta
+registros de reparación antes de guardar, recalcula, valida fórmulas y errores,
+guarda sólo una copia temporal y vuelve a abrirla. El XLSX producido por el
+worker no se sobrescribe. El test sólo se omite con una razón explícita cuando
+Windows, `pywin32` o Excel de escritorio no están disponibles.
 
 ### Crear usuario cliente
 
@@ -297,6 +352,50 @@ versiones historial/
 - **JWT tokens** expiran en 60 minutos. El cliente re-verifica en cada accion.
 - **Worker Docker** usa `QUOTE_ENGINE=python`; no necesita Windows ni Microsoft Excel.
 - **Legacy desktop/xlwings** esta archivado en `versiones historial` y no es parte de produccion.
+
+### Plantilla oficial, preservación y límites técnicos
+
+- La plantilla promovida se acepta sólo con SHA-256
+  `fc87b105b2809fbb892986e084bf1aaeffc77ff7d2b7e4b5da7ef6d8c4d028f5`.
+- Se promueve con `scripts/promote_official_quote_template.py` hacia
+  `mobiliti_saas/worker/templates/Formato Cotizacion 2026 Oficial.xlsx`, usando
+  el manifiesto `formato-cotizacion-2026-oficial.contract.json` y un destino
+  nuevo.
+- La allowlist mutable comprende las hojas `Mobiliti`, `Cotizacion`, `Fletes`
+  y `Estrategia Comercial `, sus referencias estructurales de workbook,
+  `calcChain.xml`, el dibujo de productos y las partes agregadas para
+  `Quotation`/`Quotation_Data`. Las demás partes quedan byte-idénticas.
+- `Quotation` preserva la fuente importada; los renglones combinados aparecen
+  una sola vez y en orden en `Quotation_Data`, siempre `veryHidden`.
+- `Mobiliti!J` contiene costo convertido numérico y congelado. `K6`, `W`, `X`
+  y las fórmulas oficiales posteriores no repiten la conversión.
+- La capacidad se limita por las 1,048,576 filas físicas de XLSX menos filas
+  reservadas y por 25 MiB de request, no por antiguos topes de líneas o
+  secciones. Un exceso falla explícitamente; no hay truncamiento silencioso.
+
+Aceptación local reproducible:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\dev-start.ps1
+python -m pytest tests\test_project_quote_acceptance.py tests\test_official_quote_stress.py tests\test_official_template_contract.py tests\test_quotation_sheet_transplant.py -q
+npm --prefix mobiliti_saas/web run build
+```
+
+Validación manual del Proyecto en `http://127.0.0.1:5173/`:
+
+1. Crea un Proyecto y agrega dos veces el mismo código.
+2. Importa una Quotation al Proyecto.
+3. Reemplaza una sola ocurrencia.
+4. Reemplaza todas las ocurrencias coincidentes, incluidas las importadas.
+5. Agrega un complemento por unidad y otro fijo al mismo principal.
+6. Recarga la página y confirma que el autoguardado conserva orden, secciones
+   y composiciones.
+7. Genera el XLSX en MXN y USD.
+8. Comprueba que `Cotizacion` muestra una línea compuesta y que `Mobiliti`
+   conserva cada componente como fila física independiente.
+
+Estado del handoff: validación local únicamente. No se ejecutó despliegue ni
+se escribió en SharePoint, Supabase, Storage remoto o producción.
 
 ---
 

@@ -73,6 +73,39 @@ For Cloudflare R2 storage, also set S3-compatible R2 credentials:
 
 Do not commit real secrets.
 
+## Activacion segura de sincronizacion de catalogos
+
+Deja `CATALOG_SYNC_ENABLED=false` durante la preparacion. El certificado de
+la aplicacion de Entra no se guarda en el repositorio ni en `worker.env`: el
+contenedor recibe el directorio del host como solo lectura en
+`/run/secrets/mobiliti-graph`.
+
+El despliegue acepta solamente `1`, `true` o `yes` para activar y `0`, `false`,
+`no` o vacio para desactivar. Tras obtener el commit objetivo, ejecuta el
+`preflight.py` contenido en ese commit antes de crear el worktree, construir
+la imagen o cambiar el contenedor. Cada despliegue normaliza el directorio del
+host a `root:10001` y `0750`; rechaza un enlace simbolico o un archivo en esa
+ruta.
+
+1. Como `root`, instala el PEM en
+   `/etc/mobiliti-worker/graph/client-cert.pem`, con propietario `root:10001`
+   y modo `0440`. El proceso del contenedor usa UID/GID `10001`, por lo que
+   solo obtiene lectura a traves del grupo; root del host no queda restringido.
+2. Verifica propietario, modo y que el archivo no este vacio sin imprimir su
+   contenido: `stat -c '%U:%G %a %n' /etc/mobiliti-worker/graph/client-cert.pem`
+   y `test -s /etc/mobiliti-worker/graph/client-cert.pem`.
+3. Completa en `/etc/mobiliti-worker/worker.env` `SUPABASE_SERVICE_KEY` y las
+   ocho variables Graph/SharePoint, manteniendo la ruta interna de ejemplo.
+4. Despliega aun con sincronizacion desactivada:
+   `mobiliti-worker-deploy`; luego valida `curl http://127.0.0.1:10000/health`.
+5. Solo despues de migrar la fuente SUNON al drive/root canonicos y limpiar su
+   cursor anterior, configura `CATALOG_ENABLED_SUPPLIERS=sunon`, cambia
+   `CATALOG_SYNC_ENABLED=true` y vuelve a desplegar.
+6. Ejecuta un canary manual de SUNON, revisa el candidato antes de publicarlo y
+   confirma despues una segunda corrida sin cambios. Ante una desviacion,
+   vuelve `CATALOG_SYNC_ENABLED=false`, despliega de nuevo y conserva el
+   candidato para revision; no sobrescribas la version publicada directamente.
+
 Antes de activar R2 en el worker, valida desde tu maquina local o desde el
 servidor sin imprimir secretos:
 
@@ -88,6 +121,15 @@ Solo cambia `QUOTE_STORAGE_PROVIDER=r2` cuando `s3_ready=true`,
 ```bash
 mobiliti-worker-deploy
 ```
+
+Cada despliegue crea un worktree inmutable en
+`/opt/mobiliti-worker/releases/<commit>` y conserva las liberaciones anteriores.
+El commit activo queda registrado en `/opt/mobiliti-worker/releases/CURRENT`.
+El proceso no ejecuta `git reset --hard` ni reemplaza el checkout base.
+
+Para volver a una liberación ya construida, ejecuta su `docker-compose.yml`
+con `WORKER_IMAGE_TAG=<commit-anterior>` y valida nuevamente el health local
+antes de continuar.
 
 The health endpoint is bound to localhost only:
 

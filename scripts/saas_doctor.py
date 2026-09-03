@@ -25,6 +25,7 @@ REQUIRED_PROD_ENV = [
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_FILES = [
+    ROOT / ".dockerignore",
     ROOT / "vercel_deploy" / "vercel.json",
     ROOT / "vercel_deploy" / "requirements.txt",
     ROOT / "vercel_deploy" / "api" / "index.py",
@@ -32,6 +33,7 @@ DEPLOY_FILES = [
     ROOT / "mobiliti_saas" / "web" / "package.json",
     ROOT / "mobiliti_saas" / "worker" / "Dockerfile",
     ROOT / "mobiliti_saas" / "worker" / "requirements.txt",
+    ROOT / "mobiliti_saas" / "worker" / "requirements.lock",
     ROOT / "mobiliti_saas" / "supabase_setup" / "create_tables.sql",
 ]
 LEGACY_ROOT_VERCEL = ROOT / "mobiliti_saas" / "vercel.json"
@@ -111,6 +113,25 @@ def check_deploy_files() -> list[dict]:
         results.append(_result("deploy files", "fail", "faltan: " + ", ".join(missing)))
     else:
         results.append(_result("deploy files", "ok", f"{len(DEPLOY_FILES)} archivos requeridos"))
+
+    dockerignore = ROOT / ".dockerignore"
+    try:
+        patterns = [
+            line.strip()
+            for line in dockerignore.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        required = {
+            "!mobiliti_saas/worker/**",
+            "!mobiliti_saas/quote_engine/**",
+            "!pdf_quotation_import/**",
+        }
+        if not patterns or patterns[0] != "*" or not required.issubset(patterns):
+            results.append(_result("docker build context", "fail", "allowlist incompleta"))
+        else:
+            results.append(_result("docker build context", "ok", "allowlist minima"))
+    except Exception as exc:
+        results.append(_result("docker build context", "fail", str(exc)))
 
     web_vercel = ROOT / "mobiliti_saas" / "web" / "vercel.json"
     try:

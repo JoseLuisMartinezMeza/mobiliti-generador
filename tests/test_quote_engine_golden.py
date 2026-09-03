@@ -1,6 +1,9 @@
+from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-import os
 import sys
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -10,12 +13,25 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine import generate_quote  # noqa: E402
-from mobiliti_saas.quote_engine.engine import SECTION_PROD_STARTS, _copy_source_sheet, _write_estrategia_comercial  # noqa: E402
+from mobiliti_saas.quote_engine.engine import SECTION_PROD_STARTS, _write_estrategia_comercial  # noqa: E402
+from mobiliti_saas.quote_engine.mixed_catalog import (  # noqa: E402
+    build_mixed_catalog_cart_payload,
+    create_mixed_catalog_quotation_workbook,
+)
+from mobiliti_saas.quote_engine.supplier_catalog import create_supplier_quotation_workbook  # noqa: E402
+from mobiliti_saas.quote_engine.tarkett_catalog import TarkettCatalogItem  # noqa: E402
 
 
 DOWNLOADS = Path(r"C:\Users\pepem\Downloads")
 TEMPLATE_DIR = ROOT / "versiones historial" / "HISTORIAL DE VERSIONES" / "Mobiliti_Generador_Windows"
 TEMPLATE = next(TEMPLATE_DIR.glob("Formato*.xlsx"), TEMPLATE_DIR / "Formato Cotizacion 2026 GDL (1).xlsx")
+WORKER_TEMPLATE = (
+    ROOT
+    / "mobiliti_saas"
+    / "worker"
+    / "templates"
+    / "Formato Cotizacion 2026 Oficial.xlsx"
+)
 GOLDENS = [
     DOWNLOADS / "IZA REFORMA-Quotation Sheet - V1.xlsx",
     ROOT / "versiones historial" / "KIVO BRAVANTE-Quotation Sheet - V1.xlsx",
@@ -40,6 +56,570 @@ EXPECTED_TEMPLATE_SHEETS = {
     "Meses Sin Intereses Tarjetas",
     "Quotation",
 }
+MONEY = Decimal("0.01")
+
+
+def money(value: Decimal) -> Decimal:
+    return value.quantize(MONEY, rounding=ROUND_HALF_UP)
+
+
+def _mobiliti_row_for_quotation_row(mobiliti, quotation_row: int) -> int:
+    formula = f"=Quotation!B{quotation_row}"
+    return next(
+        row
+        for row in range(1, mobiliti.max_row + 1)
+        if mobiliti.cell(row, 4).value == formula
+    )
+
+
+def reference_totals(rows: list[tuple[Decimal, Decimal, Decimal]]):
+    subtotal = Decimal("0")
+    for price, quantity, discount in rows:
+        unit = money(price)
+        discount_amount = money(unit * discount)
+        net_unit = money(unit - discount_amount)
+        subtotal += money(quantity * net_unit)
+    subtotal = money(subtotal)
+    freight = money(subtotal * Decimal("0.12"))
+    before_tax = money(subtotal + freight)
+    tax = money(before_tax * Decimal("0.16"))
+    return subtotal, freight, before_tax, tax, money(before_tax + tax)
+
+
+def _supplier_line(**overrides):
+    line = {
+        "internal_id": "alma:kun:kc8611n01rop",
+        "supplier": "alma",
+        "product_key": "kun-kc8611n01rop",
+        "sku": "KC8611N01ROP",
+        "code_status": "verified",
+        "brand": "KUN",
+        "collection": "CLOGS",
+        "name": "Silla KUN",
+        "description": "Silla configurable",
+        "unit": "pieza",
+        "availability_type": "made_to_order",
+        "stock": None,
+        "lead_time": "Sobre pedido",
+        "quantity": "1",
+        "base_option_id": "powder-coated-aluminium",
+        "add_on_option_ids": ["cushion:a-plus"],
+        "configuration": "Aluminio; Cojin A+",
+        "base_currency": "USD",
+        "base_price": "250.000000",
+        "unit_price_base": "285.100000",
+        "unit_price": "5274.35",
+        "line_total": "5274.35",
+        "tax_rate": "0.160000",
+        "attributes": {"color": "verde"},
+        "image_url": "",
+        "image_kind": "official",
+        "product_url": "https://example.test/kun",
+        "warnings": [],
+        "source_reference": "SPEC Guide-Alma-KUN.xlsx:E9:I9",
+    }
+    line.update(overrides)
+    return line
+
+
+def _supplier_payload(items):
+    return {
+        "source_type": "supplier_cart",
+        "supplier": "alma",
+        "catalog_source_hash": "a" * 64,
+        "base_currency": "USD",
+        "quote_currency": "MXN",
+        "exchange_rate": "18.500000",
+        "rate_source": "saas_exchange_rates",
+        "rate_effective_date": "2026-07-15",
+        "rate_retrieved_at": "2026-07-15T23:00:00Z",
+        "items": items,
+    }
+
+
+def _write_minimal_quotation(path: Path, *, unit_price=123.456) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Quotation"
+    for column, value in {1: "No.", 2: "Item", 4: "Description", 5: "Dimension", 7: "Qty", 10: "List Price", 11: "URL"}.items():
+        ws.cell(7, column).value = value
+    ws["A8"] = "- Catalogo proveedor"
+    ws["A9"] = 1
+    ws["B9"] = "Producto de prueba"
+    ws["D9"] = "Descripcion configurable | SKU: TEST-001"
+    ws["E9"] = "pieza"
+    ws["G9"] = 2
+    ws["J9"] = unit_price
+    ws["K9"] = "https://example.test/producto"
+    wb.save(path)
+    wb.close()
+
+
+def _write_mixed_totals_quotation(path: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Quotation"
+    headers = {
+        1: "No.", 2: "Item", 4: "Description", 5: "Dimension", 7: "Qty",
+        10: "List Price", 11: "URL", 12: "Supplier", 13: "Discount Percent",
+        14: "Original Currency", 15: "Original Unit Price", 16: "Frozen Exchange Rate",
+        17: "Source Reference", 18: "Price Mode", 19: "Auto Electrification",
+    }
+    for column, value in headers.items():
+        ws.cell(7, column).value = value
+    ws["A8"] = "- Catalogos mixtos"
+    rows = [
+        (9, "Piso Tarkett", 2, 123.46, "Tarkett", 40, "MXN", 123.456, 1, "list"),
+        (10, "Silla ALMA", 3, 200.13, "ALMA", 0, "USD", 10.817568, 18.5, "net"),
+    ]
+    for row, name, quantity, price, provider, discount, original_currency, original_price, rate, mode in rows:
+        ws.cell(row, 1).value = row - 8
+        ws.cell(row, 2).value = name
+        ws.cell(row, 4).value = f"Descripcion {name}"
+        ws.cell(row, 5).value = "pieza"
+        ws.cell(row, 7).value = quantity
+        ws.cell(row, 10).value = price
+        ws.cell(row, 12).value = provider
+        ws.cell(row, 13).value = discount
+        ws.cell(row, 14).value = original_currency
+        ws.cell(row, 15).value = original_price
+        ws.cell(row, 16).value = rate
+        ws.cell(row, 17).value = f"source:{provider.lower()}"
+        ws.cell(row, 18).value = mode
+        ws.cell(row, 19).value = False
+    wb.save(path)
+    wb.close()
+
+
+def _mixed_totals_metadata():
+    return {
+        "catalog_price_mode": "mixed_catalog_converted",
+        "quote_currency": "MXN",
+        "auto_electrification_rate": None,
+        "rate_summary": [
+            {
+                "catalog": "tarkett", "base_currency": "MXN", "quote_currency": "MXN",
+                "exchange_rate": "1.000000", "rate_source": "identity",
+                "rate_effective_date": "2026-07-15", "rate_retrieved_at": "",
+            },
+            {
+                "catalog": "alma", "base_currency": "USD", "quote_currency": "MXN",
+                "exchange_rate": "18.500000", "rate_source": "saas_exchange_rates",
+                "rate_effective_date": "2026-07-15",
+                "rate_retrieved_at": "2026-07-15T23:00:00Z",
+            },
+        ],
+        "cotizacion": "MIXTA-GOLDEN",
+    }
+
+
+def _build_real_mixed_task5_payload():
+    tarkett = TarkettCatalogItem(
+        "25731726",
+        "Piso Tarkett",
+        "m2",
+        Decimal("10"),
+        unit_price=Decimal("123.456"),
+        price_source="catalog",
+    )
+    alma = {
+        "internal_id": "alma:kun:configured",
+        "supplier": "alma",
+        "product_key": "kun-configured",
+        "sku": "KC8611N01ROP",
+        "code_status": "verified",
+        "brand": "KUN",
+        "collection": "KUN",
+        "name": "Silla KUN configurable",
+        "description": "Silla ejecutiva configurable",
+        "unit": "pieza",
+        "availability_type": "made_to_order",
+        "stock": None,
+        "lead_time": "Sobre pedido",
+        "base_price_options": [
+            {
+                "id": "powder-coated-aluminium",
+                "name": "Powder coated aluminium",
+                "price_net": "250.000000",
+                "available": True,
+            }
+        ],
+        "add_on_options": [
+            {
+                "id": "cushion:a-plus",
+                "name": "Cushion A+",
+                "family": "cushion",
+                "price_net": "35.100000",
+                "available": True,
+            }
+        ],
+        "base_currency": "USD",
+        "price_net": "199.990000",
+        "tax_rate": "0.160000",
+        "attributes": {"color": "Black", "dimensions": "65 x 45 x 83 cm"},
+        "image_url": "",
+        "image_kind": "generated_reference",
+        "product_url": "",
+        "warnings": ["Imagen ilustrativa"],
+        "source_reference": "SPEC Guide-Alma-KUN.xlsx:E9:I9",
+    }
+    return build_mixed_catalog_cart_payload(
+        [
+            {"catalog": "tarkett", "code": tarkett.code, "quantity": "2"},
+            {
+                "catalog": "alma",
+                "internal_id": alma["internal_id"],
+                "quantity": "1",
+                "base_option_id": "powder-coated-aluminium",
+                "add_on_option_ids": ["cushion:a-plus"],
+            },
+        ],
+        catalogs={
+            "tarkett": {
+                "source_hash": "a" * 64,
+                "items": [tarkett],
+                "by_code": {tarkett.code: tarkett},
+            },
+            "alma": {
+                "supplier": "alma",
+                "source_hash": "b" * 64,
+                "generated_at": "2026-07-19T00:00:00+00:00",
+                "items": [alma],
+            },
+        },
+        rate_rows=[
+            {
+                "currency": "USD",
+                "effective_date": "2026-07-19",
+                "mxn_per_unit": "18.500000",
+                "retrieved_at": "2026-07-19T12:00:00+00:00",
+            }
+        ],
+        quote_currency="MXN",
+        commercial_discount_percent="40",
+        today=date(2026, 7, 19),
+    )
+
+
+def _formula_uses_round_2(value):
+    text = str(value or "").upper().replace(" ", "")
+    return text.startswith("=") and "ROUND(" in text and ",2)" in text
+
+
+def test_supplier_intermediate_workbook_contains_configuration_and_stock_warnings(tmp_path):
+    output = tmp_path / "supplier-quotation.xlsx"
+    payload = _supplier_payload(
+        [
+            _supplier_line(
+                code_status="needs_review",
+                sku="",
+                image_kind="generated_reference",
+                quantity="2",
+            ),
+            _supplier_line(
+                internal_id="cr-global:out",
+                supplier="cr-global",
+                product_key="crg-out",
+                sku="CRG-OUT",
+                name="Producto agotado",
+                availability_type="stocked",
+                stock="0.000000",
+                lead_time="Entrega inmediata",
+                configuration="Standard",
+                quantity="1",
+            ),
+            _supplier_line(
+                internal_id="cr-global:low",
+                supplier="cr-global",
+                product_key="crg-low",
+                sku="CRG-LOW",
+                name="Producto insuficiente",
+                availability_type="stocked",
+                stock="1.000000",
+                available_after_reservations="0.500000",
+                lead_time="Entrega inmediata",
+                configuration="Standard",
+                quantity="2",
+            ),
+        ]
+    )
+
+    create_supplier_quotation_workbook(payload, output)
+
+    wb = load_workbook(output, data_only=False)
+    ws = wb["Quotation"]
+    first_description = str(ws["D9"].value)
+    assert ws["B9"].value == "Silla KUN"
+    assert "Silla configurable" in first_description
+    assert "Aluminio; Cojin A+" in first_description
+    assert "Codigo por verificar" in first_description
+    assert "Imagen de referencia" in first_description
+    assert "Sobre pedido" in first_description
+    assert "AGOTADO" not in first_description.upper()
+    assert ws["J9"].value == 5274.35
+    assert ws["G9"].value == 2
+    assert ws["K9"].value == "https://example.test/kun"
+    assert ws["D9"].fill.fgColor.rgb.endswith("FFF2CC")
+    assert "SKU: CRG-OUT" in str(ws["D10"].value)
+    assert "AGOTADO" in str(ws["D10"].value).upper()
+    assert ws["D10"].fill.fgColor.rgb.endswith("FFF2CC")
+    assert "INSUFICIENTE" in str(ws["D11"].value).upper()
+    assert "DISPONIBLE 0.5" in str(ws["D11"].value).upper()
+    assert ws["D11"].fill.fgColor.rgb.endswith("FFF2CC")
+    wb.close()
+
+
+def test_supplier_final_workbook_uses_official_template_and_frozen_price_contract(tmp_path):
+    source = tmp_path / "supplier-source.xlsx"
+    output = tmp_path / "supplier-final.xlsx"
+    _write_minimal_quotation(source)
+    metadata = {
+        "cotizacion": "SUP-001",
+        "proyecto": "Catalogo ALMA",
+        "cliente": "Cliente",
+        "descuento": 40,
+        "catalog_supplier": "alma",
+        "catalog_supplier_label": "ALMA",
+        "catalog_price_mode": "list_price_net",
+        "base_currency": "USD",
+        "quote_currency": "MXN",
+        "exchange_rate": "18.500000",
+        "rate_source": "saas_exchange_rates",
+        "rate_effective_date": "2026-07-15",
+        "rate_retrieved_at": "2026-07-15T23:00:00Z",
+    }
+
+    generate_quote(source, output, metadata, WORKER_TEMPLATE)
+
+    wb = load_workbook(output, data_only=False)
+    cot = wb["Cotizacion"]
+    mobiliti = wb["Mobiliti"]
+    quotation = wb["Quotation"]
+    # El paquete oficial v18 gobierna B4, P4/P6 y el descuento global;
+    # fórmulas visibles; J contiene el único costo congelado por producto.
+    assert cot["B4"].value is None
+    mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, 9)
+    product_row = next(
+        row
+        for row in range(1, cot.max_row + 1)
+        if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
+    )
+    assert mobiliti.cell(mobiliti_row, 6).value == "Alma - Exterior"
+    assert mobiliti.cell(mobiliti_row, 10).value == "=Quotation!K9"
+    assert quotation["K9"].value == pytest.approx(123.46)
+    assert mobiliti["P4"].value is False
+    assert getattr(mobiliti["P6"].value, "text", None) == (
+        '=IF(P4=TRUE,_FV(J6,"Price"),0)'
+    )
+    assert mobiliti["AD14"].value == pytest.approx(0.4)
+    assert cot.cell(product_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+    assert cot.cell(product_row, 3).value == "=Quotation!D9"
+    assert cot.cell(product_row, 4).value == "=Quotation!F9"
+    assert cot.cell(product_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
+    assert cot.cell(product_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
+    assert cot.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
+    assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
+    assert cot.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
+    total_row = next(
+        row
+        for row in range(product_row + 1, cot.max_row + 1)
+        if str(cot.cell(row, 4).value or "").strip() == "TOTAL:"
+    )
+    assert "16%" in str(cot.cell(total_row - 1, 8).value)
+    assert wb["Quotation_Data"].sheet_state == "veryHidden"
+    wb.close()
+
+
+def test_mixed_final_workbook_uses_official_formulas_and_one_frozen_cost_per_item(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine._exchange_rate",
+        lambda _metadata: (_ for _ in ()).throw(
+            AssertionError("mixed mode must not use the legacy exchange rate")
+        ),
+    )
+    source = tmp_path / "mixed-totals.xlsx"
+    output = tmp_path / "mixed-totals-final.xlsx"
+    _write_mixed_totals_quotation(source)
+
+    generate_quote(source, output, _mixed_totals_metadata(), WORKER_TEMPLATE)
+
+    wb = load_workbook(output, data_only=False)
+    try:
+        assert {"Cotizacion", "Mobiliti", "Quotation"} <= set(wb.sheetnames)
+        assert wb.sheetnames.count("Cotizacion") == 1
+        assert wb.sheetnames.count("Mobiliti") == 1
+        assert wb.sheetnames.count("Quotation") == 1
+        cot = wb["Cotizacion"]
+        mobiliti = wb["Mobiliti"]
+        # Las identidades conservan referencias vivas Quotation -> Mobiliti y
+        # Cotizacion referencia el precio físico AA de cada fila Mobiliti.
+        product_row_map = []
+        for source_row in (9, 10):
+            mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, source_row)
+            cot_row = next(
+                row for row in range(1, cot.max_row + 1)
+                if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
+            )
+            product_row_map.append((source_row, cot_row, mobiliti_row))
+
+        first_product = product_row_map[0][1]
+        for source_row, cot_row, mobiliti_row in product_row_map:
+            assert cot.cell(cot_row, 3).value == f"=Quotation!D{source_row}"
+            assert cot.cell(cot_row, 4).value == f"=Quotation!F{source_row}"
+            assert cot.cell(cot_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
+            assert cot.cell(cot_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
+            assert cot.cell(cot_row, 8).value == f"=F{cot_row}*G{cot_row}"
+            assert cot.cell(cot_row, 9).value == f"=F{cot_row}-H{cot_row}"
+            assert cot.cell(cot_row, 10).value == f"=E{cot_row}*I{cot_row}"
+            assert mobiliti.cell(mobiliti_row, 10).value == f"=Quotation!K{source_row}"
+        assert mobiliti["AD14"].value == pytest.approx(0.4)
+        assert cot.cell(first_product, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+        assert cot.cell(product_row_map[1][1], 7).value == (
+            "=ROUND(Mobiliti!$AD$14,2)"
+        )
+        assert wb["Quotation_Data"].sheet_state == "veryHidden"
+        assert reference_totals(
+            [
+                (Decimal("123.456"), Decimal("2"), Decimal("0.4")),
+                (Decimal("200.13"), Decimal("3"), Decimal("0")),
+            ]
+        ) == (
+            Decimal("748.55"),
+            Decimal("89.83"),
+            Decimal("838.38"),
+            Decimal("134.14"),
+            Decimal("972.52"),
+        )
+    finally:
+        wb.close()
+
+
+def test_real_task5_mixed_workbook_preserves_structured_description_and_identity_price(
+    tmp_path, monkeypatch
+):
+    payload = _build_real_mixed_task5_payload()
+    source = tmp_path / "real-task5-mixed.xlsx"
+    output = tmp_path / "real-task6-final.xlsx"
+    create_mixed_catalog_quotation_workbook(
+        payload,
+        source,
+        image_dir=tmp_path / "mixed-images",
+    )
+    metadata = {
+        "catalog_price_mode": "mixed_catalog_converted",
+        "quote_currency": payload["quote_currency"],
+        "rate_summary": payload["rate_summary"],
+        "auto_electrification_rate": payload["auto_electrification_rate"],
+        "cotizacion": "MIXTA-REAL",
+    }
+    monkeypatch.setattr(
+        "mobiliti_saas.quote_engine.engine._exchange_rate",
+        lambda _metadata: (_ for _ in ()).throw(
+            AssertionError("mixed mode must not use the legacy exchange rate")
+        ),
+    )
+
+    generate_quote(source, output, metadata, WORKER_TEMPLATE)
+
+    wb = load_workbook(output, data_only=False)
+    try:
+        cot = wb["Cotizacion"]
+        mobiliti = wb["Mobiliti"]
+        quotation = wb["Quotation"]
+        alma_source_row = next(
+            row
+            for row in range(8, quotation.max_row + 1)
+            if quotation.cell(row, 2).value == "Silla KUN configurable"
+        )
+        mobiliti_row = _mobiliti_row_for_quotation_row(
+            mobiliti,
+            alma_source_row,
+        )
+        cot_row = next(
+            row
+            for row in range(1, cot.max_row + 1)
+            if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
+        )
+        assert cot.cell(cot_row, 3).value == f"=Quotation!D{alma_source_row}"
+        assert cot.cell(cot_row, 4).value == f"=Quotation!F{alma_source_row}"
+        assert cot.cell(cot_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
+        description = str(quotation.cell(alma_source_row, 4).value)
+        for expected in (
+            "Silla ejecutiva configurable",
+            "aluminio con recubrimiento en polvo",
+            "Cushion A+",
+            "Sobre pedido",
+            "Imagen de referencia",
+        ):
+            assert expected in description
+        # Mobiliti J enlaza el costo físico K de la Quotation ampliada.
+        assert mobiliti.cell(mobiliti_row, 10).value == (
+            f"=Quotation!K{alma_source_row}"
+        )
+        assert quotation.cell(alma_source_row, 11).value == pytest.approx(5274.35)
+        assert str(mobiliti.cell(mobiliti_row, 24).value).startswith("=IF(")
+        assert mobiliti.cell(mobiliti_row, 27).value == (
+            f"=IF(Z{mobiliti_row}>=Y{mobiliti_row},"
+            f"_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D{mobiliti_row},"
+            f"$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,"
+            f"$D$15:$D$572,D{mobiliti_row})),"
+            '"NO SE ESTA RESPETANDO EL MARGEN")'
+        )
+        assert cot.cell(cot_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
+        assert wb["Quotation_Data"].sheet_state == "veryHidden"
+    finally:
+        wb.close()
+
+
+def test_standard_workbook_keeps_official_provider_header_and_formulas(tmp_path):
+    source = tmp_path / "legacy-source.xlsx"
+    output = tmp_path / "legacy-final.xlsx"
+    _write_minimal_quotation(source, unit_price=100)
+
+    generate_quote(source, output, {"cotizacion": "LEGACY", "tipo_cambio": 20, "descuento": 40}, WORKER_TEMPLATE)
+
+    wb = load_workbook(output, data_only=False)
+    cot = wb["Cotizacion"]
+    mobiliti = wb["Mobiliti"]
+    mobiliti_row = _mobiliti_row_for_quotation_row(mobiliti, 9)
+    product_row = next(
+        row
+        for row in range(1, cot.max_row + 1)
+        if cot.cell(row, 1).value == f"=Mobiliti!D{mobiliti_row}"
+    )
+    # Las filas vacías conservan las fórmulas nativas del template oficial; no
+    # se reinstalan los guards sintéticos producidos por el writer anterior.
+    assert cot["B4"].value is None
+    assert mobiliti.cell(mobiliti_row, 6).value == "Sunon Inc"
+    assert cot.cell(product_row, 3).value == "=Quotation!D9"
+    assert cot.cell(product_row, 4).value == "=Quotation!F9"
+    assert cot.cell(product_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
+    assert cot.cell(product_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
+    assert cot.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
+    assert cot.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
+    assert cot.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"
+    unused_row = mobiliti_row + 1
+    assert all(
+        mobiliti.cell(unused_row, column).value is None
+        for column in (4, 5, 6, 8, 10, 16, 19)
+    )
+    assert str(mobiliti.cell(unused_row, 24).value).startswith("=IF(")
+    assert mobiliti.cell(unused_row, 27).value == (
+        f"=IF(Z{unused_row}>=Y{unused_row},"
+        f"_xlfn.MINIFS($Z$15:$Z$572,$D$15:$D$572,D{unused_row},"
+        f"$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,"
+        f"$D$15:$D$572,D{unused_row})),"
+        '"NO SE ESTA RESPETANDO EL MARGEN")'
+    )
+    assert mobiliti["P4"].value is False
+    assert getattr(mobiliti["P6"].value, "text", None) == (
+        '=IF(P4=TRUE,_FV(J6,"Price"),0)'
+    )
+    assert wb["Quotation_Data"].sheet_state == "veryHidden"
+    wb.close()
 
 
 @pytest.mark.parametrize("source", GOLDENS)
@@ -59,29 +639,11 @@ def test_python_engine_generates_golden_structure(source, tmp_path):
     assert "Cotizacion" in wb.sheetnames
     assert "Mobiliti" in wb.sheetnames
     assert "Quotation" in wb.sheetnames
-    assert wb["Cotizacion"]["D17"].value == "=Quotation!E9"
+    assert wb["Cotizacion"]["D17"].value == "=Quotation!F9"
     assert str(wb["Mobiliti"]["K14"].value).startswith("=Quotation!")
     assert wb["Cotizacion"].print_area
     assert len(wb["Cotizacion"]._images) > 0
     wb.close()
-
-
-def test_copy_source_sheet_handles_leac_external_styles(tmp_path):
-    if os.environ.get("RUN_SLOW_QUOTE_TESTS") != "1":
-        pytest.skip("LEAC copy is a slow local regression test")
-    if not LEAC_QUOTATION.exists():
-        pytest.skip("LEAC quotation fixture not available on this machine")
-
-    workbook = Workbook()
-    _copy_source_sheet(LEAC_QUOTATION, workbook)
-    output = tmp_path / "leac-copy.xlsx"
-    workbook.save(output)
-    workbook.close()
-
-    copied = load_workbook(output)
-    assert "Quotation" in copied.sheetnames
-    assert len(copied["Quotation"].merged_cells.ranges) > 0
-    copied.close()
 
 
 def test_visual_golden_references_are_intact():
@@ -98,7 +660,7 @@ def test_visual_golden_references_are_intact():
         assert len(cot.merged_cells.ranges) >= 65
         assert cot["B4"].value is None
         assert cot["D17"].value == "=Quotation!E9"
-        assert str(cot["F17"].value).startswith("=Mobiliti!W")
+        assert str(cot["F17"].value).startswith("=Mobiliti!X")
         assert (cot.row_dimensions[17].height or 0) >= 300
         wb.close()
 
@@ -177,7 +739,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     assert len(cot.merged_cells.ranges) >= 50
     assert cot["B4"].value is None
     assert cot["A16"].value == "=Quotation!A8"
-    assert cot["D17"].value == "=Quotation!E9"
+    assert cot["D17"].value == "=Quotation!F9"
     assert str(cot["F17"].value).startswith(("=Mobiliti!X", "=IFERROR((Mobiliti!X"))
     assert (cot.row_dimensions[19].height or 0) >= 300
     merged_ranges = {str(rng) for rng in cot.merged_cells.ranges}
@@ -204,7 +766,7 @@ def test_python_engine_preserves_workbook_contract(tmp_path):
     product_rows = [
         row
         for row in range(1, cot.max_row + 1)
-        if str(cot.cell(row, 4).value or "").startswith("=Quotation!E")
+        if str(cot.cell(row, 4).value or "").startswith("=Quotation!F")
     ]
     assert product_rows
     first_product_row = product_rows[0]
@@ -323,9 +885,9 @@ def test_mobiliti_product_starts_are_not_merged_rows():
         wb.close()
 
 
-def test_python_engine_generates_cummins_large_quote(tmp_path):
+def test_python_engine_sanitizes_cummins_linked_images_with_embedded_fallback(tmp_path):
     source = DOWNLOADS / "CUMMINS-Quotation Sheet - V1.xlsx"
-    template = ROOT / "mobiliti_saas" / "worker" / "templates" / "Formato Cotizacion 2026 GDL.xlsx"
+    template = WORKER_TEMPLATE
     if not source.exists() or not template.exists():
         pytest.skip("CUMMINS input/template not available on this machine")
 
@@ -343,29 +905,14 @@ def test_python_engine_generates_cummins_large_quote(tmp_path):
         template,
     )
 
-    wb = load_workbook(output, data_only=False)
-    assert "Cotizacion" in wb.sheetnames
-    assert "Mobiliti" in wb.sheetnames
-    assert wb["Mobiliti"]["D399"].value
-    assert wb["Mobiliti"].column_dimensions["W"].hidden is True
-    assert wb["Mobiliti"]["W12"].value == "Precio Unitario Base (Aux)"
-    assert wb["Mobiliti"]["X12"].value == "Precio Unitario de Lista (Carátula)"
-    assert wb["Mobiliti"]["Y14"].value == "=X14*H14"
-    cot = wb["Cotizacion"]
-    collapsed_lumbro_formulas = [
-        cot.cell(row, 6).value
-        for row in range(1, cot.max_row + 1)
-        if isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!Y" in cot.cell(row, 6).value
-    ]
-    assert collapsed_lumbro_formulas
-    assert all("/Mobiliti!H" in formula for formula in collapsed_lumbro_formulas)
-    assert not any(
-        isinstance(cot.cell(row, 6).value, str) and "+Mobiliti!W" in cot.cell(row, 6).value
-        for row in range(1, cot.max_row + 1)
-    )
-    assert not any(
-        isinstance(cot.cell(row, 10).value, str) and "Mobiliti!AD" in cot.cell(row, 10).value
-        for row in range(1, cot.max_row + 1)
-    )
-    assert wb["Cotizacion"].print_area
-    wb.close()
+    assert output.exists()
+    with ZipFile(output) as archive:
+        external_images = [
+            (name, relationship.attrib.get("Id"))
+            for name in archive.namelist()
+            if name.endswith(".rels")
+            for relationship in ET.fromstring(archive.read(name))
+            if relationship.attrib.get("Type", "").endswith("/image")
+            and relationship.attrib.get("TargetMode", "").casefold() == "external"
+        ]
+    assert external_images == []

@@ -1,0 +1,4 @@
+networks:
+  default:
+    name: ${WORKER_NETWORK_NAME:?WORKER_NETWORK_NAME is required}
+    external: true
