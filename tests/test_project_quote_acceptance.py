@@ -724,9 +724,9 @@ def test_project_quote_preserves_original_quotation_and_template_contract(
     }
     assert output_formulas["E61"] == "IF(B67=0,0,MIN(1,B67/(B62*B71+B63*B74)))"
     assert output_formulas["B66"] == (
-        'MIN(110%,IF(E60="MANUAL",E63,IF(B61=0,0,'
+        'IF(B61=0,0,MIN(E68,MAX(E67,IF(E60="MANUAL",E63,'
         'IF(E60="PRORRATEADO",(B61*B65+E62+B78)/B61,'
-        "(B61*B65+B64+B78)/B61))))"
+        "(B61*B65+B64+B78)/B61)))))"
     )
     expected_category_formulas = {
         "N18": "IF(Mobiliti!$P$4=TRUE,(56/Mobiliti!$P$6),56)",

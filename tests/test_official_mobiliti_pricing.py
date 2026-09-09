@@ -132,7 +132,7 @@ def _binding(
     )
 
 
-def test_import_freight_exception_keeps_taxes_margins_and_manual_factor():
+def test_v11_import_freight_uses_provider_volume_and_official_factor():
     needs = [SectionNeed("first", "SILLAS", 2), SectionNeed("second", "OTRAS", 1)]
     row_map = _official_row_map(needs)
     first_row, second_row, third_row = row_map.item_rows
@@ -154,11 +154,10 @@ def test_import_freight_exception_keeps_taxes_margins_and_manual_factor():
     for row in (first_row, second_row, third_row):
         formula = _cell(output, f"L{row}").find(f"{{{MAIN}}}f")
         assert formula is not None
-        # También funciona si otros productos sí aportan m3 al mismo proyecto.
-        assert formula.text == (
-            f'IF(K{row}="Importado",IF(OR(P{row}>0,Fletes!$E$60="MANUAL"),'
-            'Fletes!$B$66,IF(Fletes!$B$61=0,0,'
-            'Fletes!$B$65+Fletes!$B$78/Fletes!$B$61)),0%)'
+        assert formula.text == f'IF(K{row}="Importado",Fletes!$B$66,0%)'
+        assert _cell(output, f"Q{row}").findtext(f"{{{MAIN}}}f") == (
+            f'IF(K{row}<>"Importado",0,IF(P{row}>0,P{row}*H{row},'
+            f'IFERROR(_xlfn.XLOOKUP(F{row},Proveedores!A:A,Proveedores!F:F,0)*H{row},0)))'
         )
         for column in ("M", "N", "O", "Y", "Z"):
             assert _formula_signature(_cell(output, f"{column}{row}")) == (

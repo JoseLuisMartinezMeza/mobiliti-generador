@@ -99,10 +99,12 @@ def test_cotizacion_preserves_official_cdmx_terms_and_conditions() -> None:
     source_values = tuple(
         tuple(source.cell(row=row, column=column).value for column in range(1, 11))
         for row in range(35, 84)
+        if row not in (54, 80)  # Destino enlazado y aviso de autorización V11.
     )
     cdmx_values = tuple(
         tuple(cdmx.cell(row=row, column=column).value for column in range(1, 11))
         for row in range(28, 77)
+        if row not in (47, 73)
     )
     assert cdmx_values == source_values
 
@@ -115,7 +117,8 @@ def test_cotizacion_preserves_official_cdmx_terms_and_conditions() -> None:
     assert "COMERCIALIZADORA VICARJOFRAA DE OCCIDENTE" in legal_text
     assert "Pago 70% Anticipo + 20% Contra Aviso de Embarque + 10% Contra Entrega" in legal_text
     assert "10-12 SEMANAS" in legal_text
-    assert "Ciudad de México, CDMX" in legal_text
+    assert 'IF(D47="CDMX","Ciudad de México, ","")' in cdmx["A47"].value
+    assert cdmx["D47"].value == "CDMX"
     assert "Pago 60% Anticipo" not in legal_text
 
 
@@ -128,6 +131,8 @@ def test_cotizacion_preserves_official_cdmx_terms_presentation() -> None:
     assert source.column_dimensions["A"].has_style
 
     for source_row, cdmx_row in zip(range(35, 84), range(28, 77)):
+        if cdmx_row in (47, 73):
+            continue  # Presentación V11 comprobada por el contrato del selector.
         # Excel cuantiza ciertas alturas al cuarto de punto al guardar. Una
         # diferencia máxima de 0.10 puntos representa el mismo alto visual.
         source_height = source.row_dimensions[source_row].height or 15
@@ -162,15 +167,19 @@ def test_cotizacion_preserves_official_cdmx_terms_presentation() -> None:
             )
             assert cdmx_link == source_link
 
-    assert _merged_ranges_relative_to(
+    cdmx_merges = _merged_ranges_relative_to(
         cdmx,
         first_row=28,
         last_row=76,
-    ) == _merged_ranges_relative_to(
+    )
+    source_merges = _merged_ranges_relative_to(
         source,
         first_row=35,
         last_row=83,
     )
+    assert cdmx_merges == (source_merges - {(1, 19, 10, 19)}) | {
+        (1, 19, 3, 19), (4, 19, 6, 19)
+    }
 
 
 def test_cotizacion_has_no_visible_payload_or_merges_after_print_layout() -> None:

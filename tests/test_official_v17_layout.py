@@ -25,7 +25,7 @@ TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 Oficial.xlsx"
 )
-EXPECTED_SHA256 = "39f5cebd3cbe3e7356f4d4174161e8599bf7158e7b495a789c9fc04850928ee4"
+EXPECTED_SHA256 = "5c27b9b65e6bea45a4bc71950537f700545d964511a7c01991a4f08d06d7c3f1"
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 X14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 XM = "http://schemas.microsoft.com/office/excel/2006/main"
@@ -57,12 +57,12 @@ def test_active_official_asset_is_the_signed_v17_workbook() -> None:
     )
 
     assert cotizacion.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A3:BA184"
-    assert mobiliti.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A1:AZ614"
+    assert mobiliti.find(f"{{{MAIN}}}dimension").attrib["ref"] == "A1:BB614"
     assert _formula(cotizacion, "G17") == "ROUND(Mobiliti!$AD$14,2)"
     assert _formula(cotizacion, "H38") == "H37*$N$39"
     assert _formula(mobiliti, "P6") == 'IF(P4=TRUE,_FV(J6,"Price"),0)'
-    assert _formula(mobiliti, "AD14") == "E6"
-    assert _formula(mobiliti, "AD15") == "IF(H15>0,$E$5,0)"
+    assert mobiliti.find(f".//{{{MAIN}}}c[@r='AD14']/{{{MAIN}}}v").text == "0"
+    assert _formula(mobiliti, "AD15") == "MIN($E$5,AL15)"
     assert _formula(control, "E4") == "Cotizacion!$H$41"
 
 
@@ -187,7 +187,7 @@ def test_v17_end_to_end_links_new_financial_and_control_surfaces(
     assert delivery_validation is not None
     assert delivery_validation.findtext(
         f"{{{X14}}}formula1/{{{XM}}}f"
-    ) == "Fletes!$A$46:$A$55"
+    ) == "Fletes!$A$46:$A$56"
     assert delivery_validation.findtext(f"{{{XM}}}sqref") == "D46"
     assert _formula(control, "E3") == f"Cotizacion!H{total_row - 2}"
     assert _formula(estrategia, "B70") == f"Cotizacion!H{total_row}"

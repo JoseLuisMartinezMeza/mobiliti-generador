@@ -182,7 +182,10 @@ def test_cdmx_v18_composes_fresh_seventeen_section_financial_contract(
     subtotal_row = request.cotizacion.total_row - 4
     assert len(row_map.sections) == 17
     assert len(subtotal_rows) == 17
-    assert _text(package, "Mobiliti", "P8") == "ZMG"
+    delivery_row = 47 + request.cotizacion.terms_row_delta
+    assert _formula(package, "Mobiliti", "P8") == f"=Cotizacion!$D${delivery_row}"
+    assert _text(package, "Cotizacion", f"D{delivery_row}") == "ZMG"
+    assert f"D{delivery_row}" in _formula(package, "Cotizacion", f"A{delivery_row}")
     assert _formula(package, "Cotizacion", "F17") == "=Mobiliti!AA15"
     assert _formula(package, "Cotizacion", "G17") == "=ROUND(Mobiliti!$AD$14,2)"
     assert _formula(package, "Cotizacion", f"H{subtotal_row}") == (
@@ -307,7 +310,7 @@ def test_cdmx_v18_composes_fresh_seventeen_section_financial_contract(
 
 
 def test_cdmx_v18_normalizes_delivery_but_official_selector_keeps_p8_formula() -> None:
-    assert _official_delivery_place({}, variant="sunon_cdmx_v1c") == "ZMG"
+    assert _official_delivery_place({}, variant="sunon_cdmx_v1c") == "CDMX"
     assert _official_delivery_place(
         {"delivery_place": "CDMX"},
         variant="sunon_cdmx_v1c",

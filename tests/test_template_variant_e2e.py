@@ -483,8 +483,8 @@ def test_real_input_uses_the_current_processed_image_pipeline(
             for name in names:
                 with Image.open(BytesIO(archive.read(name))) as image:
                     assert image.mode == "RGB"
-                    assert image.width >= 900
-                    assert image.height >= 900
+                    # El compositor de Proyecto usa min_size=550 y proporción original.
+                    assert min(image.size) >= 550
 
 
 def test_real_input_preserves_core_semantics_and_adds_cdmx_section_totals(
@@ -505,8 +505,17 @@ def test_real_input_preserves_core_semantics_and_adds_cdmx_section_totals(
     assert _cell_semantics(cdmx, "Quotation") == _cell_semantics(
         official, "Quotation"
     )
-    assert _cell_semantics(cdmx, "Mobiliti") == _cell_semantics(
-        official, "Mobiliti"
+    official_mobiliti = _cell_semantics(official, "Mobiliti")
+    cdmx_mobiliti = _cell_semantics(cdmx, "Mobiliti")
+    # Ambos formatos enlazan P8 al desplegable de su propia fila dinámica.
+    assert tuple(cell for cell in cdmx_mobiliti if cell[0] != "P8") == tuple(
+        cell for cell in official_mobiliti if cell[0] != "P8"
+    )
+    assert next(cell[1:3] for cell in official_mobiliti if cell[0] == "P8") == (
+        "formula", "Cotizacion!$D$85"
+    )
+    assert next(cell[1:3] for cell in cdmx_mobiliti if cell[0] == "P8") == (
+        "formula", "Cotizacion!$D$94"
     )
     assert _cotizacion_product_reference_signature(
         cdmx
@@ -531,7 +540,7 @@ def test_real_input_preserves_core_semantics_and_adds_cdmx_section_totals(
         "+ 10% Contra Entrega"
     ) in cdmx_text
     assert "10-12 SEMANAS" in cdmx_text
-    assert "Ciudad de México, CDMX" in cdmx_text
+    assert "CDMX" in cdmx_text
     assert "Pago 60% Anticipo" not in cdmx_text
 
 

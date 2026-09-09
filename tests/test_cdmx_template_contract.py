@@ -18,7 +18,7 @@ TEMPLATES = ROOT / "mobiliti_saas" / "worker" / "templates"
 OFFICIAL = TEMPLATES / "Formato Cotizacion 2026 Oficial.xlsx"
 CDMX = TEMPLATES / "Formato Cotizacion Sunon CDMX V1C.xlsx"
 CONTRACT = TEMPLATES / "formato-cotizacion-sunon-cdmx-v1c.contract.json"
-OFFICIAL_SHA256 = "39f5cebd3cbe3e7356f4d4174161e8599bf7158e7b495a789c9fc04850928ee4"
+OFFICIAL_SHA256 = "5c27b9b65e6bea45a4bc71950537f700545d964511a7c01991a4f08d06d7c3f1"
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 FIXED_RATE = re.compile(r"/\s*(?:18(?:\.0+)?|18\.5(?:0+)?)\b")
 
@@ -91,3 +91,16 @@ def test_cdmx_asset_has_its_own_cotizacion_presentation_archetypes() -> None:
         _row_style_signature(cdmx, "Cotizacion", 17)
         != _row_style_signature(official, "Cotizacion", 17)
     )
+
+
+def test_cdmx_v11_delivery_selector_and_authorization_are_live() -> None:
+    package = XlsxPackage.read(CDMX)
+    cot = ET.fromstring(package.parts[package.sheet_part("Cotizacion")])
+    mob = ET.fromstring(package.parts[package.sheet_part("Mobiliti")])
+    x14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+    xm = "http://schemas.microsoft.com/office/excel/2006/main"
+    validations = cot.findall(f".//{{{x14}}}dataValidation")
+    assert any(v.findtext(f"{{{xm}}}sqref") == "D47" and v.findtext(f"{{{x14}}}formula1/{{{xm}}}f") == "Fletes!$A$46:$A$56" for v in validations)
+    assert mob.findtext(f".//{{{MAIN}}}c[@r='P8']/{{{MAIN}}}f") == "Cotizacion!$D$47"
+    assert "D47" in cot.findtext(f".//{{{MAIN}}}c[@r='A47']/{{{MAIN}}}f")
+    assert "Control Administrativo" in cot.findtext(f".//{{{MAIN}}}c[@r='A73']/{{{MAIN}}}f")

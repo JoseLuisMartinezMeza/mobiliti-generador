@@ -2797,7 +2797,7 @@ def _official_delivery_place(
     requested = safe_excel_text(
         metadata.get("lugar_entrega")
         or metadata.get("delivery_place")
-        or DEFAULT_DELIVERY_PLACE
+        or ("CDMX" if variant == "sunon_cdmx_v1c" else DEFAULT_DELIVERY_PLACE)
     )
     normalized = " ".join(requested.split()).casefold()
     if variant in {"official_v17", "sunon_cdmx_v1c"}:
@@ -2838,7 +2838,7 @@ def _build_official_mobiliti(
     bindings: list[PricingRowBinding] = []
     volume_column, region_column = (
         ("P", "S")
-        if base_editor.layout.id in {"v17", "v18"}
+        if base_editor.layout.id in {"v17", "v18", "v11"}
         else ("K", "P")
     )
     for position, (line, target_row) in enumerate(

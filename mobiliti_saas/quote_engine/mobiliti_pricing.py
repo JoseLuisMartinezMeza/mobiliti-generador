@@ -217,12 +217,10 @@ def write_official_currency_selector(
     }:
         raise ValueError("Variante de compositor Mobiliti inválida")
     safe_place = _safe_delivery_text(delivery_place)
-    if editor.layout.id in {"v17", "v18"}:
+    if editor.layout.id in {"v17", "v18", "v11"}:
         writes = [
             MobilitiCellWrite("P4", "boolean", quote_currency != "MXN"),
         ]
-        if composer_variant == "sunon_cdmx_v1c":
-            writes.append(MobilitiCellWrite("P8", "text", safe_place))
         if discount is not None:
             # El porcentaje admite seis decimales; su fracción necesita ocho.
             validated_discount = _numeric_contract(

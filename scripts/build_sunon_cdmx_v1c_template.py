@@ -47,7 +47,7 @@ OFFICIAL_CONTRACT = (
     / "templates"
     / "formato-cotizacion-2026-oficial.contract.json"
 )
-OFFICIAL_SHA256 = "39f5cebd3cbe3e7356f4d4174161e8599bf7158e7b495a789c9fc04850928ee4"
+OFFICIAL_SHA256 = "5c27b9b65e6bea45a4bc71950537f700545d964511a7c01991a4f08d06d7c3f1"
 XL_LINK_TYPE_EXCEL = 1
 XL_PASTE_FORMATS = -4122
 RPC_E_CALL_REJECTED = -2147418111
@@ -347,6 +347,7 @@ def _copy_cotizacion_presentation(
     target_sheet,
     retry_com,
 ) -> None:
+    authorization_formula = target_sheet.Range("A90").Formula
     # La fuente CDMX usa otro layout lógico. Se traslada su presentación a las
     # filas canónicas que el motor ya conoce y se conservan íntegros los bloques
     # propios de CDMX: subtotal por área y condiciones comerciales.
@@ -392,6 +393,37 @@ def _copy_cotizacion_presentation(
     _replace_merge(target_sheet, "B11:G11")
     _replace_merge(target_sheet, "B12:G12")
     _copy_single_logo(source_sheet, target_sheet, retry_com)
+
+    # La presentación se coloca sobre otras filas: no heredar alturas de producto
+    # en los separadores, ni formato numérico de importe en la fecha.
+    target_sheet.Range("A3:B3").Font.Size = 10
+    target_sheet.Range("A3:B3").ShrinkToFit = True
+    target_sheet.Range("A4").NumberFormatLocal = 'dd/mm/aaaa'
+    target_sheet.Rows(19).RowHeight = 12
+    target_sheet.Rows("25:27").RowHeight = 12
+    target_sheet.Range("J18").ShrinkToFit = True
+    # La moneda la identifica el texto contractual dinámico; evitar USD fijo en MXN.
+    target_sheet.Range("F17,H17:J17,J18,H20:J24").NumberFormat = '#,##0.00'
+
+    # El destino V11 debe seguir siendo editable y alimentar el cálculo de flete.
+    # Se conserva la redacción CDMX, sin congelar una ciudad distinta al selector.
+    prefix = "a. Los precios por concepto de envío e instalación establecidos en esta cotización tienen como destino de entrega en "
+    target_sheet.Range("A47:J47").UnMerge()
+    target_sheet.Range("A47:C47").Merge()
+    target_sheet.Range("D47:F47").Merge()
+    target_sheet.Range("A47").Formula = f'="{prefix}"&IF(D47="CDMX","Ciudad de México, ","")'
+    target_sheet.Range("A47:C47").Font.Color = 0x808080
+    target_sheet.Range("D47").Value = "CDMX"
+    target_sheet.Range("D47:F47").Font.Color = 0xC3B93B  # Turquesa #3BB9C3 de la referencia CDMX.
+    target_sheet.Range("D47:F47").Font.Underline = 2
+    target_sheet.Range("D47:F47").Locked = False
+    target_sheet.Range("D64").Validation.Delete()
+    target_sheet.Range("D47").Validation.Add(Type=3, AlertStyle=1, Formula1="=Fletes!$A$46:$A$56")
+    target_sheet.Range("D47").Validation.InCellDropdown = True
+    target_sheet.Parent.Worksheets("Mobiliti").Range("P8").Formula = "=Cotizacion!$D$47"
+    target_sheet.Range("A73").Formula = authorization_formula
+    target_sheet.Range("A73:J73").Font.Size = 10
+    target_sheet.Range("A73:J73").ShrinkToFit = True
 
     target_sheet.Activate()
     target_sheet.Application.ActiveWindow.Zoom = 40
@@ -579,8 +611,13 @@ def _build_with_excel(
                 ),
             )
 
+        # Evitar que el recálculo del primer libro bloquee la apertura del segundo.
+        excel_books = application.Workbooks
+        scratch = excel_books.Add()
+        workbooks.append(scratch)
+        application.Calculation = -4135
         target = _open_workbook_with_retry(
-            application.Workbooks,
+            excel_books,
             str(candidate),
             0,
             False,
@@ -603,7 +640,7 @@ def _build_with_excel(
         )
         workbooks.append(target)
         source = _open_workbook_with_retry(
-            application.Workbooks,
+            excel_books,
             str(visual_source),
             0,
             True,

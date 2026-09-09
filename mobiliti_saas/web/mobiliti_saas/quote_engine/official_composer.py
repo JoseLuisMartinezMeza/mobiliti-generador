@@ -151,7 +151,7 @@ CDMX_COTIZACION_LAYOUT = CotizacionLayoutContract(
     total_row=CANONICAL_COTIZACION_TOTAL_ROW,
     terms_start=CANONICAL_COTIZACION_TERMS_START,
     currency_term_row=CANONICAL_COTIZACION_CURRENCY_TERM_ROW,
-    delivery_term_row=None,
+    delivery_term_row=47,
     print_end=CANONICAL_COTIZACION_PRINT_END,
     price_column="AA",
     global_discount=True,
@@ -798,7 +798,7 @@ class CotizacionSheetEditor:
             composer_variant == "official"
             and 17 in rows
             and _formula_text(rows[17], "F17")
-            in {"=Mobiliti!AA14", "=Mobiliti!AA15"}
+            in {"=Mobiliti!AA14", "=Mobiliti!AA15", "=SUM(Mobiliti!AA15:AA22)"}
         ):
             composer_variant = "official_v17"
         layout = _cotizacion_layout(composer_variant)
@@ -872,10 +872,11 @@ class CotizacionSheetEditor:
         )
         if (
             _formula_text(product_template, "F17")
-            != (
+            not in {
                 f"=Mobiliti!{layout.price_column}"
-                f"{mobiliti_row_map.canonical_first_product_row}"
-            )
+                f"{mobiliti_row_map.canonical_first_product_row}",
+                "=SUM(Mobiliti!AA15:AA22)" if layout.global_discount else "",
+            }
             or official_f.findtext(f"{{{MAIN}}}v") != "0"
             or not official_i_valid
         ):
@@ -1201,6 +1202,12 @@ class CotizacionSheetEditor:
                 delivery_row,
                 f"D{target}",
                 metadata.delivery_place,
+            )
+            _set_formula(
+                delivery_row,
+                f"A{target}",
+                '="a. Los precios por concepto de envío e instalación establecidos en esta cotización tienen como destino de entrega en "'
+                f'&IF(D{target}="CDMX","Ciudad de México, ","")',
             )
         sidecars = _shift_cotizacion_sidecars(
             _sidecar_cells(rows, first_row=16, first_sidecar_column=11),
@@ -1577,7 +1584,7 @@ def verify_output_contract(
     financial_variant = _financial_layout(variant).variant
     estrategia = ET.fromstring(package.parts[package.sheet_part("Estrategia Comercial ")])
     if financial_variant == "official_v17":
-        if variant == "official_v17":
+        if variant in {"official_v17", "sunon_cdmx_v1c"}:
             layout = _cotizacion_layout(variant)
             assert layout.delivery_term_row is not None
             delivery_row = (
@@ -1692,7 +1699,7 @@ def verify_output_contract(
         package.parts[package.sheet_part("Mobiliti")]
     ).layout
     selector_formula = (
-        "P6" if mobiliti_layout.id in {"v17", "v18"} else "K6"
+        "P6" if mobiliti_layout.id in {"v17", "v18", "v11"} else "K6"
     )
     if _formula_in_root(mobiliti, selector_formula) is None:
         raise ValueError(
@@ -1703,13 +1710,13 @@ def verify_output_contract(
     for target_row in row_map.item_rows:
         formula_columns = (
             ("Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL")
-            if mobiliti_layout.id in {"v17", "v18"}
+            if mobiliti_layout.id in {"v17", "v18", "v11"}
             else ("W", "X", "Y", "AB", "AC", "AD", "AE")
         )
         for column in formula_columns:
             if _formula_in_root(mobiliti, f"{column}{target_row}") is None:
                 raise ValueError(f"Fórmula oficial Mobiliti!{column}{target_row} ausente")
-        if mobiliti_layout.id in {"v17", "v18"}:
+        if mobiliti_layout.id in {"v17", "v18", "v11"}:
             uniform_formula = _formula_in_root(mobiliti, f"AA{target_row}") or ""
             expected_uniform = (
                 f"IF(Z{target_row}>=Y{target_row},"
@@ -2041,13 +2048,18 @@ def _translate_fletes(
         _replace_formula(
             root, "E61", "=IF(B67=0,0,MIN(1,B67/(B62*B71+B63*B74)))"
         )
-        _replace_formula(
-            root,
-            "B66",
-            '=MIN(110%,IF(E60="MANUAL",E63,IF(B61=0,0,'
-            'IF(E60="PRORRATEADO",(B61*B65+E62+B78)/B61,'
-            '(B61*B65+B64+B78)/B61))))',
-        )
+        original_factor = _formula_in_root(root, "B66") or ""
+        if original_factor.startswith("MIN(E68,MAX(E67,"):
+            # V11: respetar ambos límites; no dividir entre cero sin productos.
+            _replace_formula(root, "B66", f"=IF(B61=0,0,{original_factor})")
+        else:
+            _replace_formula(
+                root,
+                "B66",
+                '=MIN(110%,IF(E60="MANUAL",E63,IF(B61=0,0,'
+                'IF(E60="PRORRATEADO",(B61*B65+E62+B78)/B61,'
+                '(B61*B65+B64+B78)/B61))))',
+            )
         _translate_dynamic_financial_formulas(
             root,
             sheet="Fletes",
@@ -2272,7 +2284,7 @@ def _validate_exact_mobiliti_surface(
         "H": ("number", "formula"),
         "J": ("number", "formula", "text"),
     }
-    if official_editor.layout.id in {"v17", "v18"}:
+    if official_editor.layout.id in {"v17", "v18", "v11"}:
         input_kinds.update(
             {
                 "P": ("text", "number", "formula"),
@@ -2309,10 +2321,8 @@ def _validate_exact_mobiliti_surface(
     editor = WorksheetEditor.from_xml(expected.xml)
     selector_writes: list[MobilitiCellWrite] = []
     composer_variant = _cotizacion_composer_variant(base)
-    if official_editor.layout.id in {"v17", "v18"}:
+    if official_editor.layout.id in {"v17", "v18", "v11"}:
         selector_contract = [("P4", "boolean")]
-        if composer_variant == "sunon_cdmx_v1c":
-            selector_contract.append(("P8", "text"))
     else:
         selector_contract = [("K4", "boolean"), ("K8", "text")]
     for coordinate, kind in selector_contract:
@@ -2321,7 +2331,7 @@ def _validate_exact_mobiliti_surface(
             raise ValueError(f"Mobiliti no cumple el contrato exacto: {coordinate}")
         value = _exact_typed_value(cell, kind, allow_blank=False)
         selector_writes.append(MobilitiCellWrite(coordinate, kind, value))
-    if official_editor.layout.id in {"v17", "v18"}:
+    if official_editor.layout.id in {"v17", "v18", "v11"}:
         discount_coordinate = f"AD{official_editor.layout.first_section_row}"
         candidate_discount = _cell_in_root(candidate, discount_coordinate)
         expected_discount = _cell_in_root(editor.root, discount_coordinate)
@@ -4434,9 +4444,9 @@ def _delivery_validation_sqref(root: ET.Element) -> ET.Element:
     matches: list[ET.Element] = []
     for validation in root.findall(f".//{{{X14}}}dataValidation"):
         formula = validation.find(f"{{{X14}}}formula1/{{{XM}}}f")
-        if formula is not None and (formula.text or "").strip() == (
-            "Fletes!$A$46:$A$55"
-        ):
+        if formula is not None and (formula.text or "").strip() in {
+            "Fletes!$A$46:$A$55", "Fletes!$A$46:$A$56"
+        }:
             matches.append(validation)
     if len(matches) != 1:
         raise ValueError("Lista oficial de lugar de entrega inesperada")

@@ -79,7 +79,7 @@ class MobilitiCellWrite:
 class MobilitiLayoutContract:
     """Coordenadas firmadas de cada generación de la hoja Mobiliti."""
 
-    id: Literal["legacy", "v17", "v18"]
+    id: Literal["legacy", "v17", "v18", "v11"]
     table_last_column: int
     total_last_column: int
     input_columns: frozenset[int]
@@ -115,6 +115,15 @@ V18_MOBILITI_LAYOUT = MobilitiLayoutContract(
     table_last_column=38,  # AL
     total_last_column=37,  # AK
     input_columns=frozenset((4, 5, 6, 8, 10, 16, 19)),
+    first_section_row=14,
+    total_row=574,
+    auxiliary_end=614,
+)
+V11_MOBILITI_LAYOUT = MobilitiLayoutContract(
+    id="v11",
+    table_last_column=40,  # AN: controles de descuento y margen por proveedor.
+    total_last_column=37,
+    input_columns=V18_MOBILITI_LAYOUT.input_columns,
     first_section_row=14,
     total_row=574,
     auxiliary_end=614,
@@ -229,6 +238,14 @@ def _detect_mobiliti_layout(root: ET.Element) -> MobilitiLayoutContract:
             if first != 14:
                 raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
             return V17_MOBILITI_LAYOUT
+        provider_margin = root.findtext(f".//{{{MAIN}}}c[@r='AN15']/{{{MAIN}}}f")
+        if provider_margin == 'IF(AK15<AM15,"ERROR","OK")':
+            # El original V11 conserva E9 una fila arriba del rango real.
+            if first != 15 or e9_signature is None or (
+                int(e9_signature.group("first")), int(e9_signature.group("last"))
+            ) not in {(first, last), (first - 1, last - 1)}:
+                raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
+            return V11_MOBILITI_LAYOUT
         if (
             e9_signature is None
             or int(e9_signature.group("first")) != first
@@ -706,7 +723,7 @@ def _set_uniform_product_price_formulas(
 
     first_row = row_map.sections[0].product_start
     last_row = row_map.last_product_row
-    if layout.id in {"v17", "v18"}:
+    if layout.id in {"v17", "v18", "v11"}:
         formulas = {
             27: (
                 f"IF(Z{target_row}>=Y{target_row},"
@@ -1743,6 +1760,31 @@ def build_mobiliti_sheet(
     _preflight_cloneable_formulas(canonical)
     _preflight_static_special_formulas(editor, row_map)
     _translate_static_structural_formulas(editor, row_map)
+    if editor.layout.id == "v11":
+        first, last = row_map.sections[0].product_start, row_map.last_product_row
+        # La clasificación se recalcula si cambia el proveedor en Excel.
+        imported = f'COUNTIF($K${first}:$K${last},"Importado")'
+        national = f'COUNTIF($K${first}:$K${last},"Nacional")'
+        project_type = _find_cell(editor.require_row(10), 16)
+        if project_type is None:
+            raise ValueError("Selector V11 Mobiliti!P10 ausente")
+        _clear_cell(project_type)
+        ET.SubElement(project_type, f"{{{MAIN}}}f").text = (
+            f'IF({imported}>0,IF({national}>0,"MIXTO","IMPORTADO"),"NACIONAL")'
+        )
+        e9_cell = editor.root.find(f".//{{{MAIN}}}c[@r='E9']")
+        assert e9_cell is not None
+        cached = e9_cell.find(f"{{{MAIN}}}v")
+        if cached is not None:
+            e9_cell.remove(cached)
+        e9 = e9_cell.find(f"{{{MAIN}}}f")
+        assert e9 is not None
+        e9.text = (
+            f'ROUND(IFERROR(1-SUMPRODUCT(($A${first}:$A${last}=TRUE)*'
+            f'($H${first}:$H${last})*($AI${first}:$AI${last}))/'
+            f'SUMPRODUCT(($A${first}:$A${last}=TRUE)*($H${first}:$H${last})*'
+            f'($Z${first}:$Z${last})),0),2)'
+        )
     apply_mobiliti_layout(editor, row_map)
     currency_source = _find_cell(canonical.product_row, 3)
     currency_formula = (

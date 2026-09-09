@@ -63,6 +63,10 @@ $(($EnvVars.GetEnumerator() | ForEach-Object { "`$env:$($_.Key) = `"$($_.Value)`
 
 $processes = @()
 
+$devStore = if ($env:MOBILITI_DEV_STORE_DIR) { $env:MOBILITI_DEV_STORE_DIR } else { Join-Path $root ".mobiliti_dev_store" }
+& python (Join-Path $PSScriptRoot "prepare_local_catalog_sources.py") --store $devStore
+if ($LASTEXITCODE -ne 0) { throw "No se pudo preparar el índice de catálogos locales" }
+
 $processes += Start-HiddenProcess `
   -Name "api" `
   -FilePath "python" `
