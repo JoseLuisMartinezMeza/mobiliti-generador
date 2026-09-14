@@ -235,7 +235,7 @@ def test_mobiliti_product_code_and_cost_reference_the_same_quotation_row(tmp_pat
     try:
         mobiliti = wb["Mobiliti"]
         expected_rows = {
-            "Tarkett MX": 9,
+            "Santeco": 9,
             "Alma - Exterior": 10,
             "Proveedor Externo": 11,
         }
@@ -449,7 +449,7 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
         tarkett_cot = _row_for_formula(cot, 1, "=Quotation!B9")
         alma_cot = _row_for_formula(cot, 1, "=Quotation!B10")
         imported_cot = _row_for_formula(cot, 1, "=Quotation!B11")
-        assert mobiliti.cell(tarkett_mob, 6).value == "Tarkett MX"
+        assert mobiliti.cell(tarkett_mob, 6).value == "Santeco"
         assert mobiliti.cell(alma_mob, 6).value == "Alma - Exterior"
         assert mobiliti.cell(imported_mob, 6).value == "Proveedor Externo"
         for mobiliti_row, source_row, expected_price in (
@@ -465,7 +465,8 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
         for row in (tarkett_cot, alma_cot, imported_cot):
             assert cot.cell(row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
         for row in (tarkett_mob, alma_mob, imported_mob):
-            assert mobiliti[f"AD{row}"].value == f"=IF(H{row}>0,$E$5,0)"
+            # V11/V12 limitan el descuento al máximo de la partida.
+            assert mobiliti[f"AD{row}"].value == f"=MIN($E$5,AL{row})"
             assert mobiliti[f"AE{row}"].value == f"=IFERROR(AA{row}*AD{row},0)"
         assert cot.cell(tarkett_cot, 6).value == f"=Mobiliti!AA{tarkett_mob}"
         assert cot.cell(alma_cot, 6).value == f"=Mobiliti!AA{alma_mob}"

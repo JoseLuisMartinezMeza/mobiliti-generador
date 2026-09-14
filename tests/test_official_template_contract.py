@@ -25,7 +25,7 @@ TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 Oficial.xlsx"
 )
-OFFICIAL_SHA256 = "5c27b9b65e6bea45a4bc71950537f700545d964511a7c01991a4f08d06d7c3f1"
+OFFICIAL_SHA256 = "8d3e80a9f1e1f7741796995910f332753b3a3f31e763244a52e355ddf6b6e132"
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
@@ -86,7 +86,7 @@ def test_official_template_uses_latest_sharepoint_price_columns() -> None:
         '"NO SE ESTA RESPETANDO EL MARGEN")'
     )
     assert _formula(mobiliti, "AD15") == "MIN($E$5,AL15)"
-    assert _formula(cotizacion, "F17") == "SUM(Mobiliti!AA15:AA22)"
+    assert _formula(cotizacion, "F17") == "Mobiliti!AA15"
     assert _formula(cotizacion, "G17") == "ROUND(Mobiliti!$AD$14,2)"
     assert _formula(fletes, "B66") == (
         'MIN(E68,MAX(E67,IF(E60="MANUAL",E63,IF(E60="PRORRATEADO",'

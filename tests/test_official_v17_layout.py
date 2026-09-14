@@ -25,7 +25,7 @@ TEMPLATE = (
     / "templates"
     / "Formato Cotizacion 2026 Oficial.xlsx"
 )
-EXPECTED_SHA256 = "5c27b9b65e6bea45a4bc71950537f700545d964511a7c01991a4f08d06d7c3f1"
+EXPECTED_SHA256 = "8d3e80a9f1e1f7741796995910f332753b3a3f31e763244a52e355ddf6b6e132"
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 X14 = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
 XM = "http://schemas.microsoft.com/office/excel/2006/main"
