@@ -3616,7 +3616,8 @@ textarea:focus {
   background: #fff;
 }
 
-.project-line-actions .project-line-clipboard-action {
+.project-line-actions .project-line-clipboard-action,
+.project-complement-actions .project-line-clipboard-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3663,6 +3664,31 @@ textarea:focus {
 .project-complement-copy {
   display: grid;
   gap: 4px;
+}
+
+.project-complement-actions {
+  display: grid;
+  justify-items: stretch;
+  gap: 8px;
+}
+
+.project-complement-actions button {
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 7px 9px;
+  background: #fff;
+}
+
+.project-complement-actions .project-line-clipboard-action {
+  flex-direction: column;
+  padding: 6px 2px;
+  font-size: 10px;
+}
+
+.project-complement-notice {
+  color: var(--brand);
+  font-size: 14px;
 }
 
 .project-quote-fields {

@@ -1168,6 +1168,45 @@ export function copyProjectLineTree(lines, lineId) {
   };
 }
 
+export function copiar_complementos_proyecto(lineas, id_origen) {
+  if (!Array.isArray(lineas)) throw new Error("Líneas de Proyecto inválidas");
+  const origen = lineas.find((linea) => linea.lineId === normalizedProjectLineId(id_origen));
+  if (!origen) throw new Error("Producto del Proyecto no encontrado");
+  const complementos = origen.role === "complement"
+    ? [origen] : projectComplements(lineas, origen.lineId);
+  if (!complementos.length) throw new Error("El producto no tiene complementos para copiar");
+  return {sourceLineId: origen.lineId, complements: complementos.map(cloneProjectLine)};
+}
+
+export function pegar_complementos_proyecto(lineas, copia, id_destino) {
+  if (!Array.isArray(lineas)) throw new Error("Líneas de Proyecto inválidas");
+  const destino = lineas.find((linea) => linea.lineId === normalizedProjectLineId(id_destino));
+  if (!destino || destino.role !== "principal") {
+    throw new Error("El destino debe ser un producto principal");
+  }
+  if (!Array.isArray(copia?.complements) || !copia.complements.length
+      || copia.complements.some((linea) => linea?.role !== "complement"
+        || !COMPLEMENT_QUANTITY_MODES.has(linea.quantityMode))) {
+    throw new Error("No hay complementos copiados válidos");
+  }
+  const ids_usados = new Set(lineas.map((linea) => linea.lineId));
+  const existentes = projectComplements(lineas, destino.lineId);
+  const primera_posicion = existentes.reduce(
+    (siguiente, linea) => Math.max(siguiente, normalizedPosition(linea.position) + 1), 0,
+  );
+  const nuevos = copia.complements.map((linea, indice) => {
+    let id = createProjectLineId();
+    while (ids_usados.has(id)) id = createProjectLineId();
+    ids_usados.add(id);
+    return {
+      ...cloneProjectLine(linea),
+      key: id, lineId: id, parentLineId: destino.lineId,
+      sectionId: null, position: primera_posicion + indice,
+    };
+  });
+  return [...lineas, ...nuevos];
+}
+
 export function pasteProjectLineTree(lines, clipboard, targetLineId) {
   if (!Array.isArray(lines)) throw new Error("Lineas de Proyecto invalidas");
   const targetId = normalizedProjectLineId(targetLineId);

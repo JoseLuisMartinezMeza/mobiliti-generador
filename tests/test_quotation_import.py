@@ -5,6 +5,8 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 import struct
+import xml.etree.ElementTree as ET
+import zipfile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -21,6 +23,50 @@ from quotation_import_fixtures import write_import_fixture
 
 
 IMPORT_ID = "7b1d6d42-236a-4bc1-9aa8-8d9db793c30b"
+
+
+@pytest.mark.parametrize(("celda", "campo", "esperado"), [
+    ("J9", "unit_price", "2658"),
+    ("G9", "quantity", "2658"),
+    ("H9", "m3", "2658"),
+])
+def test_importacion_usa_resultado_excel_de_formulas_numericas(tmp_path, celda, campo, esperado):
+    fuente = write_import_fixture(tmp_path / "formula.xlsx")
+    libro = load_workbook(fuente)
+    libro["Quotation"][celda] = "=1329*2"
+    libro.save(fuente)
+    libro.close()
+    salida = BytesIO()
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(fuente) as origen, zipfile.ZipFile(salida, "w") as destino:
+        for entrada in origen.infolist():
+            contenido = origen.read(entrada.filename)
+            if entrada.filename == "xl/worksheets/sheet1.xml":
+                raiz = ET.fromstring(contenido)
+                raiz.find(f".//m:c[@r='{celda}']/m:v", ns).text = "2658"
+                contenido = ET.tostring(raiz, encoding="utf-8")
+            destino.writestr(entrada, contenido)
+    contenido = salida.getvalue()
+    if campo == "m3":
+        items, _ = read_items_from_bytes(contenido)
+        assert next(item for item in items if item["tipo"] == "producto")[campo] == esperado
+    else:
+        manifiesto, _ = build_import_manifest(contenido, IMPORT_ID, fuente.name)
+        assert manifiesto["items"][0][campo] == esperado
+    # Leer la importacion nunca reemplaza la formula de la fuente.
+    original = load_workbook(BytesIO(contenido), data_only=False)
+    assert original["Quotation"][celda].value == "=1329*2"
+    original.close()
+
+
+def test_importacion_indica_celda_de_formula_sin_resultado_guardado(tmp_path):
+    fuente = write_import_fixture(tmp_path / "sin-calcular.xlsx")
+    libro = load_workbook(fuente)
+    libro["Quotation"]["J9"] = "=1329*2"
+    libro.save(fuente)
+    libro.close()
+    with pytest.raises(ValueError, match=r"Quotation!J9.*[Rr]ecalcula"):
+        build_import_manifest(fuente.read_bytes(), IMPORT_ID, fuente.name)
 
 
 @pytest.fixture

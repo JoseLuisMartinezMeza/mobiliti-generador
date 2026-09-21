@@ -295,10 +295,28 @@ def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, st
         workbook = load_workbook(BytesIO(source), data_only=False)
     except Exception as exc:
         raise ValueError("El archivo .xlsx es invalido") from exc
+    libro_calculado = None
     try:
         if "Quotation" not in workbook.sheetnames:
             raise ValueError("El archivo no contiene hoja Quotation")
         sheet = workbook["Quotation"]
+
+        def valor_numerico(fila: int, columna: int):
+            """Lee el resultado guardado por Excel sin ejecutar ni cambiar formulas."""
+            nonlocal libro_calculado
+            celda = sheet.cell(row=fila, column=columna)
+            if celda.data_type != "f":
+                return celda.value
+            if libro_calculado is None:
+                libro_calculado = load_workbook(BytesIO(source), data_only=True, read_only=True)
+            resultado = libro_calculado["Quotation"].cell(row=fila, column=columna).value
+            if resultado is None:
+                raise ValueError(
+                    f"Quotation!{celda.coordinate} contiene una formula sin resultado guardado. "
+                    "Recalcula y guarda el archivo en Excel antes de importarlo."
+                )
+            return resultado
+
         columns = _detect_columns(sheet)
         description_column = _column_index(columns, "descripcion", "D")
         dimension_column = _column_index(columns, "dimension", "E")
@@ -317,7 +335,10 @@ def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, st
             if (name is None or name == "") and (number is None or number == ""):
                 continue
             if isinstance(number, (int, float)) and not isinstance(number, bool):
-                volume = _optional_cell(sheet, row, columns, "m3")
+                volume = (
+                    valor_numerico(row, column_index_from_string(columns["m3"]))
+                    if columns.get("m3") else None
+                )
                 if volume is not None and str(volume).strip():
                     volume = _plain_decimal(
                         _workbook_decimal(
@@ -336,8 +357,8 @@ def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, st
                         "descripcion": sheet.cell(row=row, column=description_column).value,
                         "dimension": sheet.cell(row=row, column=dimension_column).value,
                         "m3": volume,
-                        "cantidad": sheet.cell(row=row, column=quantity_column).value,
-                        "precio": sheet.cell(row=row, column=price_column).value,
+                        "cantidad": valor_numerico(row, quantity_column),
+                        "precio": valor_numerico(row, price_column),
                         "categoria": current_category,
                         "provider": _optional_cell(sheet, row, columns, "provider"),
                         "official_code": _optional_cell(sheet, row, columns, "official_code"),
@@ -350,6 +371,8 @@ def read_items_from_bytes(source_bytes: bytes) -> tuple[list[dict], dict[str, st
         return items, columns
     finally:
         workbook.close()
+        if libro_calculado is not None:
+            libro_calculado.close()
 
 
 def extract_images_from_bytes(source_bytes: bytes) -> dict[int, tuple[bytes, str]]:

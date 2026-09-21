@@ -13,6 +13,7 @@ import {
   MAX_MIXED_CART_SECTIONS,
   addProjectComplement,
   closeMixedCartSection,
+  copiar_complementos_proyecto,
   copyProjectLineTree,
   createMixedCartLine,
   groupMixedCartLines,
@@ -21,6 +22,7 @@ import {
   moveMixedCartLineToSection,
   moveMixedCartSection,
   pasteProjectLineTree,
+  pegar_complementos_proyecto,
   projectComplements,
   projectLineHasMatchIdentity,
   projectLineMatches,
@@ -188,6 +190,8 @@ function ComplementCard({
   onQuantityMode,
   onImportedChange,
   onRemove,
+  onCopy,
+  copied,
 }) {
   return (
     <article className="project-complement">
@@ -220,15 +224,29 @@ function ComplementCard({
           <option value="fixed_project">Cantidad fija</option>
         </select>
       </label>
-      <button
-        className="project-line-remove"
-        type="button"
-        disabled={disabled}
-        aria-label={`Quitar ${child.snapshot.name}`}
-        onClick={() => onRemove(child.lineId)}
-      >
-        <Trash2 size={18} />
-      </button>
+      <div className="project-complement-actions">
+        <button
+          className="project-line-clipboard-action"
+          type="button"
+          disabled={disabled}
+          aria-label={`Copiar complemento ${child.snapshot.name}`}
+          aria-pressed={copied}
+          title="Copiar este complemento con su cantidad y modo"
+          onClick={() => onCopy(child.lineId)}
+        >
+          <Copy size={17} aria-hidden="true" />
+          Copiar
+        </button>
+        <button
+          className="project-line-remove"
+          type="button"
+          disabled={disabled}
+          aria-label={`Quitar ${child.snapshot.name}`}
+          onClick={() => onRemove(child.lineId)}
+        >
+          <Trash2 size={18} />
+        </button>
+      </div>
     </article>
   );
 }
@@ -244,6 +262,8 @@ export default function ProjectEditor({
   const [picker, setPicker] = useState(null);
   const [pendingComplement, setPendingComplement] = useState(null);
   const [projectClipboard, setProjectClipboard] = useState(null);
+  const [complementos_copiados, set_complementos_copiados] = useState(null);
+  const [aviso_complementos, set_aviso_complementos] = useState("");
   const [error, setError] = useState("");
   const [generating, setGenerating] = useState(false);
   const lines = project?.lines || [];
@@ -275,6 +295,8 @@ export default function ProjectEditor({
 
   useEffect(() => {
     setProjectClipboard(null);
+    set_complementos_copiados(null);
+    set_aviso_complementos("");
   }, [project?.id]);
 
   function commit(next) {
@@ -412,6 +434,26 @@ export default function ProjectEditor({
     }
   }
 
+  function copiar_complementos(id_origen) {
+    try {
+      const copia = copiar_complementos_proyecto(lines, id_origen);
+      set_complementos_copiados(copia);
+      set_aviso_complementos(`${copia.complements.length} complemento(s) copiado(s). Elige «Pegar complementos» en el producto destino.`);
+      setError("");
+    } catch (fallo) {
+      setError(fallo.message || "No se pudieron copiar los complementos.");
+    }
+  }
+
+  function pegar_complementos(id_destino) {
+    try {
+      commitLines(pegar_complementos_proyecto(lines, complementos_copiados, id_destino));
+      set_aviso_complementos(`${complementos_copiados.complements.length} complemento(s) agregado(s) al producto.`);
+    } catch (fallo) {
+      setError(fallo.message || "No se pudieron pegar los complementos.");
+    }
+  }
+
   async function generateQuote() {
     setGenerating(true);
     setError("");
@@ -459,6 +501,7 @@ export default function ProjectEditor({
         </div>
       ) : null}
       {error ? <p className="error-line" role="alert">{error}</p> : null}
+      {aviso_complementos ? <p className="project-complement-notice" role="status">{aviso_complementos}</p> : null}
 
       <nav className="project-editor-tabs" aria-label="Secciones del editor">
         <button
@@ -651,6 +694,30 @@ export default function ProjectEditor({
                             <button type="button" disabled={disabled} onClick={() => openPicker("complement", line)}>
                               Agregar complemento
                             </button>
+                            {children.length ? (
+                              <button
+                                className="project-line-clipboard-action"
+                                type="button"
+                                disabled={disabled}
+                                aria-label={`Copiar complementos de ${line.snapshot.name}`}
+                                aria-pressed={complementos_copiados?.sourceLineId === line.lineId}
+                                onClick={() => copiar_complementos(line.lineId)}
+                              >
+                                <Copy size={17} aria-hidden="true" />
+                                Copiar complementos
+                              </button>
+                            ) : null}
+                            <button
+                              className="project-line-clipboard-action"
+                              type="button"
+                              disabled={disabled || !complementos_copiados}
+                              aria-label={`Pegar complementos en ${line.snapshot.name}`}
+                              title="Agregar los complementos copiados conservando los existentes"
+                              onClick={() => pegar_complementos(line.lineId)}
+                            >
+                              <ClipboardPaste size={17} aria-hidden="true" />
+                              Pegar complementos
+                            </button>
                             <button
                               className="project-line-remove"
                               type="button"
@@ -673,6 +740,8 @@ export default function ProjectEditor({
                                 onQuantity={updateQuantity}
                                 onImportedChange={updateImported}
                                 onRemove={removeLine}
+                                onCopy={copiar_complementos}
+                                copied={complementos_copiados?.sourceLineId === child.lineId}
                                 onQuantityMode={(lineId, quantityMode) => commitLines(lines.map(
                                   (candidate) => candidate.lineId === lineId
                                     ? {...candidate, quantityMode}
