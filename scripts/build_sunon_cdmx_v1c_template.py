@@ -47,7 +47,7 @@ OFFICIAL_CONTRACT = (
     / "templates"
     / "formato-cotizacion-2026-oficial.contract.json"
 )
-OFFICIAL_SHA256 = "8d3e80a9f1e1f7741796995910f332753b3a3f31e763244a52e355ddf6b6e132"
+OFFICIAL_SHA256 = "0bb1c9843438502d023ca24defccccbf2cd7ea0ae4aa0dc7b792b5d9c4005078"
 XL_LINK_TYPE_EXCEL = 1
 XL_PASTE_FORMATS = -4122
 RPC_E_CALL_REJECTED = -2147418111
@@ -417,8 +417,14 @@ def _copy_cotizacion_presentation(
     target_sheet.Range("D47:F47").Font.Color = 0xC3B93B  # Turquesa #3BB9C3 de la referencia CDMX.
     target_sheet.Range("D47:F47").Font.Underline = 2
     target_sheet.Range("D47:F47").Locked = False
+    # Copiar la validación oficial conserva referencias entre hojas que Excel
+    # puede rechazar al reconstruirlas mediante Validation.Add.
+    target_sheet.Range("D47:F47").UnMerge()
+    target_sheet.Range("D64").Copy()
+    target_sheet.Range("D47").PasteSpecial(Paste=6)  # xlPasteValidation
+    target_sheet.Range("D47:F47").Merge()
+    target_sheet.Application.CutCopyMode = False
     target_sheet.Range("D64").Validation.Delete()
-    target_sheet.Range("D47").Validation.Add(Type=3, AlertStyle=1, Formula1="=Fletes!$A$46:$A$56")
     target_sheet.Range("D47").Validation.InCellDropdown = True
     target_sheet.Parent.Worksheets("Mobiliti").Range("P8").Formula = "=Cotizacion!$D$47"
     target_sheet.Range("A73").Formula = authorization_formula
