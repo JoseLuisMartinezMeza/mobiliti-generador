@@ -576,7 +576,7 @@ def test_representative_lumbro_snapshot_quotes_official_codes_and_warns_on_revie
         review_line["product_url"],
         Decimal(review_line["quantity"]),
     )
-    assert "Codigo por verificar" in description
+    assert "Codigo por verificar" not in description
     assert "Codigo por verificar" in warning
 
     with pytest.raises(ValueError, match="entera"):
@@ -691,6 +691,43 @@ def test_repeated_kun_source_code_survives_cart_and_embeds_official_image_in_xls
     assert sheet["K9"].value == second["product_url"]
     assert len(sheet._images) == 1
     workbook.close()
+
+
+@pytest.mark.parametrize("supplier_field", ["supplier", "catalog"])
+@pytest.mark.parametrize("color", ["Oxford", "Negro", "Blanco"])
+def test_lumbro_descripcion_comercial_omite_metadatos_y_conserva_ficha(supplier_field, color):
+    item = {
+        supplier_field: "Lumbro",
+        "description": "Multicontacto Lisboa. Incluye: 2 contactos de 127v y USB.",
+        "configuration": "Standard",
+        "attributes": {"color": color},
+        "code_status": "needs_review",
+        "warnings": [
+            "El color puede variar",
+            "Código oficial no es único entre variantes; variante no cotizable.",
+            "Código oficial por verificar; variante no cotizable.",
+        ],
+    }
+    original = deepcopy(item)
+    description, warning = catalog_cart._description_for_item(item, "LISBOA", "", Decimal("1"))
+
+    assert description == item["description"] + " | Clave: LISBOA"
+    assert "Codigo por verificar" in warning
+    assert item == original
+
+
+def test_lumbro_conserva_avisos_de_precio_y_configuracion_real():
+    description, warning = catalog_cart._description_for_item(
+        {
+            "supplier": "lumbro", "description": "Multicontacto",
+            "configuration": "Cable de 3 metros", "price_source": "missing",
+            "image_kind": "generated_reference", "warnings": [],
+        }, "", "", Decimal("1"),
+    )
+    assert "Cable de 3 metros" in description
+    assert "PRECIO POR CONFIRMAR" in description
+    assert "Imagen de referencia" in description
+    assert "PRECIO POR CONFIRMAR" in warning
 
 
 def test_supplier_xlsx_description_keeps_exact_link_color_and_availability_buckets(tmp_path):

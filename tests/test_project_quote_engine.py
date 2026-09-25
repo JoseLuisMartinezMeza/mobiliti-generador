@@ -283,7 +283,7 @@ def _project_payload():
     }
 
 
-def _project_quote_input(tmp_path):
+def _project_quote_input(tmp_path, *, supplier="sunon"):
     catalog = {
         "supplier": "sunon",
         "source_hash": "c" * 64,
@@ -303,11 +303,6 @@ def _project_quote_input(tmp_path):
         ],
     }
     project = _project_payload()
-    context = project_context(
-        project,
-        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        3,
-    )
     rows = [
         {
             "line_id": PRINCIPAL_ID,
@@ -328,9 +323,25 @@ def _project_quote_input(tmp_path):
             "quantity": "3",
         },
     ]
+    if supplier == "lumbro":
+        catalog["supplier"] = supplier
+        for item in catalog["items"]:
+            item.update(
+                supplier=supplier, brand="Lumbro", base_currency="MXN",
+                code_status="needs_review", sku="",
+                attributes={"color": "Oxford", "dimensions": "600 x 600 mm"},
+                warnings=["El color puede variar", "Código oficial no es único entre variantes; variante no cotizable."],
+            )
+        for line in [*project["lines"], *rows]:
+            line["catalog"] = supplier
+    context = project_context(
+        project,
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        3,
+    )
     payload = build_mixed_catalog_cart_payload(
         rows,
-        catalogs={"sunon": catalog},
+        catalogs={supplier: catalog},
         rate_rows=[
             {
                 "currency": "USD",
@@ -365,10 +376,35 @@ def _project_quote_input(tmp_path):
         "exchange_rate": "1.000000",
         "rate_summary": deepcopy(payload["rate_summary"]),
         "auto_electrification_rate": None,
-        "catalog_source_hashes": {"sunon": "c" * 64},
+        "catalog_source_hashes": {supplier: "c" * 64},
         "project_context": deepcopy(payload["project_context"]),
     }
     return source, payload, metadata
+
+
+@pytest.mark.parametrize("language", ["es", "en"])
+def test_proyecto_lumbro_limpia_principal_y_complementos_en_excel(tmp_path, language):
+    source, payload, metadata = _project_quote_input(tmp_path, supplier="lumbro")
+    metadata["description_language"] = language
+    output = tmp_path / "lumbro-proyecto.xlsx"
+    generate_quote(
+        source, output, metadata, engine.OFFICIAL_TEMPLATE_PATH,
+        original_quotation_path=None,
+        quotation_data_rows=quotation_data_rows(payload),
+    )
+    workbook = load_workbook(output, data_only=False)
+    try:
+        quotation = workbook["Quotation"]
+        for row in (9, 10, 11):
+            description = quotation.cell(row, 4).value
+            for unwanted in ("Standard", "Color:", "por verificar", "color puede variar", "no cotizable", "Código oficial"):
+                assert unwanted not in description
+        assert "Principal" in quotation["D9"].value
+        assert quotation["D9"].value.count("\n+ ") == 2
+        assert workbook["Cotizacion"]["C17"].value == "=Quotation!D9"
+        assert [quotation.cell(row, 8).value for row in (9, 10, 11)] == [10, 20, 3]
+    finally:
+        workbook.close()
 
 
 def test_official_engine_separates_mobiliti_and_composes_cotizacion(tmp_path):

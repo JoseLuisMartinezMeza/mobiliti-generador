@@ -307,6 +307,10 @@ def _description_for_item(
     *,
     extra_description_parts: tuple[str, ...] = (),
 ) -> tuple[str, str]:
+    is_lumbro = (
+        str(item.get("catalog") or item.get("supplier") or "").strip().casefold()
+        == "lumbro"
+    )
     code_label = "SKU" if "sku" in item else "Clave"
     parts = [
         str(item.get("description", "") or "").strip(),
@@ -321,20 +325,17 @@ def _description_for_item(
     configuration = str(item.get("configuration") or "").strip()
     variant = str(item.get("variant") or "").strip()
     if configuration:
-        parts.append(configuration)
+        if not is_lumbro or configuration.casefold() not in {"standard", "estandar", "estándar"}:
+            parts.append(configuration)
     elif variant:
         parts.append(f"Variante: {variant}")
     attributes = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
     color = str(attributes.get("color") or "").strip()
-    if color:
+    if color and not is_lumbro:
         parts.append(f"Color: {color}")
     warranty = str(attributes.get("warranty") or "").strip()
     if warranty:
         parts.append(f"Garantia: {warranty}")
-    is_lumbro = (
-        str(item.get("catalog") or item.get("supplier") or "").strip().casefold()
-        == "lumbro"
-    )
     product_notes = attributes.get("product_notes")
     if not is_lumbro and isinstance(product_notes, list):
         notes = [str(value).strip() for value in product_notes if str(value).strip()]
@@ -364,7 +365,17 @@ def _description_for_item(
         if warning
     ]
     warnings = _merge_catalog_warnings(derived_warnings, item.get("warnings"))
-    parts.extend(warnings)
+    # Los avisos internos siguen en el payload; no forman parte de la ficha Lumbro.
+    parts.extend(
+        warning for warning in warnings
+        if not is_lumbro or not any(
+            marker in _catalog_warning_key(warning)
+            for marker in (
+                "codigo por verificar", "codigo oficial",
+                "el color puede variar", "variante no cotizable",
+            )
+        )
+    )
     return " | ".join(part for part in parts if part), " | ".join(warnings)
 
 
