@@ -28,6 +28,8 @@ COPY mobiliti_saas/quote_engine /app/mobiliti_saas/quote_engine
 COPY pdf_quotation_import /app/pdf_quotation_import
 COPY mobiliti_saas/worker/templates /app/templates
 
+RUN mkdir -p /var/lib/mobiliti-images && chown 10001:10001 /var/lib/mobiliti-images
+
 USER 10001:10001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

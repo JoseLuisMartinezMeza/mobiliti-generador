@@ -47,6 +47,7 @@ from .ai_image_provider import (
     normalize_image_provider,
 )
 from .image_processing import improve_image_map, improve_product_image_bytes
+from .quotation_image_policy import politica_activa, mejorar_imagen_cotizacion
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .mobiliti_layout import (
     BASE_FIRST_SECTION_ROW,
@@ -3309,6 +3310,7 @@ def _improve_official_cotizacion_images(
         cleanup_strength = "balanced"
 
     improved: list[_OfficialPresentationLine] = []
+    usar_biblioteca = politica_activa()
     for line in lines:
         if (
             line.origin not in {"imported", "quotation"}
@@ -3316,6 +3318,12 @@ def _improve_official_cotizacion_images(
             or line.image_content_type is None
         ):
             improved.append(line)
+            continue
+        if usar_biblioteca:
+            content, content_type = mejorar_imagen_cotizacion(
+                line.image_content, str(metadata.get("_image_library_account") or "")
+            )
+            improved.append(replace(line, image_content=content, image_content_type=content_type))
             continue
         try:
             content, content_type = improve_product_image_bytes(

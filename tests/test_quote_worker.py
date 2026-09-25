@@ -1651,6 +1651,16 @@ def test_worker_passes_original_import_and_all_canonical_rows_to_generator(
     assert downloads.count((import_path, "supabase")) == 1
 
 
+def test_worker_image_library_account_comes_from_job_not_metadata(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(quote_worker, "QUOTE_ENGINE", "python")
+    monkeypatch.setattr(quote_worker, "_template_path_for_job", lambda job: tmp_path / "template.xlsx")
+    monkeypatch.setattr(online_quote_generator, "generate_online_quote", lambda **kwargs: captured.update(kwargs))
+    job = {"usuario_id": 25, "metadata": {"_image_library_account": "otra-cuenta"}}
+    quote_worker._run_generator(job, tmp_path / "source.xlsx", tmp_path / "out.xlsx")
+    assert captured["metadata"]["_image_library_account"] == "25"
+
+
 def test_online_wrapper_forwards_explicit_original_and_canonical_rows(
     monkeypatch,
     tmp_path,

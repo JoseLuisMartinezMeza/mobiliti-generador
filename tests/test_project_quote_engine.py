@@ -628,6 +628,22 @@ def test_official_image_improvement_only_processes_quotation_images(monkeypatch)
     assert improved[3] is offiho
 
 
+def test_official_image_policy_uses_authenticated_scope_preserves_catalogs(monkeypatch):
+    monkeypatch.setenv("QUOTATION_IMAGE_POLICY", "openai_then_seedvr2")
+    llamadas = []
+    def mejorar(datos, cuenta):
+        llamadas.append((datos, cuenta))
+        return b"resultado", "image/png"
+    monkeypatch.setattr(engine, "mejorar_imagen_cotizacion", mejorar)
+    importada = _line(PRINCIPAL_ID, description="Importada", quantity="1", origin="imported", image_content=b"original")
+    catalogo = _line(PER_UNIT_ID, description="Catalogo", quantity="1", origin="lumbro", image_content=b"catalogo")
+    resultado = engine._improve_official_cotizacion_images((importada, catalogo), {"_image_library_account": "25"})
+    assert llamadas == [(b"original", "25")]
+    assert resultado[0].image_content == b"resultado"
+    assert importada.image_content == b"original"
+    assert resultado[1] is catalogo
+
+
 def test_official_image_improvement_uses_storage_efficient_resolution(monkeypatch):
     sizes = []
 

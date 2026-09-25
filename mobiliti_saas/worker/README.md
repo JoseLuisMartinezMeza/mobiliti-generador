@@ -82,6 +82,12 @@ python scripts\r2_doctor.py --bucket quote-files --origin https://web-lemon-one-
 
 Proveedor de mejora de imagenes:
 
+Para Quotation importada, la política OpenAI → SeedVR2 y su biblioteca persistente
+se documentan en [política de presupuesto](../../docs/2026-09-24-politica-openai-seedvr2.md).
+Está apagada por defecto; requiere claves privadas, presupuesto inicial y volumen
+persistente. Se aplica en el compositor vigente, con independencia del selector
+legado descrito a continuación. No activar sin conciliar el consumo previo.
+
 ```powershell
 # Gratis/local, sin llamadas externas. Solo mejora imagenes existentes.
 $env:IMAGE_PROVIDER="pillow"

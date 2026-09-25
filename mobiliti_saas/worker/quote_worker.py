@@ -1566,6 +1566,8 @@ def _run_generator(
     output_path: Path,
 ) -> None:
     metadata = job.get("metadata") or {}
+    # Identidad del job autenticado; nunca confiar en un valor enviado en metadata.
+    metadata["_image_library_account"] = str(job.get("usuario_id") or "")
     job["metadata"] = metadata
     if isinstance(generator_input, Path):
         generator_input = PreparedGeneratorInput(

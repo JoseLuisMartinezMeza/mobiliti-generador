@@ -22,6 +22,7 @@ services:
       - "127.0.0.1:10000:10000"
     volumes:
       - mobiliti-worker-tmp:/tmp
+      - mobiliti-image-library:/var/lib/mobiliti-images
       - /etc/mobiliti-worker/graph:/run/secrets/mobiliti-graph:ro
     healthcheck:
       test:
@@ -43,3 +44,6 @@ services:
 
 volumes:
   mobiliti-worker-tmp:
+  mobiliti-image-library:
+    # El deploy usa un proyecto Compose distinto por commit; conservar la misma biblioteca.
+    name: mobiliti-image-library-prod
