@@ -1,0 +1,121 @@
+{
+  "output_path": "C:\\Users\\pepem\\Downloads\\ARMADO_DE_CARATULA_prod_git_worktree\\outputs\\019f7907-1ecc-7001-b3f3-8eb209086fa8\\Spec guide-IDELIKA-2026.xlsx",
+  "engine": "@oai/artifact-tool",
+  "sheets": [
+    "Consolidado",
+    "Fabricacion",
+    "Stock",
+    "School Series",
+    "Fuentes_Reglas"
+  ],
+  "counts": {
+    "Fabricacion": 138,
+    "Stock": 62,
+    "School Series": 20
+  },
+  "total_rows": 220,
+  "duplicates": {
+    "stable_keys": 0,
+    "identities": 0
+  },
+  "price_conflicts": 0,
+  "formula_errors": [],
+  "renders": {
+    "Consolidado": {
+      "path": "C:\\Users\\pepem\\Downloads\\ARMADO_DE_CARATULA_prod_git_worktree\\outputs\\019f7907-1ecc-7001-b3f3-8eb209086fa8\\Spec guide-IDELIKA-2026-Consolidado.png",
+      "range": "A1:X25"
+    },
+    "Fabricacion": {
+      "path": "C:\\Users\\pepem\\Downloads\\ARMADO_DE_CARATULA_prod_git_worktree\\outputs\\019f7907-1ecc-7001-b3f3-8eb209086fa8\\Spec guide-IDELIKA-2026-Fabricacion.png",
+      "range": "A1:X25"
+    },
+    "Stock": {
+      "path": "C:\\Users\\pepem\\Downloads\\ARMADO_DE_CARATULA_prod_git_worktree\\outputs\\019f7907-1ecc-7001-b3f3-8eb209086fa8\\Spec guide-IDELIKA-2026-Stock.png",
+      "range": "A1:X25"
+    },
+    "School Series": {
+      "path": "C:\\Users\\pepem\\Downloads\\ARMADO_DE_CARATULA_prod_git_worktree\\outputs\\019f7907-1ecc-7001-b3f3-8eb209086fa8\\Spec guide-IDELIKA-2026-School-Series.png",
+      "range": "A1:X21"
+    },
+    "Fuentes_Reglas": {
+      "path": "C:\\Users\\pepem\\Downloads\\ARMADO_DE_CARATULA_prod_git_worktree\\outputs\\019f7907-1ecc-7001-b3f3-8eb209086fa8\\Spec guide-IDELIKA-2026-Fuentes-Reglas.png",
+      "range": "A1:G21"
+    }
+  },
+  "inspection": {
+    "artifact_tool_inspect": true,
+    "formula_count": 20,
+    "structure_ndjson": "{\"kind\":\"workbook\",\"id\":\"wb/sxq8n2\",\"sheets\":5,\"tables\":5}\n{\"kind\":\"sheet\",\"id\":\"ws/5tlfqb\",\"name\":\"Consolidado\",\"index\":0,\"range\":\"A1:X221\",\"address\":\"A1:X221\",\"tables\":1}\n{\"kind\":\"table\",\"sheet\":\"Consolidado\",\"address\":\"A1:X221\",\"rows\":221,\"cols\":24,\"values\":[[\"Proveedor\",\"Subcatalogo\",\"Archivo_origen\",\"Pagina_origen\",\"Clave_estable\",\"SKU\",\"Estado_codigo\",\"Producto\"],[\"IDÉLIKA\",\"Fabricacion\",\"1 CATALOGO FABRICACION 2026B.pdf\",2,\"idelika:fabricacion:sin-sku:2893bcc7cf502835d1b3\",null,\"por_verificar\",\"Mesa Centro Nagi\"],[\"IDÉLIKA\",\"Fabricacion\",\"1 CATALOGO FABRICACION 2026B.pdf\",2,\"idelika:fabricacion:sin-sku:1d4bfc68afcee1d1ea5b\",null,\"por_verificar\",\"Mesa auxiliar Nagi\"],[\"IDÉLIKA\",\"Fabricacion\",\"1 CATALOGO FABRICACION 2026B.pdf\",3,\"idelika:fabricacion:sin-sku:bd60b3308119f2f17c39\",null,\"por_verificar\",\"Mesa comedor Kanso\"],[\"IDÉLIKA\",\"Fabricacion\",\"1 CATALOGO FABRICACION 2026B.pdf\",3,\"idelika:fabricacion:sin-sku:68e33fdd3221d49ac65c\",null,\"por_verificar\",\"Mesa comedor Kuro\"]],\"valuesTruncated\":true,\"valuesPreviewRows\":5,\"valuesPreviewCols\":8,\"valuesPreviewAddress\":\"A1:H5\"}\n{\"kind\":\"sheet\",\"id\":\"ws/m7gean\",\"name\":\"Fabricacion\",\"index\":1,\"range\":\"A1:X139\",\"address\":\"A1:X139\",\"tables\":1}\n{\"kind\":\"table\",\"sheet\":\"Fabricacion\",\"address\":\"A1:X139\",\"rows\":139,\"cols\":24,\"values\":[[\"Proveedor\",\"Subcatalogo\",\"Archivo_origen\",\"Pagina_origen\",\"Clave_estable\",\"SKU\",\"Estado_codigo\",\"Producto\"],[\"IDÉLIKA\",\"Fabricacion\",\"1 CATALOGO FABRICACION 2026B.pdf\",2,\"idelika:fabricacion:sin-sku:2893bcc7cf502835d1b3\",null,\"por_verificar\",\"Mesa Centro Nagi\"],[\"IDÉLIKA\",\"Fabricacion\",\"1 CATALOGO FABRICACION 2026B.pdf\",2,\"idelika:fabricacion:sin-sku:1d4bfc68afcee1d1ea5b\",null,\"por_verificar\",\"Mesa auxiliar Nagi\"],[\"IDÉLIKA\",\"Fabricacion\",\"1 CATALOGO FABRICACION 2026B.pdf\",3,\"idelika:fabricacion:sin-sku:bd60b3308119f2f17c39\",null,\"por_verificar\",\"Mesa comedor Kanso\"],[\"IDÉLIKA\",\"Fabricacion\",\"1 CATALOGO FABRICACION 2026B.pdf\",3,\"idelika:fabricacion:sin-sku:68e33fdd3221d49ac65c\",null,\"por_verificar\",\"Mesa comedor Kuro\"]],\"valuesTruncated\":true,\"valuesPreviewRows\":5,\"valuesPreviewCols\":8,\"valuesPreviewAddress\":\"A1:H5\"}\n{\"kind\":\"sheet\",\"id\":\"ws/oj8x7y\",\"name\":\"Stock\",\"index\":2,\"range\":\"A1:X63\",\"address\":\"A1:X63\",\"tables\":1}\n{\"kind\":\"table\",\"sheet\":\"Stock\",\"address\":\"A1:X63\",\"rows\":63,\"cols\":24,\"values\":[[\"Proveedor\",\"Subcatalogo\",\"Archivo_origen\",\"Pagina_origen\",\"Clave_estable\",\"SKU\",\"Estado_codigo\",\"Producto\"],[\"IDÉLIKA\",\"Stock\",\"2 CATALOGO STOCK 2026.pdf\",2,\"idelika:stock:sin-sku:04dda56435b4cdbefc70\",null,\"por_verificar\",\"Marau silla\"],[\"IDÉLIKA\",\"Stock\",\"2 CATALOGO STOCK 2026.pdf\",2,\"idelika:stock:sin-sku:5b9ce1c1351ab6acda0a\",null,\"por_verificar\",\"Ebony banco\"],[\"IDÉLIKA\",\"Stock\",\"2 CATALOGO STOCK 2026.pdf\",3,\"idelika:stock:sin-sku:d2cddce75c1e8f63d84b\",null,\"por_verificar\",\"Slovequia banco\"],[\"IDÉLIKA\",\"Stock\",\"2 CATALOGO STOCK 2026.pdf\",4,\"idelika:stock:sin-sku:0416c892ad4041ca7a04\",null,\"por_verificar\",\"Aminy Banco\"]],\"valuesTruncated\":true,\"valuesPreviewRows\":5,\"valuesPreviewCols\":8,\"valuesPreviewAddress\":\"A1:H5\"}\n{\"kind\":\"sheet\",\"id\":\"ws/0hghbj\",\"name\":\"School Series\",\"index\":3,\"range\":\"A1:X21\",\"address\":\"A1:X21\",\"tables\":1}\n{\"kind\":\"table\",\"sheet\":\"School Series\",\"address\":\"A1:X21\",\"rows\":21,\"cols\":24,\"values\":[[\"Proveedor\",\"Subcatalogo\",\"Archivo_origen\",\"Pagina_origen\",\"Clave_estable\",\"SKU\",\"Estado_codigo\",\"Producto\"],[\"IDÉLIKA\",\"School Series\",\"4 SCHOOL SERIES 2026.pdf\",2,\"idelika:school-series:sin-sku:23b62f015dafe2a95b04\",null,\"por_verificar\",\"Pupitre 360 grados\"],[\"IDÉLIKA\",\"School Series\",\"4 SCHOOL SERIES 2026.pdf\",6,\"idelika:school-series:sin-sku:8f31da17449603d0230f\",null,\"por_verificar\",\"Pupitre Mentor\"],[\"IDÉLIKA\",\"School Series\",\"4 SCHOOL SERIES 2026.pdf\",7,\"idelika:school-series:sin-sku:798878058b9baa705adc\",null,\"por_verificar\",\"Pupitre Campus\"],[\"IDÉLIKA\",\"School Series\",\"4 SCHOOL SERIES 2026.pdf\",7,\"idelika:school-series:sin-sku:51e4292262a8b087c079\",null,\"por_verificar\",\"Silla Campus\"]],\"valuesTruncated\":true,\"valuesPreviewRows\":5,\"valuesPreviewCols\":8,\"valuesPreviewAddress\":\"A1:H5\"}\n{\"kind\":\"sheet\",\"id\":\"ws/lsd1zd\",\"name\":\"Fuentes_Reglas\",\"index\":4,\"range\":\"A1:G21\",\"address\":\"A1:G21\",\"tables\":1}\n{\"kind\":\"notice\",\"message\":\"Truncated: omitted 1 lines. Increase maxChars, narrow range, or use tableMaxRows/tableMaxCols/tableMaxCellChars.\"}",
+    "formulas_ndjson": "{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"E6\",\"formula\":\"=COUNTIF('Consolidado'!$B$2:$B$221,A6)\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"F6\",\"formula\":\"=COUNTIFS('Consolidado'!$B$2:$B$221,A6,'Consolidado'!$R$2:$R$221,\\\"confirmado\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"G6\",\"formula\":\"=COUNTIFS('Consolidado'!$B$2:$B$221,A6,'Consolidado'!$R$2:$R$221,\\\"por_confirmar\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"E7\",\"formula\":\"=COUNTIF('Consolidado'!$B$2:$B$221,A7)\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"F7\",\"formula\":\"=COUNTIFS('Consolidado'!$B$2:$B$221,A7,'Consolidado'!$R$2:$R$221,\\\"confirmado\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"G7\",\"formula\":\"=COUNTIFS('Consolidado'!$B$2:$B$221,A7,'Consolidado'!$R$2:$R$221,\\\"por_confirmar\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"E8\",\"formula\":\"=COUNTIF('Consolidado'!$B$2:$B$221,A8)\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"F8\",\"formula\":\"=COUNTIFS('Consolidado'!$B$2:$B$221,A8,'Consolidado'!$R$2:$R$221,\\\"confirmado\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"G8\",\"formula\":\"=COUNTIFS('Consolidado'!$B$2:$B$221,A8,'Consolidado'!$R$2:$R$221,\\\"por_confirmar\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B11\",\"formula\":\"=COUNTA('Consolidado'!$E$2:$E$221)\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B12\",\"formula\":\"=COUNTIF('Consolidado'!$B$2:$B$221,\\\"Fabricacion\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B13\",\"formula\":\"=COUNTIF('Consolidado'!$B$2:$B$221,\\\"Stock\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B14\",\"formula\":\"=COUNTIF('Consolidado'!$B$2:$B$221,\\\"School Series\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B15\",\"formula\":\"=COUNT('Consolidado'!$O$2:$O$221)\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B16\",\"formula\":\"=COUNTIF('Consolidado'!$R$2:$R$221,\\\"por_confirmar\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B17\",\"formula\":\"=COUNTIF('Consolidado'!$G$2:$G$221,\\\"oficial\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B18\",\"formula\":\"=COUNTIF('Consolidado'!$G$2:$G$221,\\\"por_verificar\\\")\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B19\",\"formula\":\"=SUMPRODUCT(--(COUNTIF('Consolidado'!$E$2:$E$221,'Consolidado'!$E$2:$E$221)>1))\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B20\",\"formula\":\"=SUMPRODUCT(--(COUNTIF('Consolidado'!$W$2:$W$221,'Consolidado'!$W$2:$W$221)>1))\"}\n{\"kind\":\"formula\",\"sheet\":\"Fuentes_Reglas\",\"address\":\"B21\",\"formula\":\"=SUMPRODUCT(--(COUNTIFS('Consolidado'!$W$2:$W$221,'Consolidado'!$W$2:$W$221,'Consolidado'!$O$2:$O$221,\\\"<>\\\"&'Consolidado'!$O$2:$O$221)>0))\"}",
+    "formula_error_scan_ndjson": "{\"kind\":\"notice\",\"message\":\"Cell search matched 0 entries.\"}",
+    "freeze_panes_serialized": true
+  },
+  "source_hashes": {
+    "1 CATALOGO FABRICACION 2026B.pdf": "b3bfe5761f850fd2203e0f8054d801b42d3b4e7c6c8d349ac8d30bc28fb64cfb",
+    "2 CATALOGO STOCK 2026.pdf": "a40a53e8599615a0bd2fc21fe5a1658a32a2cc83ad2ee5e89ce8bb1d9d372f76",
+    "4 SCHOOL SERIES 2026.pdf": "6fcafbb6c973e961510eead9fcf3aacdcf94ac59d48d6d2bcf7b38c7a710f2ec"
+  },
+  "package_validation": {
+    "valid": true,
+    "parts": 20,
+    "validator": "Python stdlib ZIP/OOXML pane-only postprocess and read-only validation"
+  },
+  "ooxml_postprocess": {
+    "runs": 2,
+    "first": {
+      "changed_parts": [
+        "xl/worksheets/sheet1.xml",
+        "xl/worksheets/sheet2.xml",
+        "xl/worksheets/sheet3.xml",
+        "xl/worksheets/sheet4.xml"
+      ],
+      "member_count": 20,
+      "pane": {
+        "ySplit": "1",
+        "topLeftCell": "A2",
+        "activePane": "bottomLeft",
+        "state": "frozen"
+      },
+      "sheet_parts": {
+        "Consolidado": "xl/worksheets/sheet1.xml",
+        "Fabricacion": "xl/worksheets/sheet2.xml",
+        "Stock": "xl/worksheets/sheet3.xml",
+        "School Series": "xl/worksheets/sheet4.xml"
+      },
+      "scope_valid": true,
+      "xml_parseable": true,
+      "zip_valid": true
+    },
+    "second": {
+      "changed_parts": [
+        "xl/worksheets/sheet1.xml",
+        "xl/worksheets/sheet2.xml",
+        "xl/worksheets/sheet3.xml",
+        "xl/worksheets/sheet4.xml"
+      ],
+      "member_count": 20,
+      "pane": {
+        "ySplit": "1",
+        "topLeftCell": "A2",
+        "activePane": "bottomLeft",
+        "state": "frozen"
+      },
+      "sheet_parts": {
+        "Consolidado": "xl/worksheets/sheet1.xml",
+        "Fabricacion": "xl/worksheets/sheet2.xml",
+        "Stock": "xl/worksheets/sheet3.xml",
+        "School Series": "xl/worksheets/sheet4.xml"
+      },
+      "scope_valid": true,
+      "xml_parseable": true,
+      "zip_valid": true
+    }
+  },
+  "contract_failures": [],
+  "determinism": {
+    "passed": true,
+    "runs": 2,
+    "first_normalized_sha256": "5f5325642ec5a51649e77129ae1bf8e819d922f2027f32f9f0fd89115e5fbd89",
+    "second_normalized_sha256": "5f5325642ec5a51649e77129ae1bf8e819d922f2027f32f9f0fd89115e5fbd89"
+  }
+}

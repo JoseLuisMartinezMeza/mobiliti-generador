@@ -9,8 +9,17 @@ param(
     [string]$FirewallName = "mobiliti-worker-ssh-only",
     [string]$SupabaseUrl = "https://hcdspekajlszcycecpml.supabase.co",
     [string]$SupabaseAnonKey = $env:SUPABASE_ANON_KEY,
+    [string]$SupabaseServiceKey = $env:SUPABASE_SERVICE_KEY,
     [string]$MobilitiRestSecret = $env:MOBILITI_REST_SECRET,
     [string]$QuoteStorageBucket = "quote-files",
+    [string]$CatalogAssetStorageProvider = $env:CATALOG_ASSET_STORAGE_PROVIDER,
+    [string]$CatalogAssetR2AccountId = $env:CATALOG_ASSET_R2_ACCOUNT_ID,
+    [string]$CatalogAssetR2EndpointUrl = $env:CATALOG_ASSET_R2_ENDPOINT_URL,
+    [string]$CatalogAssetR2AccessKeyId = $env:CATALOG_ASSET_R2_ACCESS_KEY_ID,
+    [string]$CatalogAssetR2SecretAccessKey = $env:CATALOG_ASSET_R2_SECRET_ACCESS_KEY,
+    [string]$CatalogAssetR2SessionToken = $env:CATALOG_ASSET_R2_SESSION_TOKEN,
+    [string]$CatalogAssetR2Region = $env:CATALOG_ASSET_R2_REGION,
+    [string]$CatalogAssetPublicBaseUrl = $env:CATALOG_ASSET_PUBLIC_BASE_URL,
     [switch]$SkipBootstrap,
     [switch]$SkipEnvUpload
 )
@@ -62,8 +71,32 @@ function Wait-ForSsh([string]$Ip) {
     Die "SSH did not become ready for $Ip"
 }
 
+if ($CatalogAssetR2SessionToken -and (
+    $CatalogAssetR2SessionToken.Length -gt 16384 -or
+    $CatalogAssetR2SessionToken -match '[\x00-\x20\x7F]'
+)) {
+    Die "CATALOG_ASSET_R2_SESSION_TOKEN is invalid."
+}
 if (-not $Token) {
     Die "Missing HCLOUD_TOKEN. Set `$env:HCLOUD_TOKEN before running."
+}
+if (-not $CatalogAssetStorageProvider) {
+    $CatalogAssetStorageProvider = "supabase"
+}
+if ($CatalogAssetStorageProvider -notin @("supabase", "r2")) {
+    Die "CATALOG_ASSET_STORAGE_PROVIDER must be supabase or r2."
+}
+if (-not $CatalogAssetR2Region) {
+    $CatalogAssetR2Region = "auto"
+}
+if ($CatalogAssetStorageProvider -eq "r2" -and (
+    -not $CatalogAssetR2AccountId -or
+    -not $CatalogAssetR2EndpointUrl -or
+    -not $CatalogAssetR2AccessKeyId -or
+    -not $CatalogAssetR2SecretAccessKey -or
+    -not $CatalogAssetPublicBaseUrl
+)) {
+    Die "Catalog R2 configuration is incomplete."
 }
 
 $env:HCLOUD_TOKEN = $Token
@@ -159,15 +192,25 @@ if (-not $SkipBootstrap) {
     }
 
     if (-not $SkipEnvUpload) {
-        if (-not $SupabaseAnonKey -or -not $MobilitiRestSecret) {
-            Die "Missing SUPABASE_ANON_KEY or MOBILITI_REST_SECRET. Set local env vars or run with -SkipEnvUpload."
+        if (-not $SupabaseAnonKey -or -not $SupabaseServiceKey -or -not $MobilitiRestSecret) {
+            Die "Missing SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, or MOBILITI_REST_SECRET. Set local env vars or run with -SkipEnvUpload."
         }
 
         $envContent = @"
 SUPABASE_URL=$SupabaseUrl
 SUPABASE_ANON_KEY=$SupabaseAnonKey
+SUPABASE_SERVICE_KEY=$SupabaseServiceKey
 MOBILITI_REST_SECRET=$MobilitiRestSecret
 QUOTE_STORAGE_BUCKET=$QuoteStorageBucket
+CATALOG_ASSET_STORAGE_PROVIDER=$CatalogAssetStorageProvider
+CATALOG_ASSET_PUBLIC_BASE_URL=$CatalogAssetPublicBaseUrl
+CATALOG_ASSET_R2_ACCOUNT_ID=$CatalogAssetR2AccountId
+CATALOG_ASSET_R2_ENDPOINT_URL=$CatalogAssetR2EndpointUrl
+CATALOG_ASSET_R2_ACCESS_KEY_ID=$CatalogAssetR2AccessKeyId
+CATALOG_ASSET_R2_SECRET_ACCESS_KEY=$CatalogAssetR2SecretAccessKey
+CATALOG_ASSET_R2_SESSION_TOKEN=$CatalogAssetR2SessionToken
+CATALOG_ASSET_R2_BUCKET=catalog-assets
+CATALOG_ASSET_R2_REGION=$CatalogAssetR2Region
 QUOTE_ENGINE=python
 WORKER_POLL_SECONDS=10
 WORKER_STALE_MINUTES=30

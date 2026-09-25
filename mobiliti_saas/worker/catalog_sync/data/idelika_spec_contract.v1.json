@@ -1,0 +1,17 @@
+{
+  "schema": "mobiliti.idelika_spec_contract",
+  "version": 1,
+  "supplier": "idelika",
+  "normalized_spec_sha256": "5f5325642ec5a51649e77129ae1bf8e819d922f2027f32f9f0fd89115e5fbd89",
+  "source_hashes": {
+    "1 CATALOGO FABRICACION 2026B.pdf": "b3bfe5761f850fd2203e0f8054d801b42d3b4e7c6c8d349ac8d30bc28fb64cfb",
+    "2 CATALOGO STOCK 2026.pdf": "a40a53e8599615a0bd2fc21fe5a1658a32a2cc83ad2ee5e89ce8bb1d9d372f76",
+    "4 SCHOOL SERIES 2026.pdf": "6fcafbb6c973e961510eead9fcf3aacdcf94ac59d48d6d2bcf7b38c7a710f2ec"
+  },
+  "total_rows": 220,
+  "counts": {
+    "Fabricacion": 138,
+    "Stock": 62,
+    "School Series": 20
+  }
+}

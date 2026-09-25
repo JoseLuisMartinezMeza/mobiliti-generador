@@ -1,0 +1,14 @@
+name = "mobiliti-catalog-assets"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[cache]
+enabled = true
+
+[vars]
+ALLOWED_ORIGIN = "https://web-lemon-one-45.vercel.app"
+
+[[r2_buckets]]
+binding = "CATALOG_ASSETS"
+bucket_name = "catalog-assets"

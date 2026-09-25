@@ -1,0 +1,320 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "inventory_key": "AREZZO NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/arezzo",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/2a74296862c8c433fdf3d49668a83fb423160d3b393fbc2aca7ca54831c6601c.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-25 BLAZE",
+      "product_url": "https://www.offihoblack.com/products/blaze-ohe-25",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/872be06375a51436d9629ef60102a21d4a240824a30574a776ae2d71c6df1349.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-45 NEGRO SNAP",
+      "product_url": "https://www.offihoblack.com/products/snap-ohe-45",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/1b02f276a1a3248b8d6032b8c959472a7a68ce0d981ba9535c22b81c6cc30b2a.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-503 C CORAL NET",
+      "product_url": "https://www.offihoblack.com/products/net-ohe-503-gris",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/ae700d06f7104ba736fbca69195a03f12a1420ee0ceae582e83732339a48e355.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHE-503 G GRIS NET",
+      "product_url": "https://www.offihoblack.com/products/net-ohe-503-gris",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/5925c8cc8999903d6ed126dadbad41f96fbe8969d5e58cb05fc8e02b705827fe.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHM-31001 GRIS FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/confortable-fabrizia-ohm-31001",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/3c9204bcb59efac13ec0b47f7e50cddedf7050f312625282c1cbbf5e07f9aced.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHM-41001 GRIS AMELIA",
+      "product_url": "https://www.offihoblack.com/products/amelia-ohm-41001",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/8665b1057d08dff1127c44658485baf88fdd1129ff0720f2af88d474236c33fd.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHS-10 CONTEMPO",
+      "product_url": "https://www.offiho.com/econosillas/OHS-10",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/523fcadf8417e14a082ff5816fe58c506b61bf672784d5c4d56e956375a57727.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-125 AMARILLO FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-125",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/34ca5fa358f8bf902c0ddc733c869ec55d0d3824f98499893fad7a9c375938ef.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-125 AZUL FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-125",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/ad66359cc2239434c72f649f9479b97a38301ed0f122b239c7ea372278c30f2a.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-125 GRIS FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-125",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/d0db9020a62bad5559107b956271d6c63ee185fe3480781ebedd6b0751c74a3b.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-125 MORADO FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-125",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/51fabbbb3d2266fef05a1eb132f09828a208f20282863db7e29ad96e79e00b34.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-125 NARANJA FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-125",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/70fb553f0e2165cc109c9dcf69735390cc8e50a44fba043a0594833f0c78714a.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-125 VERDE FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-125",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/1bf186b2b7a90945dff6076ca5b75ba4332e98ed96850500857d1e1459dbc6f4.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-126 AMARILLO FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-126",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/ade669881b910d350431065f83234abcc2d0f7d6cb0c37b4acdb861678309901.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-126 AZUL FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-126",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/f76b2e43dfbecaf4af466ed9f6f80c5ea9a3a11689ff62b1f5fcf4bb0b65edc5.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-126 GRIS FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-126",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/74660af12f4a6d7769ad38ce1830ae23206a28108d41ab7c2b5047a421e126d8.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-126 MORADO FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-126",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/3d1a6df2a96d297b1247361679fbc79c6e08681482eb9e9e4799a9ef0221e881.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-126 NARANJA FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-126",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/1f2ed97e7254d475d6188a1dd493e68c49697d2d8d3a78069579bcf29f32f083.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-126 VERDE FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-126",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/da63de8a47fb550922efaa872bf3a9266a3c0054c43c761913a606b6cbef0006.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-127 GRIS FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-127",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/6d7a80cc383b1213a4c0e59c4085dd46ffafe4d96bf6fb3caee8e62ce40d92cc.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 AMARILLO FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/625d43178843897ae6765759dc99a1226e69479ead998bbc64256b3c7be348c7.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 AZUL FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/cfbe7bdf0aea86fa33315f40b65bba73d6258d041f053965cb5bcc6dc73ca778.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 GRIS FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/9fb1e4809098203d2dc14b1a0352abdca70dada3cf83e2907fafe2c0c7520a0f.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 MORADO FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/da77508d6d3f3c919821c15034e87fbb3165ec9524cf4cef9909dfef8dcd295f.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 NARANJA FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/d11dc1f91ad3218a10922c81c48afdfffd2723d7a76b062862b30121dee28a8b.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 VERDE FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/f4b054c5e5ea0a7cacd6df0dc418ff979e227264f863e107e124d09018a79846.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 LOUNGE AMARILLO FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-lounge",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/7dd8d4e5a913b8ef4a5916084c1866e2348191f3107db4a98490d9d8d8b722a0.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 LOUNGE AZUL FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-lounge",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/cb2b42013117f23c63165bc1e41b04b09b1005707a2bca587ce8a67725864641.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 LOUNGE GRIS FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-lounge",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/23578d3c93e4150f1e26beceb7ee04c102d3cf5f6a3fec95213be3c7ff3b004c.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 LOUNGE MORADO FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-lounge",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/49b579e41c7ab99266059d30c241a67c07a8554c72ec433cd2317ddaa10513ec.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 LOUNGE NARANJA FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-lounge",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/5be3ceec8d5c61f790a0e50055d5b3b7ca67f0ab97c30953b0ba92ba44cc7562.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-128 LOUNGE VERDE FABRIZIA",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-lounge",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/9b62b740c8f1a539fb167e4901e23e6c85d602e743a12487be6183127dbc2738.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-129 AMARILLO FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-129",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/14fe2c70922376f6d5b95ae6382d31c0d257202d30572e836d7cc2acdfcedb53.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-129 AZUL FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-129",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/75dedc014a3a4049cbbd6f8a97f200ace134bdcda406678f4a64c6efb653752c.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-129 GRIS FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-129",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/1bc7b9621f7f4f8523cb20611d485e1cd7a64044341df9f02a0583eabeaac8e7.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-129 MORADO FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-129",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/ded1bf4498538a1942ffc7e1934e1eb2b19f90515f182a48f00e430f274b9c5b.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-129 NARANJA FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-129",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/533064451d33623945a55fedcea48d8c4dabde3ecddccb5cb92e8cd12d0acce6.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-129 VERDE FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-129",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/26d815c614b63b14d0d7e96eb13b5e44127ed71867232b01c85b4e848a3e7100.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-90 AMARILLO VIOLET *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-copia",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/493b4e6cffd43c034640f0fb02bbec8da437711428796fbd2392013a6a2f34f5.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-90 AZUL VIOLET *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-copia",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/8d31839519b3c8100fd1713829e7fbe563eed38697cbea9548a18580fb6c5c36.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-90 GRIS VIOLET *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-copia",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/c9324aa05c2a42d847dd11810715bf76e68ae83bfd2686158935bc95b94c8116.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-90 MORADO VIOLET *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-copia",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/48d1df1711714963b02c9e1d89059cde2e1df7421b4f8f22a19abfdd3bf6f5a6.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-90 NARANJA VIOLET *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-copia",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/9e6305ddf15370b30e890627c194a89bf4617a9bba364118e384244b18262473.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    },
+    {
+      "inventory_key": "OHV-90 VERDE VIOLET *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-128-copia",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/offiho-official-web-visual-exact/ecce2235d5887ee037156cdfed05d1930f14437055396f71c1678bbe40bb8b4b.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_web_product_variant_image_strict_visual_exact"
+    }
+  ]
+}

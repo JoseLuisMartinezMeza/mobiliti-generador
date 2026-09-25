@@ -340,6 +340,433 @@ def test_spanish_description_translates_board_and_power_terms():
             assert fragment not in text
 
 
+def test_spanish_description_translates_zoomlion_storage_and_reception_terms():
+    storage_text = build_product_description(
+        "DG2B-2.040053 Mobile Pedestal Files B/F",
+        "Two-drawer mobile cabinet. Cabinet: E0 grade particleboard. "
+        "Casters: castor wheels, made of nylon. Slide Rail: high-quality slide rail.",
+        "Archiveros Moviles y Fijos",
+        "es",
+    )
+    reception_text = build_product_description(
+        "DMA81-2.150100 Reception Desk",
+        "Reception desk. Top Panel: paper impregnated thermosetting resins surface. "
+        "Stand panel: impregnated melamine paper. Back panel: high quality PVC edge banding strips.",
+        "Escritorios-WorkStation",
+        "es",
+    )
+
+    assert "cajonera movil de dos cajones" in storage_text.lower()
+    assert "ruedas giratorias" in storage_text.lower()
+    assert "corredera de alta calidad" in storage_text.lower()
+    assert "mostrador de recepcion" in reception_text.lower()
+    assert "panel superior" in reception_text.lower()
+    assert "panel de soporte" in reception_text.lower()
+    assert "panel posterior" in reception_text.lower()
+    translated_bodies = "\n".join(
+        text.split("\n", 1)[1] for text in (storage_text, reception_text)
+    )
+    for fragment in [
+        "Two-drawer",
+        "mobile cabinet",
+        "castor wheels",
+        "Slide Rail",
+        "Reception desk",
+        "Top Panel",
+        "Stand panel",
+        "Back panel",
+    ]:
+        assert fragment.lower() not in translated_bodies.lower()
+
+
+def test_spanish_description_translates_zoomlion_chair_and_plywood_terms():
+    chair_text = build_product_description(
+        "CCP63SQ-TP Coupe II Task chair",
+        "Leather: full-grain Nappa cowhid, abrasion resistance 500r without significant damage or peeling. "
+        "Chair Back: ABS integrated back frame. Armrests: fixed, padded armrests. "
+        "Seat Cushion: optional PVC synthetic leather.",
+        "Silla",
+        "es",
+    )
+    table_text = build_product_description(
+        "SH56.042026 Flower 6 Occasional Tables",
+        "Tabletop: 19mm, E0 grade plywood. Tabletop Edge Banding: natural wood veneer edge banding strips. "
+        "Function Description: Writing Board Adjustment: Writing board can rotate 360 degrees.",
+        "Mesas de Apoyo",
+        "es",
+    )
+
+    assert "piel de vaca napa de flor entera" in chair_text.lower()
+    assert "sin danos significativos ni desprendimiento" in chair_text.lower()
+    assert "estructura integrada de respaldo en abs" in chair_text.lower()
+    assert "descansabrazos fijos y acolchados" in chair_text.lower()
+    assert "piel sintetica de pvc opcional" in chair_text.lower()
+    assert "contrachapado grado e0" in table_text.lower()
+    assert "canto de chapa de madera natural" in table_text.lower()
+    assert "pizarron de escritura puede girar 360 grados" in table_text.lower()
+    for fragment in [
+        "Leather",
+        "cowhid",
+        "without significant damage",
+        "ABS integrated back frame",
+        "fixed, padded armrests",
+        "synthetic leather",
+        "plywood",
+        "Writing Board Adjustment",
+        "Writing board can rotate",
+    ]:
+        assert fragment.lower() not in f"{chair_text}\n{table_text}".lower()
+
+
+def test_spanish_description_translates_sales_del_valle_chair_terms():
+    leather_text = build_product_description(
+        "CAL61KC Aulenti Task Chair",
+        "Leather: contact surface uses full-grain lychee texture cowhide, "
+        "non-contact surface PVC artificial leather, genuine leather dry rubbing fastness >= 4. "
+        "Back Cushion: molded foam, load capacity 1001N. "
+        "5-Star Bases: 700mm diameter aluminum alloy 5-star base.",
+        "Silla",
+        "es",
+    )
+    frame_text = build_product_description(
+        "CDK18MS Ducky Guest",
+        "Chair Back: PP+25% fiberglass integrated back frame. "
+        "Seat: PP + 25% fiberglass integrated. Chair Frame: solid wood painted frame. "
+        "Backrest: injection molded. Seat: 16mm poplar plywood. "
+        "Adjustable Feet: Nickel-plated carbon steel.",
+        "Silla",
+        "es",
+    )
+
+    assert "superficie de contacto en piel de vaca de flor entera con textura lichi" in leather_text.lower()
+    assert "superficie sin contacto en piel sintetica de pvc" in leather_text.lower()
+    assert "cojin del respaldo" in leather_text.lower()
+    assert "capacidad de carga 1001n" in leather_text.lower()
+    assert "estructura integrada de respaldo en pp con 25% de fibra de vidrio" in frame_text.lower()
+    assert "pp integrado con 25% de fibra de vidrio" in frame_text.lower()
+    assert "estructura de madera solida pintada" in frame_text.lower()
+    assert "moldeado por inyeccion" in frame_text.lower()
+    assert "contrachapado de alamo" in frame_text.lower()
+    assert "regatones ajustables" in frame_text.lower()
+    assert "acero al carbono niquelado" in frame_text.lower()
+    for fragment in [
+        "contact surface",
+        "cowhide",
+        "non-contact",
+        "genuine leather",
+        "Back Cushion",
+        "load capacity",
+        "integrated back frame",
+        "solid wood painted",
+        "injection molded",
+        "poplar plywood",
+        "Adjustable Feet",
+        "Nickel-plated",
+        "Pinturaed",
+    ]:
+        assert fragment.lower() not in f"{leather_text}\n{frame_text}".lower()
+
+
+def test_spanish_description_translates_sales_del_valle_workstation_terms():
+    text = build_product_description(
+        "Desk Lido Pro PB - L",
+        "Edge banding: the table top uses PVC edge banding strips, thickness 2.5mm; "
+        "the cabinet body uses PVC edge banding strips, thickness 1mm. "
+        "Edge Banding: the cabinet uses high quality PVC edge banding strips, "
+        "thickness 2.5mm for cabinet side panels. "
+        "Modesty Panel: impregnated melamine paper. "
+        "Lock: mechanical combination locks. "
+        "Cable Box: standard flip-top cable box, made of aluminum alloy + ABS.",
+        "Escritorios-WorkStation",
+        "es",
+    )
+
+    assert "la cubierta usa cantos de pvc" in text.lower()
+    assert "el cuerpo del gabinete usa cantos de pvc" in text.lower()
+    assert "paneles laterales del gabinete" in text.lower()
+    assert "faldon" in text.lower()
+    assert "cerraduras mecanicas de combinacion" in text.lower()
+    assert "caja pasacables estandar con tapa abatible" in text.lower()
+    for fragment in [
+        "table top",
+        "cabinet body",
+        "cabinet side panels",
+        "Modesty Panel",
+        "mechanical combination locks",
+        "flip-top cable box",
+    ]:
+        assert fragment.lower() not in text.lower()
+
+
+def test_spanish_description_translates_sales_del_valle_remaining_table_terms():
+    occasional = build_product_description(
+        "DMC71.160055 MixCube Occasional Table",
+        "Fixed High-leg desk, steel Legs in two sides. "
+        "Desk Legs: V-shaped steel legs, Q195 steel 40mm round tube, "
+        "1.5mm wall thickness, electrostatic powder coating in surface. "
+        "Adjustable feet: Adjustable, made of ABS + premium steel.",
+        "Mesas de Apoyo",
+        "es",
+    )
+    square = build_product_description(
+        "T167.110110 Square 4 Post Leg Occasional Table",
+        "Square Tea Table with Square Steel tube base. "
+        "Veneer: Wood-color configuration, Main components: natural wood veneer, "
+        "Underside of the tabletop: scientific veneer; "
+        "Non-wood Color Configuration: No wood veneer used. "
+        "Table Legs: Goal post leg in steel.",
+        "Mesas de Apoyo",
+        "es",
+    )
+
+    joined = f"{occasional}\n{square}".lower()
+    assert "mesa alta fija con patas de acero a ambos lados" in joined
+    assert "patas de acero en forma de v" in joined
+    assert "espesor de pared" in joined
+    assert "mesa de te cuadrada con base de tubo de acero cuadrado" in joined
+    assert "cara inferior de la cubierta" in joined
+    assert "chapa de madera reconstituida" in joined
+    for fragment in [
+        "fixed high-leg",
+        "desk legs",
+        "v-shaped",
+        "wall thickness",
+        "adjustable",
+        "square tea table",
+        "wood-color configuration",
+        "main components",
+        "underside",
+        "scientific veneer",
+        "no wood veneer used",
+        "goal post leg",
+    ]:
+        assert fragment not in joined
+
+
+def test_spanish_description_translates_sales_del_valle_remaining_storage_and_podium_terms():
+    storage = build_product_description(
+        "MG.GC07-2.090045 3-drawer lateral file",
+        "Lock: ordinary front lock. Fixed three-drawer cabinet.",
+        "Archiveros Moviles y Fijos",
+        "es",
+    )
+    podium = build_product_description(
+        "DM21.114 Welss Training system Fixed Height podium",
+        "Fixed podium. Podium Support: Q195 steel, 2.0mm thicknesses. "
+        "Podium Outside Panel: Q195 steel. Podium Steel Foot: Q195 steel.",
+        "Terminados",
+        "es",
+    )
+
+    joined = f"{storage}\n{podium}".lower()
+    assert "cerradura frontal estandar" in joined
+    assert "archivero fijo de tres cajones" in joined
+    assert "podio fijo" in joined
+    assert "soporte del podio" in joined
+    assert "panel exterior del podio" in joined
+    for fragment in [
+        "ordinary front lock",
+        "fixed three-drawer",
+        "fixed podium",
+        "podium support",
+        "podium outside panel",
+        "podium steel foot",
+        "thicknesses",
+    ]:
+        assert fragment not in joined
+
+
+def test_spanish_description_translates_sales_del_valle_remaining_lounge_and_phonebooth_terms():
+    lounge = build_product_description(
+        "SU38.1.MR UoE Lounge Chairs",
+        "Spring Bag: seat cushion with individually wrapped springs, good breathability. "
+        "Leg Frame: main materials use aluminum alloy + ABS. "
+        "Sofa Support Parts: steel pivot, 360 degree rotation. "
+        "Sofa Legs: steel base legs.",
+        "Sillones",
+        "es",
+    )
+    phonebooth = build_product_description(
+        "DNA20-2 DNA II Phone booth",
+        "Frame: AL6063-T5 aluminum alloy, profile 2.0mm thickness. "
+        "Steel Frame: 60x40mm rectangular steel tube. "
+        "Side Panel/Top Panel: made of high-quality cold-rolled steelin surface. "
+        "Internal sound-absorbing cotton: 2500g/m2 grammage. "
+        "Uses 4mm polyester fiber board + 1mm flocked felt, combined into a 5mm panel in inner panel. "
+        "Fixed Glass: tempering glass, black screen printing on all four sides.",
+        "Phonebooths",
+        "es",
+    )
+
+    joined = f"{lounge}\n{phonebooth}".lower()
+    assert "cojin del asiento con resortes embolsados individualmente" in joined
+    assert "buena ventilacion" in joined
+    assert "componentes de soporte del sofa" in joined
+    assert "estructura de acero" in joined
+    assert "algodon absorbente acustico interior" in joined
+    assert "tablero de fibra de poliester" in joined
+    assert "vidrio templado" in joined
+    assert "serigrafia negra en los cuatro lados" in joined
+    for fragment in [
+        "spring bag",
+        "individually wrapped",
+        "good breathability",
+        "leg frame",
+        "main materials use",
+        "sofa support parts",
+        "steel pivot",
+        "steel frame",
+        "rectangular steel tube",
+        "sound-absorbing cotton",
+        "grammage",
+        "polyester fiber board",
+        "flocked felt",
+        "inner panel",
+        "fixed glass",
+        "tempering glass",
+        "screen printing",
+    ]:
+        assert fragment not in joined
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "category", "expected", "forbidden"),
+    [
+        pytest.param(
+            "BAGEL",
+            "BAGEL Rectangular Coffee Table Base: Alu in teaklook Ceramic Top: JK-4",
+            "Mesas de Apoyo",
+            ("mesa de apoyo rectangular", "aluminio con apariencia de teca", "cubierta de ceramica"),
+            ("coffee", "teaklook", "ceramic top"),
+            id="bagel",
+        ),
+        pytest.param(
+            "CAYENNE",
+            "CAYENNE 2-seat left arm module with rope",
+            "Sillones",
+            ("modulo izquierdo de dos plazas", "descansabrazos", "cuerda"),
+            ("2-seat", "left arm", "rope"),
+            id="cayenne",
+        ),
+        pytest.param(
+            "Chiengmai",
+            "Chiengmai Meridienne Left short arm with straps full aluminium legs",
+            "Sillones",
+            ("meridiana", "descansabrazos corto izquierdo", "correas", "patas de aluminio"),
+            ("meridienne", "straps", "aluminium"),
+            id="chiengmai",
+        ),
+        pytest.param(
+            "Dinosaur egg",
+            "Dinosaur egg sling dining armchair with loose seat cushion, full aluminium legs",
+            "Silla",
+            ("silla de comedor con brazos", "cojin de asiento suelto", "patas de aluminio"),
+            ("dining armchair", "loose seat", "aluminium"),
+            id="dinosaur-egg",
+        ),
+        pytest.param(
+            "Dublin",
+            "Dublin barstool with back Seat and back with rope",
+            "Bancos",
+            ("banco alto", "asiento y respaldo", "cuerda"),
+            ("barstool", "with back", "rope"),
+            id="dublin",
+        ),
+        pytest.param(
+            "ENZO",
+            "ENZO Coffee Table (L) Top: Ceramic",
+            "Mesas de Apoyo",
+            ("mesa de apoyo", "cubierta: ceramica"),
+            ("coffee table", "top: ceramic"),
+            id="enzo",
+        ),
+        pytest.param(
+            "IBIZA",
+            "IBIZA dining armchair with rope",
+            "Silla",
+            ("silla de comedor con brazos", "cuerda"),
+            ("dining armchair", "rope"),
+            id="ibiza",
+        ),
+        pytest.param(
+            "Lille",
+            "Lille coffee table (S) with ceramic top - Travertino romano",
+            "Mesas de Apoyo",
+            ("mesa de apoyo", "cubierta de ceramica", "travertino romano"),
+            ("coffee table", "ceramic top"),
+            id="lille",
+        ),
+        pytest.param(
+            "LOFT",
+            "LOFT EXTENSION MODULE SINGLE, W/SPRING, VERSION C",
+            "Sillones",
+            ("modulo individual de extension", "con resorte", "version c"),
+            ("extension module", "w/spring"),
+            id="loft",
+        ),
+        pytest.param(
+            "LOIRE",
+            "LOIRE LOUNGE ARMCHAIR WITH STRAP 45mm",
+            "Sillones",
+            ("sillon de descanso", "con correa", "45 mm"),
+            ("lounge armchair", "strap"),
+            id="loire",
+        ),
+    ],
+)
+def test_spanish_description_translates_real_alma_catalog_phrases(
+    name,
+    source,
+    category,
+    expected,
+    forbidden,
+):
+    description = build_product_description(name, source, category, "es")
+    body = description.split("\n", 1)[1].casefold()
+
+    for fragment in expected:
+        assert fragment.casefold() in body
+    for fragment in forbidden:
+        assert fragment.casefold() not in body
+
+
+def test_processed_description_removes_only_technical_audit_segments():
+    text = build_product_description(
+        "Mesa ALMA",
+        (
+            "Descripcion Mesa ALMA"
+            " | Fuente: alma:e2e:configurable"
+            " | Hash fuente: " + "a" * 64
+            + " | Clave: ALMA-E2E"
+            " | Base operativa; Electrificacion A"
+            " | Entrega: Entrega inmediata"
+            " | Revision documental local"
+        ),
+        "Mesas de Apoyo",
+        "es",
+    )
+
+    assert "Base operativa" in text
+    assert "Electrificacion A" in text
+    assert "Entrega inmediata" in text
+    assert "Revision documental local" in text
+    assert "Fuente:" not in text
+    assert "Hash fuente:" not in text
+    assert "Clave:" not in text
+
+
+def test_spanish_finish_uses_official_freight_concept_instead_of_generic_product():
+    text = build_product_description(
+        "Desso Grain B867 9506 B1 50x50",
+        "Alfombra modular Desso",
+        "Terminados",
+        "es",
+    )
+
+    assert text.startswith("Terminado modelo Desso Grain B867 9506 B1 50x50.")
+    assert not text.startswith("Producto terminado")
+
+
 def test_python_engine_writes_spanish_description_in_cotizacion(tmp_path):
     source = DOWNLOADS / "IZA REFORMA-Quotation Sheet - V1.xlsx"
     if not source.exists() or not TEMPLATE.exists():
@@ -360,8 +787,9 @@ def test_python_engine_writes_spanish_description_in_cotizacion(tmp_path):
     )
 
     wb = load_workbook(output, data_only=False)
-    description = wb["Cotizacion"]["C17"].value
+    assert wb["Cotizacion"]["C17"].value == "=Quotation!D9"
+    description = wb["Quotation"]["D9"].value
     assert description.startswith("Silla modelo Locke Task Chair.")
     assert "malla de alta calidad" in description
-    assert description != "=Quotation!D9"
+    assert wb["Quotation"]["E9"].value != description
     wb.close()

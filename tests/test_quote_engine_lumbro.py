@@ -2,94 +2,127 @@ from pathlib import Path
 import sys
 
 import pytest
-from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mobiliti_saas.quote_engine import engine  # noqa: E402
-from mobiliti_saas.quote_engine.engine import _load_lumbro_prices, _lumbro_accessories_for_item, _write_mobiliti  # noqa: E402
+from mobiliti_saas.quote_engine.engine import (  # noqa: E402
+    _item_auto_electrification,
+)
 from mobiliti_saas.quote_engine.parser import QuoteItem  # noqa: E402
-from mobiliti_saas.quote_engine.parser import read_items  # noqa: E402
 
 
-DOWNLOADS = Path(r"C:\Users\pepem\Downloads")
-TEMPLATE_DIR = ROOT / "versiones historial" / "HISTORIAL DE VERSIONES" / "Mobiliti_Generador_Windows"
-TEMPLATE = next(TEMPLATE_DIR.glob("Formato*.xlsx"), TEMPLATE_DIR / "Formato Cotizacion 2026 GDL (1).xlsx")
+def test_legacy_electrification_metadata_retains_its_validation_contract():
+    enabled = QuoteItem(
+        tipo="producto",
+        row=9,
+        proveedor="Tarkett",
+        electrificacion_automatica=True,
+    )
+    disabled = QuoteItem(
+        tipo="producto",
+        row=10,
+        proveedor="ALMA",
+        electrificacion_automatica=False,
+    )
+    mixed = {"catalog_price_mode": "mixed_catalog_converted"}
+
+    assert _item_auto_electrification(enabled, mixed) is True
+    assert _item_auto_electrification(disabled, mixed) is False
+    assert _item_auto_electrification(QuoteItem(tipo="producto", row=11), {}) is True
+    assert _item_auto_electrification(
+        QuoteItem(tipo="producto", row=12),
+        {"catalog_price_mode": "list_price_net"},
+    ) is False
 
 
-def test_lumbro_accessories_for_workstation_pax_multiplies_quantity():
-    item = QuoteItem(tipo="producto", row=9, nombre="Estacion Lido 8PAX", cantidad=2)
+@pytest.mark.parametrize(
+    "name",
+    ["DU688-Lido Ejecutivo", "Estacion Lido 8PAX", "Sala de juntas para 8 pax"],
+)
+@pytest.mark.parametrize("legacy_mixed_flag", [False, True])
+def test_quote_presentation_keeps_only_requested_products(name, legacy_mixed_flag):
+    item = QuoteItem(
+        tipo="producto",
+        row=9,
+        nombre=name,
+        cantidad=2,
+        precio=100,
+        proveedor="Offiho",
+        modo_precio="list",
+        descuento=40,
+        moneda_original="MXN",
+        precio_original=100,
+        tipo_cambio_congelado=1,
+        electrificacion_automatica=True,
+    )
+    metadata = {"tipo_cambio": 1}
+    if legacy_mixed_flag:
+        metadata.update(
+            catalog_price_mode="mixed_catalog_converted",
+            quote_currency="MXN",
+            auto_electrification_rate={
+                "base_currency": "MXN",
+                "quote_currency": "MXN",
+                "exchange_rate": "1.000000",
+                "rate_source": "identity",
+                "rate_effective_date": "2026-08-30",
+                "rate_retrieved_at": "",
+            },
+        )
+    lines, needs = engine._official_presentation_lines(
+        (item,), metadata, {},
+    )
 
-    accessories = _lumbro_accessories_for_item(item, "Escritorios-WorkStation")
-
-    assert accessories == [
-        ("LIDO.OP-INT", 16),
-        ("JUMP-1.5M", 16),
-        ("CAJA-FUS", 4),
-    ]
-
-
-def test_lumbro_accessories_for_meeting_table_adds_jump_plus_one():
-    item = QuoteItem(tipo="producto", row=14, nombre="Sala de juntas para 8 pax", cantidad=1)
-
-    accessories = _lumbro_accessories_for_item(item, "Mesas de Juntas")
-
-    assert accessories == [
-        ("MULT-LIDO-INT", 2),
-        ("JUMP-1.5M", 3),
-    ]
-
-
-def test_lumbro_accessories_for_workstation_without_pax_adds_default_multicontact():
-    item = QuoteItem(tipo="producto", row=21, nombre="DU688-Lido Ejecutivo", cantidad=1)
-
-    accessories = _lumbro_accessories_for_item(item, "Escritorios-WorkStation")
-
-    assert accessories == [("MULT-LIDO-INT", 1)]
-
-
-def test_lumbro_accessories_for_workstation_without_pax_respects_quantity():
-    item = QuoteItem(tipo="producto", row=21, nombre="UP 1 IND Escritorio", cantidad=4)
-
-    accessories = _lumbro_accessories_for_item(item, "Escritorios-WorkStation")
-
-    assert accessories == [("MULT-LIDO-INT", 4)]
-
-
-def test_mobiliti_lumbro_rows_use_safe_discount_and_region_formulas():
-    source = DOWNLOADS / "IZA REFORMA-Quotation Sheet - V1.xlsx"
-    if not source.exists() or not TEMPLATE.exists():
-        pytest.skip("IZA input/template not available on this machine")
-
-    items, column_map = read_items(source)
-    wb = load_workbook(TEMPLATE, data_only=False)
-    try:
-        ws = wb["Mobiliti"]
-        _, lumbro_row_map = _write_mobiliti(ws, items, column_map, _load_lumbro_prices(TEMPLATE))
-        lumbro_rows = [row for rows in lumbro_row_map.values() for row in rows]
-        assert lumbro_rows
-
-        for row in lumbro_rows:
-            assert ws.cell(row, 16).value == "Centro"
-            assert str(ws.cell(row, 10).value).startswith("='SPEC-GUIDE-LUMBRO'!E")
-            assert str(ws.cell(row, 10).value).endswith("/$K$6")
-            assert ws.cell(row, 27).value == f"=MIN(0.4,Z{row})"
-            assert ws.cell(row, 28).value == f"=X{row}*AA{row}"
-            assert ws.cell(row, 29).value == f'=IF(AA{row}>Z{row},"ERROR",(X{row}-AB{row}))'
-            assert ws.cell(row, 30).value == f"=AC{row}*H{row}"
-    finally:
-        wb.close()
+    assert [line.name for line in lines] == [name]
+    assert lines[0].quantity == 2
+    assert lines[0].parent_item_key is None
+    assert sum(section.item_count for section in needs) == 1
 
 
-def test_load_lumbro_prices_preserves_source_row_reference():
-    if not TEMPLATE.exists():
-        pytest.skip("template not available on this machine")
+@pytest.mark.parametrize("code", ["MULT-LIDO-INT", "LIDO.OP-INT", "JUMP-1.5M", "CAJA-FUS"])
+def test_quote_presentation_preserves_explicit_lumbro_products(code):
+    item = QuoteItem(
+        tipo="producto", row=9, nombre=code, cantidad=3, precio=120,
+        descripcion="Accesorio elegido por el usuario",
+    )
 
-    prices = _load_lumbro_prices(TEMPLATE)
+    lines, needs = engine._official_presentation_lines(
+        (item,), {"catalog_supplier_label": "Lumbro CH", "tipo_cambio": 1},
+        {9: (b"imagen-explicita", "image/png")},
+    )
 
-    assert prices["LIDO.OP-INT"].row == 380
-    assert prices["LIDO.OP-INT"].price_mxn > 0
+    assert [line.name for line in lines] == [code]
+    assert lines[0].description == "Accesorio elegido por el usuario"
+    assert lines[0].quantity == 3
+    assert lines[0].converted_cost == 120
+    assert lines[0].provider == "Lumbro CH"
+    assert lines[0].parent_item_key is None
+    assert lines[0].image_content == b"imagen-explicita"
+    assert lines[0].image_content_type == "image/png"
+    assert sum(section.item_count for section in needs) == 1
+
+
+def test_lauco_cub_hive_uses_the_reviewed_reference_when_catalog_has_no_image():
+    item = QuoteItem(
+        tipo="producto",
+        row=9,
+        nombre="CUB HIVE",
+        descripcion="Cubiculo modular hexagonal tipo panal",
+        proveedor="Lauco",
+        cantidad=1,
+        precio=100,
+    )
+
+    lines, _ = engine._official_presentation_lines(
+        (item,),
+        {},
+        {},
+    )
+
+    assert lines[0].image_content == engine.CUB_HIVE_REFERENCE_IMAGE.read_bytes()
+    assert lines[0].image_content_type == "image/png"
 
 
 def test_exchange_rate_prefers_explicit_metadata(monkeypatch):

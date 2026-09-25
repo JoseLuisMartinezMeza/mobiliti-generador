@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 
@@ -14,7 +16,9 @@ def test_quote_form_recommends_dezgo_by_default():
     assert 'image_prompt: DEFAULT_IMAGE_PROMPT' in source
     assert 'const DEFAULT_IMAGE_PROMPT = "Mejora la calidad de imagen y que este en fondo blanco";' in source
     assert "IA Dezgo recomendado - genera faltantes realistas" in source
+    assert "Sunon web experimental - buscar por codigo" in source
     assert "Local sin IA - no inventa imagenes faltantes" in source
+    assert "Sunon web busca imagen oficial y cae a local" in source
     assert "Prompt para imagenes" in source
     assert "MAX_QUOTE_INPUT_MB = 25" in source
     assert "El archivo supera el limite" in source
@@ -35,6 +39,23 @@ def test_download_and_generation_timers_are_visible():
     assert ".job-duration" in styles
     assert ".download-downloading" in styles
     assert ".download-line.active" in styles
+
+
+def test_unsubmitted_drafts_are_not_reported_as_stalled_generation_jobs():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert 'draft: "Borrador sin enviar"' in source
+    assert "draft: 0" in source
+    assert 'return ["queued", "processing"].includes(job?.status);' in source
+    assert 'if (job?.status === "draft") return "Pendiente de enviar";' in source
+    assert 'active: jobs.filter((job) => ["queued", "processing"].includes(job.status)).length' in source
+    assert 'drafts: jobs.filter((job) => job.status === "draft").length' in source
+    assert '<StatCard label="Borradores" value={stats.drafts} />' in source
+    assert '<option value="draft">Borradores</option>' in source
+    assert 'onDelete={deleteJob}' in source
+    assert "Descartar borrador" in source
+    assert "grid-template-columns: repeat(5, minmax(0, 1fr));" in styles
 
 
 def test_expired_session_is_cleared_instead_of_showing_raw_token_error():
@@ -70,3 +91,184 @@ def test_download_does_not_mutate_signed_url_query():
     assert "download=${encodeURIComponent" not in source
     assert "const filename = data.filename || quoteDownloadFallbackName(job);" in source
     assert "link.href = signedUrl;" in source
+
+
+def test_tarkett_tab_catalog_cache_and_cart_are_present():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    vercel = Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+
+    assert '["tarkett", "Tarkett", PackageSearch]' in source
+    assert "function TarkettView" in source
+    assert 'request("/tarkett/catalog")' in source
+    assert 'request("/tarkett/quote"' not in source
+    assert 'const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";' in source
+    assert "Precio unitario" in source
+    assert "formatCatalogCurrency(item.unit_price)" in source
+    assert "sessionStorage.setItem(TARKETT_CATALOG_CACHE_KEY" in source
+    assert "Apartado {formatQuantity(reserved)}" in source
+    assert ".tarkett-grid" in styles
+    assert ".mixed-cart-drawer" in styles
+    assert '"/tarkett/:path*"' in vercel
+
+
+def test_offiho_tab_catalog_cart_and_warning_contracts_are_present():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+    vercel = Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+
+    assert 'Armchair' in source
+    assert '["tarkett", "Tarkett", PackageSearch]' in source
+    assert '["offiho", "Offiho", Armchair]' in source
+    assert source.index('["tarkett", "Tarkett", PackageSearch]') < source.index('["offiho", "Offiho", Armchair]')
+    assert "function OffihoView" in source
+    assert 'request("/offiho/catalog")' in source
+    assert 'request("/offiho/quote"' not in source
+    assert 'const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";' in source
+    assert "sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY)" in source
+    assert "inventory_key" in source
+    assert "Stock insuficiente" in source
+    assert "Agotado" in source
+    assert "window.confirm" in source
+    assert "numeric > 1000000" in source
+    assert "maximumFractionDigits: 2" in source
+    assert "rel=\"noreferrer noopener\"" in source
+    assert 'aria-label={`Abrir sitio oficial de ${item.name || item.code}`}' in source
+    assert 'title="Abrir sitio oficial"' in source
+    assert '"/offiho/:path*"' in vercel
+    assert ".offiho-product" in styles
+    assert ".offiho-warning" in styles
+    assert ".offiho-product .product-media" in styles
+    assert "width: 124px;" in styles
+    assert "height: 148px;" in styles
+    assert "object-fit: contain;" in styles
+
+
+def test_shared_supplier_tabs_are_visible_and_routed_to_the_common_view():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    component = Path("mobiliti_saas/web/src/SupplierCatalogView.jsx").read_text(encoding="utf-8")
+    vercel = Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+
+    expected_tabs = [
+        '["cr-global", "CR Global", PackageSearch]',
+        '["sonara", "Sonara", PackageSearch]',
+        '["sunon", "Sunon", PackageSearch]',
+        '["alma", "ALMA", PackageSearch]',
+    ]
+    positions = [source.index(tab) for tab in expected_tabs]
+    assert positions == sorted(positions)
+    assert 'import SupplierCatalogView from "./SupplierCatalogView";' in source
+    assert source.count("<SupplierCatalogView") == 1
+    assert "export default function SupplierCatalogView" in component
+    assert '"source": "/catalogs"' in vercel
+    assert '"source": "/catalogs/:path*"' in vercel
+
+
+def test_vercel_routes_project_workspace_requests_to_fastapi_before_spa():
+    """Project CRUD/import requests must not fall through to index.html."""
+
+    config = json.loads(
+        Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+    )
+    rewrites = config["rewrites"]
+    route_pairs = [
+        (rewrite["source"], rewrite["destination"])
+        for rewrite in rewrites
+    ]
+
+    assert ("/projects", "/api/index") in route_pairs
+    assert ("/projects/:path*", "/api/index") in route_pairs
+    assert route_pairs.index(("/projects", "/api/index")) < route_pairs.index(
+        ("/(.*)", "/index.html")
+    )
+    assert route_pairs.index(("/projects/:path*", "/api/index")) < route_pairs.index(
+        ("/(.*)", "/index.html")
+    )
+
+
+def test_vercel_keeps_static_catalog_assets_out_of_python_function_bundle():
+    config = json.loads(
+        Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+    )
+
+    assert config["functions"]["api/**/*.py"]["excludeFiles"] == (
+        "public/catalog-assets/**"
+    )
+
+
+def test_offiho_catalog_uses_factual_filters_cache_and_pagination_contracts():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert 'const OFFIHO_PAGE_SIZE = 24;' in source
+    assert "const pagedItems = useMemo" in source
+    assert "filteredItems.slice(pageStart, pageStart + OFFIHO_PAGE_SIZE)" in source
+    assert "pagedItems.map" in source
+    assert "ChevronLeft" in source and "ChevronRight" in source
+    assert 'aria-label="Pagina anterior"' in source
+    assert 'aria-label="Pagina siguiente"' in source
+    assert "Pagina {page} de {pageCount}" in source
+    assert "unitFilter" in source
+    assert "Todas las unidades" in source
+    assert "brandFilter" not in source
+    assert "categoryFilter" not in source
+    assert "user_id: userId" in source
+    assert "cached?.user_id === userId" in source
+    assert "clearCatalogCaches" in source
+    assert ".offiho-pagination" in styles
+
+
+def test_offiho_quantity_price_and_submit_guard_contracts_are_present():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+
+    assert "Precio por confirmar" in source
+    assert "confirmOnMissingPrice" in source
+    assert "confirmOnInsufficient" in source
+    assert "onBlur" in source
+
+
+def test_completed_quotes_disclose_local_image_fallback():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert "function ImageProviderWarning" in source
+    assert "image_ai_failed_count" in source
+    assert "image_ai_missing_failed_count" in source
+    assert "IA no disponible" in source
+    assert 'role="status"' in source
+    assert ".image-provider-warning" in styles
+    assert "rawQuantity" in source
+    assert "1." in source
+    assert "mixedQuoteSubmittingRef" in source
+    assert "if (mixedQuoteSubmittingRef.current" in source
+    assert "mixedQuoteSubmittingRef.current = true;" in source
+    assert "mixedQuoteSubmittingRef.current = false;" in source
+    assert 'role="status"' in source
+    assert 'aria-live="polite"' in source
+
+
+def test_catalog_shell_is_unframed_and_intermediate_breakpoint_prevents_overlap():
+    source = Path("mobiliti_saas/web/src/main.jsx").read_text(encoding="utf-8")
+    styles = Path("mobiliti_saas/web/src/styles.css").read_text(encoding="utf-8")
+
+    assert 'className="tarkett-shell"' in source
+    assert 'className="tarkett-shell offiho-shell"' in source
+    assert 'main-card full tarkett-shell' not in source
+    assert ".tarkett-shell {\n  margin: 18px;\n  overflow: visible;\n  background: transparent;\n  border: 0;\n  border-radius: 0;\n  box-shadow: none;" in styles
+    assert "@media (max-width: 1390px)" in styles
+    intermediate = styles.split("@media (max-width: 1390px)", 1)[1].split("@media (max-width: 1120px)", 1)[0]
+    assert ".tarkett-toolbar,\n  .offiho-toolbar" in intermediate
+    assert "grid-template-columns: 1fr;" in intermediate
+    assert ".tarkett-grid" in intermediate
+    assert "text-align: left;" in intermediate
+    assert ".product-actions {\n  min-width: 0;" in styles
+
+
+def test_verify_saas_runs_the_supported_frontend_validation_command():
+    script = Path("scripts/verify-saas.ps1").read_text(encoding="utf-8")
+
+    assert 'Invoke-Step "Python tests"' in script
+    assert 'Invoke-Step "Node tests"' not in script
+    assert "npm.cmd test" not in script
+    assert 'Join-Path $root "mobiliti_saas\\web"' in script
+    assert "npm.cmd run build" in script

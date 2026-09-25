@@ -1,0 +1,1227 @@
+[
+  {
+    "inventory_key": "PIGRECO W BLANCO",
+    "product_url": "https://colos.it/en/products/pigreco",
+    "image_url": "https://colos.it/storage/products/19/S_pigreco_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "PIGRECO N NEGRO",
+    "product_url": "https://colos.it/en/products/pigreco",
+    "image_url": "https://colos.it/storage/products/19/S_pigreco_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "PIGRECO G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/pigreco",
+    "image_url": "https://colos.it/storage/products/19/S_pigreco_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "PIGRECO MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/pigreco",
+    "image_url": "https://colos.it/storage/products/19/S_pigreco_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "PIGRECO V VERDE BOSQUE",
+    "product_url": "https://colos.it/en/products/pigreco",
+    "image_url": "https://colos.it/storage/products/19/S_pigreco_verdeforesta.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Forest Green"
+  },
+  {
+    "inventory_key": "PIGRECO F PIGRECO FANGO",
+    "product_url": "https://colos.it/en/products/pigreco",
+    "image_url": "https://colos.it/storage/products/19/S_pigreco_fangopng.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mud"
+  },
+  {
+    "inventory_key": "TORRE W BLANCO",
+    "product_url": "https://colos.it/en/products/torre",
+    "image_url": "https://colos.it/storage/products/3/S_torre_bianco_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "TORRE N NEGRO",
+    "product_url": "https://colos.it/en/products/torre",
+    "image_url": "https://colos.it/storage/products/3/S_torre_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "TORRE G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/torre",
+    "image_url": "https://colos.it/storage/products/3/S_torre_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "TORRE MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/torre",
+    "image_url": "https://colos.it/storage/products/3/S_torre_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "TORRE V VERDE BOSQUE",
+    "product_url": "https://colos.it/en/products/torre",
+    "image_url": "https://colos.it/storage/products/3/S_torre_verdeforesta.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Forest Green"
+  },
+  {
+    "inventory_key": "TORRE B AZUL HIELO",
+    "product_url": "https://colos.it/en/products/torre",
+    "image_url": "https://colos.it/storage/products/3/S_torre_bluchiaro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Ice Blue"
+  },
+  {
+    "inventory_key": "TORRE F FANGO",
+    "product_url": "https://colos.it/en/products/torre",
+    "image_url": "https://colos.it/storage/products/3/S_torre_fango.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mud"
+  },
+  {
+    "inventory_key": "TORRE S W BLANCO",
+    "product_url": "https://colos.it/en/products/torre-s",
+    "image_url": "https://colos.it/storage/products/4/S_torre-s_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "TORRE S N NEGRO",
+    "product_url": "https://colos.it/en/products/torre-s",
+    "image_url": "https://colos.it/storage/products/4/S_torre-s_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "TORRE S MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/torre-s",
+    "image_url": "https://colos.it/storage/products/4/S_torre-s_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "TORRE S V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/torre-s",
+    "image_url": "https://colos.it/storage/products/4/S_torre-s_verdeforesta.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Forest Green"
+  },
+  {
+    "inventory_key": "TORRE S B AZUL HIELO",
+    "product_url": "https://colos.it/en/products/torre-s",
+    "image_url": "https://colos.it/storage/products/4/S_torre-s_blu-ghiaccio.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Ice Blue"
+  },
+  {
+    "inventory_key": "TORRE S F FANGO",
+    "product_url": "https://colos.it/en/products/torre-s",
+    "image_url": "https://colos.it/storage/products/4/S_torre-s_fango.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mud"
+  },
+  {
+    "inventory_key": "VESPER/01B AZUL CLARO",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_celeste.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Pale blue"
+  },
+  {
+    "inventory_key": "VESPER/01G GRIS",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_grigio.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Grey"
+  },
+  {
+    "inventory_key": "VESPER/01N NEGRA",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "VESPER/01R ROJA",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_rosso.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "VESPER/01S ARENA",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_sabbia.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Sand"
+  },
+  {
+    "inventory_key": "VESPER/01V VERDE",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_verdeforesta.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Forest Green"
+  },
+  {
+    "inventory_key": "VESPER/01W BLANCA",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "VESPER/02B AZUL CLARO",
+    "product_url": "https://colos.it/en/products/vesper-2",
+    "image_url": "https://colos.it/storage/products/9/S_vesper-2_celeste.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Pale blue"
+  },
+  {
+    "inventory_key": "VESPER/02G GRIS",
+    "product_url": "https://colos.it/en/products/vesper-2",
+    "image_url": "https://colos.it/storage/products/9/S_vesper-2_grigio.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Grey"
+  },
+  {
+    "inventory_key": "VESPER/02N NEGRA",
+    "product_url": "https://colos.it/en/products/vesper-2",
+    "image_url": "https://colos.it/storage/products/9/S_vesper-2_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "VESPER/02R ROJA",
+    "product_url": "https://colos.it/en/products/vesper-2",
+    "image_url": "https://colos.it/storage/products/9/S_vesper-2_rosso.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "VESPER/02S ARENA",
+    "product_url": "https://colos.it/en/products/vesper-2",
+    "image_url": "https://colos.it/storage/products/9/S_vesper-2_sabbia.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Sand"
+  },
+  {
+    "inventory_key": "VESPER/02V VERDE",
+    "product_url": "https://colos.it/en/products/vesper-2",
+    "image_url": "https://colos.it/storage/products/9/S_vesper-2_verdeforesta.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Forest Green"
+  },
+  {
+    "inventory_key": "VESPER/02W BLANCA",
+    "product_url": "https://colos.it/en/products/vesper-2",
+    "image_url": "https://colos.it/storage/products/9/S_vesper-2_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "VESPER 1 SW",
+    "product_url": "https://colos.it/en/products/vesper-1-sw",
+    "image_url": "https://colos.it/storage/products/10/S_vesper-sw-_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White (default)"
+  },
+  {
+    "inventory_key": "VESPER/01 VERDE BOSQUE",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_verdeforesta.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Forest Green"
+  },
+  {
+    "inventory_key": "VESPER 2 SW CROMADA",
+    "product_url": "https://colos.it/en/products/vesper-2-sw",
+    "image_url": "https://colos.it/storage/products/49/S_vesper-2sw-_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White (default)"
+  },
+  {
+    "inventory_key": "VESPER/01B CELESTE",
+    "product_url": "https://colos.it/en/products/vesper-1",
+    "image_url": "https://colos.it/storage/products/2/S_vesper-1_celeste.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Pale blue"
+  },
+  {
+    "inventory_key": "PIAZZA 1 G GRIS CALIDO",
+    "product_url": "https://colos.it/en/products/piazza-1",
+    "image_url": "https://colos.it/storage/products/5/S_piazza-1_grigiocaldoeco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Warm grey ECO"
+  },
+  {
+    "inventory_key": "PIAZZA 1 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/piazza-1",
+    "image_url": "https://colos.it/storage/products/5/S_piazza-1_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "PIAZZA 1 N NEGRO",
+    "product_url": "https://colos.it/en/products/piazza-1",
+    "image_url": "https://colos.it/storage/products/5/S_piazza-1_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "PIAZZA 1 S ARENA",
+    "product_url": "https://colos.it/en/products/piazza-1",
+    "image_url": "https://colos.it/storage/products/5/S_piazza-1_sabbia.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Sand"
+  },
+  {
+    "inventory_key": "PIAZZA 1 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/piazza-1",
+    "image_url": "https://colos.it/storage/products/5/S_piazza-1_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "PIAZZA 1 W BLANCO",
+    "product_url": "https://colos.it/en/products/piazza-1",
+    "image_url": "https://colos.it/storage/products/5/S_piazza-1_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "PIAZZA 1 W TORRENTE",
+    "product_url": "https://colos.it/en/products/piazza-1",
+    "image_url": "https://colos.it/storage/products/5/S_piazza-1_torrente.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Torrente"
+  },
+  {
+    "inventory_key": "PIAZZA 2 G GRIS CALIDO",
+    "product_url": "https://colos.it/en/products/piazza-2",
+    "image_url": "https://colos.it/storage/products/6/S_piazza-2_grigiocaldoeco_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Warm grey ECO"
+  },
+  {
+    "inventory_key": "PIAZZA 2 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/piazza-2",
+    "image_url": "https://colos.it/storage/products/6/S_piazza-2_melanzana_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "PIAZZA 2 N NEGRO",
+    "product_url": "https://colos.it/en/products/piazza-2",
+    "image_url": "https://colos.it/storage/products/6/S_piazza-2_nero_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "PIAZZA 2 S ARENA",
+    "product_url": "https://colos.it/en/products/piazza-2",
+    "image_url": "https://colos.it/storage/products/6/S_piazza-2_sabbia_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Sand"
+  },
+  {
+    "inventory_key": "PIAZZA 2 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/piazza-2",
+    "image_url": "https://colos.it/storage/products/6/S_piazza-2_verdescuro_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "PIAZZA 2 W BLANCO",
+    "product_url": "https://colos.it/en/products/piazza-2",
+    "image_url": "https://colos.it/storage/products/6/S_piazza-2_bianco_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "SPLIT G GRIS CALIDO",
+    "product_url": "https://colos.it/en/products/split",
+    "image_url": "https://colos.it/storage/products/14/S_split_grigiocaldoeco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Warm grey ECO"
+  },
+  {
+    "inventory_key": "SPLIT MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/split",
+    "image_url": "https://colos.it/storage/products/14/S_split_melanzana_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "SPLIT N NEGRO",
+    "product_url": "https://colos.it/en/products/split",
+    "image_url": "https://colos.it/storage/products/14/S_split_nero_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "SPLIT R ROJO",
+    "product_url": "https://colos.it/en/products/split",
+    "image_url": "https://colos.it/storage/products/14/S_split_rosso_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "SPLIT S ARENA",
+    "product_url": "https://colos.it/en/products/split",
+    "image_url": "https://colos.it/storage/products/14/S_split_sabbia_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Sand"
+  },
+  {
+    "inventory_key": "SPLIT V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/split",
+    "image_url": "https://colos.it/storage/products/14/S_split_verdescuro_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "SPLIT W BLANCO",
+    "product_url": "https://colos.it/en/products/split",
+    "image_url": "https://colos.it/storage/products/14/S_split_bianco_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "SPLIT GL G GRIS CALIDO",
+    "product_url": "https://colos.it/en/products/split-gl",
+    "image_url": "https://colos.it/storage/products/15/S_split-gl_grigiocaldoeco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Warm grey ECO"
+  },
+  {
+    "inventory_key": "SPLIT GL MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/split-gl",
+    "image_url": "https://colos.it/storage/products/15/S_split-gl_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "SPLIT GL N NEGRO",
+    "product_url": "https://colos.it/en/products/split-gl",
+    "image_url": "https://colos.it/storage/products/15/S_split-gl_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "SPLIT GL R ROJO",
+    "product_url": "https://colos.it/en/products/split-gl",
+    "image_url": "https://colos.it/storage/products/15/S_split-gl_rosso.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "SPLIT GL S ARENA",
+    "product_url": "https://colos.it/en/products/split-gl",
+    "image_url": "https://colos.it/storage/products/15/S_split-gl_sabbia.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Sand"
+  },
+  {
+    "inventory_key": "SPLIT GL V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/split-gl",
+    "image_url": "https://colos.it/storage/products/15/S_split-gl_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "SPLIT GL W BLANCO",
+    "product_url": "https://colos.it/en/products/split-gl",
+    "image_url": "https://colos.it/storage/products/15/S_split-gl_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "SPLIT 1 G GRIS CALIDO",
+    "product_url": "https://colos.it/en/products/split-1",
+    "image_url": "https://colos.it/storage/products/16/S_split-1_grigiocaldoeco1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Warm grey ECO"
+  },
+  {
+    "inventory_key": "SPLIT 1 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/split-1",
+    "image_url": "https://colos.it/storage/products/16/S_split-1_melanzana1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "SPLIT 1 N NEGRO",
+    "product_url": "https://colos.it/en/products/split-1",
+    "image_url": "https://colos.it/storage/products/16/S_split-1_nero1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "SPLIT 1 R ROJO",
+    "product_url": "https://colos.it/en/products/split-1",
+    "image_url": "https://colos.it/storage/products/16/S_split-1_rosso1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "SPLIT 1 S ARENA",
+    "product_url": "https://colos.it/en/products/split-1",
+    "image_url": "https://colos.it/storage/products/16/S_split-1_sabbia1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Sand"
+  },
+  {
+    "inventory_key": "SPLIT 1 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/split-1",
+    "image_url": "https://colos.it/storage/products/16/S_split-1_verdescuro1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "SPLIT 1 W BLANCO",
+    "product_url": "https://colos.it/en/products/split-1",
+    "image_url": "https://colos.it/storage/products/16/S_split-1_bianco-1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "SPLIT KIDS G GRIS CALIDO",
+    "product_url": "https://colos.it/en/products/split-kids",
+    "image_url": "https://colos.it/storage/products/18/S_split-kid_grigiocaldo.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Warm grey ECO"
+  },
+  {
+    "inventory_key": "SPLIT KIDS MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/split-kids",
+    "image_url": "https://colos.it/storage/products/18/S_split-kid_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "SPLIT KIDS N NEGRO",
+    "product_url": "https://colos.it/en/products/split-kids",
+    "image_url": "https://colos.it/storage/products/18/S_split-kid_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "SPLIT KIDS R ROJO",
+    "product_url": "https://colos.it/en/products/split-kids",
+    "image_url": "https://colos.it/storage/products/18/S_split-kid_rosso.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "SPLIT KIDS S ARENA",
+    "product_url": "https://colos.it/en/products/split-kids",
+    "image_url": "https://colos.it/storage/products/18/S_split-kid_sabbia.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Sand"
+  },
+  {
+    "inventory_key": "SPLIT KIDS V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/split-kids",
+    "image_url": "https://colos.it/storage/products/18/S_split-kid_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "SPLIT KIDS W BLANCO",
+    "product_url": "https://colos.it/en/products/split-kids",
+    "image_url": "https://colos.it/storage/products/18/S_split-kid_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "VILLA 1 G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/villa-1",
+    "image_url": "https://colos.it/storage/products/20/S_villa-1_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "VILLA 1 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/villa-1",
+    "image_url": "https://colos.it/storage/products/20/S_villa-1_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "VILLA 1 N NEGRO",
+    "product_url": "https://colos.it/en/products/villa-1",
+    "image_url": "https://colos.it/storage/products/20/S_villa-1_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "VILLA 1 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/villa-1",
+    "image_url": "https://colos.it/storage/products/20/S_villa-1_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "VILLA 1 W BLANCO",
+    "product_url": "https://colos.it/en/products/villa-1",
+    "image_url": "https://colos.it/storage/products/20/S_villa-1_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "VILLA 2 G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/villa-2",
+    "image_url": "https://colos.it/storage/products/21/S_villa-2_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "VILLA 2 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/villa-2",
+    "image_url": "https://colos.it/storage/products/21/S_villa-2_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "VILLA 2 N NEGRO",
+    "product_url": "https://colos.it/en/products/villa-2",
+    "image_url": "https://colos.it/storage/products/21/S_villa-2_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "VILLA 2 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/villa-2",
+    "image_url": "https://colos.it/storage/products/21/S_villa-2_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "VILLA 2 W BLANCO",
+    "product_url": "https://colos.it/en/products/villa-2",
+    "image_url": "https://colos.it/storage/products/21/S_villa-2_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "VILLA 3 G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/villa-3a",
+    "image_url": "https://colos.it/storage/products/22/S_villa-3_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "VILLA 3 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/villa-3a",
+    "image_url": "https://colos.it/storage/products/22/S_villa-3_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "VILLA 3 N NEGRO",
+    "product_url": "https://colos.it/en/products/villa-3a",
+    "image_url": "https://colos.it/storage/products/22/S_villa-3_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "VILLA 3 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/villa-3a",
+    "image_url": "https://colos.it/storage/products/22/S_villa-3_gverdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "VILLA 3 W BLANCO",
+    "product_url": "https://colos.it/en/products/villa-3a",
+    "image_url": "https://colos.it/storage/products/22/S_villa-3_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "C1.1/1 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/c1-1-1",
+    "image_url": "https://colos.it/storage/products/30/S_c1-1-1_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "C1.1/1 N NEGRO",
+    "product_url": "https://colos.it/en/products/c1-1-1",
+    "image_url": "https://colos.it/storage/products/30/S_c1-1-1_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "C1.1/1 R ROJO",
+    "product_url": "https://colos.it/en/products/c1-1-1",
+    "image_url": "https://colos.it/storage/products/30/S_c1-1-1_rosso.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "C1.1/1 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/c1-1-1",
+    "image_url": "https://colos.it/storage/products/30/S_c1-1-1_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "C1.1/1 W BLANCO",
+    "product_url": "https://colos.it/en/products/c1-1-1",
+    "image_url": "https://colos.it/storage/products/30/S_c1-1-1_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "C1.1/1 Y MOSTAZA",
+    "product_url": "https://colos.it/en/products/c1-1-1",
+    "image_url": "https://colos.it/storage/products/30/S_c1-1-1_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "C1.1/4 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/c1-1-4",
+    "image_url": "https://colos.it/storage/products/146/S_c1-1-4_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "C1.1/4 N NEGRO",
+    "product_url": "https://colos.it/en/products/c1-1-4",
+    "image_url": "https://colos.it/storage/products/146/S_c1-1-4_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "C1.1/4 R ROJO",
+    "product_url": "https://colos.it/en/products/c1-1-4",
+    "image_url": "https://colos.it/storage/products/146/S_c1-1-4_rosso.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "C1.1/4 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/c1-1-4",
+    "image_url": "https://colos.it/storage/products/146/S_c1-1-4_verdescuro1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "C1.1/4 W BLANCO",
+    "product_url": "https://colos.it/en/products/c1-1-4",
+    "image_url": "https://colos.it/storage/products/146/S_c1-1-4_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "C1.1/4 Y MOSTAZA",
+    "product_url": "https://colos.it/en/products/c1-1-4",
+    "image_url": "https://colos.it/storage/products/146/S_c1-1-4_senape1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "C1.2/1 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/c1-2-1",
+    "image_url": "https://colos.it/storage/products/31/S_c1-2-1_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "C1.2/1 N NEGRO",
+    "product_url": "https://colos.it/en/products/c1-2-1",
+    "image_url": "https://colos.it/storage/products/31/S_c1-2-1_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "C1.2/1 R ROJO",
+    "product_url": "https://colos.it/en/products/c1-2-1",
+    "image_url": "https://colos.it/storage/products/31/S_c1-2-1_rosso.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "C1.2/1 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/c1-2-1",
+    "image_url": "https://colos.it/storage/products/31/S_c1-2-1_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "C1.2/1 W BLANCO",
+    "product_url": "https://colos.it/en/products/c1-2-1",
+    "image_url": "https://colos.it/storage/products/31/S_c1-2-1_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "C1.2/1 Y MOSTAZA",
+    "product_url": "https://colos.it/en/products/c1-2-1",
+    "image_url": "https://colos.it/storage/products/31/S_c1-2-1_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "C1.2/4 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/c1-2-4",
+    "image_url": "https://colos.it/storage/products/147/S_c1-2_4melanzana1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "C1.2/4 N NEGRO",
+    "product_url": "https://colos.it/en/products/c1-2-4",
+    "image_url": "https://colos.it/storage/products/147/S_c1-2_4nero1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "C1.2/4 R ROJO",
+    "product_url": "https://colos.it/en/products/c1-2-4",
+    "image_url": "https://colos.it/storage/products/147/S_c1-2-4_rosso.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Red"
+  },
+  {
+    "inventory_key": "C1.2/4 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/c1-2-4",
+    "image_url": "https://colos.it/storage/products/147/S_c1-2-4_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "C1.2/4 W BLANCO",
+    "product_url": "https://colos.it/en/products/c1-2-4",
+    "image_url": "https://colos.it/storage/products/147/S_c1-2-4_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "C1.2/4 Y MOSTAZA",
+    "product_url": "https://colos.it/en/products/c1-2-4",
+    "image_url": "https://colos.it/storage/products/147/S_c1-2_4senape1.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "RE-AL 1 W",
+    "product_url": "https://colos.it/en/products/re-al-1",
+    "image_url": "https://colos.it/storage/products/130/S_re_al_1_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "RE-AL 1 TR",
+    "product_url": "https://colos.it/en/products/re-al-1",
+    "image_url": "https://colos.it/storage/products/130/S_re_al_1_travertino.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Travertine"
+  },
+  {
+    "inventory_key": "RE-AL 1 TO",
+    "product_url": "https://colos.it/en/products/re-al-1",
+    "image_url": "https://colos.it/storage/products/130/S_re_al_1_torrente.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Torrente"
+  },
+  {
+    "inventory_key": "RE-AL 1 TE",
+    "product_url": "https://colos.it/en/products/re-al-1",
+    "image_url": "https://colos.it/storage/products/130/S_re_al_1_terracotta.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Terracotta"
+  },
+  {
+    "inventory_key": "RE-AL 1 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/re-al-1",
+    "image_url": "https://colos.it/storage/products/130/S_re_al_1_verde-scuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "RE-AL 1 G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/re-al-1",
+    "image_url": "https://colos.it/storage/products/130/S_re_al_1_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "RE-AL 1 N NEGRA",
+    "product_url": "https://colos.it/en/products/re-al-1",
+    "image_url": "https://colos.it/storage/products/130/S_re_al_1_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "RE-AL 2 W BLANCA",
+    "product_url": "https://colos.it/en/products/re-al-2",
+    "image_url": "https://colos.it/storage/products/131/S_re_al_2_bianco_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White"
+  },
+  {
+    "inventory_key": "RE-AL 2 TR TRAVERTINO",
+    "product_url": "https://colos.it/en/products/re-al-2",
+    "image_url": "https://colos.it/storage/products/131/S_re_al_2_travertino_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Travertine"
+  },
+  {
+    "inventory_key": "RE-AL 2 TO TORRENTE",
+    "product_url": "https://colos.it/en/products/re-al-2",
+    "image_url": "https://colos.it/storage/products/131/S_re_al_2_torrente_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Torrente"
+  },
+  {
+    "inventory_key": "RE-AL 2 TE TERRACOTA",
+    "product_url": "https://colos.it/en/products/re-al-2",
+    "image_url": "https://colos.it/storage/products/131/S_re_al_2_terracotta_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Terracotta"
+  },
+  {
+    "inventory_key": "RE-AL 2 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/re-al-2",
+    "image_url": "https://colos.it/storage/products/131/S_re_al_2_verde-scuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "RE-AL 2 G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/re-al-2",
+    "image_url": "https://colos.it/storage/products/131/S_re_al_2_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "RE-AL 2 N NEGRA",
+    "product_url": "https://colos.it/en/products/re-al-2",
+    "image_url": "https://colos.it/storage/products/131/S_re_al_2_nero_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "STECCA 1 B AZUL OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-1",
+    "image_url": "https://colos.it/storage/products/23/S_stecca-1_bluscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark blue"
+  },
+  {
+    "inventory_key": "STECCA 1 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/stecca-1",
+    "image_url": "https://colos.it/storage/products/23/S_stecca-1_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "STECCA 1 N NEGRO",
+    "product_url": "https://colos.it/en/products/stecca-1",
+    "image_url": "https://colos.it/storage/products/23/S_stecca-1_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "STECCA 1 S MOSTAZA",
+    "product_url": "https://colos.it/en/products/stecca-1",
+    "image_url": "https://colos.it/storage/products/23/S_stecca-1_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "STECCA 1 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-1",
+    "image_url": "https://colos.it/storage/products/23/S_stecca-1_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "STECCA 1 G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-1",
+    "image_url": "https://colos.it/storage/products/23/S_stecca-1_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "STECCA 2 B AZUL OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-2",
+    "image_url": "https://colos.it/storage/products/24/S_stecca-2_bluscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark blue"
+  },
+  {
+    "inventory_key": "STECCA 2 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/stecca-2",
+    "image_url": "https://colos.it/storage/products/24/S_stecca-2_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "STECCA 2 N NEGRO",
+    "product_url": "https://colos.it/en/products/stecca-2",
+    "image_url": "https://colos.it/storage/products/24/S_stecca-2_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "STECCA 2 S MOSTAZA",
+    "product_url": "https://colos.it/en/products/stecca-2",
+    "image_url": "https://colos.it/storage/products/24/S_stecca-2_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "STECCA 2 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-2",
+    "image_url": "https://colos.it/storage/products/24/S_stecca-2_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "STECCA 2 G GRIS OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-2",
+    "image_url": "https://colos.it/storage/products/24/S_stecca-2_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "STECCA 5 B AZUL OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-5",
+    "image_url": "https://colos.it/storage/products/25/S_stecca-5_bluiscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark blue"
+  },
+  {
+    "inventory_key": "STECCA 5 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/stecca-5",
+    "image_url": "https://colos.it/storage/products/25/S_stecca-5_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "STECCA 5 N NEGRO",
+    "product_url": "https://colos.it/en/products/stecca-5",
+    "image_url": "https://colos.it/storage/products/25/S_stecca-5_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "STECCA 5 S MOSTAZA",
+    "product_url": "https://colos.it/en/products/stecca-5",
+    "image_url": "https://colos.it/storage/products/25/S_stecca-5_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "STECCA 5 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-5",
+    "image_url": "https://colos.it/storage/products/25/S_stecca-5_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "STECCA 6 B AZUL OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-6",
+    "image_url": "https://colos.it/storage/products/26/S_stecca-6_bluscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark blue"
+  },
+  {
+    "inventory_key": "STECCA 6 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/stecca-6",
+    "image_url": "https://colos.it/storage/products/26/S_stecca-6_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "STECCA 6 N NEGRO",
+    "product_url": "https://colos.it/en/products/stecca-6",
+    "image_url": "https://colos.it/storage/products/26/S_stecca-6_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "STECCA 6 S MOSTAZA",
+    "product_url": "https://colos.it/en/products/stecca-6",
+    "image_url": "https://colos.it/storage/products/26/S_stecca-6_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "STECCA 6 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-6",
+    "image_url": "https://colos.it/storage/products/26/S_stecca-6_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "STECCA 7 B AZUL OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-7",
+    "image_url": "https://colos.it/storage/products/27/S_stecca-7_bluscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark blue"
+  },
+  {
+    "inventory_key": "STECCA 7 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/stecca-7",
+    "image_url": "https://colos.it/storage/products/27/S_stecca-7_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "STECCA 7 N NEGRO",
+    "product_url": "https://colos.it/en/products/stecca-7",
+    "image_url": "https://colos.it/storage/products/27/S_stecca-7_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "STECCA 7 S MOSTAZA",
+    "product_url": "https://colos.it/en/products/stecca-7",
+    "image_url": "https://colos.it/storage/products/27/S_stecca-7_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "STECCA 7 V VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-7",
+    "image_url": "https://colos.it/storage/products/27/S_stecca-7_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "STECCA L B VISITANTE AZUL OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-l",
+    "image_url": "https://colos.it/storage/products/29/S_stecca-l_bluscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark blue"
+  },
+  {
+    "inventory_key": "STECCA L MZ VISITANTE BERENJENA",
+    "product_url": "https://colos.it/en/products/stecca-l",
+    "image_url": "https://colos.it/storage/products/29/S_stecca-l_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "STECCA L N VISITANTE NEGRO",
+    "product_url": "https://colos.it/en/products/stecca-l",
+    "image_url": "https://colos.it/storage/products/29/S_stecca-l_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "STECCA L S VISITANTE MOSTAZA",
+    "product_url": "https://colos.it/en/products/stecca-l",
+    "image_url": "https://colos.it/storage/products/29/S_stecca-l_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "STECCA L V VISITANTE VERDE OSCURO",
+    "product_url": "https://colos.it/en/products/stecca-l",
+    "image_url": "https://colos.it/storage/products/29/S_stecca-l_verdescuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark green"
+  },
+  {
+    "inventory_key": "MOMO 1 N NEGRA",
+    "product_url": "https://colos.it/en/products/momo-net-1",
+    "image_url": "https://colos.it/storage/products/76/S_momo-net-1_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "MOMO 1 R BERENJENA",
+    "product_url": "https://colos.it/en/products/momo-net-1",
+    "image_url": "https://colos.it/storage/products/76/S_momo-net-1_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "MOMO 1 S MOSTAZA",
+    "product_url": "https://colos.it/en/products/momo-net-1",
+    "image_url": "https://colos.it/storage/products/76/S_momo-net-1_giallo.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "MOMO 1 G GRIS OBSCURO",
+    "product_url": "https://colos.it/en/products/momo-net-1",
+    "image_url": "https://colos.it/storage/products/76/S_momo-net-1_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "MOMO 3 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/momo-net-3",
+    "image_url": "https://colos.it/storage/products/74/S_momo-net-3_melanzana.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "MOMO 3 N NEGRO",
+    "product_url": "https://colos.it/en/products/momo-net-3",
+    "image_url": "https://colos.it/storage/products/74/S_momo-net-3_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "MOMO 3 S MOSTAZA",
+    "product_url": "https://colos.it/en/products/momo-net-3",
+    "image_url": "https://colos.it/storage/products/74/S_momo-net-3_senape.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "MOMO 3 G GRIS OBSCURO",
+    "product_url": "https://colos.it/en/products/momo-net-3",
+    "image_url": "https://colos.it/storage/products/74/S_momo-net-3_grigioscuro.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Dark grey"
+  },
+  {
+    "inventory_key": "TA/2-600 MZ BERENJENA",
+    "product_url": "https://colos.it/en/products/ta202-600",
+    "image_url": "https://colos.it/storage/products/137/S_ta-2-2q_melanzana_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Aubergine"
+  },
+  {
+    "inventory_key": "TA/2-600 N NEGRA",
+    "product_url": "https://colos.it/en/products/ta202-600",
+    "image_url": "https://colos.it/storage/products/137/S_ta-2-2q_nero.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Black"
+  },
+  {
+    "inventory_key": "TA/2-600 S MOSTAZA",
+    "product_url": "https://colos.it/en/products/ta202-600",
+    "image_url": "https://colos.it/storage/products/137/S_ta-2-2q_senape_0.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "Mustard"
+  },
+  {
+    "inventory_key": "TA/2Q-600",
+    "product_url": "https://colos.it/en/products/ta202-q-600",
+    "image_url": "https://colos.it/storage/products/67/S_ta-2-2t_bianco.jpg",
+    "evidence_as_of": "2026-08-12",
+    "visible_color": "White (default)"
+  }
+]

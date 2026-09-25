@@ -101,17 +101,135 @@ def test_delete_quote_removes_only_owned_job_and_storage(monkeypatch):
     _mock_user(monkeypatch)
     deleted_jobs = []
     deleted_storage = []
+    released = []
 
     monkeypatch.setattr(index, "db_get_quote_job", lambda job_id: _job(job_id))
     monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: deleted_jobs.append(job_id) or _job(job_id), raising=False)
     monkeypatch.setattr(index, "_delete_quote_storage", lambda job: deleted_storage.extend([job["input_path"], job["output_path"]]), raising=False)
+    monkeypatch.setattr(index, "db_release_tarkett_reservations", lambda job_id: released.append(("tarkett", job_id)), raising=False)
+    monkeypatch.setattr(index, "db_release_offiho_reservations", lambda job_id: released.append(("offiho", job_id)), raising=False)
+    monkeypatch.setattr(index, "db_release_catalog_reservations", lambda job_id: released.append(("supplier", job_id)), raising=False)
 
     resp = _client().delete("/cotizaciones/job-1", headers=_auth_headers())
 
     assert resp.status_code == 200
     assert resp.json()["deleted_id"] == "job-1"
     assert deleted_jobs == ["job-1"]
+    assert released == [("tarkett", "job-1"), ("offiho", "job-1"), ("supplier", "job-1")]
     assert deleted_storage == ["users/7/jobs/job-1/input.xlsx", "users/7/jobs/job-1/output.xlsx"]
+
+
+def test_delete_quote_falls_back_to_rest_compatible_release_on_supabase_400(monkeypatch):
+    _mock_user(monkeypatch)
+    job_id = "00000000-0000-0000-0000-000000000059"
+    job = _job(job_id)
+    job["metadata"]["source_type"] = "mixed_catalog_cart"
+    released = []
+    deleted_jobs = []
+    deleted_storage = []
+
+    monkeypatch.setattr(index, "db_get_quote_job", lambda _job_id: job)
+    monkeypatch.setattr(
+        index,
+        "_release_quote_reservations",
+        lambda _job: (_ for _ in ()).throw(RuntimeError("Supabase HTTP 400")),
+    )
+    monkeypatch.setattr(index, "_use_postgres", lambda: False)
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(
+        index,
+        "db_release_tarkett_reservations",
+        lambda released_job_id: released.append(("tarkett", released_job_id)),
+    )
+    monkeypatch.setattr(
+        index,
+        "db_release_offiho_reservations",
+        lambda released_job_id: released.append(("offiho", released_job_id)),
+    )
+    monkeypatch.setattr(
+        index,
+        "db_release_catalog_reservations",
+        lambda released_job_id: released.append(("supplier", released_job_id)),
+    )
+    monkeypatch.setattr(
+        index,
+        "db_delete_quote_job",
+        lambda deleted_job_id: deleted_jobs.append(deleted_job_id) or job,
+    )
+    monkeypatch.setattr(
+        index,
+        "_supabase_req",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("atomic RPC should not be required")
+        ),
+    )
+    monkeypatch.setattr(
+        index,
+        "_delete_quote_storage",
+        lambda deleted_job: deleted_storage.extend(
+            [deleted_job["input_path"], deleted_job["output_path"]]
+        ),
+    )
+
+    resp = _client().delete(f"/cotizaciones/{job_id}", headers=_auth_headers())
+
+    assert resp.status_code == 200, resp.json()
+    assert released == [
+        ("tarkett", job_id),
+        ("offiho", job_id),
+        ("supplier", job_id),
+    ]
+    assert deleted_jobs == [job_id]
+    assert deleted_storage == [
+        f"users/7/jobs/{job_id}/input.xlsx",
+        f"users/7/jobs/{job_id}/output.xlsx",
+    ]
+
+
+def test_delete_quote_uses_owner_scoped_atomic_rpc_if_rest_delete_also_returns_400(
+    monkeypatch,
+):
+    _mock_user(monkeypatch)
+    job_id = "00000000-0000-0000-0000-000000000060"
+    job = _job(job_id)
+    job["metadata"]["source_type"] = "mixed_catalog_cart"
+    rpc_calls = []
+
+    monkeypatch.setattr(index, "db_get_quote_job", lambda _job_id: job)
+    monkeypatch.setattr(
+        index,
+        "_release_quote_reservations",
+        lambda _job: (_ for _ in ()).throw(RuntimeError("Supabase HTTP 400")),
+    )
+    monkeypatch.setattr(index, "_use_postgres", lambda: False)
+    monkeypatch.setattr(index, "DEV_MODE", False)
+    monkeypatch.setattr(index, "db_release_tarkett_reservations", lambda _job_id: [])
+    monkeypatch.setattr(index, "db_release_offiho_reservations", lambda _job_id: [])
+    monkeypatch.setattr(index, "db_release_catalog_reservations", lambda _job_id: [])
+    monkeypatch.setattr(
+        index,
+        "db_delete_quote_job",
+        lambda _job_id: (_ for _ in ()).throw(RuntimeError("Supabase HTTP 400")),
+    )
+    monkeypatch.setattr(
+        index,
+        "_supabase_req",
+        lambda method, path, params=None, json_data=None: (
+            rpc_calls.append((method, path, json_data)) or True
+        ),
+    )
+    monkeypatch.setattr(index, "_delete_quote_storage", lambda _job: None)
+
+    resp = _client().delete(f"/cotizaciones/{job_id}", headers=_auth_headers())
+
+    assert resp.status_code == 200, resp.json()
+    assert rpc_calls == [
+        (
+            "POST",
+            "/rpc/saas_delete_quote_job",
+            {"p_quote_job_id": job_id, "p_usuario_id": 7},
+        )
+    ]
 
 
 def test_delete_quote_rejects_other_user_job(monkeypatch):
@@ -124,12 +242,36 @@ def test_delete_quote_rejects_other_user_job(monkeypatch):
     assert resp.status_code == 403
 
 
-def test_list_enforces_3_completed_quote_limit_and_purges_oldest_storage(monkeypatch):
+def test_delete_supplier_quote_releases_catalog_reservations(monkeypatch):
     _mock_user(monkeypatch)
-    jobs = [_job(f"job-{i}", created_suffix=i) for i in range(4, 0, -1)]
+    job = _job("supplier-job")
+    job["metadata"]["source_type"] = "supplier_cart"
+    released = []
+
+    monkeypatch.setattr(index, "db_get_quote_job", lambda _job_id: job)
+    monkeypatch.setattr(index, "db_delete_quote_job", lambda _job_id: job)
+    monkeypatch.setattr(index, "_delete_quote_storage", lambda _job: None)
+    monkeypatch.setattr(index, "db_release_tarkett_reservations", lambda job_id: released.append(("tarkett", job_id)))
+    monkeypatch.setattr(index, "db_release_offiho_reservations", lambda job_id: released.append(("offiho", job_id)))
+    monkeypatch.setattr(index, "db_release_catalog_reservations", lambda job_id: released.append(("supplier", job_id)))
+
+    resp = _client().delete("/cotizaciones/supplier-job", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    assert released == [
+        ("tarkett", "supplier-job"),
+        ("offiho", "supplier-job"),
+        ("supplier", "supplier-job"),
+    ]
+
+
+def test_list_enforces_5_completed_quote_limit_and_purges_oldest_storage(monkeypatch):
+    _mock_user(monkeypatch)
+    jobs = [_job(f"job-{i}", created_suffix=i) for i in range(6, 0, -1)]
     deleted_jobs = []
     deleted_storage = []
     deleted_input_paths = []
+    released = []
 
     def fake_list(usuario_id):
         return [job for job in jobs if job["id"] not in deleted_jobs]
@@ -139,22 +281,26 @@ def test_list_enforces_3_completed_quote_limit_and_purges_oldest_storage(monkeyp
     monkeypatch.setattr(index, "_delete_quote_storage", lambda job: deleted_storage.extend([job["input_path"], job["output_path"]]), raising=False)
     monkeypatch.setattr(index, "_delete_storage_paths", lambda paths: deleted_input_paths.extend(paths), raising=False)
     monkeypatch.setattr(index, "db_update_quote_job", lambda job_id, updates: {"id": job_id, **updates}, raising=False)
+    monkeypatch.setattr(index, "db_release_tarkett_reservations", lambda job_id: released.append(("tarkett", job_id)), raising=False)
+    monkeypatch.setattr(index, "db_release_offiho_reservations", lambda job_id: released.append(("offiho", job_id)), raising=False)
+    monkeypatch.setattr(index, "db_release_catalog_reservations", lambda job_id: released.append(("supplier", job_id)), raising=False)
 
     resp = _client().get("/cotizaciones", headers=_auth_headers())
 
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body["cotizaciones"]) == 3
+    assert len(body["cotizaciones"]) == 5
     assert deleted_jobs == ["job-1"]
+    assert released == [("tarkett", "job-1"), ("offiho", "job-1"), ("supplier", "job-1")]
     assert "users/7/jobs/job-1/input.xlsx" in deleted_storage
     assert "users/7/jobs/job-1/output.xlsx" in deleted_storage
-    assert "users/7/jobs/job-4/input.xlsx" in deleted_input_paths
+    assert "users/7/jobs/job-6/input.xlsx" in deleted_input_paths
     assert "users/7/jobs/job-2/input.xlsx" in deleted_input_paths
 
 
 def test_admin_storage_retention_defaults_to_dry_run(monkeypatch):
     _mock_user(monkeypatch, es_admin=True)
-    jobs = [_job(f"job-{i}", created_suffix=i) for i in range(4, 0, -1)]
+    jobs = [_job(f"job-{i}", created_suffix=i) for i in range(6, 0, -1)]
     monkeypatch.setattr(index, "db_list_usuarios", lambda: [{"id": 7}], raising=False)
     monkeypatch.setattr(index, "db_list_quote_jobs", lambda usuario_id: jobs, raising=False)
     monkeypatch.setattr(index, "db_delete_quote_job", lambda job_id: (_ for _ in ()).throw(AssertionError("dry-run must not delete jobs")), raising=False)
@@ -166,10 +312,36 @@ def test_admin_storage_retention_defaults_to_dry_run(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["dry_run"] is True
-    assert body["policy"]["max_completed_outputs_per_user"] == 3
+    assert body["policy"]["max_completed_outputs_per_user"] == 5
     assert body["totals"]["jobs_deleted"] == 1
-    assert body["totals"]["completed_inputs_deleted"] == 3
+    assert body["totals"]["completed_inputs_deleted"] == 5
     assert body["totals"]["storage_objects_deleted"] == 0
+
+
+def test_quote_limits_default_to_five():
+    assert index.MAX_QUOTE_HISTORY_PER_USER == 5
+    assert index.MAX_ACTIVE_QUOTE_JOBS_PER_USER == 5
+
+
+def test_atomic_quote_delete_migration_is_owner_scoped_and_service_only():
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "mobiliti_saas"
+        / "supabase_setup"
+        / "2026_07_delete_quote_job.sql"
+    )
+    sql = migration.read_text(encoding="utf-8")
+    normalized = " ".join(sql.lower().split())
+
+    assert "create or replace function saas_delete_quote_job" in normalized
+    assert "p_usuario_id integer" in normalized
+    assert "where id = p_quote_job_id and usuario_id = p_usuario_id" in normalized
+    assert "update saas_tarkett_reservations" in normalized
+    assert "update saas_offiho_reservations" in normalized
+    assert "update saas_catalog_reservations" in normalized
+    assert "delete from saas_quote_jobs" in normalized
+    assert "revoke all on function saas_delete_quote_job(uuid, integer) from public" in normalized
+    assert "grant execute on function saas_delete_quote_job(uuid, integer) to service_role" in normalized
 
 
 def test_emergency_storage_retention_requires_token():

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "inventory_key": "OHV-127 MORADO FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-127",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/3a4b8182d825e5cc311ef6eadebffd9f49c9ea10f6594d6ed27049080e04ad7b.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "shopify_exact_product_variant_binding_http_and_visual_verified",
+      "source_sha256": "3a4b8182d825e5cc311ef6eadebffd9f49c9ea10f6594d6ed27049080e04ad7b"
+    },
+    {
+      "inventory_key": "OHV-127 NARANJA FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-127",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/cec3592ea793d131df700d092a094b86312d758992934db1be5eb36c047bd1f0.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "shopify_exact_product_variant_binding_http_and_visual_verified",
+      "source_sha256": "cec3592ea793d131df700d092a094b86312d758992934db1be5eb36c047bd1f0"
+    },
+    {
+      "inventory_key": "OHV-127 VERDE FABRIZIA *",
+      "product_url": "https://www.offihoblack.com/products/fabrizia-ohv-127",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/8ef57b6b33f0b378bb0a55a28c797da9564091b4bf25aacb928c6f708267cca1.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "shopify_exact_product_variant_binding_http_and_visual_verified",
+      "source_sha256": "8ef57b6b33f0b378bb0a55a28c797da9564091b4bf25aacb928c6f708267cca1"
+    },
+    {
+      "inventory_key": "OHV-120 GRIS BORSANI",
+      "product_url": "https://www.offiho.com/confortables/confortables-borsani-modelo-OHV-120",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/9c46fae00edd9276ee0b2a4137994426febb3a077e6e8a535ec1f0db1dedf0fe.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_product_options_gray_binding_http_and_visual_verified",
+      "source_sha256": "9c46fae00edd9276ee0b2a4137994426febb3a077e6e8a535ec1f0db1dedf0fe"
+    },
+    {
+      "inventory_key": "SILLA ELEFANTE CAFÉ",
+      "product_url": "https://www.offiho.com/econosillas/silla-elefante",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/c17244ac6c1abc8dfe542fa9fc7fa21508be010a9fd59d59e6210aef69496c2e.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_cappuccino_cafe_product_photo_http_and_visual_verified",
+      "source_sha256": "c17244ac6c1abc8dfe542fa9fc7fa21508be010a9fd59d59e6210aef69496c2e"
+    },
+    {
+      "inventory_key": "PANELO-73",
+      "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-plus-modelo-OHV-73",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/37fb4225d81be821a75638a7f8f8698f4c2cbe481ba5069b0ea1a04df70d05e9.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_optional_accessory_exact_code_http_and_visual_verified",
+      "source_sha256": "37fb4225d81be821a75638a7f8f8698f4c2cbe481ba5069b0ea1a04df70d05e9"
+    },
+    {
+      "inventory_key": "PISTON CAJERO NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/kits-piston/piston-cajero",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/e9e7d8d7c400499a82efac2b93e830312915dfba3d0e295e660b71487717a579.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_piston_cajero_black_body_http_and_visual_verified",
+      "source_sha256": "e9e7d8d7c400499a82efac2b93e830312915dfba3d0e295e660b71487717a579"
+    },
+    {
+      "inventory_key": "BRAZOS 73 NEGRO",
+      "product_url": "https://www.offiho.com/visitantes-exterior/visitantes-exterior-plus-modelo-OHV-73",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/918d130e44406cad05388a5f8a1064dc8802e36de8411acbe63538dbd29cae93.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_offiho_optional_arm_accessory_black_http_and_visual_verified",
+      "source_sha256": "918d130e44406cad05388a5f8a1064dc8802e36de8411acbe63538dbd29cae93"
+    },
+    {
+      "inventory_key": "ALFIERE B/T-800",
+      "product_url": "https://colos.it/en/products/alfiere-b",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/79c184ea1ad1655801ec3b99c4e8e0c29763f10ee152cf26faa2b81ba40154cf.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_hidden_product_image_exact_model_size_finish_http_and_visual_verified",
+      "source_sha256": "79c184ea1ad1655801ec3b99c4e8e0c29763f10ee152cf26faa2b81ba40154cf"
+    },
+    {
+      "inventory_key": "ALFIERE B/T-800 W BLANCA",
+      "product_url": "https://colos.it/en/products/alfiere-b",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/hidden-variant-exact/eb9a937ee8b901515176aecef2528d784f0557b47d527c15e4c797a39c095641.jpg",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_hidden_product_image_exact_model_size_finish_http_and_visual_verified",
+      "source_sha256": "eb9a937ee8b901515176aecef2528d784f0557b47d527c15e4c797a39c095641"
+    }
+  ]
+}

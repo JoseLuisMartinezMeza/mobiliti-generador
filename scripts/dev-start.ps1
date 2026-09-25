@@ -8,6 +8,24 @@ $root = Split-Path -Parent $PSScriptRoot
 $logDir = Join-Path $root ".mobiliti_dev_store\logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
+function Stop-ProcessTree([int]$ProcessId) {
+  $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue
+  foreach ($child in $children) {
+    Stop-ProcessTree -ProcessId $child.ProcessId
+  }
+  Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.CommandLine -and
+    $_.CommandLine -match "uvicorn index:app" -and
+    $_.CommandLine -match "--port $ApiPort"
+  } |
+  ForEach-Object {
+    Stop-ProcessTree -ProcessId $_.ProcessId
+  }
+
 foreach ($port in @($ApiPort, $WebPort)) {
   $connections = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
   foreach ($connection in $connections) {
@@ -45,16 +63,22 @@ $(($EnvVars.GetEnumerator() | ForEach-Object { "`$env:$($_.Key) = `"$($_.Value)`
 
 $processes = @()
 
+$devStore = if ($env:MOBILITI_DEV_STORE_DIR) { $env:MOBILITI_DEV_STORE_DIR } else { Join-Path $root ".mobiliti_dev_store" }
+& python (Join-Path $PSScriptRoot "prepare_local_catalog_sources.py") --store $devStore
+if ($LASTEXITCODE -ne 0) { throw "No se pudo preparar el índice de catálogos locales" }
+
 $processes += Start-HiddenProcess `
   -Name "api" `
   -FilePath "python" `
-  -Arguments "-m uvicorn index:app --app-dir vercel_deploy\api --host 127.0.0.1 --port $ApiPort" `
+  -Arguments "-m uvicorn index:app --app-dir mobiliti_saas\api --host 127.0.0.1 --port $ApiPort --reload --reload-dir mobiliti_saas\api --reload-dir mobiliti_saas\quote_engine" `
   -WorkingDirectory $root `
   -EnvVars @{
     MOBILITI_DEV_MODE = "1"
     JWT_SECRET_KEY = "dev-secret-change-me-32-chars"
     CORS_ORIGINS = "http://127.0.0.1:$WebPort"
     MOBILITI_DEV_PUBLIC_BASE_URL = "http://127.0.0.1:$ApiPort"
+    MOBILITI_DEV_WEB_BASE_URL = "http://127.0.0.1:$WebPort"
+    CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos,labenze,requiez"
   }
 
 $processes += Start-HiddenProcess `
@@ -66,6 +90,7 @@ $processes += Start-HiddenProcess `
     MOBILITI_DEV_MODE = "1"
     QUOTE_ENGINE = "python"
     WORKER_STALE_MINUTES = "30"
+    CATALOG_ENABLED_SUPPLIERS = "cr-global,sonara,sunon,alma,lumbro,jome,lauco,idelika,conceptos,labenze,requiez"
   }
 
 $processes += Start-HiddenProcess `

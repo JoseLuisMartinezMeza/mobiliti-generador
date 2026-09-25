@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "inventory_key": "VESPER/03W BLANCA",
+      "product_url": "https://colos.it/en/products/vesper-3a",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/0917-vesper-03w-blanca.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_collection_2025_pdf_exact_crop",
+      "source_pdf_sha256": "3478215583ddd46aead2744fd2827e270a35d312d3c2bdfe077449a48ca0a2bb",
+      "source_pages": [
+        45
+      ]
+    },
+    {
+      "inventory_key": "PIAZZA 3B MZ BERENJENA",
+      "product_url": "https://colos.it/en/products/piazza-3b",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/0982-piazza-3b-mz-berenjena.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_collection_2025_pdf_exact_crop",
+      "source_pdf_sha256": "3478215583ddd46aead2744fd2827e270a35d312d3c2bdfe077449a48ca0a2bb",
+      "source_pages": [
+        26
+      ]
+    },
+    {
+      "inventory_key": "MOMO 2 MZ BERENJENA",
+      "product_url": "https://colos.it/en/products/momo-net-2",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/1180-momo-2-mz-berenjena.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_collection_2025_pdf_exact_crop",
+      "source_pdf_sha256": "3478215583ddd46aead2744fd2827e270a35d312d3c2bdfe077449a48ca0a2bb",
+      "source_pages": [
+        56
+      ]
+    },
+    {
+      "inventory_key": "DAILY 1 NATURAL/CROMADA NATURAL/CROMADA",
+      "product_url": "https://colos.it/en/products/daily-1",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/1195-daily-1-natural-cromada-natural-cromada.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_collection_2025_pdf_exact_crop",
+      "source_pdf_sha256": "3478215583ddd46aead2744fd2827e270a35d312d3c2bdfe077449a48ca0a2bb",
+      "source_pages": [
+        15
+      ]
+    },
+    {
+      "inventory_key": "DAILY 1 NATURAL/NEGRA NATURAL/NEGRO",
+      "product_url": "https://colos.it/en/products/daily-1",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/1196-daily-1-natural-negra-natural-negro.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_collection_2025_pdf_exact_crop",
+      "source_pdf_sha256": "3478215583ddd46aead2744fd2827e270a35d312d3c2bdfe077449a48ca0a2bb",
+      "source_pages": [
+        17
+      ]
+    },
+    {
+      "inventory_key": "DAILY 2 NEGRA/NEGRA NEGRO/NEGRO",
+      "product_url": "https://colos.it/en/products/daily-2",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/1203-daily-2-negra-negra-negro-negro.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_collection_2025_pdf_exact_crop",
+      "source_pdf_sha256": "3478215583ddd46aead2744fd2827e270a35d312d3c2bdfe077449a48ca0a2bb",
+      "source_pages": [
+        15
+      ]
+    },
+    {
+      "inventory_key": "STATO A/T-600 W BLANCA",
+      "product_url": "https://colos.it/en/products/stato-a-t-r",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/1260-stato-a-t-600-w-blanca.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_collection_2025_pdf_exact_crop",
+      "source_pdf_sha256": "3478215583ddd46aead2744fd2827e270a35d312d3c2bdfe077449a48ca0a2bb",
+      "source_pages": [
+        89,
+        90
+      ]
+    },
+    {
+      "inventory_key": "ALFIERE A/T-600 W BLANCA",
+      "product_url": "https://colos.it/en/products/alfiere-a-t-q",
+      "image_url": "https://web-lemon-one-45.vercel.app/catalog-assets/offiho/catalog-crops/colos/1272-alfiere-a-t-600-w-blanca.png",
+      "evidence_as_of": "2026-08-12",
+      "evidence_kind": "official_colos_collection_2025_pdf_exact_crop",
+      "source_pdf_sha256": "3478215583ddd46aead2744fd2827e270a35d312d3c2bdfe077449a48ca0a2bb",
+      "source_pages": [
+        85,
+        87
+      ]
+    }
+  ]
+}

@@ -18,14 +18,23 @@ dist/
 # Archivos grandes / binarios
 *.exe
 *.zip
+!mobiliti_saas/worker/catalog_sync/data/mondecasa_images.v1.zip
 *.msi
 
 # Temporales
 temp_images/
 salidas/
 outputs/
+.cache/
+mobiliti_saas/.mobiliti_dev_store/
+.mobiliti_dev_store/
+.playwright-mcp/
+tmp/
+.superpowers/sdd/artifacts/
 *.tmp
 *.temp
+*.bak.xlsx
+*-validation.png
 
 # Secrets / local credentials
 .env

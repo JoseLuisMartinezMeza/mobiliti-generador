@@ -16,13 +16,30 @@ if str(PROJECT_ROOT) not in sys.path:
 from mobiliti_saas.quote_engine import generate_quote, read_items  # noqa: E402
 
 
+_ARGUMENT_OMITTED = object()
+
+
 def generate_online_quote(
     source_path: str | Path,
     output_path: str | Path,
     metadata: dict[str, Any] | None = None,
     template_path: str | Path | None = None,
+    *,
+    original_quotation_path: object = _ARGUMENT_OMITTED,
+    quotation_data_rows: object = _ARGUMENT_OMITTED,
 ) -> Path:
-    return generate_quote(source_path, output_path, metadata, template_path)
+    explicit_sources = {}
+    if original_quotation_path is not _ARGUMENT_OMITTED:
+        explicit_sources["original_quotation_path"] = original_quotation_path
+    if quotation_data_rows is not _ARGUMENT_OMITTED:
+        explicit_sources["quotation_data_rows"] = quotation_data_rows
+    return generate_quote(
+        source_path,
+        output_path,
+        metadata,
+        template_path,
+        **explicit_sources,
+    )
 
 
 def main() -> None:

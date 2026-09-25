@@ -1,25 +1,64 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Armchair,
   ArrowDownToLine,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Circle,
   Clock3,
+  ExternalLink,
   FileSpreadsheet,
+  FolderKanban,
   History,
+  ImageOff,
   LayoutDashboard,
   Loader2,
   LogOut,
+  PackageSearch,
+  Plus,
   RefreshCw,
   Search,
   Settings,
   Sparkles,
+  ShoppingCart,
   Trash2,
   UploadCloud,
   UserRound,
   UsersRound,
   XCircle
 } from "lucide-react";
+import SupplierCatalogView from "./SupplierCatalogView";
+import CatalogAdminPanel from "./CatalogAdminPanel";
+import MixedCartDrawer from "./MixedCartDrawer";
+import ProjectEditor from "./ProjectEditor";
+import ProjectsView, {createNewProject} from "./ProjectsView";
+import {createProjectOperationId, projectMixedQuoteLines} from "./projectWorkspace.js";
+import {useProjectAutosave} from "./useProjectAutosave.js";
+import {
+  closeMixedCartSection,
+  compactMixedCartSections,
+  createImportedCartBundle,
+  createInitialMixedCartSections,
+  createMixedCartLine,
+  createMixedQuoteRequestSnapshot,
+  hydrateProject,
+  lineNeedsAvailabilityConfirmation,
+  lineNeedsPriceConfirmation,
+  mergeMixedCartSection,
+  moveMixedCartLine,
+  moveMixedCartLineToSection,
+  removeMixedCartLine,
+  replaceImportedCartBundle,
+  renameMixedCartSection,
+  serializeProject,
+  updateMixedCartQuantity,
+  updateImportedCartLine,
+  upsertMixedCartLine,
+  validateLineQuantity,
+  withDurableImportedAssets,
+} from "./mixedCart.js";
 import "./styles.css";
 
 const DEFAULT_API_BASE = ["127.0.0.1", "localhost"].includes(
@@ -31,10 +70,12 @@ const AUTH_EXPIRED_MESSAGE = "Tu sesion expiro. Vuelve a iniciar sesion para gen
 const MAX_QUOTE_INPUT_MB = 25;
 
 class ApiError extends Error {
-  constructor(message, status = 0) {
+  constructor(message, status = 0, detail = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
+    this.project = detail?.project || null;
   }
 }
 
@@ -132,11 +173,85 @@ const emptyQuote = {
   image_cleanup_strength: "balanced",
   image_background: "white",
   image_prompt: DEFAULT_IMAGE_PROMPT,
-  template: "Formato Cotizacion 2026 GDL (1).xlsx"
+  template: "official_2026_gdl"
 };
 
+const EMPTY_MIXED_QUOTE = Object.freeze({
+  proyecto: "",
+  cliente: "",
+  correo: "",
+  telefono: "",
+  direccion: "",
+  razon_social: "",
+  quote_currency: "MXN",
+  descuento: "40",
+  template: "official_2026_gdl",
+  description_language: "es"
+});
+
+function projectQuoteFieldsFromMixedQuote(quote) {
+  return {
+    proyecto: quote.proyecto,
+    cliente: quote.cliente,
+    correo: quote.correo,
+    telefono: quote.telefono,
+    direccion: quote.direccion,
+    razon_social: quote.razon_social,
+    quote_currency: quote.quote_currency,
+    descuento: quote.descuento,
+    template: quote.template || "official_2026_gdl",
+    description_language: quote.description_language || "es",
+  };
+}
+
+const TARKETT_CATALOG_CACHE_KEY = "mobiliti_tarkett_catalog";
+const OFFIHO_CATALOG_CACHE_KEY = "mobiliti_offiho_catalog";
+const OFFIHO_PAGE_SIZE = 24;
+const quantityFormatter = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 3 });
+const catalogCurrencyFormatter = new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" });
+
+function clearCatalogCaches() {
+  try {
+    sessionStorage.removeItem(TARKETT_CATALOG_CACHE_KEY);
+    sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY);
+    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith("supplier-catalog:")) sessionStorage.removeItem(key);
+    }
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser sessions.
+  }
+}
+
+function normalizeCatalogText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function formatQuantity(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "0";
+  return quantityFormatter.format(numeric);
+}
+
+function formatCatalogCurrency(value) {
+  const numeric = Number(value);
+  return catalogCurrencyFormatter.format(Number.isFinite(numeric) ? numeric : 0);
+}
+
+function hasMissingCatalogPrice(item) {
+  return item?.price_source === "missing" || !(Number(item?.unit_price) > 0);
+}
+
+function stockLimit(item) {
+  const numeric = Number(item?.available_quantity);
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+}
+
 const statusLabels = {
-  draft: "Archivo preparado",
+  draft: "Borrador sin enviar",
   queued: "En cola",
   processing: "Procesando datos",
   completed: "Cotizacion lista",
@@ -144,7 +259,7 @@ const statusLabels = {
 };
 
 const fallbackProgress = {
-  draft: 10,
+  draft: 0,
   queued: 30,
   processing: 70,
   completed: 100,
@@ -158,7 +273,7 @@ function jobProgress(job) {
 }
 
 function isActiveJob(job) {
-  return ["draft", "queued", "processing"].includes(job?.status);
+  return ["queued", "processing"].includes(job?.status);
 }
 
 function jobDurationMs(job, now = Date.now()) {
@@ -199,7 +314,7 @@ function estimatedJobDurationMs(job, now = Date.now()) {
   const provider = String(metadata.image_provider || "").toLowerCase();
   const sourceImages = Number(metadata.image_source_count);
   const generatedImages = Number(metadata.image_ai_missing_attempted_count || metadata.image_ai_generated_count);
-  const baseline = provider === "dezgo" ? 360000 : 90000;
+  const baseline = provider === "dezgo" ? 360000 : ["sunon_web", "sunon_catalog"].includes(provider) ? 180000 : 90000;
   const imageBudget = provider === "dezgo"
     ? (Number.isFinite(sourceImages) ? sourceImages * 22000 : 0) + (Number.isFinite(generatedImages) ? generatedImages * 35000 : 0)
     : 0;
@@ -214,7 +329,8 @@ function generationLabel(job, now = Date.now()) {
   const elapsed = jobDurationMs(job, now);
   if (job?.status === "completed") return `Tardo ${formatDuration(elapsed)}`;
   if (job?.status === "failed") return `Fallo tras ${formatDuration(elapsed)}`;
-  if (job?.status === "draft" || job?.status === "queued") {
+  if (job?.status === "draft") return "Pendiente de enviar";
+  if (job?.status === "queued") {
     return `Estimado aprox. ${formatDurationApprox(estimatedJobDurationMs(job, now))}`;
   }
   if (job?.status === "processing") {
@@ -258,10 +374,10 @@ async function runDownload(job, token, setDownloadState) {
 function useApi(token) {
   return useMemo(() => {
     async function request(path, options = {}) {
-      const headers = {
-        "Content-Type": "application/json",
-        ...(options.headers || {})
-      };
+      const headers = { ...(options.headers || {}) };
+      if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+      }
       if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch(apiUrl(path), { ...options, headers });
       const data = await res.json().catch(() => ({}));
@@ -271,7 +387,10 @@ function useApi(token) {
           notifyAuthExpired();
           throw new ApiError(AUTH_EXPIRED_MESSAGE, res.status);
         }
-        throw new ApiError(detail, res.status);
+        const message = typeof detail === "string"
+          ? detail
+          : detail?.code || "Error de API";
+        throw new ApiError(message, res.status, detail);
       }
       return data;
     }
@@ -339,10 +458,24 @@ function Login({ onLogin, notice = "" }) {
 function Sidebar({ view, setView, isAdmin, onLogout }) {
   const items = [
     ["cotizaciones", "Cotizaciones", FileSpreadsheet],
+    ["proyectos", "Proyectos", FolderKanban],
     ["nueva", "Nueva", UploadCloud],
     ["historial", "Historial", History],
     ["clientes", "Clientes", UsersRound],
-    ["admin", "Admin", Settings]
+    ["admin", "Admin", Settings],
+    ["tarkett", "Tarkett", PackageSearch],
+    ["offiho", "Offiho", Armchair],
+    ["cr-global", "CR Global", PackageSearch],
+    ["sonara", "Sonara", PackageSearch],
+    ["sunon", "Sunon", PackageSearch],
+    ["alma", "ALMA", PackageSearch],
+    ["lumbro", "Lumbro", PackageSearch],
+    ["jome", "JOME", PackageSearch],
+    ["lauco", "Lauco", PackageSearch],
+    ["idelika", "IDÉLIKA", PackageSearch],
+    ["conceptos", "Conceptos", PackageSearch],
+    ["labenze", "Labenze", PackageSearch],
+    ["requiez", "Requiez", PackageSearch]
   ];
   return (
     <aside className="sidebar">
@@ -377,7 +510,7 @@ function Sidebar({ view, setView, isAdmin, onLogout }) {
   );
 }
 
-function Header({ user, subscription }) {
+function Header({ user, subscription, cartCount, onOpenCart }) {
   const initials = (user?.nombre || user?.email || "AV")
     .split(/\s|@/)
     .filter(Boolean)
@@ -396,6 +529,10 @@ function Header({ user, subscription }) {
         <strong>{subscription?.plan || "Plan activo"}</strong>
         <small>Vence: {formatDate(subscription?.fecha_fin)}</small>
       </div>
+      <button className="global-cart-toggle" type="button" onClick={onOpenCart}>
+        <FolderKanban size={19} />
+        Proyecto ({cartCount})
+      </button>
       <div className="user-chip">
         <div>{initials}</div>
         <span>{user?.nombre || user?.email}<small>{user?.es_admin ? "Administrador" : "Usuario"}</small></span>
@@ -404,7 +541,31 @@ function Header({ user, subscription }) {
   );
 }
 
-function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory }) {
+function previewNeedsSourceCurrency(preview) {
+  return preview?.currency_status === "required";
+}
+
+function importedProjectName(preview, options) {
+  const explicitName = String(options?.quoteForm?.proyecto || "").trim();
+  if (explicitName) return explicitName.slice(0, 120);
+  const filename = String(preview?.original_filename || "")
+    .replace(/\.[^.]+$/u, "")
+    .replace(/\s*[-_]\s*quotation\s+sheet(?:\s*[-_].*)?$/iu, "")
+    .trim();
+  return (filename || "Proyecto importado").slice(0, 120);
+}
+
+function QuoteForm({
+  token,
+  onJobChange,
+  recentJobs,
+  refreshJobs,
+  onOpenHistory,
+  onImportPreview,
+  confirmedImport,
+  pendingImportId,
+  autoCreateProject,
+}) {
   const { request } = useApi(token);
   const [form, setForm] = useState(emptyQuote);
   const [file, setFile] = useState(null);
@@ -413,8 +574,36 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
   const [downloadState, setDownloadState] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [importPreview, setImportPreview] = useState(null);
+  const [importCurrency, setImportCurrency] = useState("");
+  const [importProvider, setImportProvider] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef(null);
+  const importPreviewRef = useRef(null);
+  const uploadDraftRef = useRef(null);
+  const requestInFlightRef = useRef(false);
+  const requestEpochRef = useRef(0);
+
+  useEffect(() => {
+    if (!confirmedImport?.importId
+        || confirmedImport.importId !== importPreview?.import_id) return;
+    setImportPreview(null);
+    setImportCurrency("");
+    setImportProvider("");
+    uploadDraftRef.current = null;
+  }, [confirmedImport, importPreview?.import_id]);
+
+  useEffect(() => {
+    if (!importPreview?.import_id) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      importPreviewRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      importPreviewRef.current?.focus({preventScroll: true});
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [importPreview?.import_id]);
 
   useEffect(() => {
     if (!job?.id || !["queued", "processing", "draft"].includes(job.status)) return;
@@ -447,7 +636,13 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
   }
 
   function selectFile(nextFile) {
+    if (busy) return;
+    requestEpochRef.current += 1;
     setError("");
+    setImportPreview(null);
+    setImportCurrency("");
+    setImportProvider("");
+    uploadDraftRef.current = null;
     if (!nextFile) {
       setFile(null);
       return;
@@ -471,35 +666,26 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
     selectFile(event.dataTransfer.files?.[0] || null);
   }
 
-  async function createQuote(event) {
-    event.preventDefault();
-    setError("");
-    setDownloadUrl("");
-    setDownloadState(null);
-
-    if (!file) {
-      setError("Selecciona un archivo .xlsx o .pdf primero.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const init = await request("/cotizaciones/init-upload", {
+  async function uploadQuoteDraft(selectedFile, template) {
+    const existing = uploadDraftRef.current;
+    if (existing?.file === selectedFile && existing.template === template) return existing;
+    const init = await request("/cotizaciones/init-upload", {
         method: "POST",
-        body: JSON.stringify({ filename: file.name, size: file.size, template: form.template })
+        body: JSON.stringify({ filename: selectedFile.name, size: selectedFile.size, template })
       });
       if (init.signed_upload_url) {
         const uploadRes = await fetch(init.signed_upload_url, {
           method: "PUT",
           headers: {
-            "Content-Type": quoteInputContentType(file.name)
+            "Content-Type": quoteInputContentType(selectedFile.name)
           },
-          body: file
+          body: selectedFile
         });
         const uploadData = await uploadRes.json().catch(() => ({}));
         if (!uploadRes.ok) throw new Error(uploadData.message || uploadData.error || "Error subiendo archivo");
       } else if (init.upload_url) {
         const body = new FormData();
-        body.append("file", file);
+        body.append("file", selectedFile);
         const uploadRes = await fetch(apiUrl(init.upload_url), {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
@@ -510,18 +696,119 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
       } else {
         throw new Error("La API no devolvio una ruta de carga valida.");
       }
+      const draft = { job_id: init.job_id, file: selectedFile, template };
+      uploadDraftRef.current = draft;
+      return draft;
+  }
 
-      const submitted = await request(`/cotizaciones/${init.job_id}/submit`, {
+  async function createQuote(event) {
+    event.preventDefault();
+    if (requestInFlightRef.current) return;
+    setError("");
+    setDownloadUrl("");
+    setDownloadState(null);
+
+    if (!file) {
+      setError("Selecciona un archivo .xlsx o .pdf primero.");
+      return;
+    }
+    const requestEpoch = ++requestEpochRef.current;
+    requestInFlightRef.current = true;
+    setBusy(true);
+    try {
+      const draft = await uploadQuoteDraft(file, form.template);
+
+      const submitted = await request(`/cotizaciones/${draft.job_id}/submit`, {
         method: "POST",
         body: JSON.stringify(form)
       });
+      if (requestEpoch !== requestEpochRef.current) return;
       setJob(submitted.job);
       onJobChange(submitted.job);
       refreshJobs();
+      setImportPreview(null);
+      uploadDraftRef.current = null;
     } catch (err) {
-      setError(err.message);
+      if (requestEpoch === requestEpochRef.current) setError(err.message);
     } finally {
-      setBusy(false);
+      if (requestEpoch === requestEpochRef.current) {
+        requestInFlightRef.current = false;
+        setBusy(false);
+      }
+    }
+  }
+
+  async function previewImport() {
+    if (requestInFlightRef.current) return;
+    if (!file) {
+      setError("Selecciona un archivo .xlsx para previsualizar.");
+      return;
+    }
+    if (!/\.xlsx$/i.test(file.name)) {
+      setError("La importacion editable solo admite archivos .xlsx con hoja Quotation.");
+      return;
+    }
+    const requestEpoch = ++requestEpochRef.current;
+    requestInFlightRef.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const draft = await uploadQuoteDraft(file, form.template);
+      const preview = await request(`/cotizaciones/${draft.job_id}/import-preview`, { method: "POST" });
+      if (requestEpoch !== requestEpochRef.current) return;
+      const sourceCurrency = preview.source_currency || "";
+      const provider = String(preview.provider || "").trim();
+      if (autoCreateProject
+          && provider
+          && (!previewNeedsSourceCurrency(preview) || sourceCurrency)) {
+        const imported = await onImportPreview(preview, {
+          sourceCurrency,
+          provider,
+          quoteForm: form,
+        });
+        if (requestEpoch !== requestEpochRef.current) return;
+        if (imported) {
+          setImportPreview(null);
+          setImportCurrency("");
+          setImportProvider("");
+          uploadDraftRef.current = null;
+          return;
+        }
+      }
+      setImportPreview(preview);
+      setImportCurrency(preview.source_currency || "");
+      setImportProvider(preview.provider || "");
+    } catch (err) {
+      if (requestEpoch === requestEpochRef.current) setError(err.message);
+    } finally {
+      if (requestEpoch === requestEpochRef.current) {
+        requestInFlightRef.current = false;
+        setBusy(false);
+      }
+    }
+  }
+
+  async function confirmImport() {
+    if (requestInFlightRef.current) return;
+    const detectedCurrency = importPreview?.source_currency || "";
+    const sourceCurrency = detectedCurrency || importCurrency;
+    const provider = importProvider.trim();
+    if (!importPreview || (previewNeedsSourceCurrency(importPreview) && !sourceCurrency) || !provider) return;
+    const requestEpoch = ++requestEpochRef.current;
+    requestInFlightRef.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await onImportPreview(importPreview, { sourceCurrency, provider, quoteForm: form });
+    } catch (failure) {
+      if (requestEpoch === requestEpochRef.current) {
+        setError(failure.message || "No se pudo importar al Proyecto.");
+      }
+    } finally {
+      if (requestEpoch === requestEpochRef.current) {
+        requestInFlightRef.current = false;
+        setBusy(false);
+      }
     }
   }
 
@@ -550,6 +837,9 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
   }
 
   const displayJob = job || recentJobs[0];
+  const importIsPending = Boolean(
+    importPreview?.import_id && pendingImportId === importPreview.import_id,
+  );
 
   return (
     <div className="workspace-grid">
@@ -563,6 +853,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
           <button
             className={`dropzone ${isDragging ? "dragging" : ""}`}
             type="button"
+            disabled={busy}
             onClick={() => inputRef.current?.click()}
             onDragOver={(event) => {
               event.preventDefault();
@@ -575,6 +866,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
               ref={inputRef}
               type="file"
               accept=".xlsx,.pdf"
+              disabled={busy}
               onChange={(event) => selectFile(event.target.files?.[0] || null)}
               hidden
             />
@@ -593,31 +885,35 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
               required={false}
               readOnly
               placeholder="Automatico por usuario"
+              disabled={busy}
             />
-            <Field label="Proyecto" value={form.proyecto} onChange={(value) => updateField("proyecto", value)} />
-            <Field label="Cliente" value={form.cliente} onChange={(value) => updateField("cliente", value)} />
-            <Field label="Correo" type="email" value={form.correo} onChange={(value) => updateField("correo", value)} />
-            <Field label="Telefono" value={form.telefono} onChange={(value) => updateField("telefono", value)} />
-            <Field label="Direccion" value={form.direccion} onChange={(value) => updateField("direccion", value)} />
-            <Field label="Descuento (%)" type="number" min="0" max="100" value={form.descuento} onChange={updateDiscount} />
-            <Field label="Razon social" value={form.razon_social} onChange={(value) => updateField("razon_social", value)} wide />
+            <Field label="Proyecto" value={form.proyecto} onChange={(value) => updateField("proyecto", value)} disabled={busy} />
+            <Field label="Cliente" value={form.cliente} onChange={(value) => updateField("cliente", value)} disabled={busy} />
+            <Field label="Correo" type="email" value={form.correo} onChange={(value) => updateField("correo", value)} disabled={busy} />
+            <Field label="Telefono" value={form.telefono} onChange={(value) => updateField("telefono", value)} disabled={busy} />
+            <Field label="Direccion" value={form.direccion} onChange={(value) => updateField("direccion", value)} disabled={busy} />
+            <Field label="Descuento (%)" type="number" min="0" max="100" value={form.descuento} onChange={updateDiscount} disabled={busy} />
+            <Field label="Razon social" value={form.razon_social} onChange={(value) => updateField("razon_social", value)} wide disabled={busy} />
           </div>
 
           <h3>3. Plantilla y render</h3>
           <div className="template-grid">
-            <select value={form.template} onChange={(event) => updateField("template", event.target.value)}>
-              <option>Formato Cotizacion 2026 GDL (1).xlsx</option>
-              <option>Plantilla Corporativa Mobiliti 2025</option>
+            <select value={form.template} disabled={busy} onChange={(event) => updateField("template", event.target.value)}>
+              <option value="official_2026_gdl">Formato Cotización 2026 GDL (1)</option>
+              <option value="official_2026_gdl">Plantilla Corporativa Mobiliti 2025</option>
+              <option value="sunon_cdmx_v1c">Formato Cotización Único - Sunon CDMX V1C</option>
             </select>
-            <select value={form.description_language} onChange={(event) => updateField("description_language", event.target.value)}>
+            <select value={form.description_language} disabled={busy} onChange={(event) => updateField("description_language", event.target.value)}>
               <option value="es">Descripciones en espanol</option>
               <option value="en">Descripciones en ingles</option>
             </select>
-            <select value={form.image_provider} onChange={(event) => updateField("image_provider", event.target.value)}>
+            <select value={form.image_provider} disabled={busy} onChange={(event) => updateField("image_provider", event.target.value)}>
               <option value="dezgo">IA Dezgo recomendado - genera faltantes realistas</option>
+              <option value="sunon_catalog">Catalogo Sunon preciso - solo codigo exacto</option>
+              <option value="sunon_web">Sunon web experimental - buscar por codigo</option>
               <option value="pillow">Local sin IA - no inventa imagenes faltantes</option>
             </select>
-            <select value={form.image_cleanup_strength} onChange={(event) => updateField("image_cleanup_strength", event.target.value)}>
+            <select value={form.image_cleanup_strength} disabled={busy} onChange={(event) => updateField("image_cleanup_strength", event.target.value)}>
               <option value="balanced">Limpieza balanceada</option>
               <option value="normal">Limpieza conservadora</option>
               <option value="aggressive">Limpieza fuerte</option>
@@ -625,13 +921,20 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
             <div className="render-summary">
               <Sparkles size={18} />
               <span>
-                {form.image_provider === "dezgo" ? "IA Dezgo mejora y genera faltantes" : "Render local solo mejora imagenes existentes"} - Fondo {form.image_background === "white" ? "blanco" : "transparente"}
+                {form.image_provider === "dezgo"
+                  ? "IA Dezgo mejora y genera faltantes"
+                  : form.image_provider === "sunon_catalog"
+                    ? "Catalogo Sunon usa solo matches exactos"
+                  : form.image_provider === "sunon_web"
+                    ? "Sunon web busca imagen oficial y cae a local"
+                    : "Render local solo mejora imagenes existentes"} - Fondo {form.image_background === "white" ? "blanco" : "transparente"}
               </span>
             </div>
             <label className="prompt-field">
               Prompt para imagenes
               <textarea
                 value={form.image_prompt}
+                disabled={busy}
                 onChange={(event) => updateField("image_prompt", event.target.value)}
                 placeholder={DEFAULT_IMAGE_PROMPT}
                 rows={3}
@@ -639,14 +942,59 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
             </label>
           </div>
 
-          {error ? <div className="error-line">{error}</div> : null}
+          {error ? <div className="error-line" role="alert">{error}</div> : null}
+          {busy ? <div className="sr-only" role="status" aria-live="polite">Procesando archivo, espera antes de continuar.</div> : null}
           <DownloadStatusLine state={downloadState} />
           {downloadUrl && !downloadState ? <div className="download-line">Ultima descarga: {downloadUrl}</div> : null}
 
+          {importPreview ? (
+            <section
+              ref={importPreviewRef}
+              className="quotation-import-preview"
+              aria-label="Previsualizacion de importacion"
+              tabIndex={-1}
+            >
+              <h3>Previsualizacion: {importPreview.original_filename || file?.name}</h3>
+              <p>{importPreview.items?.length || 0} producto(s) en {importPreview.sections?.length || 0} seccion(es).</p>
+              {previewNeedsSourceCurrency(importPreview) || importPreview.source_currency ? <label>
+                Moneda de origen {importPreview.source_currency ? "detectada" : "*"}
+                <select
+                  value={importPreview.source_currency || importCurrency}
+                  disabled={busy || Boolean(importPreview.source_currency)}
+                  required={!importPreview.source_currency}
+                  aria-describedby="import-currency-help"
+                  onChange={(event) => setImportCurrency(event.target.value)}
+                >
+                  {!importPreview.source_currency ? <option value="">Selecciona una moneda</option> : null}
+                  {['MXN', 'USD', 'EUR'].map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+                </select>
+              </label> : null}
+              <small id="import-currency-help">{
+                importPreview.source_currency
+                  ? "La moneda detectada no se puede reemplazar."
+                  : previewNeedsSourceCurrency(importPreview)
+                    ? "Selecciona la moneda antes de confirmar la importacion."
+                    : "Las monedas explicitas de cada producto se conservaran sin una seleccion global."
+              }</small>
+              <label>
+                Proveedor *
+                <input name="import-provider" value={importProvider} disabled={busy} required onChange={(event) => setImportProvider(event.target.value)} />
+              </label>
+              <button
+                type="button"
+                className="primary-action"
+                disabled={busy || importIsPending || !importProvider.trim() || (previewNeedsSourceCurrency(importPreview) && !(importPreview.source_currency || importCurrency))}
+                onClick={confirmImport}
+              >
+                {importIsPending ? "Guardando importacion…" : "Confirmar importacion al proyecto"}
+              </button>
+            </section>
+          ) : null}
+
           <div className="actions-row">
-            <button className="primary-action" disabled={busy}>
-              {busy ? <Loader2 className="spin" size={18} /> : <FileSpreadsheet size={18} />}
-              Generar cotizacion
+            <button className="secondary-action" type="button" disabled={busy} onClick={previewImport}>
+              {busy ? <Loader2 className="spin" size={18} /> : <UploadCloud size={18} />}
+              Previsualizar e importar al proyecto
             </button>
           </div>
         </form>
@@ -659,7 +1007,7 @@ function QuoteForm({ token, onJobChange, recentJobs, refreshJobs, onOpenHistory 
   );
 }
 
-function Field({ label, value, onChange, type = "text", wide = false, min, max, required = true, readOnly = false, placeholder = "" }) {
+function Field({ label, value, onChange, type = "text", wide = false, min, max, required = true, readOnly = false, placeholder = "", disabled = false }) {
   return (
     <label className={wide ? "wide" : ""}>
       {label}{required ? " *" : ""}
@@ -671,9 +1019,475 @@ function Field({ label, value, onChange, type = "text", wide = false, min, max, 
         onChange={(event) => onChange(event.target.value)}
         required={required}
         readOnly={readOnly}
+        disabled={disabled}
         placeholder={placeholder}
       />
     </label>
+  );
+}
+
+function TarkettView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartBusy }) {
+  const { request } = useApi(token);
+  const [catalog, setCatalog] = useState({ source_hash: "", generated_at: "", total: 0, items: [] });
+  const [query, setQuery] = useState("");
+  const [collectionFilter, setCollectionFilter] = useState("all");
+  const [unitFilter, setUnitFilter] = useState("all");
+  const [quantityDraftsByCode, setQuantityDraftsByCode] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [quantityError, setQuantityError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(TARKETT_CATALOG_CACHE_KEY) || "null");
+      if (cached?.source_hash && cached?.user_id === userId && Array.isArray(cached.items)) {
+        setCatalog(cached);
+        setLoading(false);
+      }
+    } catch {
+      sessionStorage.removeItem(TARKETT_CATALOG_CACHE_KEY);
+    }
+
+    async function loadCatalog() {
+      setLoading(true);
+      setError("");
+      try {
+        const data = await request("/tarkett/catalog");
+        if (cancelled) return;
+        setCatalog(data);
+        sessionStorage.setItem(TARKETT_CATALOG_CACHE_KEY, JSON.stringify({ ...data, user_id: userId }));
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [request, reloadKey, userId]);
+
+  const unitOptions = useMemo(() => {
+    const units = new Set((catalog.items || []).map((item) => item.unit).filter(Boolean));
+    return Array.from(units).sort((a, b) => a.localeCompare(b, "es"));
+  }, [catalog.items]);
+  const collectionOptions = useMemo(() => {
+    const collections = new Set((catalog.items || []).map((item) => item.collection).filter(Boolean));
+    return Array.from(collections).sort((a, b) => a.localeCompare(b, "es"));
+  }, [catalog.items]);
+
+  const filteredItems = useMemo(() => {
+    const cleanQuery = normalizeCatalogText(query);
+    return (catalog.items || []).filter((item) => {
+      const matchesCollection = collectionFilter === "all" || item.collection === collectionFilter;
+      const matchesUnit = unitFilter === "all" || item.unit === unitFilter;
+      const haystack = normalizeCatalogText(`${item.code} ${item.name} ${item.collection} ${item.unit}`);
+      return matchesCollection && matchesUnit && (!cleanQuery || haystack.includes(cleanQuery));
+    });
+  }, [catalog.items, collectionFilter, query, unitFilter]);
+
+  function addTarkettItem(item) {
+    const existing = cartLines.find((line) => line.catalog === "tarkett" && line.identity.code === item.code);
+    const available = Math.min(stockLimit(item), 1000000);
+    const draft = quantityDraftsByCode[item.code]
+      ?? existing?.quantity
+      ?? String(Math.min(1, available));
+    try {
+      const added = onAddCartLine(createMixedCartLine({
+        catalog: "tarkett",
+        identity: { code: item.code },
+        quantity: String(draft),
+        quantityRules: {
+          min: "0.000001",
+          step: "0.000001",
+          maxDecimals: 6,
+          max: String(available),
+        },
+        snapshot: {
+          name: item.name,
+          code: item.code,
+          image_url: item.image_url || "",
+          unit: item.unit,
+          availability: String(item.available_quantity),
+          configuration: "",
+          warnings: [],
+        },
+      }));
+      if (added) setQuantityError("");
+    } catch (quantityFailure) {
+      setQuantityError(quantityFailure.message || "Cantidad invalida");
+    }
+  }
+
+  return (
+    <section className="tarkett-shell">
+      <div className="card-head tarkett-head">
+        <div>
+          <h2>Tarkett</h2>
+          <p>{catalog.total || catalog.items.length} productos indexados{catalog.generated_at ? ` - ${formatDate(catalog.generated_at)}` : ""}</p>
+        </div>
+        <div className="catalog-head-actions">
+          <button className="ghost-action" type="button" onClick={() => {
+            sessionStorage.removeItem(TARKETT_CATALOG_CACHE_KEY);
+            setReloadKey((value) => value + 1);
+          }}>
+            <RefreshCw size={16} />
+            Refrescar
+          </button>
+          <button className="ghost-action" type="button" onClick={onOpenCart}>
+            <FolderKanban size={17} /> Proyecto ({cartLines.length})
+          </button>
+        </div>
+      </div>
+
+      <div className="tarkett-layout">
+        <div className="tarkett-catalog">
+          <div className="tarkett-toolbar">
+            <label className="search-box">
+              <Search size={18} />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar clave, producto o unidad" />
+            </label>
+            <select value={collectionFilter} onChange={(event) => setCollectionFilter(event.target.value)} aria-label="Filtrar por colección">
+              <option value="all">Todas las colecciones</option>
+              {collectionOptions.map((collection) => <option key={collection} value={collection}>{collection}</option>)}
+            </select>
+            <select value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)}>
+              <option value="all">Todas las unidades</option>
+              {unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+            </select>
+            <span>{loading ? "Cargando..." : `${filteredItems.length} visibles`}</span>
+          </div>
+
+          {error ? <div className="error-line">{error}</div> : null}
+          {quantityError ? <div className="error-line" role="alert">{quantityError}</div> : null}
+
+          <div className="tarkett-grid">
+            {filteredItems.map((item) => {
+              const existing = cartLines.find((line) => line.catalog === "tarkett" && line.identity.code === item.code);
+              const reserved = Number(item.reserved_quantity || 0);
+              const available = Math.min(stockLimit(item), 1000000);
+              const draft = quantityDraftsByCode[item.code]
+                ?? existing?.quantity
+                ?? String(Math.min(1, available));
+              return (
+                <article className="tarkett-product" key={item.code}>
+                  <div className="product-media">
+                    {item.image_url ? (
+                      <img src={item.image_url} alt={item.name} loading="lazy" />
+                    ) : (
+                      <div className="product-placeholder"><ImageOff size={24} /></div>
+                    )}
+                  </div>
+                  <div className="product-info">
+                    <div className="product-title-row">
+                      <span>{item.code}</span>
+                      {item.product_url ? (
+                        <a href={item.product_url} target="_blank" rel="noreferrer" aria-label={`Abrir ${item.name}`}>
+                          <ExternalLink size={15} />
+                        </a>
+                      ) : null}
+                    </div>
+                    <strong>{item.name}</strong>
+                    <small>{item.unit}</small>
+                    <div className="tarkett-price-row">
+                      <span>Precio unitario</span>
+                      <strong>{hasMissingCatalogPrice(item) ? "Por confirmar" : formatCatalogCurrency(item.unit_price)}</strong>
+                    </div>
+                    <div className="stock-row">
+                      <span>Existencia {formatQuantity(item.available_quantity)}</span>
+                      {item.reserved_by_others && reserved > 0 ? <em>Apartado {formatQuantity(reserved)}</em> : null}
+                    </div>
+                  </div>
+                  <div className="product-actions">
+                    <input
+                      type="number"
+                      min="0.000001"
+                      step="0.000001"
+                      max={available || undefined}
+                      value={draft}
+                      disabled={cartBusy}
+                      onChange={(event) => setQuantityDraftsByCode((current) => ({
+                        ...current,
+                        [item.code]: event.target.value,
+                      }))}
+                      placeholder="Cant."
+                    />
+                    <button
+                      className="primary-action"
+                      type="button"
+                      onClick={() => addTarkettItem(item)}
+                      disabled={cartBusy || available <= 0}
+                    >
+                      <Plus size={16} />
+                      Agregar
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+
+      </div>
+    </section>
+  );
+}
+
+function OffihoView({ token, userId, cartLines, onAddCartLine, onOpenCart, cartBusy }) {
+  const { request } = useApi(token);
+  const [catalog, setCatalog] = useState({ source_hash: "", generated_at: "", total: 0, items: [] });
+  const [query, setQuery] = useState("");
+  const [collectionFilter, setCollectionFilter] = useState("all");
+  const [unitFilter, setUnitFilter] = useState("all");
+  const [availabilityFilter, setAvailabilityFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const [quantityDraftsByInventoryKey, setQuantityDraftsByInventoryKey] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [quantityError, setQuantityError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const offihoQuantityFormatter = useMemo(() => new Intl.NumberFormat("es-MX", { maximumFractionDigits: 3 }), []);
+  const offihoCurrencyFormatter = useMemo(() => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 2 }), []);
+
+  function normalizeOffihoText(value) {
+    return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  }
+
+  function offihoStockLimit(item) {
+    const numeric = Number(item?.available_quantity);
+    return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+  }
+
+  function formatOffihoQuantity(value) {
+    const numeric = Number(value);
+    return offihoQuantityFormatter.format(Number.isFinite(numeric) ? numeric : 0);
+  }
+
+  function formatOffihoCurrency(value) {
+    const numeric = Number(value);
+    return offihoCurrencyFormatter.format(Number.isFinite(numeric) ? numeric : 0);
+  }
+
+  function hasMissingPrice(item) {
+    return item?.price_source === "missing";
+  }
+
+  function normalizeOffihoQuantity(rawQuantity) {
+    const raw = String(rawQuantity ?? "").trim();
+    if (!/^\d+(?:\.\d{1,3})?$/.test(raw)) return { error: "Ingresa una cantidad mayor a 0 con hasta 3 decimales." };
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric) || numeric <= 0 || numeric > 1000000) return { error: "La cantidad debe estar entre 0.001 y 1000000." };
+    return { quantity: numeric, rawQuantity: String(numeric) };
+  }
+
+  function isOffihoQuantityDraft(rawQuantity) {
+    // Preserve drafts such as "" and "1." until blur validates them.
+    return /^\d*(?:\.\d{0,3})?$/.test(rawQuantity);
+  }
+
+  function offihoStockWarning(item, quantity) {
+    const available = offihoStockLimit(item);
+    if (available <= 0 || item?.is_out_of_stock) return "Agotado";
+    return Number(quantity) > available ? "Stock insuficiente" : "";
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(OFFIHO_CATALOG_CACHE_KEY) || "null");
+      if (cached?.source_hash && cached?.user_id === userId && Array.isArray(cached.items)) {
+        setCatalog(cached);
+        setLoading(false);
+      }
+    } catch {
+      sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY);
+    }
+
+    async function loadCatalog() {
+      setLoading(true);
+      setError("");
+      try {
+        const data = reloadKey
+          ? await request("/offiho/catalog?fresh=1", { cache: "no-store" })
+          : await request("/offiho/catalog");
+        if (cancelled) return;
+        setCatalog(data);
+        sessionStorage.setItem(OFFIHO_CATALOG_CACHE_KEY, JSON.stringify({ ...data, user_id: userId }));
+      } catch (err) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadCatalog();
+    return () => { cancelled = true; };
+  }, [request, reloadKey, userId]);
+
+  const unitOptions = useMemo(() => Array.from(new Set((catalog.items || []).map((item) => item.unit).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [catalog.items]);
+  const collectionOptions = useMemo(() => Array.from(new Set((catalog.items || []).map((item) => item.collection).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [catalog.items]);
+  const filteredItems = useMemo(() => {
+    const cleanQuery = normalizeOffihoText(query);
+    return (catalog.items || []).filter((item) => {
+      const available = offihoStockLimit(item);
+      const matchesCollection = collectionFilter === "all" || item.collection === collectionFilter;
+      const matchesUnit = unitFilter === "all" || item.unit === unitFilter;
+      const matchesAvailability = availabilityFilter === "all" || (availabilityFilter === "available" && available > 0) || (availabilityFilter === "out" && available <= 0);
+      const haystack = normalizeOffihoText(`${item.inventory_key} ${item.code} ${item.name} ${item.variant} ${item.collection} ${item.unit}`);
+      return matchesCollection && matchesUnit && matchesAvailability && (!cleanQuery || haystack.includes(cleanQuery));
+    });
+  }, [availabilityFilter, catalog.items, collectionFilter, query, unitFilter]);
+  const pageCount = Math.max(1, Math.ceil(filteredItems.length / OFFIHO_PAGE_SIZE));
+  const pageStart = (page - 1) * OFFIHO_PAGE_SIZE;
+  const pagedItems = useMemo(() => filteredItems.slice(pageStart, pageStart + OFFIHO_PAGE_SIZE), [filteredItems, pageStart]);
+
+  useEffect(() => { setPage(1); }, [availabilityFilter, collectionFilter, query, unitFilter]);
+  useEffect(() => { setPage((current) => Math.min(current, pageCount)); }, [pageCount]);
+
+  function changeOffihoDraft(inventoryKey, rawQuantity) {
+    const raw = String(rawQuantity);
+    if (!isOffihoQuantityDraft(raw)) setQuantityError("Usa solo numeros y hasta 3 decimales; no se permiten exponentes.");
+    else setQuantityError("");
+    if (isOffihoQuantityDraft(raw)) {
+      setQuantityDraftsByInventoryKey((current) => ({ ...current, [inventoryKey]: raw }));
+    }
+  }
+
+  function normalizeOffihoDraft(item) {
+    const draft = quantityDraftsByInventoryKey[item.inventory_key] ?? "1";
+    const normalized = normalizeOffihoQuantity(draft);
+    if (normalized.error) {
+      setQuantityError(normalized.error);
+      return false;
+    }
+    setQuantityError("");
+    setQuantityDraftsByInventoryKey((current) => ({
+      ...current,
+      [item.inventory_key]: normalized.rawQuantity,
+    }));
+    return true;
+  }
+
+  function addOffihoItem(item) {
+    const draft = quantityDraftsByInventoryKey[item.inventory_key] ?? "1";
+    const normalized = normalizeOffihoQuantity(draft);
+    if (normalized.error) {
+      setQuantityError(normalized.error);
+      return;
+    }
+    const available = Math.min(offihoStockLimit(item), 1000000);
+    const warning = offihoStockWarning(item, normalized.quantity);
+    const warnings = [
+      ...(warning ? [warning] : []),
+      ...(hasMissingPrice(item) ? ["Precio por confirmar"] : []),
+      ...(item.image_kind === "generated_reference" ? ["Imagen de referencia"] : []),
+    ];
+    try {
+      const added = onAddCartLine(createMixedCartLine({
+        catalog: "offiho",
+        identity: { inventory_key: item.inventory_key },
+        quantity: normalized.rawQuantity,
+        quantityRules: {
+          min: "0.001",
+          step: "0.001",
+          maxDecimals: 3,
+          max: "1000000",
+          warningAt: String(available),
+          confirmOnInsufficient: true,
+          confirmOnMissingPrice: hasMissingPrice(item),
+        },
+        snapshot: {
+          name: item.name,
+          code: item.code || item.inventory_key,
+          image_url: item.image_url || "",
+          image_kind: item.image_kind || (item.image_url ? "official" : "placeholder"),
+          unit: item.unit,
+          availability: String(item.available_quantity),
+          configuration: String(item.variant || ""),
+          warnings,
+        },
+      }));
+      if (added) setQuantityError("");
+    } catch (quantityFailure) {
+      setQuantityError(quantityFailure.message || "No se pudo agregar el producto");
+    }
+  }
+
+  const catalogTimestamp = catalog.catalog_built_at || catalog.generated_at;
+
+  return (
+    <section className="tarkett-shell offiho-shell">
+      <div className="card-head tarkett-head">
+        <div><h2>Offiho</h2><p>{catalog.total || catalog.items.length} productos indexados{catalogTimestamp ? ` - ${formatDate(catalogTimestamp)}` : ""}</p></div>
+        <div className="catalog-head-actions">
+          <button
+            className="ghost-action"
+            type="button"
+            disabled={loading}
+            aria-busy={loading}
+            onClick={() => {
+              sessionStorage.removeItem(OFFIHO_CATALOG_CACHE_KEY);
+              setReloadKey((value) => value + 1);
+            }}
+          >
+            <RefreshCw size={16} aria-hidden="true" />
+            {loading && reloadKey ? "Refrescando..." : "Refrescar"}
+          </button>
+          <button className="ghost-action" type="button" onClick={onOpenCart}><FolderKanban size={17} /> Proyecto ({cartLines.length})</button>
+        </div>
+      </div>
+
+      <div className="tarkett-layout">
+        <div className="tarkett-catalog">
+          <div className="tarkett-toolbar offiho-toolbar">
+            <label className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar clave, modelo, variante o producto" aria-label="Buscar catalogo Offiho" /></label>
+            <select value={collectionFilter} onChange={(event) => setCollectionFilter(event.target.value)} aria-label="Filtrar por colección"><option value="all">Todas las colecciones</option>{collectionOptions.map((collection) => <option key={collection} value={collection}>{collection}</option>)}</select>
+            <select value={unitFilter} onChange={(event) => setUnitFilter(event.target.value)} aria-label="Filtrar por unidad"><option value="all">Todas las unidades</option>{unitOptions.map((unit) => <option key={unit} value={unit}>{unit}</option>)}</select>
+            <select value={availabilityFilter} onChange={(event) => setAvailabilityFilter(event.target.value)} aria-label="Filtrar por disponibilidad"><option value="all">Toda disponibilidad</option><option value="available">Con existencia</option><option value="out">Agotados</option></select>
+            <span role="status" aria-live="polite">{loading ? (reloadKey ? "Refrescando..." : "Cargando...") : `${filteredItems.length} visibles`}</span>
+          </div>
+          {error ? <div className="error-line">{error}</div> : null}
+          {quantityError ? <div className="error-line" role="alert">{quantityError}</div> : null}
+          {loading ? <p className="empty">Cargando catalogo Offiho...</p> : null}
+          {!loading && !filteredItems.length ? <p className="empty">No hay productos que coincidan con los filtros.</p> : null}
+
+          <div className="tarkett-grid offiho-grid">
+            {pagedItems.map((item) => {
+              const reserved = Number(item.reserved_quantity || 0);
+              const draft = quantityDraftsByInventoryKey[item.inventory_key] ?? "1";
+              const normalizedDraft = normalizeOffihoQuantity(draft);
+              const stockWarning = normalizedDraft.error
+                ? (offihoStockLimit(item) <= 0 ? "Agotado" : "")
+                : offihoStockWarning(item, normalizedDraft.quantity);
+              return (
+                <article className="tarkett-product offiho-product" key={item.inventory_key}>
+                  <div className="product-media">{item.image_url ? <img src={item.image_url} alt={`${item.name || item.inventory_key} ${item.variant || ""}`.trim()} loading="lazy" /> : <div className="product-placeholder" aria-label="Imagen no disponible"><ImageOff size={24} /></div>}</div>
+                  <div className="product-info">
+                    <div className="product-title-row"><span>{item.code}</span>{item.product_url ? <a href={item.product_url} target="_blank" rel="noreferrer noopener" aria-label={`Abrir sitio oficial de ${item.name || item.code}`} title="Abrir sitio oficial"><ExternalLink size={15} /></a> : null}</div>
+                    <strong>{item.name || item.inventory_key}</strong>
+                    {item.image_kind === "generated_reference" ? <span className="supplier-badge reference offiho-generated-badge" title={item.image_label || "Referencia visual generada; no es una fotografía oficial"}>Imagen generada</span> : null}
+                    <small>{item.variant || "Sin variante"} - {item.unit}</small>
+                    {item.description ? <p className="offiho-description" title={item.description}>{item.description}</p> : null}
+                    <div className="offiho-meta"><span>{item.unit} - {formatOffihoQuantity(item.pieces_per_box)} pzas/caja</span><strong>{hasMissingPrice(item) ? "Precio por confirmar" : formatOffihoCurrency(item.unit_price)}</strong></div>
+                    <div className="stock-row"><span>Existencia {formatOffihoQuantity(item.available_quantity)}</span>{item.reserved_by_others && reserved > 0 ? <em>Apartado {formatOffihoQuantity(reserved)}</em> : null}{stockWarning ? <b className={`offiho-warning ${stockWarning === "Agotado" ? "out" : "insufficient"}`}>{stockWarning}</b> : null}</div>
+                  </div>
+                  <div className="product-actions">
+                    <input type="text" inputMode="decimal" value={draft} disabled={cartBusy} onChange={(event) => changeOffihoDraft(item.inventory_key, event.target.value)} onBlur={() => normalizeOffihoDraft(item)} placeholder="Cant." aria-label={`Cantidad para ${item.name || item.inventory_key}`} />
+                    <button className="primary-action" type="button" disabled={cartBusy} onClick={() => addOffihoItem(item)}><Plus size={16} />Agregar</button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          {!loading && filteredItems.length ? <div className="offiho-pagination"><button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1} aria-label="Pagina anterior" title="Pagina anterior"><ChevronLeft size={18} /></button><span>Pagina {page} de {pageCount}</span><button type="button" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={page >= pageCount} aria-label="Pagina siguiente" title="Pagina siguiente"><ChevronRight size={18} /></button></div> : null}
+        </div>
+
+      </div>
+    </section>
   );
 }
 
@@ -688,6 +1502,21 @@ function JobDuration({ job, tone = "" }) {
       <Clock3 size={14} />
       {label}
     </span>
+  );
+}
+
+function ImageProviderWarning({ job }) {
+  const metadata = job?.metadata || {};
+  const existingFailures = Number(metadata.image_ai_failed_count);
+  const missingFailures = Number(metadata.image_ai_missing_failed_count);
+  const count = (Number.isFinite(existingFailures) ? existingFailures : 0)
+    + (Number.isFinite(missingFailures) ? missingFailures : 0);
+  if (job?.status !== "completed" || count <= 0) return null;
+
+  return (
+    <small className="image-provider-warning" role="status">
+      IA no disponible en {count} {count === 1 ? "producto" : "productos"}; la cotizacion continuo con las imagenes locales disponibles.
+    </small>
   );
 }
 
@@ -764,6 +1593,7 @@ function StatusPanel({ job }) {
         </div>
         <JobDuration job={job} tone="panel" />
       </div>
+      <ImageProviderWarning job={job} />
       <div className="timeline">
         {steps.map(([key, title, desc], index) => {
           const done = key === "failed" ? false : index <= activeIndex;
@@ -798,6 +1628,7 @@ function RecentOutputs({ jobs, onDownload, onRetry, onOpenHistory, downloadState
               <strong>{job.metadata?.cotizacion || job.metadata?.original_filename || "Cotizacion"}</strong>
               <span>{statusLabels[job.status] || job.status} - {formatDate(job.updated_at)}</span>
               <JobDuration job={job} />
+              <ImageProviderWarning job={job} />
               <div className="mini-progress-track">
                 <div className={`mini-progress-fill ${job.status}`} style={{ width: `${jobProgress(job)}%` }} />
               </div>
@@ -818,14 +1649,15 @@ function RecentOutputs({ jobs, onDownload, onRetry, onOpenHistory, downloadState
   );
 }
 
-function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downloadState }) {
+function QuotesView({ jobs, onDownload, onRetry, onDelete, onCreateNew, refreshJobs, downloadState, deleteState }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
   const stats = useMemo(() => ({
     total: jobs.length,
     completed: jobs.filter((job) => job.status === "completed").length,
-    active: jobs.filter((job) => ["draft", "queued", "processing"].includes(job.status)).length,
+    drafts: jobs.filter((job) => job.status === "draft").length,
+    active: jobs.filter((job) => ["queued", "processing"].includes(job.status)).length,
     failed: jobs.filter((job) => job.status === "failed").length
   }), [jobs]);
 
@@ -861,6 +1693,7 @@ function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downl
       <div className="stats-grid">
         <StatCard label="Total" value={stats.total} />
         <StatCard label="Listas" value={stats.completed} />
+        <StatCard label="Borradores" value={stats.drafts} />
         <StatCard label="En proceso" value={stats.active} />
         <StatCard label="Con error" value={stats.failed} tone={stats.failed ? "danger" : ""} />
       </div>
@@ -873,6 +1706,7 @@ function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downl
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
           <option value="all">Todos los estados</option>
           <option value="completed">Listas</option>
+          <option value="draft">Borradores</option>
           <option value="processing">Procesando</option>
           <option value="queued">En cola</option>
           <option value="failed">Con error</option>
@@ -894,6 +1728,7 @@ function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downl
               <strong>{job.metadata?.proyecto || job.metadata?.cliente || "Cotizacion Mobiliti"}</strong>
               <small>{formatDate(job.updated_at || job.created_at)}</small>
               <JobDuration job={job} />
+              <ImageProviderWarning job={job} />
             </div>
             <div className="quote-status">
               <em className={`status ${job.status}`}>{statusLabels[job.status] || job.status}</em>
@@ -906,6 +1741,16 @@ function QuotesView({ jobs, onDownload, onRetry, onCreateNew, refreshJobs, downl
                 <button className="ghost-action" type="button" onClick={() => onRetry(job)}>
                   <Clock3 size={16} />
                   Reintentar
+                </button>
+              ) : job.status === "draft" ? (
+                <button
+                  className="danger-action"
+                  type="button"
+                  onClick={() => onDelete(job)}
+                  disabled={deleteState?.jobId === job.id}
+                >
+                  {deleteState?.jobId === job.id ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                  {deleteState?.jobId === job.id ? "Descartando" : "Descartar borrador"}
                 </button>
               ) : (
                 <DownloadButton job={job} onDownload={onDownload} downloadState={downloadState} />
@@ -972,6 +1817,57 @@ function HistoryView({ jobs, onDownload, onRetry, onDelete, downloadState, delet
           </div>
         ))}
         {!jobs.length ? <p className="empty">No hay historial todavia.</p> : null}
+      </div>
+    </section>
+  );
+}
+
+function ClientsView({ token }) {
+  const { request } = useApi(token);
+  const [users, setUsers] = useState([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    request("/admin/usuarios")
+      .then((data) => {
+        if (active) setUsers(Array.isArray(data) ? data : []);
+      })
+      .catch((failure) => {
+        if (active) setError(failure.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [request]);
+
+  const clients = users.filter((user) => !user.es_admin);
+  return (
+    <section className="main-card full">
+      <div className="card-head">
+        <h2>Clientes</h2>
+        <p>Consulta las cuentas de clientes registradas.</p>
+      </div>
+      {error ? <div className="error-line">{error}</div> : null}
+      <div className="admin-grid clients-grid">
+        <div>
+          <h3>Clientes registrados</h3>
+          {loading ? <p className="empty">Cargando clientes…</p> : null}
+          {!loading && !clients.length ? <p className="empty">No hay clientes registrados.</p> : null}
+          {clients.map((client) => (
+            <div className="admin-row" key={client.id}>
+              <UserRound size={18} />
+              <span>{client.nombre || client.email}</span>
+              <em>{client.activo === false ? "Inactivo" : client.empresa || "Activo"}</em>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -1070,7 +1966,8 @@ function AdminView({ token }) {
   }
 
   return (
-    <section className="main-card full">
+    <>
+      <section className="main-card full">
       <div className="card-head">
         <h2>Admin</h2>
         <p>Gestion basica de usuarios y suscripciones.</p>
@@ -1153,8 +2050,491 @@ function AdminView({ token }) {
           ))}
         </div>
       </div>
-    </section>
+      </section>
+      <CatalogAdminPanel request={request} />
+    </>
   );
+}
+
+function createMixedQuoteController({
+  cartRef: mixedCartRef,
+  sectionsRef: mixedSectionsRef = null,
+  submittingRef: mixedQuoteSubmittingRef,
+  sessionEpochRef: mixedQuoteSessionEpochRef,
+  importRevisionRef: mixedImportRevisionRef = null,
+  emptyForm,
+  replaceCart,
+  replaceSections = null,
+  setOpen,
+  setForm,
+  getForm,
+  setBusy,
+  setError,
+  setNotice,
+  setJobs,
+  request,
+  confirmQuote,
+  confirmImport,
+  waitForJobResult,
+}) {
+  mixedSectionsRef = mixedSectionsRef || { current: createInitialMixedCartSections() };
+  replaceSections = replaceSections || (() => {});
+  const askImport = confirmImport || (() => true);
+  const awaitJobResult = waitForJobResult || (async (job) => ({ ...job, status: "completed" }));
+  mixedImportRevisionRef = mixedImportRevisionRef || { current: 0 };
+
+  function add(line) {
+    if (mixedQuoteSubmittingRef.current) {
+      setError("Espera a que termine la cotizacion en curso");
+      setOpen(true);
+      return false;
+    }
+    try {
+      const activeSection = mixedSectionsRef.current[mixedSectionsRef.current.length - 1]
+        || createInitialMixedCartSections()[0];
+      const next = upsertMixedCartLine(
+        mixedCartRef.current,
+        { ...line, sectionId: activeSection.id },
+      );
+      replaceCart(next);
+      setError("");
+      setNotice("");
+      setOpen(true);
+      return true;
+    } catch (cartFailure) {
+      setError(cartFailure.message || "No se pudo agregar el producto");
+      setOpen(true);
+      return false;
+    }
+  }
+
+  function update(key, quantity) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceCart(updateMixedCartQuantity(mixedCartRef.current, key, quantity));
+  }
+
+  function updateImported(key, edits) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceCart(updateImportedCartLine(mixedCartRef.current, key, edits));
+  }
+
+  function importPreview(preview, { sourceCurrency, provider }) {
+    if (mixedQuoteSubmittingRef.current) {
+      setError("Espera a que termine la cotizacion en curso");
+      setOpen(true);
+      return false;
+    }
+    const hasImportedLines = mixedCartRef.current.some((line) => line.kind === "imported");
+    if (hasImportedLines && !askImport("Se reemplazaran solo los productos importados actuales. Los productos de catalogo se conservaran. ¿Continuar?")) {
+      return false;
+    }
+    try {
+      const bundle = createImportedCartBundle(
+        preview,
+        sourceCurrency,
+        provider,
+        mixedSectionsRef.current,
+      );
+      mixedImportRevisionRef.current += 1;
+      bundle.lines = bundle.lines.map((line) => ({
+        ...line,
+        editorRevision: mixedImportRevisionRef.current,
+      }));
+      const next = replaceImportedCartBundle(
+        mixedCartRef.current,
+        mixedSectionsRef.current,
+        bundle,
+      );
+      replaceCart(next.lines);
+      replaceSections(next.sections);
+      setError("");
+      setNotice("");
+      setOpen(true);
+      return true;
+    } catch (cartFailure) {
+      setError(cartFailure.message || "No se pudo importar la previsualizacion");
+      setOpen(true);
+      return false;
+    }
+  }
+
+  function remove(key) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    const nextLines = removeMixedCartLine(mixedCartRef.current, key);
+    const compacted = compactMixedCartSections(mixedSectionsRef.current, nextLines);
+    replaceCart(compacted.lines);
+    replaceSections(compacted.sections);
+  }
+
+  function closeSection() {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceSections(closeMixedCartSection(mixedSectionsRef.current, mixedCartRef.current));
+  }
+
+  function renameSection(sectionId, concept) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceSections(renameMixedCartSection(mixedSectionsRef.current, sectionId, concept));
+  }
+
+  function mergeSection(sectionId) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    const merged = mergeMixedCartSection(
+      mixedSectionsRef.current,
+      mixedCartRef.current,
+      sectionId,
+    );
+    replaceCart(merged.lines);
+    replaceSections(merged.sections);
+  }
+
+  function moveLine(key, direction) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    replaceCart(moveMixedCartLine(mixedCartRef.current, key, direction));
+  }
+
+  function moveLineToSection(key, sectionId) {
+    if (mixedQuoteSubmittingRef.current) throw new Error("Cotizacion en curso");
+    const nextLines = moveMixedCartLineToSection(
+      mixedCartRef.current,
+      mixedSectionsRef.current,
+      key,
+      sectionId,
+    );
+    const compacted = compactMixedCartSections(mixedSectionsRef.current, nextLines);
+    replaceCart(compacted.lines);
+    replaceSections(compacted.sections);
+  }
+
+  function updateField(field, value) {
+    if (mixedQuoteSubmittingRef.current) return;
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function resetSession() {
+    mixedQuoteSessionEpochRef.current += 1;
+    mixedImportRevisionRef.current = 0;
+    mixedQuoteSubmittingRef.current = false;
+    setBusy(false);
+    replaceCart([]);
+    replaceSections(createInitialMixedCartSections());
+    setOpen(false);
+    setForm({ ...emptyForm });
+    setError("");
+    setNotice("");
+  }
+
+  async function submit(
+    event,
+    submissionLines = mixedCartRef.current,
+    preparedRequest = null,
+    {preserveProject = false, propagateFailure = false, projectQuote = null} = {},
+  ) {
+    event.preventDefault();
+    if (mixedQuoteSubmittingRef.current || !submissionLines.length) return;
+
+    let committedLines;
+    try {
+      committedLines = submissionLines.map((line) => ({
+        ...line,
+        quantity: validateLineQuantity(line, line.quantity),
+      }));
+    } catch (quantityFailure) {
+      setError(quantityFailure.message || "Cantidad invalida");
+      return;
+    }
+    replaceCart(committedLines);
+
+    const availabilityWarnings = committedLines.filter(lineNeedsAvailabilityConfirmation);
+    const priceWarnings = committedLines.filter(lineNeedsPriceConfirmation);
+    if ((availabilityWarnings.length || priceWarnings.length) && !confirmQuote(
+      `Hay ${availabilityWarnings.length} producto(s) agotado(s) o con existencia insuficiente `
+      + `y ${priceWarnings.length} producto(s) con precio por confirmar. ¿Deseas continuar?`,
+    )) return;
+
+    mixedQuoteSubmittingRef.current = true;
+    const submissionEpoch = mixedQuoteSessionEpochRef.current;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const quoteRequest = projectQuote
+        ? {expected_revision: projectQuote.revision, template: getForm().template}
+        : preparedRequest || createMixedQuoteRequestSnapshot(
+          getForm(),
+          mixedSectionsRef.current,
+          committedLines,
+        );
+      const quotePath = projectQuote
+        ? `/projects/${encodeURIComponent(projectQuote.id)}/quote`
+        : "/catalogs/mixed-quote";
+      const data = await request(quotePath, {
+        method: "POST",
+        body: JSON.stringify(quoteRequest),
+      });
+      if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
+      if (!data?.job?.id) throw new Error("Respuesta de trabajo mixto invalida");
+      setJobs((current) => [data.job, ...current.filter((job) => job.id !== data.job.id)]);
+      setNotice("Cotizacion mixta en cola. Revisa el avance en Cotizaciones.");
+      const finalJob = await awaitJobResult(
+        data.job,
+        () => submissionEpoch === mixedQuoteSessionEpochRef.current,
+      );
+      if (submissionEpoch !== mixedQuoteSessionEpochRef.current || !finalJob) return;
+      setJobs((current) => [finalJob, ...current.filter((job) => job.id !== finalJob.id)]);
+      if (finalJob.status === "failed") {
+        const failure = new Error(
+          finalJob.error_message || "La cotizacion fallo; el proyecto se conservo para reintentar.",
+        );
+        if (!propagateFailure) setError(failure.message);
+        setNotice("");
+        setOpen(true);
+        if (propagateFailure) throw failure;
+        return;
+      }
+      if (finalJob.status !== "completed") throw new Error("Estado final de cotizacion invalido");
+      if (!preserveProject) {
+        replaceCart([]);
+        replaceSections(createInitialMixedCartSections());
+      }
+      setOpen(false);
+      setNotice("Cotizacion mixta lista. Revisa el archivo en Cotizaciones.");
+      return finalJob;
+    } catch (quoteFailure) {
+      if (submissionEpoch !== mixedQuoteSessionEpochRef.current) return;
+      if (!propagateFailure) {
+        setError(quoteFailure.message || "No se pudo generar la cotizacion mixta");
+      }
+      if (propagateFailure) throw quoteFailure;
+    } finally {
+      if (submissionEpoch === mixedQuoteSessionEpochRef.current) {
+        mixedQuoteSubmittingRef.current = false;
+        setBusy(false);
+      }
+    }
+  }
+
+  return {
+    add,
+    update,
+    updateImported,
+    importPreview,
+    remove,
+    closeSection,
+    renameSection,
+    mergeSection,
+    moveLine,
+    moveLineToSection,
+    updateField,
+    resetSession,
+    submit,
+  };
+}
+
+function importQuotationPreviewForProject({
+  activeProject,
+  allowed,
+  preview,
+  options,
+  controller,
+  onBlocked,
+}) {
+  return runProjectLineEntry({
+    allowed: allowed ?? Boolean(activeProject?.id),
+    mutate: () => controller.importPreview(preview, options),
+    onBlocked,
+  });
+}
+
+async function promoteProjectImport({request, userId, projectId, draft}) {
+  if (!Number.isSafeInteger(userId) || userId <= 0
+      || !projectId || !draft?.preview?.import_id) {
+    throw new Error("Borrador de importacion invalido");
+  }
+  const promoted = await request(
+    `/projects/${projectId}/imports/${draft.preview.import_id}`,
+    {method: "POST"},
+  );
+  return {
+    ...draft,
+    preview: withDurableImportedAssets(draft.preview, promoted, {
+      userId,
+      projectId,
+      importId: draft.preview.import_id,
+    }),
+  };
+}
+
+function projectStateWithImportDraft(baseState, pendingImportDraft) {
+  if (!pendingImportDraft) return baseState;
+  const {preview, options} = pendingImportDraft;
+  const bundle = createImportedCartBundle(
+    preview,
+    options?.sourceCurrency,
+    options?.provider,
+    baseState.sections,
+  );
+  const adopted = replaceImportedCartBundle(
+    baseState.lines,
+    baseState.sections,
+    bundle,
+  );
+  return {
+    quoteFields: Object.fromEntries(
+      Object.entries(baseState.quoteFields).map(([field, value]) => (
+        [field, options?.quoteForm?.[field] ?? value]
+      )),
+    ),
+    sections: adopted.sections,
+    lines: adopted.lines,
+  };
+}
+
+function projectCreationPlan({
+  activeProject,
+  pendingImportDraft,
+  localState,
+  emptyState,
+}) {
+  const baseState = activeProject ? emptyState : localState;
+  if (pendingImportDraft) {
+    const adopted = projectStateWithImportDraft(baseState, pendingImportDraft);
+    return {
+      projectState: {
+        quoteFields: adopted.quoteFields,
+        sections: baseState.sections,
+        lines: baseState.lines.filter((line) => line?.kind !== "imported"),
+      },
+      submittedAdoption: pendingImportDraft,
+    };
+  }
+  const hasRecoverableOrphan = !activeProject && localState.lines.length > 0;
+  return {
+    projectState: hasRecoverableOrphan ? localState : emptyState,
+    submittedAdoption: null,
+  };
+}
+
+function pendingDraftAfterConfirmedCreation(currentDraft, submittedAdoption) {
+  return submittedAdoption && currentDraft === submittedAdoption
+    ? null
+    : currentDraft;
+}
+
+async function persistCreatedProjectAdoption({
+  request,
+  created,
+  submittedAdoption,
+  operationId,
+  promoteImport,
+}) {
+  if (!created?.id || !created?.payload || !Number.isSafeInteger(created.revision)
+      || !submittedAdoption || typeof promoteImport !== "function") {
+    throw new Error("Adopcion de importacion invalida");
+  }
+  const baseState = hydrateProject(created.payload);
+  if (baseState.lines.some((line) => line?.kind === "imported")) {
+    throw new Error("El Proyecto base contiene lineas importadas transitorias");
+  }
+  const durableDraft = await promoteImport(created.id, submittedAdoption);
+  const adoptedState = projectStateWithImportDraft(baseState, durableDraft);
+  const data = await request(`/projects/${created.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: created.name,
+      payload: serializeProject(adoptedState),
+      expected_revision: created.revision,
+      operation_id: operationId,
+    }),
+  });
+  const saved = data?.project;
+  if (!saved?.id || saved.id !== created.id || !saved.payload
+      || !Number.isSafeInteger(saved.revision) || saved.revision < created.revision) {
+    throw new Error("Respuesta de adopcion de Proyecto invalida");
+  }
+  return {
+    project: saved,
+    state: hydrateProject(saved.payload),
+    adoptionDraft: submittedAdoption,
+  };
+}
+
+async function loadProjectSnapshot({
+  request,
+  projectId,
+  adoptionDraft,
+  hydrate,
+  promoteImport = null,
+}) {
+  const data = await request(`/projects/${projectId}`);
+  if (!data?.project?.payload) throw new Error("Respuesta de Proyecto inválida");
+  const hydrated = hydrate(data.project.payload);
+  const durableDraft = adoptionDraft && promoteImport
+    ? await promoteImport(data.project.id, adoptionDraft)
+    : adoptionDraft;
+  return {
+    project: {
+      id: data.project.id,
+      name: data.project.name,
+      revision: data.project.revision,
+    },
+    state: projectStateWithImportDraft(hydrated, durableDraft),
+    adoptionDraft,
+  };
+}
+
+function canMutateProject({
+  activeProject,
+  projectLoadStatus,
+  autosaveStatus,
+}) {
+  return Boolean(activeProject?.id)
+    && projectLoadStatus !== "loading"
+    && autosaveStatus !== "conflict";
+}
+
+function runProjectLineEntry({allowed, mutate, onBlocked}) {
+  if (!allowed) {
+    onBlocked();
+    return false;
+  }
+  return mutate();
+}
+
+function saveProjectSnapshot({
+  request,
+  snapshot,
+  expectedRevision,
+  operationId,
+  adoptionRef,
+  onSaved,
+  onAdoptionConfirmed,
+}) {
+  const adoption = adoptionRef.current;
+  if (adoption?.projectId === snapshot.id) {
+    adoptionRef.current = {...adoption, operationId};
+  }
+  return request(`/projects/${snapshot.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: snapshot.name,
+      payload: snapshot.payload,
+      expected_revision: expectedRevision,
+      operation_id: operationId,
+    }),
+  }).then((data) => {
+    const saved = data?.project;
+    if (!saved?.id || saved.id !== snapshot.id) {
+      throw new Error("Respuesta de guardado de Proyecto inválida");
+    }
+    onSaved(saved);
+    const confirmedAdoption = adoptionRef.current;
+    if (confirmedAdoption?.projectId === saved.id
+        && confirmedAdoption.operationId === operationId) {
+      adoptionRef.current = null;
+      onAdoptionConfirmed(confirmedAdoption.draft);
+    }
+    return saved;
+  });
 }
 
 function App() {
@@ -1172,15 +2552,205 @@ function App() {
   const [jobs, setJobs] = useState([]);
   const [downloadState, setDownloadState] = useState(null);
   const [deleteState, setDeleteState] = useState(null);
+  const [activeProjectId, setActiveProjectId] = useState("");
+  const [activeProject, setActiveProject] = useState(null);
+  const [projectLoadState, setProjectLoadState] = useState({status: "idle", message: ""});
+  const [projectChangeVersion, setProjectChangeVersion] = useState(0);
+  const projectLoadEpochRef = useRef(0);
+  const pendingImportAdoptionRef = useRef(null);
+  const automaticProjectCreationRef = useRef(false);
+  const activeProjectRef = useRef(null);
+  const canMutateActiveProjectRef = useRef(false);
+  const [mixedCart, setMixedCart] = useState([]);
+  const mixedCartRef = useRef([]);
+  const [mixedCartSections, setMixedCartSections] = useState(
+    () => createInitialMixedCartSections(),
+  );
+  const mixedCartSectionsRef = useRef(createInitialMixedCartSections());
+  const [mixedCartOpen, setMixedCartOpen] = useState(false);
+  const [mixedQuote, setMixedQuote] = useState({ ...EMPTY_MIXED_QUOTE });
+  const [mixedQuoteBusy, setMixedQuoteBusy] = useState(false);
+  const [mixedQuoteError, setMixedQuoteError] = useState("");
+  const [mixedQuoteNotice, setMixedQuoteNotice] = useState("");
+  const [pendingImportDraft, setPendingImportDraft] = useState(null);
+  const [confirmedImport, setConfirmedImport] = useState(null);
+  const mixedQuoteSubmittingRef = useRef(false);
+  const mixedQuoteSessionEpochRef = useRef(0);
+  const mixedImportRevisionRef = useRef(0);
   const { request } = useApi(session?.access_token);
+  const mixedRequest = useMemo(
+    () => createMixedQuoteRequestSnapshot(
+      {},
+      mixedCartSections,
+      projectMixedQuoteLines(mixedCart),
+    ),
+    [mixedCart, mixedCartSections],
+  );
+  const editorProject = useMemo(() => (
+    activeProject ? {
+      ...activeProject,
+      quoteFields: projectQuoteFieldsFromMixedQuote(mixedQuote),
+      sections: mixedCartSections,
+      lines: mixedCart,
+    } : null
+  ), [activeProject, mixedCart, mixedCartSections, mixedQuote]);
+  const creationPlan = useMemo(() => projectCreationPlan({
+    activeProject,
+    pendingImportDraft,
+    localState: {
+      quoteFields: projectQuoteFieldsFromMixedQuote(mixedQuote),
+      sections: mixedCartSections,
+      lines: mixedCart,
+    },
+    emptyState: {
+      quoteFields: {
+        proyecto: "",
+        cliente: "",
+        correo: "",
+        telefono: "",
+        direccion: "",
+        razon_social: "",
+        quote_currency: "MXN",
+        descuento: "40",
+        template: "official_2026_gdl",
+        description_language: "es",
+      },
+      sections: createInitialMixedCartSections(),
+      lines: [],
+    },
+  }), [
+    activeProject,
+    mixedCart,
+    mixedCartSections,
+    mixedQuote,
+    pendingImportDraft,
+  ]);
+  const projectSaveSnapshot = useMemo(() => (
+    editorProject ? {
+      id: editorProject.id,
+      name: editorProject.name,
+      payload: serializeProject(editorProject),
+    } : null
+  ), [editorProject]);
+  const saveActiveProject = React.useCallback((
+    snapshot,
+    expectedRevision,
+    operationId,
+  ) => saveProjectSnapshot({
+    request,
+    snapshot,
+    expectedRevision,
+    operationId,
+    adoptionRef: pendingImportAdoptionRef,
+    onSaved: (saved) => {
+      setActiveProject((current) => current?.id === saved.id
+        ? {...current, name: saved.name, revision: saved.revision}
+        : current);
+    },
+    onAdoptionConfirmed: (draft) => {
+      setPendingImportDraft((current) => current === draft ? null : current);
+      setConfirmedImport({
+        importId: draft.preview.import_id,
+        projectId: snapshot.id,
+        confirmedAt: Date.now(),
+      });
+    },
+  }), [request]);
+  const projectAutosave = useProjectAutosave({
+    project: projectSaveSnapshot,
+    projectKey: activeProject
+      ? `${activeProject.id}:${activeProject.loadKey}`
+      : "",
+    revision: activeProject?.revision || 0,
+    changeVersion: projectChangeVersion,
+    saveProject: saveActiveProject,
+    enabled: Boolean(activeProject?.id),
+  });
+  const canMutateActiveProject = canMutateProject({
+    activeProject,
+    projectLoadStatus: projectLoadState.status,
+    autosaveStatus: projectAutosave.status,
+  });
+  activeProjectRef.current = activeProject;
+  canMutateActiveProjectRef.current = canMutateActiveProject;
+
+  async function waitForMixedQuoteJob(job, isCurrent) {
+    let current = job;
+    while (isCurrent() && !["completed", "failed"].includes(current?.status)) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      if (!isCurrent()) return null;
+      const response = await request(`/cotizaciones/${job.id}`);
+      current = response?.job;
+      if (!current?.id) throw new Error("Respuesta de estado de cotizacion invalida");
+    }
+    return isCurrent() ? current : null;
+  }
+
+  function replaceMixedCart(next, markProjectChanged = true) {
+    mixedCartRef.current = next;
+    setMixedCart(next);
+    if (markProjectChanged && activeProject) {
+      setProjectChangeVersion((current) => current + 1);
+    }
+  }
+
+  function replaceMixedCartSections(next, markProjectChanged = true) {
+    mixedCartSectionsRef.current = next;
+    setMixedCartSections(next);
+    if (markProjectChanged && activeProject) {
+      setProjectChangeVersion((current) => current + 1);
+    }
+  }
+
+  function replaceMixedQuote(next) {
+    setMixedQuote((current) => {
+      const value = typeof next === "function" ? next(current) : next;
+      return value;
+    });
+    if (activeProject) setProjectChangeVersion((current) => current + 1);
+  }
+
+  const mixedQuoteController = createMixedQuoteController({
+    cartRef: mixedCartRef,
+    sectionsRef: mixedCartSectionsRef,
+    submittingRef: mixedQuoteSubmittingRef,
+    sessionEpochRef: mixedQuoteSessionEpochRef,
+    importRevisionRef: mixedImportRevisionRef,
+    emptyForm: EMPTY_MIXED_QUOTE,
+    replaceCart: replaceMixedCart,
+    replaceSections: replaceMixedCartSections,
+    setOpen: setMixedCartOpen,
+    setForm: replaceMixedQuote,
+    getForm: () => mixedQuote,
+    setBusy: setMixedQuoteBusy,
+    setError: setMixedQuoteError,
+    setNotice: setMixedQuoteNotice,
+    setJobs,
+    request,
+    confirmQuote: (message) => window.confirm(message),
+    confirmImport: (message) => window.confirm(message),
+    waitForJobResult: waitForMixedQuoteJob,
+  });
+
+  function resetMixedQuoteSession() {
+    mixedQuoteController.resetSession();
+  }
 
   useEffect(() => {
     function handleAuthExpired() {
       localStorage.removeItem("mobiliti_session");
+      clearCatalogCaches();
+      resetMixedQuoteSession();
       setSession(null);
       setJobs([]);
       setDownloadState(null);
       setDeleteState(null);
+      setActiveProjectId("");
+      setActiveProject(null);
+      setPendingImportDraft(null);
+      setConfirmedImport(null);
+      pendingImportAdoptionRef.current = null;
+      setProjectChangeVersion(0);
       setView("cotizaciones");
       setSessionNotice(AUTH_EXPIRED_MESSAGE);
     }
@@ -1210,13 +2780,366 @@ function App() {
 
   function logout() {
     localStorage.removeItem("mobiliti_session");
+    clearCatalogCaches();
+    resetMixedQuoteSession();
     setSession(null);
     setSessionNotice("");
+    setActiveProjectId("");
+    setActiveProject(null);
+    setPendingImportDraft(null);
+    setConfirmedImport(null);
+    pendingImportAdoptionRef.current = null;
+    setProjectChangeVersion(0);
   }
 
   if (!session) return <Login onLogin={login} notice={sessionNotice} />;
 
   const isAdmin = Boolean(session.usuario?.es_admin);
+  const supplierLabels = {
+    "cr-global": "CR Global",
+    sonara: "Sonara",
+    sunon: "Sunon",
+    alma: "ALMA",
+    lumbro: "Lumbro",
+    jome: "JOME",
+    lauco: "Lauco",
+    idelika: "IDÉLIKA",
+    conceptos: "Conceptos",
+    labenze: "Labenze",
+    requiez: "Requiez"
+  };
+
+  function blockExternalProjectEntry(pendingDraft = null) {
+    if (pendingDraft) {
+      pendingImportAdoptionRef.current = null;
+      setPendingImportDraft((current) => current || pendingDraft);
+    }
+    if (activeProject?.id) {
+      setMixedQuoteError(
+        "Reabre el Proyecto desde Proyectos para cargar la revisión vigente antes de continuar.",
+      );
+    } else if (pendingDraft) {
+      setMixedQuoteError(
+        "Crea o abre un Proyecto desde Proyectos. El borrador importado se conservará.",
+      );
+    } else {
+      setMixedQuoteError("Crea o abre un Proyecto antes de agregar productos.");
+    }
+    setMixedCartOpen(false);
+    setView("proyectos");
+  }
+
+  function addMixedCartLine(line) {
+    return runProjectLineEntry({
+      allowed: canMutateActiveProject,
+      mutate: () => mixedQuoteController.add(line),
+      onBlocked: () => blockExternalProjectEntry(),
+    });
+  }
+
+  function updateMixedCartLine(key, quantity) {
+    mixedQuoteController.update(key, quantity);
+  }
+
+  function updateImportedCartLineFromApp(key, edits) {
+    try {
+      mixedQuoteController.updateImported(key, edits);
+      setMixedQuoteError("");
+      return "";
+    } catch (cartFailure) {
+      const message = cartFailure.message || "No se pudo editar el producto importado";
+      setMixedQuoteError(message);
+      return message;
+    }
+  }
+
+  async function importQuotationPreview(preview, options) {
+    const importDraft = {preview, options};
+    if (!activeProject?.id) {
+      setPendingImportDraft(importDraft);
+      try {
+        const created = await createNewProject(
+          request,
+          activateCreatedProject,
+          {
+            quoteFields: projectQuoteFieldsFromMixedQuote({
+              ...EMPTY_MIXED_QUOTE,
+              ...(options?.quoteForm || {}),
+            }),
+            sections: createInitialMixedCartSections(),
+            lines: [],
+          },
+          automaticProjectCreationRef,
+          importDraft,
+          importedProjectName(preview, options),
+        );
+        return Boolean(created);
+      } catch (failure) {
+        setPendingImportDraft((current) => current === importDraft ? null : current);
+        const message = failure.message || "No se pudo crear el Proyecto importado.";
+        setMixedQuoteError(message);
+        throw failure;
+      }
+    }
+    const allowed = runProjectLineEntry({
+      allowed: canMutateActiveProject,
+      mutate: () => true,
+      onBlocked: () => blockExternalProjectEntry(),
+    });
+    if (!allowed) return false;
+    if (pendingImportAdoptionRef.current) {
+      setMixedQuoteError("Espera a que la importacion pendiente termine de guardarse.");
+      return false;
+    }
+    const projectId = activeProject.id;
+    const loadEpoch = projectLoadEpochRef.current;
+    try {
+      const durableDraft = await promoteProjectImport({
+        request,
+        userId: session.usuario.id,
+        projectId,
+        draft: importDraft,
+      });
+      if (projectLoadEpochRef.current !== loadEpoch
+          || activeProjectRef.current?.id !== projectId
+          || !canMutateActiveProjectRef.current) {
+        throw new Error("El Proyecto cambio durante la importacion. Vuelve a intentarlo.");
+      }
+      const durablePreview = durableDraft.preview;
+      const imported = mixedQuoteController.importPreview(durablePreview, options);
+      if (!imported) return false;
+      pendingImportAdoptionRef.current = {
+        projectId,
+        operationId: "",
+        draft: importDraft,
+      };
+      setPendingImportDraft(importDraft);
+      return false;
+    } catch (failure) {
+      const message = failure.message || "No se pudo promover la importacion al Proyecto.";
+      setMixedQuoteError(message);
+      throw failure;
+    }
+  }
+
+  function removeMixedCartLineFromApp(key) {
+    mixedQuoteController.remove(key);
+  }
+
+  function closeMixedCartSectionFromApp() {
+    mixedQuoteController.closeSection();
+  }
+
+  function renameMixedCartSectionFromApp(sectionId, concept) {
+    mixedQuoteController.renameSection(sectionId, concept);
+  }
+
+  function mergeMixedCartSectionFromApp(sectionId) {
+    mixedQuoteController.mergeSection(sectionId);
+  }
+
+  function moveMixedCartLineFromApp(key, direction) {
+    mixedQuoteController.moveLine(key, direction);
+  }
+
+  function moveMixedCartLineToSectionFromApp(key, sectionId) {
+    mixedQuoteController.moveLineToSection(key, sectionId);
+  }
+
+  function updateMixedQuoteField(field, value) {
+    mixedQuoteController.updateField(field, value);
+  }
+
+  function openMixedCart() {
+    setMixedCartOpen(true);
+  }
+
+  async function activateCreatedProject(created, submittedAdoption) {
+    const loadEpoch = projectLoadEpochRef.current + 1;
+    projectLoadEpochRef.current = loadEpoch;
+    setProjectLoadState({status: "loading", message: ""});
+    try {
+      const persisted = submittedAdoption
+        ? await persistCreatedProjectAdoption({
+          request,
+          created,
+          submittedAdoption,
+          operationId: createProjectOperationId(),
+          promoteImport: (projectId, draft) => promoteProjectImport({
+            request,
+            userId: session.usuario.id,
+            projectId,
+            draft,
+          }),
+        })
+        : {
+          project: created,
+          state: hydrateProject(created.payload),
+          adoptionDraft: null,
+        };
+      if (projectLoadEpochRef.current !== loadEpoch) return null;
+      const savedProject = persisted.project;
+      const adopted = persisted.state;
+      mixedCartRef.current = adopted.lines;
+      mixedCartSectionsRef.current = adopted.sections;
+      setMixedCart(adopted.lines);
+      setMixedCartSections(adopted.sections);
+      setMixedQuote({...EMPTY_MIXED_QUOTE, ...adopted.quoteFields});
+      setActiveProjectId(savedProject.id);
+      setActiveProject({
+        id: savedProject.id,
+        name: savedProject.name,
+        revision: savedProject.revision,
+        loadKey: loadEpoch,
+      });
+      pendingImportAdoptionRef.current = null;
+      setPendingImportDraft((current) => (
+        pendingDraftAfterConfirmedCreation(current, submittedAdoption)
+      ));
+      if (submittedAdoption) {
+        setConfirmedImport({
+          importId: submittedAdoption.preview.import_id,
+          projectId: savedProject.id,
+          confirmedAt: Date.now(),
+        });
+      }
+      setProjectChangeVersion(0);
+      setProjectLoadState({status: "ready", message: ""});
+      setMixedQuoteError("");
+      setView("project-editor");
+      return savedProject;
+    } catch (failure) {
+      if (projectLoadEpochRef.current !== loadEpoch) throw failure;
+      setProjectLoadState({
+        status: "failed",
+        message: failure.message || "No se pudo adoptar la importacion en el Proyecto.",
+      });
+      setMixedQuoteError(
+        failure.message || "No se pudo adoptar la importacion en el Proyecto.",
+      );
+      setView("proyectos");
+      throw failure;
+    }
+  }
+
+  async function openProject(projectId) {
+    if (!activeProject && mixedCartRef.current.length) {
+      setMixedQuoteError(
+        "Los productos sin Proyecto se conservaron. Termina su flujo antes de abrir otro Proyecto.",
+      );
+      return;
+    }
+    if (activeProject && activeProject.id !== projectId && projectAutosave.status !== "saved") {
+      setMixedQuoteError("Espera a que los cambios pendientes terminen de guardarse.");
+      return;
+    }
+    const loadEpoch = projectLoadEpochRef.current + 1;
+    projectLoadEpochRef.current = loadEpoch;
+    setProjectLoadState({status: "loading", message: ""});
+    setView("project-editor");
+    try {
+      const loaded = await loadProjectSnapshot({
+        request,
+        projectId,
+        adoptionDraft: pendingImportDraft,
+        hydrate: hydrateProject,
+        promoteImport: (targetProjectId, draft) => promoteProjectImport({
+          request,
+          userId: session.usuario.id,
+          projectId: targetProjectId,
+          draft,
+        }),
+      });
+      if (projectLoadEpochRef.current !== loadEpoch) return;
+      const adoptionDraft = loaded.adoptionDraft;
+      const adopted = loaded.state;
+      pendingImportAdoptionRef.current = null;
+      if (adoptionDraft) {
+        pendingImportAdoptionRef.current = {
+          projectId: loaded.project.id,
+          operationId: "",
+          draft: adoptionDraft,
+        };
+      }
+      mixedCartRef.current = adopted.lines;
+      mixedCartSectionsRef.current = adopted.sections;
+      setMixedCart(adopted.lines);
+      setMixedCartSections(adopted.sections);
+      setMixedQuote({...EMPTY_MIXED_QUOTE, ...adopted.quoteFields});
+      setActiveProjectId(loaded.project.id);
+      setActiveProject({
+        ...loaded.project,
+        loadKey: loadEpoch,
+      });
+      setProjectChangeVersion(adoptionDraft ? 1 : 0);
+      setProjectLoadState({status: "ready", message: ""});
+    } catch (failure) {
+      if (projectLoadEpochRef.current !== loadEpoch) return;
+      setProjectLoadState({
+        status: "failed",
+        message: failure.message || "No se pudo abrir el Proyecto.",
+      });
+    }
+  }
+
+  function updateActiveProject(nextProject) {
+    if (!nextProject || nextProject.id !== activeProject?.id) return;
+    mixedCartRef.current = nextProject.lines;
+    mixedCartSectionsRef.current = nextProject.sections;
+    setMixedCart(nextProject.lines);
+    setMixedCartSections(nextProject.sections);
+    setMixedQuote({...EMPTY_MIXED_QUOTE, ...nextProject.quoteFields});
+    setActiveProject((current) => ({...current, name: nextProject.name}));
+    setProjectChangeVersion((current) => current + 1);
+  }
+
+  function handleProjectDeleted(projectId) {
+    if (activeProjectRef.current?.id !== projectId) return;
+    projectLoadEpochRef.current += 1;
+    activeProjectRef.current = null;
+    canMutateActiveProjectRef.current = false;
+    pendingImportAdoptionRef.current = null;
+    const emptySections = createInitialMixedCartSections();
+    mixedCartRef.current = [];
+    mixedCartSectionsRef.current = emptySections;
+    setActiveProjectId("");
+    setActiveProject(null);
+    setMixedCart([]);
+    setMixedCartSections(emptySections);
+    setMixedQuote({...EMPTY_MIXED_QUOTE});
+    setPendingImportDraft(null);
+    setConfirmedImport(null);
+    setProjectChangeVersion(0);
+    setProjectLoadState({status: "idle", message: ""});
+    setView("proyectos");
+  }
+
+  async function generateActiveProjectQuote(project) {
+    if (!project?.id) throw new Error("Abre un Proyecto persistente antes de cotizar.");
+    if (projectAutosave.status !== "saved") {
+      throw new Error("Espera a que el Proyecto termine de guardarse.");
+    }
+    return mixedQuoteController.submit(
+      {preventDefault() {}},
+      project.lines,
+      null,
+      {
+        preserveProject: true,
+        propagateFailure: true,
+        projectQuote: {
+          id: project.id,
+          revision: project.revision,
+        },
+      },
+    );
+  }
+
+  async function submitMixedQuote(event, submissionLines = mixedCartRef.current) {
+    const preparedRequest = submissionLines === mixedCartRef.current
+      ? Object.freeze({ ...mixedQuote, ...mixedRequest })
+      : null;
+    return mixedQuoteController.submit(event, submissionLines, preparedRequest);
+  }
   async function downloadJob(job) {
     try {
       await runDownload(job, session.access_token, setDownloadState);
@@ -1251,27 +3174,97 @@ function App() {
       recentJobs={jobs}
       refreshJobs={refreshJobs}
       onOpenHistory={() => setView("historial")}
+      onImportPreview={importQuotationPreview}
+      confirmedImport={confirmedImport}
+      pendingImportId={pendingImportDraft?.preview?.import_id || ""}
+      autoCreateProject={!activeProject?.id}
       onJobChange={(job) => {
         setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       }}
     />
   );
   const mainView = view === "cotizaciones"
-    ? <QuotesView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onCreateNew={() => setView("nueva")} refreshJobs={refreshJobs} downloadState={downloadState} />
-    : view === "nueva"
+    ? <QuotesView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} onCreateNew={() => setView("nueva")} refreshJobs={refreshJobs} downloadState={downloadState} deleteState={deleteState} />
+    : view === "proyectos"
+      ? (
+        <ProjectsView
+          request={request}
+          onOpenProject={openProject}
+          onActivateProject={activateCreatedProject}
+          projectDraft={creationPlan.projectState}
+          projectAdoptionDraft={creationPlan.submittedAdoption}
+          activeProjectId={activeProjectId}
+          onProjectDeleted={handleProjectDeleted}
+        />
+      )
+      : view === "project-editor"
+        ? projectLoadState.status === "loading"
+          ? <section className="project-editor-loading" role="status">Cargando Proyecto…</section>
+          : projectLoadState.status === "failed"
+            ? (
+              <section className="project-editor-loading">
+                <p className="error-line" role="alert">{projectLoadState.message}</p>
+                <button type="button" className="ghost-action" onClick={() => setView("proyectos")}>
+                  Volver a Proyectos
+                </button>
+              </section>
+            )
+            : editorProject
+              ? (
+                <ProjectEditor
+                  project={editorProject}
+                  request={request}
+                  autosave={projectAutosave}
+                  onProjectChange={updateActiveProject}
+                  onGenerateQuote={generateActiveProjectQuote}
+                />
+              )
+              : <section className="project-editor-loading">Selecciona un Proyecto para editarlo.</section>
+      : view === "nueva"
       ? quoteForm
       : view === "historial"
         ? <HistoryView jobs={jobs} onDownload={downloadJob} onRetry={retryJob} onDelete={deleteJob} downloadState={downloadState} deleteState={deleteState} />
-        : view === "admin" || view === "clientes"
-          ? <AdminView token={session.access_token} />
-          : quoteForm;
+        : view === "tarkett"
+          ? <TarkettView token={session.access_token} userId={session.usuario?.id} cartLines={mixedCart} onAddCartLine={addMixedCartLine} onOpenCart={openMixedCart} cartBusy={mixedQuoteBusy} />
+          : view === "offiho"
+            ? <OffihoView token={session.access_token} userId={session.usuario?.id} cartLines={mixedCart} onAddCartLine={addMixedCartLine} onOpenCart={openMixedCart} cartBusy={mixedQuoteBusy} />
+            : Object.hasOwn(supplierLabels, view)
+              ? <SupplierCatalogView key={view} supplier={view} label={supplierLabels[view]} request={request} userId={session.usuario?.id} onAddCartLine={addMixedCartLine} onOpenCart={openMixedCart} cartLineCount={mixedCart.length} cartBusy={mixedQuoteBusy} />
+        : view === "clientes" && isAdmin
+          ? <ClientsView token={session.access_token} />
+          : view === "admin" && isAdmin
+            ? <AdminView token={session.access_token} />
+            : quoteForm;
 
   return (
     <div className="app-shell">
       <Sidebar view={view} setView={setView} isAdmin={isAdmin} onLogout={logout} />
       <main className="content-shell">
-        <Header user={session.usuario} subscription={session.suscripcion} />
+        <Header user={session.usuario} subscription={session.suscripcion} cartCount={mixedCart.length} onOpenCart={openMixedCart} />
+        {mixedQuoteNotice ? (
+          <div className="mixed-quote-notice" role="status" aria-live="polite">
+            {mixedQuoteNotice}
+          </div>
+        ) : null}
+        {mixedQuoteError ? (
+          <div className="error-line mixed-project-error" role="alert">
+            {mixedQuoteError}
+          </div>
+        ) : null}
         {mainView}
+        <MixedCartDrawer
+          lines={mixedCart}
+          sections={mixedCartSections}
+          open={mixedCartOpen}
+          projectName={activeProject?.name || ""}
+          autosave={activeProject ? projectAutosave : {status: "pending"}}
+          busy={mixedQuoteBusy}
+          onClose={() => setMixedCartOpen(false)}
+          onEditProject={() => {
+            setMixedCartOpen(false);
+            setView(activeProject ? "project-editor" : "proyectos");
+          }}
+        />
       </main>
     </div>
   );

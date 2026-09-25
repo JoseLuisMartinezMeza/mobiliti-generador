@@ -1,0 +1,355 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "inventory_key": "ECOGERENCIAL NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/eco-gerencial",
+      "image_url": "https://www.offiho.com/econosillas/eco-gerencial1/colores/EcoGerencialnegro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "NOVAISO SIN BRAZOS AZUL",
+      "product_url": "https://www.offiho.com/econosillas/novaisosinbrazos",
+      "image_url": "https://www.offiho.com/econosillas/novaiso-sin-brazos/colores/NovaisoSinBrazosAzul.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "NOVAISO SIN BRAZOS NEGRO",
+      "product_url": "https://www.offiho.com/econosillas/novaisosinbrazos",
+      "image_url": "https://www.offiho.com/econosillas/novaiso-sin-brazos/colores/NovaisoSinBrazosNegro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHE-99 GRIS/VERDE EVOLUTION",
+      "product_url": "https://www.offiho.com/operativos/evolution/operativos-evolution-modelo-OHE-99gris",
+      "image_url": "https://www.offiho.com/operativos/evolution/OHE-99gris/colores/OHE-99grisVerde.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHR-2800-2P CR CROMADA IVY",
+      "product_url": "https://www.offiho.com/bancas/ivy-2800/bancas-ivy-modelo-OHR-2800-2PCr",
+      "image_url": "https://www.offiho.com/bancas/ivy-2800/OHR-2800-2PCR/colores/OHR-2800-2Pcr.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_singleton_configuration_http_verified"
+    },
+    {
+      "inventory_key": "OHR-2800-3P CR CROMADA IVY",
+      "product_url": "https://www.offiho.com/bancas/ivy-2800/bancas-ivy-modelo-OHR-2800-3PCr",
+      "image_url": "https://www.offiho.com/bancas/ivy-2800/OHR-2800-3PCR/colores/OHR-2800-3Pcr.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_singleton_configuration_http_verified"
+    },
+    {
+      "inventory_key": "OHR-2800-4P CR CROMADA IVY",
+      "product_url": "https://www.offiho.com/bancas/ivy-2800/bancas-ivy-modelo-OHR-2800-4PCr",
+      "image_url": "https://www.offiho.com/bancas/ivy-2800/OHR-2800-4PCR/colores/OHR-2800-4Pcr.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_singleton_configuration_http_verified"
+    },
+    {
+      "inventory_key": "OHT-319 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-319",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-319/colores/OHT-319blanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-319 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-319",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-319/colores/OHT-319gris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-319 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-319",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-319/colores/OHT-319negro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-319 ROJO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-319",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-319/colores/OHT-319rojo.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-320 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-320",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-320/colores/OHT-320blanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-320 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-320",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-320/colores/OHT-320gris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-320 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-320",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-320/colores/OHT-320negro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-320 ROJO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-320",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-320/colores/OHT-320rojo.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-321CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-321cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-321cr/colores/OHT-321CRblanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-321CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-321cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-321cr/colores/OHT-321CRgris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-321CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-321cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-321cr/colores/OHT-321CRnegro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-321CR ROJO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-321cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-321cr/colores/OHT-321CRrojo.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-322CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-322cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-322cr/colores/OHT-322CRblanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-322CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-322cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-322cr/colores/OHT-322CRgris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHT-322CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHT-322cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHT-322cr/colores/OHT-322CRnegro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-310 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-310",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-310/colores/OHV-310blanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-310 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-310",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-310/colores/OHV-310gris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-310 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-310",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-310/colores/OHV-310negro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-311 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-311",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-311/colores/OHV-311blanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-311 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-311",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-311/colores/OHV-311gris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-312 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-312",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-312/colores/OHV-312blanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-312 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-312",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-312/colores/OHV-312gris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-312 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-312",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-312/colores/OHV-312negro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-313 BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-313",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-313/colores/OHV-313blanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-313 GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-313",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-313/colores/OHV-313gris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-313 NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-313",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-313/colores/OHV-313negro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-315CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-315cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-315cr/colores/OHV-315CRblanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-315CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-315cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-315cr/colores/OHV-315CRgris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-315CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-315cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-315cr/colores/OHV-315CRnegro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-316CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-316cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-316cr/colores/OHV-316CRblanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-316CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-316cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-316cr/colores/OHV-316CRgris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-316CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-316cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-316cr/colores/OHV-316CRnegro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-316CR ROJO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-316cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-316cr/colores/OHV-316CRrojo.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-317CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-317cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-317cr/colores/OHV-317CRblanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-317CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-317cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-317cr/colores/OHV-317CRgris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-317CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-317cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-317cr/colores/OHV-317CRnegro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-318CR BLANCO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-318cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-318cr/colores/OHV-318CRblanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-318CR GRIS KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-318cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-318cr/colores/OHV-318CRgris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-318CR NEGRO KYOS",
+      "product_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/visitantes-interior-kyoscollection-modelo-OHV-318cr",
+      "image_url": "https://www.offiho.com/visitantes-interior/kyos-collection/kyos-plasticos-expuestos/OHV-318cr/colores/OHV-318CRnegro.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-7216 CELESTE KOLN *",
+      "product_url": "https://www.offiho.com/visitantes-interior/koln/visitantes-interior-koln-modelo-OHV-7216",
+      "image_url": "https://www.offiho.com/visitantes-interior/koln/OHV-7216/colores/OHV-7216celesteBlanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "OHV-7216P CELESTE KOLN *",
+      "product_url": "https://www.offiho.com/visitantes-interior/koln/visitantes-interior-koln-modelo-OHV-7216P",
+      "image_url": "https://www.offiho.com/visitantes-interior/koln/OHV-7216P/colores/OHV-7216PcelesteBlanco.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "PEDESTAL 300 BL GRIS",
+      "product_url": "https://www.offiho.com/mesas/mesas-pedestal300-BL",
+      "image_url": "https://www.offiho.com/mesas/pedestal300-BL/colores/PEDESTAL300-Gris.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    },
+    {
+      "inventory_key": "PEDESTAL 300 BL NEGRO",
+      "product_url": "https://www.offiho.com/mesas/mesas-pedestal300-BL",
+      "image_url": "https://www.offiho.com/mesas/pedestal300-BL/colores/PEDESTAL300-BL.jpg",
+      "evidence_as_of": "2026-08-12T06:22:27.313005+00:00",
+      "evidence_kind": "product_options_data_cloudzoom_filename_variant_http_verified"
+    }
+  ]
+}
