@@ -32,7 +32,7 @@ en la cuenta: el límite de esta aplicación no controla compras del proveedor.
 - No se regenera el mismo contenido al volver a cotizar. Cola fal persistida
   y recuperable, sin segundo POST cuando ya existe una solicitud en cola.
 
-## Activación pendiente de publicación autorizada
+## Configuración de activación
 
 El código está apagado por defecto. Configuración privada del worker:
 
@@ -86,8 +86,55 @@ Microsoft Excel sin recovery logs, alteración de fórmulas comerciales ni error
 REF/VALUE en las celdas comprobadas. Evidencia preservada en
 `output/politica-imagenes-20260924/validacion-excel.json` y los XLSX adyacentes.
 No se ejecutó una compilación Docker local porque Docker no está instalado en
-este entorno. Pendiente: publicación, instalación segura de claves/configuración,
-conciliación del saldo y E2E productivo.
+este entorno. La compilación posterior en Hetzner sí terminó correctamente.
+
+## Publicación autorizada y validada — 24 septiembre México / 25 septiembre UTC
+
+El usuario autorizó explícitamente el despliegue. Commit activo del worker:
+`e9fee9f62cb123935264d0368695b6f7435497e9`; `CURRENT` e imagen del contenedor coinciden.
+Health: ok=true, processed=2, last_error=null. Las claves existentes se instalaron
+por stdin SSH en configuración privada, sin incluirlas en Git, logs o frontend.
+Vercel no necesitó publicación nueva: la generación y política corren en el worker.
+
+Se fijó `name: mobiliti-image-library-prod` para conservar el volumen entre los
+proyectos Compose distintos que crea cada release. Presupuesto inicial 30 USD,
+provisión previa 0.40 USD. Una llamada OpenAI del E2E añadió 0.05407 USD calculados
+del uso: total controlado 0.45407 USD, proveedor actual OpenAI. El panel de saldo
+requiere login; este contador no se presenta como saldo bancario conciliado.
+
+Cuenta QA no administradora 26, desactivada al finalizar. Dos jobs completos:
+
+- General: `890e5bcf-665e-48ec-bdaa-c1260f6067d5`.
+- CDMX: `f19bfc19-5812-4976-b2f9-9faeca5acec0`.
+
+E2E real por API pública: login, carga firmada R2, submit, procesamiento del worker,
+descarga y validación XLSX. Dos apariciones de la misma fotografía y ambos formatos
+reutilizan un único resultado OpenAI, SHA256
+`bcba11ef29a1207421f921355dce0d0f6772616e73256947712b1d51ccfd3f18`.
+Los originales de Quotation siguen intactos. Ambos resultados se abrieron,
+recalcularon y reabrieron en Microsoft Excel sin reparaciones; se verificaron
+4 fórmulas comerciales en general y 5 en CDMX.
+
+Canary en el mismo contenedor con presupuesto QA independiente de 0 USD: cambió
+a SeedVR2 por presupuesto, obtuvo PNG 1024×1024 y lo reutilizó con la red bloqueada
+en el proceso de comprobación. No se agotaron ni alteraron los 30 USD reales para
+simular el cambio. Request fal `01a0d6e1-35c7-7cb3-b5a6-be06796dd7c0`.
+
+Se preservaron los 49 jobs anteriores; quedaron 51, ninguno activo. Login QA
+devuelve 403; reservas liberadas. La credencial temporal QA fue enviada a Papelera.
+No se modificaron recargas automáticas ni se compró crédito.
+
+Recuperación: contenedor anterior conservado como
+`mobiliti-worker-backup-20260925044118-9b41af9be652`; configuración anterior en
+`/etc/mobiliti-worker/worker.env.pre-image-policy-20260925044029.bak`.
+Backup SQLite de las cuatro bases, integrity_check=ok, en
+`/var/lib/mobiliti-images/backups/20260925044759` (mismo volumen, no backup externo).
+Evidencias locales: `output/politica-imagenes-20260924/` (`qa-image-e2e.json`,
+`presupuesto-produccion.json`, `seed-respaldo-produccion.json`,
+`validacion-excel-produccion.json`, `qa-cierre-verificado.json`).
+
+Pendiente operativo: desactivar recarga automática en OpenAI si no se desean
+compras adicionales, conciliar saldo y renovar la clave temporal antes de vencer.
 
 Fuentes: [OpenAI prepago](https://help.openai.com/en/articles/8264644-setting-up-and-managing-prepaid-api-billing),
 [modelo y tarifas](https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst),
