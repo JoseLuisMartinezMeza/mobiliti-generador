@@ -55,3 +55,20 @@ La sesión del usuario en la aplicación generó dos proyectos internos, identif
 La revisión automática bloqueó exportar el snapshot interno completo por posible contenido sensible. La alternativa utiliza las selecciones observadas en la interfaz, los datos congelados del XLSX y metadatos sanitizados del trabajo de prueba; no se presenta como una copia completa del payload del servidor.
 
 Los hallazgos reales de la primera pasada dieron lugar a regresiones específicas: se omiten avisos documentales de Sonara y Requiez, se evita reintroducir una ficha cruda como configuración de Conceptos, se normalizan las notas y conexiones de Lumbro, el color de Sunon, las garantías de CR Global y la opción de ALMA. Offiho aclara altura, brazos y cabecera sin perder material ni capacidad; Lauco mejora concordancia y conectores conservando cada cifra. Las unidades de títulos se normalizan sólo en Tarkett y Sonara. `tests/test_catalog_production_editorial_regressions.py` protege estos casos y la conservación de configuraciones distintas, advertencias comerciales y modelos. La comparación final de las 4,218 fuentes volvió a dar cero diferencias.
+
+El cierre de esta segunda revisión pasó 59 pruebas de proveedores, regresiones reales y paridad. La pasada amplia anterior aportó 141 pruebas correctas, incluidos cinco E2E; su fallo de paridad ocurrió mientras se terminaba de copiar un espejo y quedó resuelto en la pasada de cierre, con las fuentes inmóviles. Una revisión independiente de las 1,288 fichas Offiho comprobó que los 57 textos afectados por el último ajuste conservan sus cifras y hechos.
+
+La versión final del worker es `3f198b1d5fcd64e9a18b8ab15d09313482f8b215`, publicada el 30 de septiembre de 2026 a las 06:06 UTC, de nuevo con cola vacía y salud confirmada. El respaldo anterior es `mobiliti-worker-backup-20260930060624-ea487ca49025`. Los archivos ajenos presentes en la raíz no entraron en la publicación. La repetición final desde la interfaz es `200-00039`, `PRUEBA E2E DESCRIPCIONES - 13 CATALOGOS FINAL`.
+
+### Resultado final confirmado
+
+La cotización `200-00039` se completó en 43.309 segundos (22.605 segundos de procesamiento). El job `fdf84bb8-1f08-4357-9c52-f63f08e632c7` terminó sin errores ni advertencias, con imagen/CURRENT correctos, worker sano y cero reinicios. La descarga de la interfaz se preservó como `produccion/mixta13-200-00039-produccion-final.xlsx`, SHA-256 `c0bdf69d5c4b2bf16fbca1b1cbb55b2c73992c18a33d3514f1674ef117d156b3`.
+
+- Verificación editorial y técnica: **289 comprobaciones correctas, cero fallos**. Los 13 precios, cantidades y categorías coinciden con la primera mezcla. Las tasas y los hashes de cada catálogo coinciden con los metadatos sanitizados del trabajo final. Se revisaron manualmente las 13 descripciones, incluidas restricciones, garantía, materiales y opciones.
+- Excel real: **435 fórmulas y 515 celdas operativas** verificadas; apertura sin reparación, recálculo completo, guardado y reapertura de una copia nueva sin errores. Original intacto y todas las instancias de Excel creadas para esta prueba cerradas.
+- Comparativo de ficha fuente y texto entregado: `output/descripciones-20260930/produccion/comparativo-13-catalogos-produccion-final.html`.
+- Reporte del archivo: `output/descripciones-20260930/produccion/mixta13-200-00039-verificacion-final.json`.
+- Reporte Excel: `output/descripciones-20260930/produccion/excel/20260930T065109Z-22bc57/resultado-excel-com.json`.
+- Evidencia de interfaz: `output/descripciones-20260930/produccion/e2e-final-200-00039-completa.png`.
+
+Los tres trabajos de prueba y sus archivos se conservaron. La verificación de Excel cubre productos, costos, cantidades, descuentos y totales operativos; las tres referencias antiguas ya identificadas en hojas auxiliares históricas de la plantilla siguen fuera de este alcance. Las cotizaciones creadas antes del cambio conservan su archivo; la nueva redacción se aplica al generar o regenerar.
