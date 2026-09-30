@@ -91,6 +91,10 @@ def _lumbro(texto: str) -> str:
     texto = re.sub(r"\bUSB\s*\(Datos\)", "USB de datos", texto, flags=re.I)
     texto = re.sub(r"\bUSB\s*\(Carga\)", "USB de carga", texto, flags=re.I)
     texto = re.sub(r"\bUSB doble\s*\(Carga\)", "USB doble de carga", texto, flags=re.I)
+    texto = re.sub(r"\bpara canaleta COLOR\b", "para canaleta en color", texto)
+    texto = re.sub(r"\bNo Regulados\b", "no regulados", texto, flags=re.I)
+    texto = re.sub(r"\bPUERTO USB CARGA DOBLE\b", "puerto USB de carga doble", texto, flags=re.I)
+    texto = re.sub(r"\bINTERCONECTAR\b", "interconectar", texto)
     return texto
 
 
@@ -222,6 +226,18 @@ def redactar_descripcion_proveedor(item: dict) -> str:
         texto = re.sub(r"\bSoporte asiento\b", "Soporte de asiento", texto, flags=re.I)
         texto = re.sub(r"\bPatas acero\b", "Patas de acero", texto, flags=re.I)
         texto = re.sub(r"\bademás delcrón\b", "además de delcrón", texto, flags=re.I)
+        texto = re.sub(r"\b(plazas?) brazos y respaldo (bajo|alto) base\b", r"\1 con brazos y respaldo \2; base", texto, flags=re.I)
+        texto = re.sub(r"\bpino de primera (?=\d)", "pino de primera de ", texto, flags=re.I)
+        texto = re.sub(r"\bpuntos críticos,? paneles\b", "puntos críticos. Paneles", texto, flags=re.I)
+        texto = re.sub(r"\b(Paneles sólidos en listón de \d+\s*mm), armada con\b", r"\1. Estructura armada con", texto, flags=re.I)
+        texto = re.sub(r"\bAcojinamiento en asiento, poliuretano flexible densidad\b", "Acojinamiento del asiento en poliuretano flexible de densidad", texto, flags=re.I)
+        texto = re.sub(r", respaldo densidad\b", "; respaldo de densidad", texto, flags=re.I)
+        texto = re.sub(r", brazos y costados densidad\b", "; brazos y costados de densidad", texto, flags=re.I)
+        texto = re.sub(r"\bSoporte de asiento triplay\b", "Soporte del asiento en triplay", texto, flags=re.I)
+        texto = re.sub(r"\btriplay de pino (?=\d)", "triplay de pino de ", texto, flags=re.I)
+        texto = re.sub(r"\bo MDF (?=\d)", "o MDF de ", texto)
+        texto = re.sub(r"\bgrapa de acero (?=\d)", "grapa de acero de ", texto, flags=re.I)
+        texto = re.sub(r"\bcal\. (\d+) acabado pintura\b", r"cal. \1, con acabado de pintura", texto, flags=re.I)
     return _puntuacion(texto)
 
 

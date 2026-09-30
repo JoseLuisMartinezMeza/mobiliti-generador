@@ -71,7 +71,7 @@ def test_ficha_oficial_conserva_datos_y_no_afirma_piel_natural(articulos):
     assert "soft revolving leather" in texto
     assert "piel natural" not in texto and "piel genuina" not in texto
     assert "50 kg/m³" in texto and "160 kg" in texto
-    assert "Ajuste de altura mediante pistón neumático" in texto
+    assert "Altura del asiento ajustable mediante pistón neumático" in texto
     assert "CIANI *" not in texto
 
 
@@ -141,3 +141,34 @@ def test_detecta_ruido_en_payload_real_sin_procedencia(articulos):
         if texto != esperado:
             diferencias.append((original["inventory_key"], esperado, texto))
     assert diferencias == []
+
+
+def test_alufsen_aclara_cabecera_y_conserva_tapizado_de_brazos(articulos):
+    item = copy.deepcopy(_buscar(articulos, "OHE-405 NEGRO ALUFSEN"))
+    anterior = copy.deepcopy(item)
+    texto = redactar_descripcion_offiho(item)
+    assert "Altura del asiento ajustable mediante pistón neumático." in texto
+    assert "que permite ajustar la altura" not in texto
+    assert "Respaldo alto con cabecera. Asiento y respaldo con espuma laminada flexible" in texto
+    assert "asiento y respaldo con cabecera" not in texto.lower()
+    assert (
+        "Brazos de aluminio fundido con acabado natural pulido, "
+        "acojinados y tapizados en soft revolving leather color negro."
+    ) in texto
+    assert "Tapizado: soft revolving leather de color negro." in texto
+    assert "50 kg/m³" in texto and "160 kg" in texto
+    assert ". Acojinados" not in texto
+    assert item == anterior
+
+
+def test_pulido_de_alufsen_no_inventa_cabecera_ni_cambia_ajuste_distinto():
+    texto = redactar_descripcion_offiho({
+        "name": "Silla de prueba",
+        "description": (
+            "elevación: por medio de pistón neumático con recorrido de 100 mm. "
+            "asiento y respaldo: de respaldo alto, espuma de 30 kg/m3."
+        ),
+    })
+    assert "Ajuste de altura mediante pistón neumático con recorrido de 100 mm" in texto
+    assert "cabecera" not in texto
+    assert "30 kg/m³" in texto

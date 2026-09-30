@@ -66,6 +66,8 @@ def es_aviso_interno(texto: str) -> bool:
     texto = _clave(texto)
     return bool(re.search(
         r"^(?:codigo (?:oficial )?(?:por verificar|no es unico)|"
+        r"codigo de proveedor faltante\b|"
+        r"codigo [^:;]+ requiere revision en pagina \d+\b|"
         r"modelo no encontrado en spec guide|revision documental local|"
         r"missing_code\b|price_pending\b|variant_not_quotable\b)", texto,
     )) or "variante no cotizable" in texto
@@ -98,6 +100,25 @@ def _redactar_segmento(texto: str, idioma: str, catalogo: str) -> str:
         if letras and sum(letra.isupper() for letra in letras) / len(letras) > .8:
             texto = texto.lower()
         texto = _acentuar(texto)
+        texto = re.sub(r"^Notas:\s*nota:\s*", "Notas: ", texto, flags=re.I)
+        texto = re.sub(
+            r"^Garantía:\s*(?:Garantía\s+(?:de\s+)?)?(\d+)\s+años\b",
+            r"Garantía: \1 años", texto, flags=re.I,
+        )
+        if catalogo == "sunon":
+            colores = {"black": "negro", "white": "blanco", "gray": "gris", "grey": "gris",
+                       "red": "rojo", "green": "verde", "blue": "azul", "orange": "naranja",
+                       "yellow": "amarillo"}
+            color = re.fullmatch(r"Color:\s*(\w+)", texto, flags=re.I)
+            if color and color.group(1).casefold() in colores:
+                texto = "Color: " + colores[color.group(1).casefold()]
+        elif catalogo == "alma":
+            texto = re.sub(
+                r"^Sin cojín Aluminio:\s*Recubrimiento en polvo$",
+                "Sin cojín; aluminio con recubrimiento en polvo", texto, flags=re.I,
+            )
+        elif catalogo == "requiez":
+            texto = re.sub(r"\bng\s*/\s*gr\b", "NG/GR", texto, flags=re.I)
         texto = re.sub(r"\bEntrega:\s*Entrega\s+", "Entrega: ", texto, flags=re.I)
         texto = re.sub(r"\bVariante:\s*", "Configuración: ", texto, flags=re.I)
         texto = re.sub(
@@ -124,16 +145,33 @@ def _redactar_segmento(texto: str, idioma: str, catalogo: str) -> str:
     return texto[:1].upper() + texto[1:]
 
 
+def _normalizar_unidades_titulo(texto: str, catalogo: str) -> str:
+    # Los espesores y longitudes figuran en estos títulos de catálogo. No
+    # aplicar esta regla a modelos de otras marcas, como «SERIE20MM».
+    if catalogo not in {"tarkett", "sonara"}:
+        return texto
+    texto = re.sub(r"(?<=\d)\s*mts\b\.?", " m", texto, flags=re.I)
+    return re.sub(r"(?<=\d)\s*(mm|cm|m)\b", lambda m: " " + m.group(1).lower(), texto, flags=re.I)
+
+
 def construir_descripcion_catalogo(
     nombre: object, descripcion: object, idioma: object = "es", *, catalogo: str = "",
 ) -> str:
     """Separa especificaciones y condiciones; nunca resume cortando características."""
     idioma = normalize_description_language(idioma)
     titulo = re.sub(r"\s+", " ", str(nombre or "")).strip(" .*")
+    titulo = _normalizar_unidades_titulo(titulo, catalogo)
+    if idioma == "es" and catalogo == "cr-global":
+        titulo = re.sub(r"^Vertebra\b", "Vértebra", titulo, flags=re.I)
+    titulo_origen = titulo
+    if idioma == "es" and catalogo == "alma":
+        titulo = titulo_alma(titulo)
+    elif idioma == "es" and catalogo == "sunon":
+        titulo = titulo_sunon(titulo)
     fuente = str(descripcion or "")
     fuente = re.sub(r"\b(?:Material|Function|Process)\s+Description\s*:", "", fuente, flags=re.I)
     segmentos: list[str] = []
-    vistos = {_clave_deduplicacion(titulo)}
+    vistos = {_clave_deduplicacion(titulo), _clave_deduplicacion(titulo_origen)}
     for parte in re.split(r"\s*\|\s*|[\r\n]+|\s*\d+\)\s*", fuente):
         parte = parte.strip()
         if not parte or re.match(
@@ -143,9 +181,10 @@ def construir_descripcion_catalogo(
             continue
         if _clave(parte) in {"standard", "estandar"}:
             continue
+        parte = _normalizar_unidades_titulo(parte, catalogo)
         # El nombre ya figura en el encabezado; no repetirlo al inicio de la ficha.
-        if titulo and re.match(re.escape(titulo) + r"(?:\s|[.:;]|$)", parte, re.I):
-            resto = re.sub(r"^" + re.escape(titulo) + r"\b[\s.:;]*", "", parte, flags=re.I)
+        if titulo_origen and re.match(re.escape(titulo_origen) + r"(?:\s|[.:;]|$)", parte, re.I):
+            resto = re.sub(r"^" + re.escape(titulo_origen) + r"\b[\s.:;]*", "", parte, flags=re.I)
             if not re.match(r"^(?:de|con|en|para|sin|y)\b", resto, re.I) or _clave(resto) == "de offiho":
                 parte = resto
         texto = _redactar_segmento(parte, idioma, catalogo)
@@ -155,8 +194,4 @@ def construir_descripcion_catalogo(
         vistos.add(clave)
         segmentos.append(texto + ("" if texto.endswith((".", "!", "?")) else "."))
     # Los modelos se conservan literalmente; la categoría logística no es una ficha comercial.
-    if idioma == "es" and catalogo == "alma":
-        titulo = titulo_alma(titulo)
-    elif idioma == "es" and catalogo == "sunon":
-        titulo = titulo_sunon(titulo)
     return "\n".join([titulo + "." if titulo else "", *segmentos]).strip()

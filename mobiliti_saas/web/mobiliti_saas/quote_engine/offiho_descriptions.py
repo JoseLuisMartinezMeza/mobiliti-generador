@@ -136,6 +136,11 @@ def _redactar_clausula(etiqueta: str, contenido: str, *, pdf: bool) -> str:
         return contenido[:1].upper() + contenido[1:]
     if clave in {"elevacion", "sistema de elevacion"}:
         contenido = re.sub(r"^(?:por medio de|de medio de)\s+", "mediante ", contenido, flags=re.I)
+        if re.fullmatch(
+            r"mediante pistón neumático que permite ajustar la altura del asiento",
+            contenido, flags=re.I,
+        ):
+            return "Altura del asiento ajustable mediante pistón neumático"
         return f"Ajuste de altura {contenido}"
     if clave == "tapiz":
         contenido = re.sub(r"^en\s+", "", contenido, flags=re.I)
@@ -144,6 +149,22 @@ def _redactar_clausula(etiqueta: str, contenido: str, *, pdf: bool) -> str:
         return f"{etiqueta.capitalize()}: {contenido}"
     if clave == "respaldo" and contenido.lower().startswith("respaldo "):
         return contenido[:1].upper() + contenido[1:]
+    if clave == "brazos":
+        tapizado = re.fullmatch(
+            r"de aluminio fundido y pulidos con terminado natural\.\s+"
+            r"Acojinados y tapizados en (.+)",
+            contenido, flags=re.I,
+        )
+        if tapizado:
+            return (
+                "Brazos de aluminio fundido con acabado natural pulido, "
+                f"acojinados y tapizados en {tapizado.group(1)}"
+            )
+    if clave == "asiento y respaldo":
+        cabecera = re.fullmatch(r"de respaldo alto con cabecera,\s*(.+)", contenido, flags=re.I)
+        if cabecera:
+            acojinamiento = re.sub(r"^con\s+", "", cabecera.group(1), flags=re.I)
+            return f"Respaldo alto con cabecera. Asiento y respaldo con {acojinamiento}"
     if clave == "asiento y respaldo" and re.match(r"^de respaldo (alto|bajo)\b", contenido, re.I):
         contenido = re.sub(r"^de respaldo (alto|bajo)\s*,?\s*", r"Respaldo \1; asiento y respaldo con ", contenido, flags=re.I)
         return contenido.replace("con con ", "con ")

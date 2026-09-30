@@ -379,7 +379,13 @@ def _description_for_item(
     configuration = str(item.get("configuration") or "").strip()
     variant = str(item.get("variant") or "").strip()
     if configuration:
-        if not is_lumbro or configuration.casefold() not in {"standard", "estandar", "estándar"}:
+        # Algunas opciones publican de nuevo la ficha completa. El texto ya
+        # revisado basta; no reintroducir la misma ficha con errores de origen.
+        repite_ficha = redactar and (
+            " ".join(configuration.split()).casefold().rstrip(" .")
+            == " ".join(str(ficha.get("description") or "").split()).casefold().rstrip(" .")
+        )
+        if not repite_ficha and (not is_lumbro or configuration.casefold() not in {"standard", "estandar", "estándar"}):
             parts.append(configuration)
     elif variant:
         parts.append(f"Variante: {variant}")

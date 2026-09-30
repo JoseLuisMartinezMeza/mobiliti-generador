@@ -1,6 +1,6 @@
 # Revisión de descripciones de los catálogos
 
-Se revisaron los 4,218 registros de los 13 catálogos disponibles localmente. La corrección se aplica a la presentación de cotizaciones nuevas o regeneradas; los snapshots de proveedores, sus claves, precios e inventario se conservan. No se ejecutó ningún despliegue ni publicación remota.
+Se revisaron los 4,218 registros de los 13 catálogos disponibles localmente. La corrección se aplica a la presentación de cotizaciones nuevas o regeneradas; los snapshots de proveedores, sus claves, precios e inventario se conservan. El usuario autorizó el despliegue y la prueba de extremo a extremo en producción.
 
 ## Cambios
 
@@ -42,3 +42,16 @@ El flujo completo API/worker pasó en MXN, USD y EUR (tres casos). Diez comproba
 Cuatro casos de imágenes importadas de esa suite requieren `rembg`, ausente en el runtime; este límite es independiente de la revisión de textos. Las fixtures aíslan la limpieza del almacenamiento simulado en memoria y mantienen la preservación de archivos reales. Las pasadas anteriores a esta arquitectura no se usan como evidencia de su preservación de cálculos.
 
 Las pruebas utilizaron almacenamiento local aislado, conexiones externas bloqueadas y preservación de temporales. Los ejemplos XLSX de pruebas usan precios sintéticos y no deben enviarse como cotizaciones comerciales.
+
+## Publicación y prueba en producción
+
+El worker se publicó el 30 de septiembre de 2026 con el commit `69943048be682b74ac05eba5588fafa5f169f93a`, desde un checkout aislado que contiene únicamente los 38 archivos de esta tarea. Se verificaron cola vacía, imagen activa, salud y coincidencia de `CURRENT`. El contenedor anterior y el volumen de imágenes quedaron preservados. No fue necesario desplegar Vercel porque no cambiaron la API ni el contrato del payload.
+
+La sesión del usuario en la aplicación generó dos proyectos internos, identificados como `PRUEBA E2E DESCRIPCIONES`, con contacto ficticio y sin enviar mensajes. Se seleccionaron productos y configuraciones desde los catálogos reales y se descargaron sus Excel desde la interfaz:
+
+- `200-00037`: cinco artículos Offiho, seis piezas; lista en 32 segundos. Las 99 comprobaciones de textos, precios, cantidades, fórmulas y clasificación pasaron. Excel abrió el archivo sin reparación, recalculó y reabrió una copia nueva: 171 fórmulas y 203 celdas operativas verificadas, original intacto.
+- `200-00038`: trece artículos, uno por catálogo, incluidas opciones de tapiz y productos Sunon/ALMA en USD; lista en 27 segundos. Excel abrió y recalculó una copia sin reparación ni errores en 435 fórmulas y 515 celdas operativas. El tipo de cambio congelado de 18.071 MXN/USD coincide con los metadatos sanitizados del trabajo. La lectura editorial encontró avisos administrativos y configuraciones que todavía requerían limpieza; esta primera pasada se conserva como evidencia del hallazgo, no como aprobación editorial final.
+
+La revisión automática bloqueó exportar el snapshot interno completo por posible contenido sensible. La alternativa utiliza las selecciones observadas en la interfaz, los datos congelados del XLSX y metadatos sanitizados del trabajo de prueba; no se presenta como una copia completa del payload del servidor.
+
+Los hallazgos reales de la primera pasada dieron lugar a regresiones específicas: se omiten avisos documentales de Sonara y Requiez, se evita reintroducir una ficha cruda como configuración de Conceptos, se normalizan las notas y conexiones de Lumbro, el color de Sunon, las garantías de CR Global y la opción de ALMA. Offiho aclara altura, brazos y cabecera sin perder material ni capacidad; Lauco mejora concordancia y conectores conservando cada cifra. Las unidades de títulos se normalizan sólo en Tarkett y Sonara. `tests/test_catalog_production_editorial_regressions.py` protege estos casos y la conservación de configuraciones distintas, advertencias comerciales y modelos. La comparación final de las 4,218 fuentes volvió a dar cero diferencias.

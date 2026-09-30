@@ -85,14 +85,14 @@ def test_catalogo_preserva_restricciones_y_avisos_de_color():
 
 
 @pytest.mark.parametrize(
-    "titulo,cuerpo,catalogo",
+    "titulo,cuerpo,catalogo,titulo_final",
     [
-        ("ROOT · 160-05535", "Root 160-05535", "requiez"),
-        ("Aurea Tech Cadiz 6.0mm", "Aurea Tech Cadiz 6.0 mm", "tarkett"),
+        ("ROOT · 160-05535", "Root 160-05535", "requiez", "ROOT · 160-05535"),
+        ("Aurea Tech Cadiz 6.0mm", "Aurea Tech Cadiz 6.0 mm", "tarkett", "Aurea Tech Cadiz 6.0 mm"),
     ],
 )
-def test_catalogo_omite_repeticion_completa_sin_cambiar_titulo(titulo, cuerpo, catalogo):
-    assert construir_descripcion_catalogo(titulo, cuerpo, catalogo=catalogo) == titulo + "."
+def test_catalogo_omite_repeticion_completa_sin_cambiar_identidad(titulo, cuerpo, catalogo, titulo_final):
+    assert construir_descripcion_catalogo(titulo, cuerpo, catalogo=catalogo) == titulo_final + "."
 
 
 @pytest.mark.parametrize(
@@ -105,7 +105,7 @@ def test_catalogo_omite_repeticion_completa_sin_cambiar_titulo(titulo, cuerpo, c
 )
 def test_catalogo_deduplicacion_no_omite_detalles_ni_modelos_distintos(titulo, cuerpo, catalogo, conservado):
     texto = construir_descripcion_catalogo(titulo, cuerpo, catalogo=catalogo)
-    assert texto.startswith(titulo + ".\n")
+    assert texto.startswith(titulo.replace("6.0mm", "6.0 mm") + ".\n")
     assert conservado in texto.split("\n", 1)[1]
 
 
