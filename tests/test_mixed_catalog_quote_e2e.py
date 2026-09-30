@@ -93,6 +93,9 @@ def isolated_quote_runtime(monkeypatch):
         f"mixed_quote_e2e_worker_{suffix}",
         WORKER_DIR / "quote_worker.py",
     )
+    # El cliente de esta prueba conserva objetos sólo en memoria. Permitir
+    # su limpieza simulada no cambia la preservación de temporales en disco.
+    monkeypatch.setattr(quote_worker, "local_files_preserved", lambda: False)
     assert api_index._enabled_catalog_suppliers() == CATALOGS[2:]
     try:
         yield api_index, quote_worker
@@ -1804,7 +1807,8 @@ def test_mixed_api_worker_produces_one_auditable_workbook(
             read_only=True,
         )
         try:
-            assert converted.sheetnames == ["Quotation"]
+            assert [sheet.title for sheet in converted if sheet.sheet_state == "visible"] == ["Quotation"]
+            assert converted["_Catalogo_textos"].sheet_state == "hidden"
         finally:
             converted.close()
         worker_client.record_event("converter")
@@ -2058,7 +2062,7 @@ def _assert_task9_final_workbook(
     )
 
     sonara_row = cotizacion_rows[final_names.index("Panel Sonara por verificar")]
-    assert "Revision documental local" in str(
+    assert "Revision documental local" not in str(
         processed_by_cotizacion_row[sonara_row]
     )
     alma_rows = [
@@ -2066,7 +2070,7 @@ def _assert_task9_final_workbook(
         for index, name in enumerate(final_names)
         if name == "Mesa ALMA"
     ]
-    assert "electrificacion a" in str(
+    assert "electrificación a" in str(
         processed_by_cotizacion_row[alma_rows[0]]
     ).casefold()
     assert "pasacables b" in str(
@@ -2142,11 +2146,11 @@ def _assert_final_workbook(
         True, True, False, False, False, False, False, False,
     ]
     sonara_description = str(quotation.cell(source_rows[3], 4).value)
-    assert "Revision documental local" in sonara_description
-    assert "Codigo por verificar" in sonara_description
+    assert "Revision documental local" not in sonara_description
+    assert "Codigo por verificar" not in sonara_description
     alma_a_description = str(quotation.cell(source_rows[5], 4).value)
     alma_b_description = str(quotation.cell(source_rows[6], 4).value)
-    assert "electrificacion a" in alma_a_description.casefold()
+    assert "electrificación a" in alma_a_description.casefold()
     assert "pasacables b" in alma_b_description.casefold()
     assert alma_a_description != alma_b_description
     assert "LIDO.OP-INT manual" in str(quotation.cell(source_rows[7], 2).value)

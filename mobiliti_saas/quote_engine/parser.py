@@ -37,6 +37,8 @@ class QuoteItem:
     source_hash: Any = ""
     source_row: Any = None
     upstream_row_hash: Any = ""
+    nombre_comercial: str | None = None
+    descripcion_comercial: str | None = None
 
 
 def normalize_header(value: Any) -> str:
@@ -117,6 +119,40 @@ def col_index(column_map: dict[str, str], key: str, fallback: str) -> int:
     return column_index_from_string(column_map.get(key, fallback))
 
 
+def _leer_textos_comerciales(wb, quotation) -> dict[int, tuple[str, str]]:
+    """Lee la presentación separada sin reemplazar datos usados para calcular."""
+    if "_Catalogo_textos" not in wb.sheetnames:
+        return {}
+    hoja = wb["_Catalogo_textos"]
+    if hoja.sheet_state not in {"hidden", "veryHidden"}:
+        raise ValueError("La hoja de textos comerciales debe permanecer oculta")
+    if tuple(hoja.cell(1, columna).value for columna in range(1, 4)) != (
+        "fila", "nombre", "descripcion",
+    ):
+        raise ValueError("Encabezados de textos comerciales inválidos")
+    if hoja.max_column > 3 or hoja.max_row > max(1, quotation.max_row - Q_HEADER_ROW + 1):
+        raise ValueError("Dimensiones de textos comerciales inválidas")
+    textos: dict[int, tuple[str, str]] = {}
+    for fila, nombre, descripcion in hoja.iter_rows(min_row=2, max_col=3, values_only=True):
+        if fila is None and nombre is None and descripcion is None:
+            continue
+        if type(fila) is not int or not Q_HEADER_ROW < fila <= quotation.max_row:
+            raise ValueError("Fila de textos comerciales fuera de Quotation")
+        if fila in textos:
+            raise ValueError("Fila duplicada en textos comerciales")
+        if type(quotation.cell(fila, 1).value) not in {int, float}:
+            raise ValueError("Los textos comerciales deben referir a un producto")
+        valores = []
+        for valor in (nombre, descripcion):
+            if valor is None:
+                valor = ""
+            if not isinstance(valor, str) or len(valor) > 32_767:
+                raise ValueError("Texto comercial inválido")
+            valores.append(valor)
+        textos[fila] = (valores[0], valores[1])
+    return textos
+
+
 def read_items(source_path: str | Path) -> tuple[list[QuoteItem], dict[str, str]]:
     wb = load_workbook(source_path, data_only=True)
     if "Quotation" not in wb.sheetnames:
@@ -124,6 +160,11 @@ def read_items(source_path: str | Path) -> tuple[list[QuoteItem], dict[str, str]
         raise ValueError("El archivo no contiene hoja Quotation")
 
     ws = wb["Quotation"]
+    try:
+        textos_comerciales = _leer_textos_comerciales(wb, ws)
+    except Exception:
+        wb.close()
+        raise
     column_map = detect_columns(ws)
     desc_col = col_index(column_map, "descripcion", "D")
     dim_col = col_index(column_map, "dimension", "E")
@@ -182,6 +223,8 @@ def read_items(source_path: str | Path) -> tuple[list[QuoteItem], dict[str, str]
                     source_hash=optional_value(row, "source_hash", ""),
                     source_row=optional_value(row, "source_row", None),
                     upstream_row_hash=optional_value(row, "upstream_row_hash", ""),
+                    nombre_comercial=textos_comerciales.get(row, (None, None))[0],
+                    descripcion_comercial=textos_comerciales.get(row, (None, None))[1],
                 )
             )
         elif (no_val is None or no_val == "") and item_name:

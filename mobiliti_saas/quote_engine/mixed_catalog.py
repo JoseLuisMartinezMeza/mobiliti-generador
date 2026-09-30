@@ -898,6 +898,13 @@ def _validate_mixed_excel_text_cells(
         source_type=MIXED_GROUP_SOURCE_TYPES[catalog],
         extra_description_parts=extra_description_parts,
     )
+    descripcion_fuente, _, _ = catalog_quotation_item_text(
+        line,
+        index=index,
+        source_type=MIXED_GROUP_SOURCE_TYPES[catalog],
+        extra_description_parts=extra_description_parts,
+        redactar=False,
+    )
     attributes = line["attributes"]
     dimensions = str(attributes.get("dimensions") or "").strip()
     dimension_cell = (
@@ -908,6 +915,7 @@ def _validate_mixed_excel_text_cells(
     text_cells = (
         line["name"],
         description,
+        descripcion_fuente,
         dimension_cell,
         line["product_url"],
         line["supplier"],

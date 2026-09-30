@@ -40,6 +40,7 @@ from PIL import Image as PILImage
 from .catalog_cart import WARNING_FILL
 from .classification import classify_product_name, load_category_dictionary
 from .descriptions import build_product_description, normalize_description_language
+from .customer_descriptions import CATALOGOS_COMERCIALES, construir_descripcion_catalogo
 from .ai_image_provider import (
     dezgo_config_from_env,
     generate_with_dezgo,
@@ -2919,6 +2920,24 @@ def _official_cotizacion_description(
     line: _OfficialPresentationLine,
     language: str,
 ) -> str:
+    catalogo = line.origin
+    if line.item is not None and catalogo == "quotation":
+        # Los carritos mixtos anteriores al handoff canónico conservan el origen
+        # en la referencia de su snapshot; no inferirlo de un proveedor importado.
+        catalogo = str(line.item.referencia_fuente or "").split(":", 1)[0].casefold()
+    if line.item is not None and catalogo in CATALOGOS_COMERCIALES:
+        return construir_descripcion_catalogo(
+            (
+                line.item.nombre_comercial
+                if line.item.nombre_comercial is not None else line.item.nombre
+            ),
+            (
+                line.item.descripcion_comercial
+                if line.item.descripcion_comercial is not None else line.item.descripcion
+            ),
+            language,
+            catalogo=catalogo,
+        )
     return (
         build_product_description(
             line.item.nombre,

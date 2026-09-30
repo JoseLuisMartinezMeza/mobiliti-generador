@@ -314,7 +314,8 @@ def test_mixed_workbook_has_one_quotation_with_provider_sections_and_audit_colum
         frozen_payload(), output, image_dir=tmp_path / "images"
     )
     wb = load_workbook(output, data_only=False)
-    assert wb.sheetnames == ["Quotation"]
+    assert [sheet.title for sheet in wb if sheet.sheet_state == "visible"] == ["Quotation"]
+    assert wb["_Catalogo_textos"].sheet_state == "hidden"
     ws = wb["Quotation"]
     assert [ws.cell(7, column).value for column in range(12, 20)] == [
         "Supplier",
@@ -812,7 +813,7 @@ def test_catalog_warning_merge_keeps_each_semantic_warning_once():
     assert description.count("Validar acabado manualmente") == 1
 
 
-def test_lumbro_quotation_omits_internal_notes_and_unknown_availability_only():
+def test_lumbro_quotation_omits_internal_defaults_and_keeps_commercial_notes():
     common = {
         "description": "Multicontacto LIDO con 3 puertos",
         "configuration": "Standard",
@@ -824,6 +825,7 @@ def test_lumbro_quotation_omits_internal_notes_and_unknown_availability_only():
         },
     }
 
+    original = deepcopy(common)
     lumbro_description, _ = _description_for_item(
         {**common, "catalog": "lumbro", "supplier": "Lumbro"},
         "LIDO.OP-INT",
@@ -838,11 +840,12 @@ def test_lumbro_quotation_omits_internal_notes_and_unknown_availability_only():
     )
 
     assert "Multicontacto LIDO con 3 puertos" in lumbro_description
-    assert "Standard" in lumbro_description
-    assert "Notas:" not in lumbro_description
+    assert "Standard" not in lumbro_description
+    assert "Notas: NOTA: SE PUEDEN MODIFICAR LAS CONEXIONES CON PRECIO ESPECIAL" in lumbro_description
     assert "Disponibilidad: por confirmar" not in lumbro_description
     assert "Notas: NOTA: SE PUEDEN MODIFICAR" in alma_description
     assert "Disponibilidad: por confirmar" in alma_description
+    assert common == original
 
 
 def test_legacy_supplier_sku_fallback_keeps_a_to_k_and_image_anchor(monkeypatch, tmp_path):

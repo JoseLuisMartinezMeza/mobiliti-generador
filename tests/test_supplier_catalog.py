@@ -711,7 +711,7 @@ def test_lumbro_descripcion_comercial_omite_metadatos_y_conserva_ficha(supplier_
     original = deepcopy(item)
     description, warning = catalog_cart._description_for_item(item, "LISBOA", "", Decimal("1"))
 
-    assert description == item["description"] + " | Clave: LISBOA"
+    assert description == "Multicontacto Lisboa. Incluye: 2 contactos de 127 V y USB. | Clave: LISBOA"
     assert "Codigo por verificar" in warning
     assert item == original
 

@@ -107,6 +107,9 @@ def isolated_13_supplier_runtime(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SUPABASE_SERVICE_KEY", "test-key")
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-32-chars-long!!!!!")
     monkeypatch.setenv("CATALOG_ENABLED_SUPPLIERS", ",".join(GENERIC_SUPPLIERS))
+    # Las imágenes se resuelven con local_catalog_image, no con el servidor
+    # dev ni por red. El origen HTTPS satisface el contrato del payload.
+    monkeypatch.setenv("MOBILITI_DEV_PUBLIC_BASE_URL", "https://catalog-assets.example.test")
     monkeypatch.syspath_prepend(str(WORKER_DIR))
     modules_before = set(sys.modules)
     suffix = uuid.uuid4().hex
@@ -127,6 +130,9 @@ def isolated_13_supplier_runtime(monkeypatch: pytest.MonkeyPatch):
         f"mixed_quote_13_worker_{suffix}",
         WORKER_DIR / "quote_worker.py",
     )
+    # El cliente de esta prueba conserva objetos sólo en memoria. Permitir
+    # su limpieza simulada no cambia la preservación de temporales en disco.
+    monkeypatch.setattr(quote_worker, "local_files_preserved", lambda: False)
     assert api_index._enabled_catalog_suppliers() == GENERIC_SUPPLIERS
     try:
         yield api_index, quote_worker
@@ -537,7 +543,8 @@ def test_post_mixed_quote_runs_python_worker_for_all_13_suppliers(
         assert generator_input.quotation_data == expected_handoff
         converted = load_workbook(generator_input.parser_source, data_only=False)
         try:
-            assert converted.sheetnames == ["Quotation"]
+            assert [sheet.title for sheet in converted if sheet.sheet_state == "visible"] == ["Quotation"]
+            assert converted["_Catalogo_textos"].sheet_state == "hidden"
             official_hashes = {
                 selection.asset_sha256 for selection in selections.values()
             }
@@ -579,7 +586,7 @@ def test_post_mixed_quote_runs_python_worker_for_all_13_suppliers(
         audit = workbook["Quotation_Data"]
         headers = _header_columns(quotation)
         assert {
-            "Description", "Source Reference", "Canonical Key"
+            "Description", "Trasformacion", "Source Reference", "Canonical Key"
         } <= set(headers)
         product_rows = [
             row
@@ -587,16 +594,30 @@ def test_post_mixed_quote_runs_python_worker_for_all_13_suppliers(
             if isinstance(quotation.cell(row, 1).value, (int, float))
         ]
         descriptions = {
-            row: str(quotation.cell(row, headers["Description"]).value or "")
+            row: str(quotation.cell(row, headers["Trasformacion"]).value or "")
             for row in product_rows
         }
         main_rows_by_supplier = {}
         for supplier, code in expected_codes.items():
-            matches = [row for row, description in descriptions.items() if code in description]
-            assert len(matches) == 1, f"Código principal {supplier}/{code} ambiguo"
+            matches = [
+                row for row in product_rows
+                if quotation.cell(row, headers["Canonical Key"]).value
+                == payload_lines[supplier]["line_id"]
+            ]
+            assert len(matches) == 1, f"Identidad principal {supplier}/{code} ambigua"
             row = matches[0]
             main_rows_by_supplier[supplier] = row
-            assert payload_lines[supplier]["source_reference"] in descriptions[row]
+            assert quotation.cell(row, headers["Source Reference"]).value == (
+                payload_lines[supplier]["source_reference"]
+            )
+            assert descriptions[row]
+            assert "Fuente:" not in descriptions[row]
+            assert "Hash fuente:" not in descriptions[row]
+            # Cotizacion debe enlazar el texto comercial D, no la fuente E.
+            assert sum(
+                workbook["Cotizacion"].cell(target_row, 3).value == f"=Quotation!D{row}"
+                for target_row in range(1, workbook["Cotizacion"].max_row + 1)
+            ) == 1
         assert len(set(main_rows_by_supplier.values())) == 13
         derived_rows = [
             row for row in product_rows if row not in set(main_rows_by_supplier.values())

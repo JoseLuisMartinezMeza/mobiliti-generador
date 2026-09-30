@@ -1,0 +1,3296 @@
+{
+  "version": 1,
+  "reviewed_at": "2026-09-30",
+  "method": "Traducción editorial exacta de las 299 cláusulas presentes en 124 descripciones únicas de 262 productos Sunon del snapshot local; no se infieren materiales o prestaciones ausentes.",
+  "translations": [
+    {
+      "source": "Steel edge side table with handle",
+      "spanish": "Mesa auxiliar con borde de acero y asa.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B55:K55",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Table Legs: T-shaped steel legs, electrostatic powder coating surface, 5mm",
+      "spanish": "Patas de acero en T, de 5 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B55:K55",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Paint: uses water-based environmentally friendly paint",
+      "spanish": "Acabado con pintura ecológica a base de agua.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B55:K55",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Square coffee table with wooden base",
+      "spanish": "Mesa de centro cuadrada con base de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:K30",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Tabletop: 40mm, the majority of the board is made of E0 grade MDF",
+      "spanish": "Cubierta de 40 mm, fabricada principalmente en MDF grado E0.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:K30",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Leg Frame: main body uses E0 grade MDF/particle board",
+      "spanish": "Estructura de las patas en MDF o aglomerado grado E0.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:K30",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Square coffee table",
+      "spanish": "Mesa de centro cuadrada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:K30",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Tabletop: 18mm, surface uses impregnated melamine paper for excellent stability, superior layering, strong resistance to dirt and wear; E0 grade particle board",
+      "spanish": "Cubierta de aglomerado grado E0 de 18 mm, revestida con papel melamínico impregnado. Superficie estable y resistente a la suciedad y al desgaste.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B52:K52",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Edge banding: the tabletop uses PVC edge banding strios, thickness 1mm",
+      "spanish": "Cantos de PVC de 1 mm en la cubierta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B52:K52",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Support Frame: round tube made of Q195 steel, disc made of SPHC, electrostatic powder coating",
+      "spanish": "Estructura de soporte con tubo redondo de acero Q195 y disco de acero SPHC, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B52:K52",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Custom Desk with Cabinet: one side with a side cabinet, one side with slanted insert legs",
+      "spanish": "Escritorio con gabinete lateral en un extremo y patas inclinadas de inserción en el otro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Cabinet: the main body surface covered with impregnated melamine paper. E0 grade particleboard",
+      "spanish": "Gabinete de aglomerado grado E0 revestido con papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Edge Banding: the cabinet uses PVC edge banding strips, thickness 1mm",
+      "spanish": "Cantos de PVC de 1 mm en el gabinete.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Table Legs: slanted legs, 1.5~1.8mm, surface electrostatic powder coating, steel plate with thickness 0.7mm, surface electrostatic powder coating, board material is E0 grade particle board, formaldehyde emission ≤0.05mg/m3",
+      "spanish": "Patas inclinadas de 1.5–1.8 mm y placa de acero de 0.7 mm, con recubrimiento electrostático en polvo. Tablero de aglomerado grado E0, con emisión de formaldehído ≤ 0.05 mg/m3.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Slide Rail: \"Hettich\" soft-close three-section slide rails",
+      "spanish": "Correderas Hettich de tres secciones con cierre suave.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Hinges: damping buffer hinge",
+      "spanish": "Bisagras con cierre amortiguado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Lock: mechanical combination locks",
+      "spanish": "Cerraduras mecánicas de combinación.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Handles: Hidden aluminum alloy handle",
+      "spanish": "Jaladera oculta de aleación de aluminio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Straight Desk with Cabinet: one side with a side cabinet, one side with straight board legs",
+      "spanish": "Escritorio recto con gabinete lateral en un extremo y patas rectas de tablero en el otro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:K21",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Table Legs: straight legs, 58mm thickened parts, base material is E0 grade particle board",
+      "spanish": "Patas rectas con secciones reforzadas de 58 mm, fabricadas en aglomerado grado E0.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:K21",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Tabletop: 25mm, surface uses impregnated melamine paper for excellent stability, superior layering, strong resistance to dirt and wear; E0 grade particle board",
+      "spanish": "Cubierta de aglomerado grado E0 de 25 mm, revestida con papel melamínico impregnado. Superficie estable y resistente a la suciedad y al desgaste.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Edge banding: the tabletop uses PVC edge banding strips, thickness 2.5mm",
+      "spanish": "Cantos de PVC de 2.5 mm en la cubierta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Modesty Panel: 8mm thickness, surface covered with impregnated melamine paper for excellent stability, superior layering, and strong resistance to dirt and wear. E0 grade MDF",
+      "spanish": "Faldón de MDF grado E0 de 8 mm de espesor, revestido con papel melamínico impregnado. Superficie estable y resistente a la suciedad y al desgaste.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Edge Banding: the modesty panel uses PVC edge banding strips, thickness 0.8mm",
+      "spanish": "Cantos de PVC de 0.8 mm en el faldón.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Panel Clip: ABS",
+      "spanish": "Clip de sujeción para panel de ABS.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Handles: ABS",
+      "spanish": "Jaladeras de ABS.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Slide Rail: high-quality slide rail",
+      "spanish": "Correderas de alta calidad.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Lock: ordinary front lock",
+      "spanish": "Cerradura frontal estándar.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Cabinet Legs: ABS material",
+      "spanish": "Patas de gabinete de ABS.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Cable Spiral: ABS",
+      "spanish": "Organizador de cables en espiral de ABS.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "L-shaped desk with a cabinet and height-adjustable legs",
+      "spanish": "Escritorio en L con gabinete y patas de altura ajustable.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B8:K8",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Two-section height-adjustable single desk",
+      "spanish": "Escritorio individual de altura ajustable con estructura de dos secciones.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B12:K12",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Height Adjustment: dual motor drive, height range 695-1185mm, speed 30mm/s, noise ≤50dB",
+      "spanish": "Ajuste de altura con doble motor, rango de 695–1185 mm, velocidad de 30 mm/s y nivel de ruido ≤ 50 dB.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B12:K12",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Hand Controller: touchscreen hand controller with graphical touch buttons and three memory presets: sitting position, standing position, and one-touch return",
+      "spanish": "Control táctil con botones gráficos y tres memorias: posición sentada, posición de pie y retorno con un toque.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B12:K12",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Safety Protection: obstacle detection with automatic retraction and adjustable sensitivity",
+      "spanish": "Detección de obstáculos con retroceso automático y sensibilidad ajustable.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B12:K12",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Sit-Down Reminder: timer-based alert with vibration and LED strip flashing on the hand controller",
+      "spanish": "Recordatorio programable con vibración y señal luminosa LED en el control.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B12:K12",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Fixed High-leg desk，steel Legs in two sides",
+      "spanish": "Mesa alta fija con patas de acero a ambos lados.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B7:K7",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Tabletop:25mm thickness, surface material is impregnated film paper,E0 grade particleboard",
+      "spanish": "Cubierta de aglomerado grado E0 de 25 mm, con superficie de papel impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B7:K7",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Pull Rod: made of high-quality cold-rolled steel, with an electrostatic powder coating on the surface, thickness 1.5mm",
+      "spanish": "Tirante de acero laminado en frío de alta calidad, de 1.5 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B7:K7",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Desk Legs:V-shaped steel legs,Q195 steel φ40mm round tube,1.5mm wall thickness,electrostatic powder coating in surface",
+      "spanish": "Patas en V de tubo redondo de acero Q195, de 40 mm de diámetro y 1.5 mm de espesor de pared, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B7:K7",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Adjustable feet:Adjustable, made of ABS + premium steel",
+      "spanish": "Regatones ajustables de ABS y acero de alta calidad.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B7:K7",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: high-quality mesh, dry rubbing fastness ≥ 4, abrasion resistance ≥ 6000 cycles",
+      "spanish": "Tapizado de malla de alta calidad, con solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 6000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Back: nylon + 30% fiberglass integrated back frame",
+      "spanish": "Estructura integrada de respaldo de nylon con 30% de fibra de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: fully ventilated mesh, PA seat shell, 136kg weight capacity",
+      "spanish": "Asiento de malla ventilada con carcasa de PA y capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: 3D, PU armrests",
+      "spanish": "Descansabrazos 3D de PU.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Bases: Zhongtai mechanism",
+      "spanish": "Mecanismo Zhongtai.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Gas Cylinder: SAMHONGSA Class 3 gas lift cylinder, Stroke: 75 ±3mm",
+      "spanish": "Pistón de gas SAMHONGSA clase 3, con recorrido de 75 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "5-Star Bases: 690mm diameter, nylon",
+      "spanish": "Base de 5 puntas de nylon, de 690 mm de diámetro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Casters: Silent PU casters",
+      "spanish": "Rodajas silenciosas de PU.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Back Adjustment: up/down adjustment by 50mm",
+      "spanish": "Respaldo con ajuste vertical de 50 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "3D Armrest: armrest adjustable vertically by 100mm, rotatable left and right by 20mm, forward and backward by 30mm",
+      "spanish": "Descansabrazos 3D con ajuste vertical de 100 mm, movimiento lateral publicado de 20 mm y desplazamiento hacia delante y atrás de 30 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment: Line-controlled STG backrest synchronous tilt, four-position lock, automatic counterweight mechanism does not require adjustment of tilt force, seat cushion can slide forward and backward",
+      "spanish": "Mecanismo sincronizado STG del respaldo accionado por cable, con bloqueo en cuatro posiciones y contrapeso automático que no requiere ajustar la fuerza de reclinación. Asiento deslizable hacia delante y atrás.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:K34",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: high-quality linen fabric, dry rubbing fastness ≥ 4, abrasion resistance ≥ 12000 cycles",
+      "spanish": "Tapizado de lino de alta calidad, con solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 12000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B69:K69",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: molded foam, density ≥ 55kg/m3, PP seat shell, weight capacity 136kg",
+      "spanish": "Asiento con espuma moldeada de densidad ≥ 55 kg/m3, carcasa de PP y capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B69:K69",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: PP material 2D armrests",
+      "spanish": "Descansabrazos 2D de PP.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B69:K69",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Gas Cylinder: SAMHONGSA class 3 gas cylinder, 85±3mm",
+      "spanish": "Pistón de gas SAMHONGSA clase 3, de 85 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B69:K69",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Chair Casters: PA casters",
+      "spanish": "Rodajas de PA.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B69:K69",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Chair Back Adjustment: swivels horizontally by 10°",
+      "spanish": "Respaldo con giro horizontal de 10°.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B69:K69",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "2D Armrest: armrest adjustable vertically by 45mm, rotable left and right by 15°",
+      "spanish": "Descansabrazos 2D con ajuste vertical de 45 mm y giro lateral de 15°.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B69:K69",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment: STG backrest synchronous tilt, four-position lock, automatic counterweight mechanism does not require adjustment of tilt force",
+      "spanish": "Mecanismo sincronizado STG del respaldo con bloqueo en cuatro posiciones y contrapeso automático, sin necesidad de ajustar la fuerza de reclinación.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B69:K69",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Headrest Adjustment: vertical adjustment 25mm",
+      "spanish": "Cabecera con ajuste vertical de 25 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B68:K68",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Leather: contact surface uses full-grain Nappa cowhide, non-contact surface water-based leather, genuine leather dry rubbing fastness ≥ 4, abrasion resistance 300r without significant damage or peeling",
+      "spanish": "Tapizado de piel de vaca napa de flor entera en las superficies de contacto y piel de base acuosa en las demás áreas. Piel genuina con solidez al frote en seco ≥ 4 y resistencia a la abrasión de 300 r sin daños significativos ni desprendimiento.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B67:K67",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Back Cushion: molded foam, density ≥55kg/m3, with E1 grade bentwood board, load capacity 1001N",
+      "spanish": "Cojín de respaldo con espuma moldeada de densidad ≥ 55 kg/m3 y tablero de madera curvada grado E1. Capacidad de carga de 1001 N.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B67:K67",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: molded foam, density ≥ 55kg/m3, equipped with E1 grade bentwood board, weight capacity 136kg",
+      "spanish": "Asiento con espuma moldeada de densidad ≥ 55 kg/m3 y tablero de madera curvada grado E1. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B67:K67",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: polished aluminum alloy armrests",
+      "spanish": "Descansabrazos de aleación de aluminio pulido.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B67:K67",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Gas Cylinder:SAMHONGSA class 3 gas cylinder,68±3mm",
+      "spanish": "Pistón de gas SAMHONGSA clase 3, de 68 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B67:K67",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "5-Star Bases: 700mm diameter aluminum alloy 5-star base",
+      "spanish": "Base de 5 puntas de aleación de aluminio, de 700 mm de diámetro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B67:K67",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment: STG backrest synchronous tilt, four-position lock, knob adjustable tilt tension",
+      "spanish": "Mecanismo sincronizado STG del respaldo con bloqueo en cuatro posiciones y tensión de reclinación ajustable mediante perilla.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B67:K67",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Leather: contact surface uses full-grain lychee texture cowhide, non-contact surface water-based leather, genuine leather dry rubbing fastness ≥ 4, abrasion resistance 300r without significant damage or peeling",
+      "spanish": "Tapizado de piel de vaca de flor entera con textura lichi en las superficies de contacto y piel de base acuosa en las demás áreas. Solidez al frote en seco de la piel ≥ 4 y resistencia a la abrasión de 300 r sin daños significativos ni desprendimiento.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B66:K66",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Leather: contact surface uses full-grain lychee texture cowhide, non-contact surface PVC artificial leather, genuine leather dry rubbing fastness ≥ 4, abrasion resistance 500r without significant damage or peeling",
+      "spanish": "Tapizado de piel de vaca de flor entera con textura lichi en las superficies de contacto y piel sintética de PVC en las demás áreas. Solidez al frote en seco de la piel ≥ 4 y resistencia a la abrasión de 500 r sin daños significativos ni desprendimiento.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B33:K33",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Gas Cylinder:SAMHONGSA class 3 gas cylinder,Stroke:68±3mm",
+      "spanish": "Pistón de gas SAMHONGSA clase 3, con recorrido de 68 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B33:K33",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Back: ABS integrated back frame, molded foam, density ≥ 55kg/m3, equipped with E1 grade bentwood board",
+      "spanish": "Respaldo con estructura integrada de ABS, espuma moldeada de densidad ≥ 55 kg/m3 y tablero de madera curvada grado E1.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B65:K65",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: fixed, padded armrests",
+      "spanish": "Descansabrazos fijos y acolchados.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B65:K65",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Chair Bases: High-quality mechanism",
+      "spanish": "Mecanismo de alta calidad.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B65:K65",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Gas Cylinder: SAMHONGSA class 3 gas cylinder, 66±3mm",
+      "spanish": "Pistón de gas SAMHONGSA clase 3, de 66 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B65:K65",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Chair Casters: PU casters",
+      "spanish": "Rodajas de PU.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B65:K65",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Headrest Adjustment: vertical adjustment 50mm",
+      "spanish": "Cabecera con ajuste vertical de 50 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B65:K65",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Chair Body: PP integrated, molded",
+      "spanish": "Cuerpo de PP moldeado en una pieza.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B12:K12",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Frame: steel frame, 19mm round tube, 1.8mm thickness, electrostatic powder coating surface",
+      "spanish": "Estructura de tubo redondo de acero de 19 mm, con espesor de 1.8 mm y recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B12:K12",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Leg nails: PP fixed nails",
+      "spanish": "Regatones fijos de PP.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B12:K12",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: high-quality linen velvet, dry rubbing fastness ≥4, abrasion resistance ≥6000 cycles",
+      "spanish": "Tapizado de terciopelo de lino de alta calidad, con solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 6000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B54:K54",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: molded foam, density ≥ 55kg/m3, cut foam, density 25kg/m3±1.5, E1 grade bentwood board, weight capacity 136kg",
+      "spanish": "Asiento con espuma moldeada de densidad ≥ 55 kg/m3, espuma cortada de densidad 25 ± 1.5 kg/m3 y tablero de madera curvada grado E1. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B32:K32",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment: KTG forward tilt, four-position lock, knob adjustable tilt tension",
+      "spanish": "Mecanismo KTG con inclinación hacia delante, bloqueo en cuatro posiciones y tensión ajustable mediante perilla.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B32:K32",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Back:PP+25% fiberglass integrated back frame",
+      "spanish": "Estructura integrada de respaldo de PP con 25% de fibra de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B38:K38",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Seat: PP + 25% fiberglass integrated",
+      "spanish": "Asiento de PP integrado con 25% de fibra de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B38:K38",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Full Plastic Chairs: PP + 25% fiberglass integrated",
+      "spanish": "Silla de plástico con cuerpo integrado de PP y 25% de fibra de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B6:K6",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: backrest uses high-quality knitted fabric, dry rubbing fastness ≥ 4, abrasion resistance ≥ 50000 cycles; seat cushion uses high-quality mesh fabric, dry rub fastness ≥ 4, abrasion resistance ≥ 6000 cycles",
+      "spanish": "Respaldo tapizado con tejido de punto de alta calidad, solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 50000 ciclos. Asiento tapizado en malla de alta calidad, con solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 6000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B42:K42",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: cut foam, density 25kg/m3±1.5, equipped with E1 grade bentwood board, weight capacity 136kg",
+      "spanish": "Asiento con espuma cortada de densidad 25 ± 1.5 kg/m3 y tablero de madera curvada grado E1. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B42:K42",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: fixed PA armrests",
+      "spanish": "Descansabrazos fijos de PA.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B42:K42",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Frame: steel frame, special-shaped tube, 1.5mm thickness, electrostatic powder coating surface",
+      "spanish": "Estructura de acero con tubo de sección especial de 1.5 mm de espesor y recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B42:K42",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Folding Storage: seat cushion can flip up for horizontal stacking storage",
+      "spanish": "Asiento abatible para almacenamiento mediante apilado horizontal.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B42:K42",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Backrest: PP + GF25, injection molded",
+      "spanish": "Respaldo de PP con GF25, moldeado por inyección.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B28:K28",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Seat: 16mm poplar plywood",
+      "spanish": "Asiento de contrachapado de álamo de 16 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B28:K28",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Frame: steel frame, 13mm round tube, 1.8mm thickness, electrostatic powder coating surface",
+      "spanish": "Estructura de tubo redondo de acero de 13 mm, con espesor de 1.8 mm y recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B28:K28",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: high-quality mesh, dry rubbing fastness ≥ 4, abrasion resistance ≥ 12000 cycles",
+      "spanish": "Tapizado de malla de alta calidad, con solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 12000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Back: nylon integrated back frame",
+      "spanish": "Estructura integrada de respaldo de nylon.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: molded foam, density ≥ 55kg/m3, equipped with E1 grade bentwood board, PP seat shell, weight capacity 136kg",
+      "spanish": "Asiento con espuma moldeada de densidad ≥ 55 kg/m3, tablero de madera curvada grado E1 y carcasa de PP. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: 4D, PU armrests",
+      "spanish": "Descansabrazos 4D de PU.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Gas Cylinder: SAMHONGSA class 3 gas cylinder, Stroke:82±3mm",
+      "spanish": "Pistón de gas SAMHONGSA clase 3, con recorrido de 82 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "5-Star Bases: 700mm diameter nylon 5-star base",
+      "spanish": "Base de 5 puntas de nylon, de 700 mm de diámetro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Lumbar Support Adjustment: vertical adjustment by 50mm",
+      "spanish": "Soporte lumbar con ajuste vertical de 50 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment:STG backrest synchronous tilt,four-position lock,quick adjustment handle to adjust the reclining tension in four positions,seat cushion can slide forward and backward",
+      "spanish": "Mecanismo sincronizado STG del respaldo con bloqueo en cuatro posiciones. Palanca de ajuste rápido de tensión en cuatro posiciones y asiento deslizable hacia delante y atrás.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "4D Quick Installation Armrests:uses quick installation design, armrests adjustable vertically by 70mm,rotatable left and right by 15°,forward and backward sliding by 30mm,width adjustable by 16mm",
+      "spanish": "Descansabrazos 4D de instalación rápida, con ajuste vertical de 70 mm, giro lateral de 15°, desplazamiento hacia delante y atrás de 30 mm y ajuste de ancho de 16 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:K37",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Frame: steel frame, 22mm round tube , thickness 1.5mm, electrostatic powder coating",
+      "spanish": "Estructura de tubo redondo de acero de 22 mm, con espesor de 1.5 mm y recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B22:K22",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Chair Back: PP + 30% fiberglass integrated back frame",
+      "spanish": "Estructura integrada de respaldo de PP con 30% de fibra de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B22:K22",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: cut foam, density 31kg/m3±1.5, equipped with E1 grade bentwood board, PP seat shell, weight capacity 136kg",
+      "spanish": "Asiento con espuma cortada de densidad 31 ± 1.5 kg/m3, tablero de madera curvada grado E1 y carcasa de PP. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B22:K22",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: cut foam, density 31.5kg/m3±2, equipped with E1 grade bentwood board, PP seat shell, weight capacity 136kg",
+      "spanish": "Asiento con espuma cortada de densidad 31.5 ± 2 kg/m3, tablero de madera curvada grado E1 y carcasa de PP. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B39:K39",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: linen fabric, dry rubbing color fastness grade 3-4, wet rubbing color fastness ≥ grade 3, abrasion resistance ≥ 12,000 times",
+      "spanish": "Tapizado de lino, con solidez del color al frote en seco de grado 3-4, al frote húmedo ≥ grado 3 y resistencia a la abrasión ≥ 12,000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Foam:molded, density ≥50kg/m3, with built-in welded steel frame",
+      "spanish": "Espuma moldeada de densidad ≥ 50 kg/m3, con estructura interna de acero soldada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Sofa Legs: POM plastic, single-piece injection molded",
+      "spanish": "Patas de POM moldeadas por inyección en una pieza.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Storage pocket: front storage pocket",
+      "spanish": "Bolsillo frontal de almacenamiento.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:K20",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Foam: molded, density ≥50kg/m3",
+      "spanish": "Espuma moldeada de densidad ≥ 50 kg/m3.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B56:K56",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Upholstery Filling: seat cushion, high-quality duck down + 6D polyester fabric, soft and comfortable",
+      "spanish": "Relleno de asiento con plumón de pato de alta calidad y tejido de poliéster 6D, de tacto suave.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B59:K59",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Foam: high resilience foam, seat density ≥31kg/m3, other parts ≥20kg/m3",
+      "spanish": "Espuma de alta resiliencia, con densidad ≥ 31 kg/m3 en el asiento y ≥ 20 kg/m3 en las demás partes.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B59:K59",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Sofa Legs: steel sofa legs with electrostatic powder coating, 5mm thickness",
+      "spanish": "Patas de acero de 5 mm de espesor con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B59:K59",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Leather: contact areas use top-layer lychee pattern cowhide, non-contact areas use polyvinyl chloride artificial leather, cowhide dry rubbing color fastness ≥ grade 4, wet rubbing color fastness ≥ grade 3, abrasion resistance (CS-10, 500g, 500r) with no noticeable damage or peeling",
+      "spanish": "Piel de vaca de capa superior con textura lichi en las áreas de contacto y piel sintética de PVC en las demás áreas. Solidez del color al frote en seco ≥ grado 4 y al frote húmedo ≥ grado 3. Resistencia a la abrasión en ensayo CS-10, 500 g y 500 r, sin daños visibles ni desprendimiento.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B14:K14",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Upholstery Filling: Backrest upholstery uses cut-back rebound sponge + 6D polyester fabric, soft and comfortable",
+      "spanish": "Relleno del respaldo con espuma cortada de recuperación elástica y tejido de poliéster 6D, de tacto suave.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B14:K14",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Sofa Legs: steel sofa legs with electrostatic powder coating, 1.8mm thickness hollow track pipe",
+      "spanish": "Patas de acero de tubo hueco con perfil tipo pista, de 1.8 mm de espesor, y recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B14:K14",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Tabletop: 19mm,E0 grade plywood",
+      "spanish": "Cubierta de contrachapado grado E0 de 19 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B51:K51",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Tabletop Edge Banding: natural wood veneer edge banding strips, thickness 1mm",
+      "spanish": "Cantos de chapa de madera natural de 1 mm en la cubierta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B51:K51",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Veneer:natural wood veneer ≥0.4mm on wood grain parts",
+      "spanish": "Chapa de madera natural ≥ 0.4 mm en las partes con veta de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B51:K51",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Tray: steel tray, electrostatic powder coating, thickness ≥3mm",
+      "spanish": "Bandeja de acero de espesor ≥ 3 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B51:K51",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Tabletop: 150mm,the majority of the board is made of E0 grade MDF",
+      "spanish": "Cubierta de 150 mm, fabricada principalmente en MDF grado E0.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B49:K49",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Sofa Legs: steel Sofa Legs, electrostatic powder coating, 2.0mm hollow round tube",
+      "spanish": "Patas de acero de tubo redondo hueco de 2.0 mm de espesor, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B49:K49",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: three-proof fabric, dry rubbing color fastness grade 3-4, wet rubbing color fastness ≥ grade 3, abrasion resistance ≥ 12000 cycles, water repellency ≥ grade 3, oil repellency ≥ grade 4, stain resistance ≥ grade 4",
+      "spanish": "Tapizado con protección contra agua, aceite y manchas. Solidez del color al frote en seco de grado 3-4 y al frote húmedo ≥ grado 3; resistencia a la abrasión ≥ 12000 ciclos, repelencia al agua ≥ grado 3, repelencia al aceite ≥ grado 4 y resistencia a las manchas ≥ grado 4.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B44:K44",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: combination of leather and fabric , seat cushion and backrest use linen velvet fabric, other parts use polyvinyl chloride (PVC) artificial leather, linen velvet fabric dry rubbing color fastness grade 3-4, wet rubbing color fastness ≥ grade 3, abrasion resistance ≥ 12000 cycles",
+      "spanish": "Combinación de tela y piel sintética: asiento y respaldo en terciopelo de lino, y demás áreas en piel sintética de PVC. La tela tiene solidez del color al frote en seco de grado 3-4 y al frote húmedo ≥ grado 3, con resistencia a la abrasión ≥ 12000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B63:K63",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Sofa Legs: steel Sofa Legs, electrostatic powder coating, 22mm solid round steel",
+      "spanish": "Patas de acero redondo macizo de 22 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B63:K63",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 1st and 2nd batch inventory"
+        }
+      ]
+    },
+    {
+      "source": "Square conference table",
+      "spanish": "Mesa de juntas cuadrada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B22:K22",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 3rd batch"
+        }
+      ]
+    },
+    {
+      "source": "Edge banding: the tabletop uses ABS laser edge banding strips, thickness 2.5mm",
+      "spanish": "Cantos de ABS aplicados con láser, de 2.5 mm, en la cubierta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:K30",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Middle Steel Legs: high-quality cold-rolled steel, 1.5~2.0mm, surface electrostatic powder coating",
+      "spanish": "Patas centrales de acero laminado en frío de alta calidad, de 1.5–2.0 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:K30",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Table Legs: 45-degree aluminum alloy die-casting angled legs, with polished or electrostatic powder coating surface",
+      "spanish": "Patas anguladas a 45° de aleación de aluminio fundido, con acabado pulido o recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:K30",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Cable Box: dual-flip cover, made of aluminum alloy",
+      "spanish": "Caja pasacables de aleación de aluminio con tapa abatible doble.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:K30",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Body: PP + 20% fiberglass, molded",
+      "spanish": "Cuerpo moldeado de PP con 20% de fibra de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B40:K40",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Gas Cylinder: SAMHONGSA Class 3 gas lift cylinder, Stroke: 252 ±3mm",
+      "spanish": "Pistón de gas SAMHONGSA clase 3, con recorrido de 252 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B40:K40",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "5-Star Bases: 690mm diameter steel-plated 5-star base",
+      "spanish": "Base de 5 puntas de acero con acabado metalizado, de 690 mm de diámetro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B40:K40",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment: BG Chair Base, only height adjustment, not tilt-capable",
+      "spanish": "Mecanismo BG con ajuste de altura únicamente; no permite reclinación.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B40:K40",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "US standard desk-mounted power outlet",
+      "spanish": "Contacto eléctrico para montaje en escritorio, con estándar estadounidense.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B17:K17",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Socket: PC",
+      "spanish": "Carcasa del contacto de PC.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B17:K17",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Two-section height-adjustable face-to-face desk",
+      "spanish": "Escritorio doble enfrentado de altura ajustable, con estructura de dos secciones.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B15:K15",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Hand Controller: mechanical button hand controller with three memory presets",
+      "spanish": "Control con botones mecánicos y tres memorias de altura.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B15:K15",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Desk Screen:upholstered,12mm",
+      "spanish": "Mampara de escritorio tapizada, de 12 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:K16",
+          "file_id": "96668bc5ef1a7a08b9e4ee2f7d935cf80f3c9c874d0ffbce0fdb5cfaf3de656d",
+          "sheet_or_page": "The 4th batch"
+        }
+      ]
+    },
+    {
+      "source": "Silla Operativa, Modelo Shield,",
+      "spanish": "Silla operativa modelo Shield.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:E18",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: PP height-adjustable armrest",
+      "spanish": "Descansabrazos de PP con ajuste de altura.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:E18",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Gas Cylinder: SAMHONGSA class 3 gas cylinder, 82±3mm",
+      "spanish": "Pistón de gas SAMHONGSA clase 3, de 82 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:E18",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "5-Star Bases: 640mm diameter nylon 5-star base",
+      "spanish": "Base de 5 puntas de nylon, de 640 mm de diámetro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:E18",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Upholstery Technique: the seat cushion is covered with air-controlled drawstring molding, ensuring shape stability, with no adhesive used to reduce formaldehyde content",
+      "spanish": "Asiento tapizado mediante moldeado con cordón y control neumático, para mantener la forma. Fabricación sin adhesivo para reducir el contenido de formaldehído.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:E18",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Lumbar Support: fixed lumbar support",
+      "spanish": "Soporte lumbar fijo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:E18",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Height-Adjustable Armrests: armrests adjustable vertically by 70mm",
+      "spanish": "Descansabrazos con ajuste vertical de 70 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:E18",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment: TG basic tilt, single-position initial lock, knob adjustable tilt tension",
+      "spanish": "Mecanismo TG de reclinación básica, con bloqueo en la posición inicial y tensión ajustable mediante perilla.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:E18",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Silla Operativa, Modelo Olive II,",
+      "spanish": "Silla operativa modelo Olive II.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B13:E13",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: high-quality mesh, seat cushion optional high-quality linen fabric, dry rubbing fastness ≥ 4, abrasion resistance ≥ 6000 cycles",
+      "spanish": "Tapizado de malla de alta calidad, con opción de lino de alta calidad para el asiento. Solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 6000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B13:E13",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: adjustable PU armrests",
+      "spanish": "Descansabrazos ajustables de PU.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B13:E13",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Lumbar Support Adjustment: vertical and rotation adjustment by 40° each",
+      "spanish": "Soporte lumbar con ajuste vertical y de rotación; el fabricante indica 40° para cada ajuste.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B13:E13",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment: STG backrest synchronous tilt, four-position lock, automatic counterweight mechanism does not require adjustment of tilt force, seat cushion can slide forward and backward",
+      "spanish": "Mecanismo sincronizado STG del respaldo con bloqueo en cuatro posiciones y contrapeso automático que no requiere ajustar la fuerza de reclinación. Asiento deslizable hacia delante y atrás.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B13:E13",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Sliding chassis with seat Silla Operativa, Modelo Iron II,",
+      "spanish": "Silla operativa modelo Iron II, con mecanismo y asiento deslizables.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Fabric: High quality mesh fabric, seat cushion can choose high-quality linen fabric, dry rubbing color fastness ≥ 4 levels, wear resistance ≥ 6000 times",
+      "spanish": "Tapizado de malla de alta calidad, con opción de lino de alta calidad para el asiento. Solidez del color al frote en seco ≥ 4 y resistencia al desgaste ≥ 6000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Chair back: Nylon+30% fiberglass integrated back frame",
+      "spanish": "Estructura integrada de respaldo de nylon con 30% de fibra de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Seat cushion: Cut cotton, density 25kg/m3 ± 1.5, seat cushion equipped with E1 grade curved wooden board, seat surface load-bearing capacity 136kg",
+      "spanish": "Asiento con relleno de algodón cortado de densidad 25 ± 1.5 kg/m3 y tablero de madera curvada grado E1. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Armrest: PU surface lifting armrest",
+      "spanish": "Descansabrazos con superficie de PU y ajuste de altura.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Chassis: High quality chassis with sliding function",
+      "spanish": "Mecanismo de alta calidad con función de deslizamiento.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Air rod: Korean \"Sanhong\" three-level air rod, stroke 85 ± 3mm",
+      "spanish": "Pistón de gas coreano Sanhong de clase 3, con recorrido de 85 ± 3 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Five star feet: 700mm diameter nylon five star feet",
+      "spanish": "Base de cinco puntas de nylon, de 700 mm de diámetro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Chair wheel: PA wheel",
+      "spanish": "Rodajas de PA.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Manufacturing process: cushion air controlled pull rope wrapped and molded, with stable shape, no spray glue, reducing formaldehyde content",
+      "spanish": "Cojín moldeado y envuelto mediante cordón con control neumático para mantener la forma. Proceso sin adhesivo en aerosol para reducir el contenido de formaldehído.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Lumbar support adjustment: up and down adjustment of 30mm",
+      "spanish": "Soporte lumbar con ajuste vertical de 30 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Elevating armrest: The armrest can be adjusted up and down by 70mm",
+      "spanish": "Descansabrazos con ajuste vertical de 70 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Chassis adjustment: STG rear seat synchronously tilts, single gear initial position locked, knob can adjust tilt tightness“",
+      "spanish": "Mecanismo sincronizado STG con bloqueo en la posición inicial y tensión de reclinación ajustable mediante perilla.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Silla Operativa, Modelo Alien, White nylon frame. Armrest: white PU adjustable armrest. Backrests and seats: mesh backrest and fabric elastic foam seat with PP shell Institution: Four position automatic tension control system. Cylinder: High quality air lift. Base: White nylon five-star base with PA casters",
+      "spanish": "Silla operativa modelo Alien, con estructura de nylon blanco y descansabrazos ajustables de PU blanco. Respaldo de malla y asiento tapizado en tela con espuma elástica y carcasa de PP. Sistema de tensión automática con cuatro posiciones. Pistón de gas de alta calidad y base de cinco puntas de nylon blanco con rodajas de PA.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B10:E10",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Silla Operativa, Modelo Alien,",
+      "spanish": "Silla operativa modelo Alien.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B10:E10",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Finishing: backrest uses mesh, dry rubbing fastness ≥4, abrasion resistance ≥12000 cycles; seat cushion uses mesh or linen velvet, dry rubbing fastness ≥4, abrasion resistance ≥12000 cycles",
+      "spanish": "Respaldo de malla con solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 12000 ciclos. Asiento de malla o terciopelo de lino, con solidez al frote en seco ≥ 4 y resistencia a la abrasión ≥ 12000 ciclos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B4:J4",
+          "file_id": "42958cc5d245b10faa4ec6d877196e2be6d98c503b7408958d15b805e3926b44",
+          "sheet_or_page": "Raw material inventory for Chai"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: cut foam, density 25kg/m3±1.5, equipped with E1 grade bentwood board, PP seat shell, weight capacity 136kg",
+      "spanish": "Asiento con espuma cortada de densidad 25 ± 1.5 kg/m3, tablero de madera curvada grado E1 y carcasa de PP. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B4:J4",
+          "file_id": "42958cc5d245b10faa4ec6d877196e2be6d98c503b7408958d15b805e3926b44",
+          "sheet_or_page": "Raw material inventory for Chai"
+        }
+      ]
+    },
+    {
+      "source": "Height-Adjustable Armrests: armrests adjustable vertically by 80mm",
+      "spanish": "Descansabrazos con ajuste vertical de 80 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B4:J4",
+          "file_id": "42958cc5d245b10faa4ec6d877196e2be6d98c503b7408958d15b805e3926b44",
+          "sheet_or_page": "Raw material inventory for Chai"
+        }
+      ]
+    },
+    {
+      "source": "Silla Operativa, Modelo Dolphin,",
+      "spanish": "Silla operativa modelo Dolphin.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B15:E15",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Seat Cushion: cut foam, density 22kg/m3±1.5, equipped with E1 grade bentwood board, weight capacity 136kg",
+      "spanish": "Asiento con espuma cortada de densidad 22 ± 1.5 kg/m3 y tablero de madera curvada grado E1. Capacidad de carga de 136 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B15:E15",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Armrests: fixed armrests",
+      "spanish": "Descansabrazos fijos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B15:E15",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Silla Operativa, Modelo Iron II,",
+      "spanish": "Silla operativa modelo Iron II.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:E16",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Lumbar Support Adjustment: vertical adjustment by 30mm",
+      "spanish": "Soporte lumbar con ajuste vertical de 30 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B17:E17",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Chair Base Adjustment: STG backrest synchronous tilt, three-position lock, knob adjustable tilt tension",
+      "spanish": "Mecanismo sincronizado STG del respaldo con bloqueo en tres posiciones y tensión de reclinación ajustable mediante perilla.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B17:E17",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Gabinete, Modelo M Cabinet,",
+      "spanish": "Gabinete modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:E21",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Two-door file cabinet with glass doors and display area",
+      "spanish": "Archivero de dos puertas de vidrio con área de exhibición.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:E21",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Cabinet: the main body surface covered with impregnated melamine paper. E0 grade particleboard-",
+      "spanish": "Gabinete de aglomerado grado E0 revestido con papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:E21",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Door Panel: glass panel door with embedded glass, made of E0 grade particle board, 5mm tempered glass-",
+      "spanish": "Puerta de aglomerado grado E0 con vidrio templado de 5 mm integrado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:E21",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Gabinete, Modelo M Cabinet",
+      "spanish": "Gabinete modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:E21",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Door Panel: glass panel door with embedded glass, made of E0 grade particle board, 5mm tempered glass",
+      "spanish": "Puerta de aglomerado grado E0 con vidrio templado de 5 mm integrado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:E21",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Credenza, Modleo M Cabinet,",
+      "spanish": "Credenza modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B40:J40",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "two-door tea cabinet with glass doors",
+      "spanish": "Gabinete de servicio con dos puertas de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B40:J40",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "two-door tea cabinet with glass doors and open cabinet",
+      "spanish": "Gabinete de servicio con dos puertas de vidrio y compartimento abierto.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B39:J39",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Three-door tea cabinet with glass doors and open cabinet",
+      "spanish": "Gabinete de servicio con tres puertas de vidrio y compartimento abierto.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B38:J38",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Credenza, Modelo M Cabinet,",
+      "spanish": "Credenza modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B23:E23",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Four-door file cabinet with glass doors",
+      "spanish": "Archivero de cuatro puertas de vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B23:E23",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Four-door file cabinet with glass doors and open cabinet",
+      "spanish": "Archivero de cuatro puertas de vidrio y compartimento abierto.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B24:E24",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Archivero, Modelo M Cabinet,",
+      "spanish": "Archivero modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B25:E25",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Two-door file cabinet",
+      "spanish": "Archivero de dos puertas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:E21",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Upholstered Door Panel: E0 grade particleboard, surface covered with impregnated melamine paper, formaldehyde emission ≤0.05mg/m3. Fabric:?high-quality linen with dry rubbing color fastness ≥ level 4, wear resistance ≥ 30,000 cycles, zero harmful aromatic amines, sealed edges with 2mm laser-cut ABS edging",
+      "spanish": "Puerta tapizada de aglomerado grado E0, con superficie de papel melamínico impregnado y emisión de formaldehído ≤ 0.05 mg/m3. Tela de lino de alta calidad, con solidez del color al frote en seco ≥ nivel 4 y resistencia al desgaste ≥ 30,000 ciclos, libre de aminas aromáticas nocivas. Cantos sellados con ABS de 2 mm aplicado con láser.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B25:E25",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Mesa Alta, Modelo M Cabinet,",
+      "spanish": "Mesa alta modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:J34",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Square negotiation table",
+      "spanish": "Mesa de reunión cuadrada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:J34",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Cable Box: integrated flip-top multifunctional cable box, made of aluminum alloy + ABS",
+      "spanish": "Caja pasacables multifuncional integrada, con tapa abatible, fabricada en aleación de aluminio y ABS.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:J34",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Uplift Box: high-quality cold-rolled steel, with an electrostatic powder coating on the surface, thickness 0.7mm",
+      "spanish": "Caja elevable de acero laminado en frío de alta calidad, de 0.7 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:J34",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Locker, Modelo M Cabinet,",
+      "spanish": "Locker modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B17:J17",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Ten-door locker with combination lock (can be extended)",
+      "spanish": "Locker de diez puertas con cerradura de combinación y posibilidad de ampliación.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B17:J17",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Extensión Locker, Modelo M Cabinet,",
+      "spanish": "Extensión de locker modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:J18",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Five-door combination lock locker with extension capability",
+      "spanish": "Locker de cinco puertas con cerradura de combinación y posibilidad de ampliación.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B18:J18",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Four-door file cabinet body with display area (can be extended with up to 3 additional extension units)",
+      "spanish": "Cuerpo de archivero de cuatro puertas con área de exhibición, ampliable con hasta 3 unidades adicionales.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B19:J19",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Extensión Archivero, Modelo M Cabinet,",
+      "spanish": "Extensión de archivero modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B20:J20",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Archivero Movible, Modelo Mall,",
+      "spanish": "Archivero modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B110:E110",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Two-drawer mobile cabinet",
+      "spanish": "Archivero móvil de dos cajones.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B110:E110",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Three-drawer mobile cabinet",
+      "spanish": "Archivero móvil de tres cajones.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B109:E109",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Fixed two-drawer cabinet",
+      "spanish": "Archivero fijo de dos cajones.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B111:E111",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Archivero Lateral, Modelo Mall,",
+      "spanish": "Archivero lateral modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B127:E127",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Fixed three-drawer cabinet",
+      "spanish": "Archivero fijo de tres cajones.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B127:E127",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Archivero Torre, Modelo Mall,",
+      "spanish": "Archivero tipo torre modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B132:E132",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Fixed side cabinet",
+      "spanish": "Gabinete lateral fijo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B132:E132",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Lock: drawer hook lock",
+      "spanish": "Cerradura de gancho para cajón.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B132:E132",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Bracket Privacidad; Modelo Mall,",
+      "spanish": "Soporte para mampara de privacidad modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B106:E106",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Screen Base: cold-rolled steel, electrostatic powder coating surface",
+      "spanish": "Base de mampara de acero laminado en frío, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B106:E106",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Cubierta Lineal, Modelo Mall,",
+      "spanish": "Cubierta lineal modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B28:J28",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Straight Desk for Staff",
+      "spanish": "Escritorio operativo recto.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B28:J28",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Extensión Recepción, Modelo Mall,",
+      "spanish": "Extensión de recepción modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B145:E145",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Reception desk",
+      "spanish": "Mostrador de recepción.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B145:E145",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Back panel: 25mm, impregnated melamine paper",
+      "spanish": "Panel posterior de 25 mm revestido con papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B145:E145",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Table Legs: 25mm impregnated melamine paper-faced board, E0-grade particleboard",
+      "spanish": "Patas de tablero aglomerado grado E0 de 25 mm, revestido con papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B145:E145",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Edge banding: the back panel uses high quality PVC edge banding strips, thickness 2.5mm",
+      "spanish": "Cantos de PVC de alta calidad de 2.5 mm en el panel posterior.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B145:E145",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Edge banding: the table legs uses high-quality PVC edge banding strips, thickness 2.5mm",
+      "spanish": "Cantos de PVC de alta calidad de 2.5 mm en las patas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B145:E145",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Guardaropa, Modelo Mall,",
+      "spanish": "Guardarropa modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B112:E112",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Single-door, three-tier wardrobe",
+      "spanish": "Guardarropa de una puerta y tres niveles.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B112:E112",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Storage Function: equipped with pull-out clothes rod",
+      "spanish": "Incluye barra extraíble para colgar ropa.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B112:E112",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Back cabinet with display area and wardrobe",
+      "spanish": "Gabinete posterior con área de exhibición y guardarropa.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B114:E114",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Archivero, Modelo Mall,",
+      "spanish": "Archivero modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B116:E116",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Two-door, three-tier bookshelf",
+      "spanish": "Librero de dos puertas y tres niveles.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B116:E116",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Lock: double-door lock",
+      "spanish": "Cerradura para puerta doble.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B116:E116",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Two-door, four-tier bookshelf",
+      "spanish": "Librero de dos puertas y cuatro niveles.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B117:E117",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Archivero Tipo Librero, Modelo Mall,",
+      "spanish": "Librero modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B118:E118",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Three-tier open bookshelf",
+      "spanish": "Librero abierto de tres niveles.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B118:E118",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Four-tier open bookshelf",
+      "spanish": "Librero abierto de cuatro niveles.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B119:E119",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Five-tier open bookshelf",
+      "spanish": "Librero abierto de cinco niveles.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B120:E120",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Mesa Colaborativa, Modelo Tea Table,",
+      "spanish": "Mesa colaborativa modelo Tea Table.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B60:E60",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Round coffee table",
+      "spanish": "Mesa de centro redonda.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B60:E60",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Support Frame: Q195 steel, electrostatic powder coating, 10mm diameter solid round bar",
+      "spanish": "Estructura de soporte de acero Q195, con barra redonda maciza de 10 mm de diámetro y recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B60:E60",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Door Panel: made of E0 grade particle board, with a surface layer of impregnated paper, formaldehyde emission ≤0.05mg/m3",
+      "spanish": "Puerta de aglomerado grado E0 con superficie de papel impregnado y emisión de formaldehído ≤ 0.05 mg/m3.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B21:J21",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Material Desctription:",
+      "spanish": "",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B14:J14",
+          "file_id": "395233272f9c8f9075cfd6c45f4b49d247d5abcdd2712a4106beac617f3f87bf",
+          "sheet_or_page": "Quotation (2)"
+        }
+      ]
+    },
+    {
+      "source": "Table Legs: angled steel legs, high-quality cold-rolled steel, 1.5~2.0mm, surface electrostatic powder coating",
+      "spanish": "Patas inclinadas de acero laminado en frío de alta calidad, de 1.5–2.0 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B14:J14",
+          "file_id": "395233272f9c8f9075cfd6c45f4b49d247d5abcdd2712a4106beac617f3f87bf",
+          "sheet_or_page": "Quotation (2)"
+        }
+      ]
+    },
+    {
+      "source": "Puerta de Laminado con Cristal,",
+      "spanish": "Puerta de laminado con vidrio.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B32:J32",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Door Panel: glass panel door with embedded glass, made of E0 grade particle board, 4mm ordinary glass",
+      "spanish": "Puerta de aglomerado grado E0 con vidrio común de 4 mm integrado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B32:J32",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Recepción, Modelo Mall,",
+      "spanish": "Mostrador de recepción modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B145:E145",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Top Panel: 25mm thickness, paper impregnated thermosetting resins surface",
+      "spanish": "Panel superior de 25 mm, con superficie de papel impregnado con resinas termoestables.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B143:E143",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Stand panel: 18mm thickness, impregnated melamine paper",
+      "spanish": "Panel de soporte de 18 mm revestido con papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B143:E143",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Edge Banding: the top panel uses high-quality PVC edge banding strips, thickness 2.5mm",
+      "spanish": "Cantos de PVC de alta calidad de 2.5 mm en el panel superior.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B143:E143",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Edge banding: the station board uses high-quality PVC edge banding strips, thickness 1mm",
+      "spanish": "Cantos de PVC de alta calidad de 1 mm en el panel frontal.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B143:E143",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Mesa Colaborativa, Modelo Mall,",
+      "spanish": "Mesa colaborativa modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B146:E146",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Rectangular Height Adjustable Desk",
+      "spanish": "Escritorio rectangular de altura ajustable.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B146:E146",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Side Panel:18mm thickness,impregnated melamine paper surface",
+      "spanish": "Panel lateral de 18 mm, con superficie de papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B146:E146",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Edge Banding: the side panels use high-quality PVC edge banding strips,thickness 1mm",
+      "spanish": "Cantos de PVC de alta calidad de 1 mm en los paneles laterales.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B146:E146",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Panel: high-quality cold-rolled steel, 0.8-2.0mm thick, electrostatic powder coating surface",
+      "spanish": "Panel de acero laminado en frío de alta calidad, de 0.8–2.0 mm de espesor, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B146:E146",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Base: hot-rolled steel, 5.0mm thickness, electrostatic powder coating surface",
+      "spanish": "Base de acero laminado en caliente de 5.0 mm de espesor, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B146:E146",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Cable management: hidden wiring inside flexible spine cable management",
+      "spanish": "Cableado oculto dentro de un organizador flexible tipo columna.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B146:E146",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Height Adjustment: dual motor, height range 657-1152mm, speed 30mm/s, noise ≤50dB",
+      "spanish": "Ajuste de altura con doble motor, rango de 657–1152 mm, velocidad de 30 mm/s y nivel de ruido ≤ 50 dB.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B146:E146",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Escritorio con Credenza, Modelo Mall,",
+      "spanish": "Escritorio con credenza modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B23:J23",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Straight manager desk with cabinet, a side cabinet on one side, steel legs on the other",
+      "spanish": "Escritorio gerencial recto con gabinete lateral en un extremo y patas de acero en el otro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B23:J23",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Modesty Panel: 8mm width, surface covered with impregnated melamine paper for excellent stability, superior layering, and strong resistance to dirt and wear. E0 grade particle board",
+      "spanish": "Faldón de aglomerado grado E0 revestido con papel melamínico impregnado. Medida de ancho publicada: 8 mm. Superficie estable y resistente a la suciedad y al desgaste.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B23:J23",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Edge banding: the table top uses PVC edge banding strips,thickness 2.5mm; the cabinet body uses PVC edge banding strips,thickness 1mm",
+      "spanish": "Cantos de PVC de 2.5 mm en la cubierta y de 1 mm en el gabinete.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B23:J23",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Cable management: rear entry, front exit",
+      "spanish": "Paso de cables con entrada posterior y salida frontal.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B23:J23",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Aluminum Strip: Made of AL6063-T5 aluminum alloy, cross-sectional thickness 1mm~1.5mm, with surface anodized treatment",
+      "spanish": "Perfil de aleación de aluminio AL6063-T5, de 1–1.5 mm de espesor de sección, con tratamiento anodizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B11:J11",
+          "file_id": "395233272f9c8f9075cfd6c45f4b49d247d5abcdd2712a4106beac617f3f87bf",
+          "sheet_or_page": "Quotation (2)"
+        }
+      ]
+    },
+    {
+      "source": "Mesa Alta, Modelo Mall,",
+      "spanish": "Mesa alta modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B136:E136",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "High-top table",
+      "spanish": "Mesa alta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B136:E136",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Table Legs:Goal post leg in steel, high-quality cold-rolled steel, 1.5~1.8mm, surface electrostatic powder coating",
+      "spanish": "Patas de acero tipo marco, de acero laminado en frío de alta calidad de 1.5–1.8 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B136:E136",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Four-door file cabinet body",
+      "spanish": "Cuerpo de archivero de cuatro puertas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B19:J19",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Archivero Tipo Credenza,",
+      "spanish": "Archivero tipo credenza.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B123:E123",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Twelve-door file cabinet body",
+      "spanish": "Cuerpo de archivero de doce puertas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B16:J16",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Mesa Alta con Top Access, Modelo Mall,",
+      "spanish": "Mesa alta con caja pasacables modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B137:E137",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Clip para Mampara, Modelo Mall,",
+      "spanish": "Clip para mampara modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B107:E107",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Screen Clip: zinc alloy, die-cast, surface electrostatic electrostatic electrostatic powder coating",
+      "spanish": "Clip para mampara de aleación de zinc fundida a presión, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B107:E107",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Escritorio en U, Modelo Mall,",
+      "spanish": "Escritorio en U modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B26:J26",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Irregular shape manager desk with cabinet, a side cabinet on one side, steel legs on the other",
+      "spanish": "Escritorio gerencial de forma irregular, con gabinete lateral en un extremo y patas de acero en el otro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B26:J26",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Pata Lateral,",
+      "spanish": "Pata lateral.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B6:J6",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Mesa de Conferencias, Modelo Mall,",
+      "spanish": "Mesa de conferencias modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B151:E151",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Back Panel: 18mm thickness,impregnated melamine paper surface",
+      "spanish": "Panel posterior de 18 mm, con superficie de papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B151:E151",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Edge Banding: the back panel uses high-quality PVC edge banding strips,thickness 1mm",
+      "spanish": "Cantos de PVC de alta calidad de 1 mm en el panel posterior.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B151:E151",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Rectangular Desk",
+      "spanish": "Escritorio rectangular.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B148:E148",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Modesty Panel: 18mm thick,impregnated melamine paper surface",
+      "spanish": "Faldón de 18 mm de espesor, con superficie de papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B148:E148",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Side Panel:25mm thickness, impregnated melamine paper surface",
+      "spanish": "Panel lateral de 25 mm, con superficie de papel melamínico impregnado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B148:E148",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Edge Banding: the modesty panel uses high-quality PVC edge banding strips, thickness 1mm",
+      "spanish": "Cantos de PVC de alta calidad de 1 mm en el faldón.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B148:E148",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Edge Banding: the side panels use high-quality PVC edge banding strips, thickness 2.5mm",
+      "spanish": "Cantos de PVC de alta calidad de 2.5 mm en los paneles laterales.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B148:E148",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Archivero Abierto, Modelo Mall,",
+      "spanish": "Archivero abierto modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B128:E128",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Two-tier open cabinet",
+      "spanish": "Gabinete abierto de dos niveles.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B128:E128",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Puera de Cristal, Modelo M Cabinet,",
+      "spanish": "Puerta de vidrio modelo M Cabinet.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:J30",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Door Frame: made of AL6063-T5 aluminum alloy, with alkaline oxidation",
+      "spanish": "Marco de puerta de aleación de aluminio AL6063-T5 con oxidación alcalina.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:J30",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Door Panel Glass: regular glass,3mm",
+      "spanish": "Vidrio común de 3 mm para puerta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B30:J30",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Staff desk with extension side table",
+      "spanish": "Escritorio operativo con extensión lateral.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B34:J34",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mall"
+        }
+      ]
+    },
+    {
+      "source": "Training table Top: Laminate Base: Steel",
+      "spanish": "Mesa de capacitación con cubierta de laminado y base de acero.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B4:J4",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mandis"
+        }
+      ]
+    },
+    {
+      "source": "Round negotiation table",
+      "spanish": "Mesa de reunión redonda.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B139:E139",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Two-door two-drawer file cabinet body, includes two lower drawers",
+      "spanish": "Cuerpo de archivero de dos puertas y dos cajones inferiores.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B9:J9",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Beam: high-quality cold-rolled steel, with an electrostatic powder coating on the surface, 1.5mm thickness",
+      "spanish": "Travesaño de acero laminado en frío de alta calidad, de 1.5 mm de espesor, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:J37",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Sliding Door Kit: sliding door upper and lower wheels + damper",
+      "spanish": "Kit para puerta corrediza con ruedas superiores e inferiores y amortiguador.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B37:J37",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Cable Trays: high-quality cold-rolled steel, 0.7mm, surface electrostatic powder coating",
+      "spanish": "Charola pasacables de acero laminado en frío de alta calidad, de 0.7 mm, con recubrimiento electrostático en polvo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B5:J5",
+          "file_id": "395233272f9c8f9075cfd6c45f4b49d247d5abcdd2712a4106beac617f3f87bf",
+          "sheet_or_page": "Quotation (2)"
+        }
+      ]
+    },
+    {
+      "source": "Gabinete Colgante, Modelo Mall,",
+      "spanish": "Gabinete colgante modelo Mall.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B134:E134",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Wall cabinet with sliding door",
+      "spanish": "Gabinete de pared con puerta corrediza.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B134:E134",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Sliding Door: polyester fiber, formaldehyde-free",
+      "spanish": "Puerta corrediza de fibra de poliéster, libre de formaldehído.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B134:E134",
+          "file_id": "79a12811c9921447f58cf0ea38272b6c458c6982f17f25d5fdc212b30915de6b",
+          "sheet_or_page": "SPEC Sunon Mty"
+        }
+      ]
+    },
+    {
+      "source": "Eight-door file cabinet body",
+      "spanish": "Cuerpo de archivero de ocho puertas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B13:J13",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "M Cabinet"
+        }
+      ]
+    },
+    {
+      "source": "Mandis Training table, 70.84\" X 23.63\" X 29.53\", Flip and Nest, locking casters",
+      "spanish": "Mesa de capacitación Mandis de 70.84 × 23.63 × 29.53 pulgadas, con cubierta abatible, almacenamiento encajable y rodajas con freno.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "B5:J5",
+          "file_id": "1338afa15dc843169a75c7504dbd964b20241eb1c3fd7b81d87c98b81b49ff80",
+          "sheet_or_page": "Mandis"
+        }
+      ]
+    }
+  ]
+}

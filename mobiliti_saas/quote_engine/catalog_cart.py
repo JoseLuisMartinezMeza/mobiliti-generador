@@ -21,6 +21,9 @@ from openpyxl.utils import get_column_letter
 from PIL import Image, UnidentifiedImageError
 
 from .local_files import local_files_preserved, save_quotation_workbook, temporary_directory
+from .offiho_descriptions import nombre_producto_offiho, redactar_descripcion_offiho
+from .supplier_descriptions import nombre_producto_proveedor, redactar_descripcion_proveedor
+from .customer_descriptions import es_aviso_interno
 
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -222,6 +225,12 @@ def write_catalog_quotation_item(
 ) -> None:
     code = str(item.get("code") or item.get("sku") or "").strip()
     name = str(item.get("name", "")).strip()
+    nombre_comercial = name
+    ficha_comercial, _ = _ficha_para_redaccion(item)
+    if source_type == "offiho_cart":
+        nombre_comercial = nombre_producto_offiho(ficha_comercial)
+    elif source_type == "supplier_cart":
+        nombre_comercial = nombre_producto_proveedor(ficha_comercial)
     unit = str(item.get("unit", "")).strip()
     attributes = (
         item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
@@ -234,6 +243,22 @@ def write_catalog_quotation_item(
         source_type=source_type,
         extra_description_parts=extra_description_parts,
     )
+    if source_type in {"offiho_cart", "tarkett_cart", "supplier_cart"}:
+        descripcion_comercial = description
+        description, _, _ = catalog_quotation_item_text(
+            item, index=index, source_type=source_type,
+            extra_description_parts=extra_description_parts, redactar=False,
+        )
+        # El clasificador aprende alias de B/D: conservar la fuente impide que
+        # una corrección editorial cambie categorías, instalación o fletes.
+        libro = ws.parent
+        nombre_hoja = "_Catalogo_textos"
+        if nombre_hoja not in libro.sheetnames:
+            hoja_textos = libro.create_sheet(nombre_hoja)
+            hoja_textos.append(["fila", "nombre", "descripcion"])
+            hoja_textos.sheet_state = "hidden"
+        hoja_textos = libro[nombre_hoja]
+        hoja_textos.append([row, text_transform(nombre_comercial), text_transform(descripcion_comercial)])
     ws.cell(row, 1).value = index
     ws.cell(row, 2).value = text_transform(name)
     ws.cell(row, 4).value = text_transform(description)
@@ -273,6 +298,7 @@ def catalog_quotation_item_text(
     index: int,
     source_type: str,
     extra_description_parts: tuple[str, ...] = (),
+    redactar: bool = True,
 ) -> tuple[str, str, Decimal]:
     code = str(item.get("code") or item.get("sku") or "").strip()
     name = str(item.get("name", "")).strip()
@@ -289,14 +315,29 @@ def catalog_quotation_item_text(
         item_label=code or name or str(index),
         max_decimal_places=quantity_precision,
     )
+    # La copia aporta el origen de carritos antiguos sin alterar su snapshot.
+    item_redaccion = item
+    if source_type in {"offiho_cart", "tarkett_cart"}:
+        item_redaccion = {**item, "catalog": source_type.removesuffix("_cart")}
     description, warning = _description_for_item(
-        item,
+        item_redaccion,
         code,
         url,
         quantity,
         extra_description_parts=extra_description_parts,
+        redactar=redactar and source_type != "imported_quotation",
     )
     return description, warning, quantity
+
+
+def _ficha_para_redaccion(item: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Separa los sufijos de trazabilidad antes de comparar fichas revisadas."""
+    segmentos = re.split(r"\s*\|\s*", str(item.get("description") or "").strip())
+    metadatos = [parte for parte in segmentos if re.match(
+        r"^(?:fuente|hash\s+(?:fuente|fila)|colecci[oó]n|unidad)\s*:", parte, flags=re.I,
+    )]
+    ficha = {**item, "description": " | ".join(parte for parte in segmentos if parte not in metadatos)}
+    return ficha, metadatos
 
 
 def _description_for_item(
@@ -306,14 +347,27 @@ def _description_for_item(
     quantity: Decimal,
     *,
     extra_description_parts: tuple[str, ...] = (),
+    redactar: bool = True,
 ) -> tuple[str, str]:
     is_lumbro = (
         str(item.get("catalog") or item.get("supplier") or "").strip().casefold()
         == "lumbro"
     )
     code_label = "SKU" if "sku" in item else "Clave"
+    catalogo = str(item.get("catalog") or item.get("supplier") or "").strip().casefold()
+    descripcion = str(item.get("description") or "").strip()
+    metadatos = []
+    if redactar:
+        # Las rutas de proveedor y mixta añaden trazabilidad antes del escritor.
+        # La revisión exacta debe comparar la ficha, sin esos sufijos administrativos.
+        ficha, metadatos = _ficha_para_redaccion(item)
+        descripcion = (
+            redactar_descripcion_offiho(ficha) if catalogo == "offiho"
+            else redactar_descripcion_proveedor(ficha)
+        )
     parts = [
-        str(item.get("description", "") or "").strip(),
+        descripcion,
+        *metadatos,
         *(str(value or "").strip() for value in extra_description_parts),
         (
             f"Coleccion: {str(item.get('collection') or '').strip()}"
@@ -337,8 +391,14 @@ def _description_for_item(
     if warranty:
         parts.append(f"Garantia: {warranty}")
     product_notes = attributes.get("product_notes")
-    if not is_lumbro and isinstance(product_notes, list):
-        notes = [str(value).strip() for value in product_notes if str(value).strip()]
+    if (redactar or not is_lumbro) and isinstance(product_notes, list):
+        notes = [
+            str(value).strip() for value in product_notes
+            if str(value).strip() and (
+                not redactar or (not es_aviso_interno(str(value))
+                and not (is_lumbro and "el color puede variar" in _catalog_warning_key(value)))
+            )
+        ]
         if notes:
             parts.append(f"Notas: {'; '.join(notes)}")
     lead_time = str(item.get("lead_time", "") or "").strip()

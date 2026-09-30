@@ -986,7 +986,8 @@ def test_catalog_workbook_closes_when_save_fails(monkeypatch, tmp_path):
     original_close = workbook.close
     close_calls = []
 
-    def fail_save(path):
+    def fail_save(workbook_to_save, path):
+        assert workbook_to_save is workbook
         raise OSError("save failed")
 
     def record_close():
@@ -994,7 +995,7 @@ def test_catalog_workbook_closes_when_save_fails(monkeypatch, tmp_path):
         original_close()
 
     monkeypatch.setattr(catalog_cart, "Workbook", lambda: workbook)
-    monkeypatch.setattr(workbook, "save", fail_save)
+    monkeypatch.setattr(catalog_cart, "save_quotation_workbook", fail_save)
     monkeypatch.setattr(workbook, "close", record_close)
 
     with pytest.raises(OSError, match="save failed"):

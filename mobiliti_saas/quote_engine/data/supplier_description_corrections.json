@@ -1,0 +1,2539 @@
+{
+  "version": 1,
+  "reviewed_at": "2026-09-30",
+  "scope": "Correcciones editoriales de textos exactos de snapshots locales; no constituye verificación de inventario vigente ni completa hechos ausentes.",
+  "corrections": [
+    {
+      "supplier": "sonara",
+      "original": "Canal U de 2.40mts",
+      "revised": "Canal U de 2.40 m.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            152.0,
+            404.3,
+            547.2,
+            427.9
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel liso sin corte.",
+      "revised": "Panel liso, sin corte.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            154.3,
+            126.5,
+            558.5,
+            150.1
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "\"L\" Silver, White y Black \"T\" Silver, White y Black",
+      "revised": "Opciones en L y T, disponibles en plata, blanco y negro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            165.1,
+            444.4,
+            544.1,
+            478.5
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Costo por metro cuadrado (Colores Negro, Camello, Gris, Gris espacial y Gris Plateado)",
+      "revised": "Venta por metro cuadrado. Colores disponibles: negro, camello, gris, gris espacial y gris plateado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            170.2,
+            120.8,
+            555.4,
+            154.9
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Rollo de 1 x 20mts de Aislante Ecomute",
+      "revised": "Rollo de aislante Ecomute de 1 × 20 m.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            153.5,
+            650.4,
+            550.3,
+            675.5
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Cortes de linea (Tipo Mamparas divisorias, Corte Celosía, Corte en U y V).",
+      "revised": "Cortes de línea para mamparas divisorias, celosías y cortes en U o V.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            153.7,
+            240.0,
+            560.5,
+            263.6
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Paquete 4 paneles de: hexágono, triángulo, cuadrado, círculo.",
+      "revised": "Paquete de 4 paneles con formas de hexágono, triángulo, cuadrado y círculo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            168.1,
+            314.7,
+            556.4,
+            339.8
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Cubeta de 4kg de pegamento ADH",
+      "revised": "Pegamento ADH en cubeta de 4 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            163.9,
+            531.5,
+            545.9,
+            546.6
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Corte grado complejidad C.",
+      "revised": "Corte con grado de complejidad C.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            164.6,
+            643.2,
+            561.6,
+            667.8
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Corte grado complejidad D.",
+      "revised": "Corte con grado de complejidad D.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            163.5,
+            683.3,
+            562.3,
+            708.3
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Tubo Cuadrado de 2.40mts",
+      "revised": "Tubo cuadrado de 2.40 m.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            150.7,
+            324.4,
+            550.3,
+            348.0
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel con impresion con corte recto.",
+      "revised": "Panel impreso con corte recto.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            165.4,
+            398.1,
+            559.7,
+            423.1
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Herrajes de sujeción a techo tipo parrilla de aluminio 1.20x1.20m. (no incluye amarre a losa)",
+      "revised": "Herrajes de aluminio para sujeción a techo tipo parrilla, de 1.20 × 1.20 m. No incluyen amarre a losa.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            146.8,
+            203.7,
+            550.9,
+            237.8
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Paquete 4 Rectángulos 1.20 m. x .60 m.",
+      "revised": "Paquete de 4 paneles rectangulares de 1.20 × 0.60 m.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            167.1,
+            424.5,
+            560.5,
+            462.5
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Tubo Cuadrado de 1.20mts",
+      "revised": "Tubo cuadrado de 1.20 m.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            152.1,
+            286.9,
+            548.9,
+            310.4
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Cubeta de 20kg de pegamento ADH",
+      "revised": "Pegamento ADH en cubeta de 20 kg.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            161.2,
+            572.9,
+            553.2,
+            588.4
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel Sonara 1.20 x .240 m. con tiras de mdf de 2.5 cm pegados al panel, con chapa de formica al frente.",
+      "revised": "Panel Sonara de 1.20 × 0.240 m, con tiras de MDF de 2.5 cm adheridas al panel y recubrimiento frontal de fórmica.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            161.8,
+            236.5,
+            558.4,
+            270.5
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": [
+        "medida_0_240_m_publicada_requiere_confirmacion"
+      ]
+    },
+    {
+      "supplier": "sonara",
+      "original": "Canal U de 1.20mts",
+      "revised": "Canal U de 1.20 m.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            152.0,
+            361.8,
+            548.9,
+            385.4
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel doble Ranurado en V, cortes de línea.",
+      "revised": "Panel doble con ranuras en V y cortes de línea.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            162.5,
+            280.7,
+            555.4,
+            307.9
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Corte grado complejidad A.",
+      "revised": "Corte con grado de complejidad A.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            164.3,
+            508.6,
+            558.6,
+            533.7
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Paquete 4 Rectángulos 1.20 m. x .30 m.",
+      "revised": "Paquete de 4 paneles rectangulares de 1.20 × 0.30 m.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            168.4,
+            381.9,
+            560.2,
+            417.4
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel con impresion 1.20 x 2.40 mts, 9 mm.",
+      "revised": "Panel impreso de 1.20 × 2.40 m y 9 mm de espesor.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            168.0,
+            357.0,
+            562.9,
+            382.1
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel liso sin corte (Solo en colores Gris, Gris espacial, Gris plateado y Negro).",
+      "revised": "Panel liso, sin corte. Disponible en gris, gris espacial, gris plateado y negro.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            153.1,
+            163.9,
+            561.3,
+            188.1
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Herrajes de sujeción a techo en vertical.",
+      "revised": "Herrajes para sujeción vertical a techo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            155.7,
+            164.2,
+            549.9,
+            192.1
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Cortes de linea (Tipo Mamparas divisorias, Corte Celosía, Corte en U y V) (Solo en colores Negro, Gris, Gris espacial y Gris plateado",
+      "revised": "Cortes de línea para mamparas divisorias, celosías y cortes en U o V. Disponibles en negro, gris, gris espacial y gris plateado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            153.7,
+            268.7,
+            561.9,
+            313.2
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Costo por metro cuadrado con corte Colores Negro, Camello, Gris, Gris espacial y Gris Plateado)",
+      "revised": "Venta por metro cuadrado con corte. Colores disponibles: negro, camello, gris, gris espacial y gris plateado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            151.6,
+            160.0,
+            556.0,
+            194.0
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Corte grado complejidad A (Solo en colores Gris, Gris espacial y Gris plateado).",
+      "revised": "Corte con grado de complejidad A. Disponible en gris, gris espacial y gris plateado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            164.1,
+            569.4,
+            558.5,
+            596.7
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Corte grado complejidad B (Solo en colores Gris, Gris espacial y Gris plateado).",
+      "revised": "Corte con grado de complejidad B. Disponible en gris, gris espacial y gris plateado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            165.6,
+            605.3,
+            560.2,
+            630.4
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Herrajes de sujeción a techo tipo parrilla de aluminio 2.40x2.40m. (no incluye amarre a losa)",
+      "revised": "Herrajes de aluminio para sujeción a techo tipo parrilla, de 2.40 × 2.40 m. No incluyen amarre a losa.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            149.5,
+            242.6,
+            551.4,
+            276.7
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Herrajes de sujeción a techo en horizontal.",
+      "revised": "Herrajes para sujeción horizontal a techo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            155.7,
+            127.1,
+            548.9,
+            150.6
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 3
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Corte grado complejidad B.",
+      "revised": "Corte con grado de complejidad B.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            162.9,
+            539.7,
+            561.8,
+            564.3
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 1
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel suspendido SACC003 medida de 1.20 mts de diametro (No incluye herrajes).",
+      "revised": "Panel suspendido SACC003 de 1.20 m de diámetro. No incluye herrajes.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            154.9,
+            475.6,
+            559.9,
+            501.1
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel suspendido SACC003 medida de 2.40 mts de diametro (No incluye herrajes).",
+      "revised": "Panel suspendido SACC003 de 2.40 m de diámetro. No incluye herrajes.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            154.2,
+            514.4,
+            559.0,
+            548.4
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel suspendido SACC004 medida de 1.20 x 1.20 mts (No incluye herrajes).",
+      "revised": "Panel suspendido SACC004 de 1.20 × 1.20 m. No incluye herrajes.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            152.9,
+            555.7,
+            555.4,
+            581.1
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel suspendido SACC004 medida de 2.40 x 2.40mts (No incluye herrajes).",
+      "revised": "Panel suspendido SACC004 de 2.40 × 2.40 m. No incluye herrajes.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            152.4,
+            589.3,
+            556.0,
+            614.7
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel suspendido SACC005 medida de 1.20 x 1.20 mts (No incluye herrajes).",
+      "revised": "Panel suspendido SACC005 de 1.20 × 1.20 m. No incluye herrajes.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            153.9,
+            624.4,
+            555.1,
+            648.9
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel suspendido SACC005 medida de 2.40 x 2.40 mts (No incluye herrajes).",
+      "revised": "Panel suspendido SACC005 de 2.40 × 2.40 m. No incluye herrajes.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            154.9,
+            658.1,
+            555.1,
+            686.4
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "sonara",
+      "original": "Panel suspendido SACC006, 8 Tiras de 1.20 x.30 mts (No incluye herrajes).",
+      "revised": "Panel suspendido SACC006 con 8 tiras de 1.20 × 0.30 m. No incluye herrajes.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            151.6,
+            695.8,
+            555.4,
+            721.4
+          ],
+          "file_id": "c497314221f5e700d6722deb92a3dbb02c4686e7b39e17766332bee6a6e05128",
+          "sheet_or_page": 2
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón aspetta de 1 plaza fabricado en estructura interna y brazos en madera de",
+      "revised": "Sillón Aspetta de 1 plaza, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E100",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat aspetta de 2 plazas fabricado en estructura interna y brazos en",
+      "revised": "Sofá Aspetta de 2 plazas, con estructura interna y brazos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E108",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá aspetta de 3 plazas fabricado en estructura interna y brazos en",
+      "revised": "Sofá Aspetta de 3 plazas, con estructura interna y brazos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E115",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá betto 1 plaza móvil. base: estructura fabricados con un bastidor de madera",
+      "revised": "Sofá Betto móvil de 1 plaza, con bastidor de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E172",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Taburete lego modular base cuadricular, asiento ergonómico, acojinamiento por",
+      "revised": "Taburete modular Lego con base de diseño cuadricular y asiento ergonómico.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E199",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón mercedes de 1 plaza fabricado en estructura interna y brazos en madera de",
+      "revised": "Sillón Mercedes de 1 plaza, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E123",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat mercedes de 2 plazas fabricado en estructura interna y brazos en",
+      "revised": "Sofá Mercedes de 2 plazas, con estructura interna y brazos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E131",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá mercedes de 3 plazas fabricado en estructura interna y brazos en",
+      "revised": "Sofá Mercedes de 3 plazas, con estructura interna y brazos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E139",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón mint de 1 plaza fabricado en estructura interna y brazos en madera de pino",
+      "revised": "Sillón Mint de 1 plaza, con estructura interna y brazos de madera de pino.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E147",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat mint de 2 plazas fabricado en estructura interna y brazos en madera de",
+      "revised": "Sofá Mint de 2 plazas, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E156",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá mint de 3 plazas fabricado en estructura interna y brazos en madera de pino",
+      "revised": "Sofá Mint de 3 plazas, con estructura interna y brazos de madera de pino.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E164",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Ottoman esquinero curvo 90° rec estructurado en madera de pino de primera,",
+      "revised": "Otomana esquinera curva de 90° de la línea Rec, con estructura de madera de pino de primera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E82",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón individual con brazo rec. estructurado en madera de pino de primera,",
+      "revised": "Sillón individual con brazo de la línea Rec, con estructura de madera de pino de primera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E53",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Ottoman curvo conector rec estructurado en madera de pino de primera,",
+      "revised": "Otomana curva de conexión de la línea Rec, con estructura de madera de pino de primera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E91",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón esquinero rec estructurado en madera de pino de primera, estufado y",
+      "revised": "Sillón esquinero de la línea Rec, con estructura de madera de pino de primera, estufada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E62",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Ottoman individual rec estructurado en madera de pino de primera, estufado y",
+      "revised": "Otomana individual de la línea Rec, con estructura de madera de pino de primera, estufada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E73",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón individual sin brazos rec. estructurado en madera de pino de primera,",
+      "revised": "Sillón individual sin brazos de la línea Rec, con estructura de madera de pino de primera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E41",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat península rec. estructurado en madera de pino de primera, estufado",
+      "revised": "Sofá península de la línea Rec, con estructura de madera de pino de primera, estufada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E21",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Ottoman dos plazas rec. estructurado en madera de pino de primera, estufado y",
+      "revised": "Otomana de 2 plazas de la línea Rec, con estructura de madera de pino de primera, estufada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E32",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat sin brazos rec. estructurado en madera de pino de primera, estufado",
+      "revised": "Sofá sin brazos de la línea Rec, con estructura de madera de pino de primera, estufada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E9",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Cushion con base, para archivero, estructura fabricados con un bastidor de madera",
+      "revised": "Cojín con base para archivero, con bastidor de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E184",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Cushion con base, para credenza: estructura fabricados con un bastidor de madera",
+      "revised": "Cojín con base para credenza, con bastidor de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E191",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Taburete cirkuz redondo base: estructura fabricados con un bastidor de madera",
+      "revised": "Taburete redondo Cirkuz, con bastidor de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E338",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón habitad de 1 plaza fabricado en estructura interna y brazos en madera",
+      "revised": "Sillón Habitad de 1 plaza, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E267",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat habitad de 2 plazas fabricado en estructura interna y brazos en madera",
+      "revised": "Sofá Habitad de 2 plazas, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E276",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá habitad de 3 plazas fabricado en estructura interna y brazos en madera",
+      "revised": "Sofá Habitad de 3 plazas, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E284",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Taburete rectangular kubuz base: estructura fabricados con un bastidor de",
+      "revised": "Taburete rectangular Kubuz.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E348",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón kuadri de 1 plaza fabricado en estructura interna y brazos en madera",
+      "revised": "Sillón Kuadri de 1 plaza, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E218",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat kuadri de 2 plazas fabricado en estructura interna y brazos en madera",
+      "revised": "Sofá Kuadri de 2 plazas, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E227",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá kuadri de 3 plazas fabricado en estructura interna y brazos en madera",
+      "revised": "Sofá Kuadri de 3 plazas, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E235",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón livi de 1 plaza fabricado en estructura interna y brazos diagonales en madera",
+      "revised": "Sillón Livi de 1 plaza, con estructura interna y brazos diagonales de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E243",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat livi de 2 plazas fabricado en estructura interna y brazos diagonales en madera",
+      "revised": "Sofá Livi de 2 plazas, con estructura interna y brazos diagonales de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E251",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá livi de 3 plazas fabricado en estructura interna y brazos diagonales en madera",
+      "revised": "Sofá Livi de 3 plazas, con estructura interna y brazos diagonales de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E259",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón rubik de 1 plaza fabricado en estructura interna y brazos diagonales en madera",
+      "revised": "Sillón Rubik de 1 plaza, con estructura interna y brazos diagonales de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E292",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "madera de pino de 1 calidad de 1 1/4\", estructura en escuadra, asiento y",
+      "revised": "Estructura en escuadra de madera de pino de primera calidad, de 1 1/4 pulgadas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E300",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá rubik de 3 plazas fabricado en estructura interna y brazos diagonales en madera",
+      "revised": "Sofá Rubik de 3 plazas, con estructura interna y brazos diagonales de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E306",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sillón toyo de 1 plaza fabricado en estructura interna y brazos en madera",
+      "revised": "Sillón Toyo de 1 plaza, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E314",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Loveseat toyo de 2 plazas fabricado en estructura interna y brazos en madera",
+      "revised": "Sofá Toyo de 2 plazas, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E322",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "conceptos",
+      "original": "Sofá toyo de 3 plazas fabricado en estructura interna y brazos en madera",
+      "revised": "Sofá Toyo de 3 plazas, con estructura interna y brazos de madera.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E330",
+          "file_id": "7d2380cb3cde7ec70ee25832c06c351c6f65dc757f793713a86524bcd7a06c70",
+          "sheet_or_page": "Costo Sofas - Cdmx-Gdl-Qro"
+        }
+      ],
+      "pending": [
+        "texto_fuente_recortado_a_una_fila_se_conservan_solo_hechos_completos"
+      ]
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Accesorios: Base tapiz y brazos. Silla de polipropileno con respaldo multiperforado y base de 5 puntas cromada con rodajas.",
+      "revised": "Silla de polipropileno con respaldo multiperforado y base cromada de 5 puntas con rodajas. Base para tapizado y brazos disponibles como accesorios.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            347.876,
+            42.844,
+            385.06,
+            88.044
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 20
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Negro catálogo Gris de tapices. Cromo Colores especiales Silla con asiento tapizado y respaldo en polipropileno, con base 4 patas en tubular de acero pintado.",
+      "revised": "Silla con asiento tapizado y respaldo de polipropileno, con base de 4 patas de acero tubular pintado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            348.945,
+            47.919,
+            386.825,
+            93.119
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 9
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Negro Gris Accesorios: Colores Cromo Base tapiz y brazos. especiales Silla de polipropileno con respaldo multiperforado y base de 4 patas en acero tubular pintado o cromado.",
+      "revised": "Silla de polipropileno con respaldo multiperforado y base de 4 patas de acero tubular pintado o cromado. Base para tapizado y brazos disponibles como accesorios.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            349.239,
+            525.496,
+            388.935,
+            570.696
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 19
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Negro Gris Accesorios: Colores Cromo Base tapiz y brazos. especiales Silla de polipropileno con respaldo multiperforado y base de 4 patas con rodajas en acero tubular pintado.",
+      "revised": "Silla de polipropileno con respaldo multiperforado y base de 4 patas con rodajas de acero tubular pintado. Base para tapizado y brazos disponibles como accesorios.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            347.738,
+            207.165,
+            386.65,
+            252.365
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 20
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Negro Gris Accesorios: Base Colores Cromo tapiz y brazos. especiales Opción a recorte de altura. Banco H.75 de polipropileno con respaldo multiperforado y base de 4 patas en acero tubular pintado.",
+      "revised": "Banco H.75 de polipropileno con respaldo multiperforado y base de 4 patas de acero tubular pintado. Opción de recorte de altura. Base para tapizado y brazos disponibles como accesorios.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            348.672,
+            526.477,
+            387.528,
+            571.677
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 37
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Negro Cromo Colores especiales Disponible en versión Silla con base trineo y scocca en tapizada. tecnopolímero.",
+      "revised": "Silla con base de trineo y carcasa de tecnopolímero. Disponible en versión tapizada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            348.395,
+            47.3,
+            381.971,
+            92.5
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 17
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Blanco Madera Nogal de tapices. Aluminio L3 4 patas en madera de encino blanco en Natural/Wengué/Nogal. R3 Fija de 4 puntas de acero cromado o pintado. *Aplican colores especiales P3 Fija de 4 puntas tipo spider en acero cromado o pintado. Sillón de 1 plaza en cuerpo de poliuretano P20 Giratoria de 5 puntas nylon con rodajas color negro. inyectado y tapizado. R10 Giratoria de 5 puntas en nylon o aluminio con rodajas. L17 Giratoria de 4 puntas en madera sólida Natural/Wengué/Nogal. P4 4 puntas de acero cromado o pintado. D1 Giratoria de plato y columna en acero inoxidable.",
+      "revised": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.721,
+            61.505,
+            417.471,
+            103.88
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 28
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "L3": "Base de 4 patas de madera de encino blanco, en acabado natural, wengué o nogal.",
+        "R3": "Base fija de 4 puntas de acero cromado o pintado.",
+        "P3": "Base fija de 4 puntas tipo araña, de acero cromado o pintado.",
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R10": "Base giratoria de 5 puntas de nylon o aluminio, con rodajas.",
+        "L17": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "P4": "Base de 4 puntas de acero cromado o pintado.",
+        "D1": "Base giratoria de plato y columna de acero inoxidable."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Madera Natural Consultar Madera Wengué catálogo Madera Nogal de tapices. Sillón con base de 4 patas en madera de fresno Natural/Wengué/ Nogal.",
+      "revised": "Sillón con base de 4 patas de madera de fresno, disponible en acabado natural, wengué o nogal.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            341.424,
+            156.519,
+            396.184,
+            201.719
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 26
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Blanco Madera Nogal de tapices. Aluminio L3 4 patas en madera de encino blanco en Natural/Wengué/Nogal. R3 Fija de 4 puntas de acero cromado o pintado. *Aplican colores especiales P3 Fija de 4 puntas tipo spider en acero cromado o pintado. Sillón de 1 plaza en cuerpo de poliuretano P20 Giratoria de 5 puntas nylon con rodajas color negro. inyectado y tapizado con cojín adicional en R10 Giratoria de 5 puntas en nylon o asiento. aluminio con rodajas. L17 Giratoria de 4 puntas en madera sólida Natural/Wengué/Nogal. P4 4 puntas de acero cromado o pintado. D1 Giratoria de plato y columna en acero inoxidable.",
+      "revised": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado, y cojín adicional en el asiento.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.238,
+            381.039,
+            416.771,
+            423.414
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 23
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "L3": "Base de 4 patas de madera de encino blanco, en acabado natural, wengué o nogal.",
+        "R3": "Base fija de 4 puntas de acero cromado o pintado.",
+        "P3": "Base fija de 4 puntas tipo araña, de acero cromado o pintado.",
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R10": "Base giratoria de 5 puntas de nylon o aluminio, con rodajas.",
+        "L17": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "P4": "Base de 4 puntas de acero cromado o pintado.",
+        "D1": "Base giratoria de plato y columna de acero inoxidable."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Blanco Madera Nogal de tapices. Aluminio L3 4 patas en madera de encino blanco en Natural/Wengué/Nogal. R3 Fija de 4 puntas de acero cromado o pintado. *Aplican colores especiales P3 Fija de 4 puntas tipo spider en acero cromado o pintado. P20 Giratoria de 5 puntas nylon con rodajas color negro. Sillón de 1 plaza en R10 Giratoria de 5 puntas en nylon o cuerpo de poliuretano aluminio con rodajas. inyectado y tapizado. L17 Giratoria de 4 puntas en madera sólida Natural/Wengué/Nogal. D1 Giratoria de plato y columna en acero inoxidable. S5 Trineo en acero cromado o pintado. R16 Spider giratoria de 4 puntas en aluminio pintado. P4 4 puntas de acero cromado o pintado.",
+      "revised": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.255,
+            49.958,
+            417.008,
+            92.333
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 25
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "L3": "Base de 4 patas de madera de encino blanco, en acabado natural, wengué o nogal.",
+        "R3": "Base fija de 4 puntas de acero cromado o pintado.",
+        "P3": "Base fija de 4 puntas tipo araña, de acero cromado o pintado.",
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R10": "Base giratoria de 5 puntas de nylon o aluminio, con rodajas.",
+        "L17": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "P4": "Base de 4 puntas de acero cromado o pintado.",
+        "D1": "Base giratoria de plato y columna de acero inoxidable.",
+        "S5": "Base de trineo de acero cromado o pintado.",
+        "R16": "Base giratoria de 4 puntas tipo araña, de aluminio pintado."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Madera Nogal de tapices. L31 Fija de 4 puntas en madera sólida Natural/Wengué/Nogal. R13 Giratoria de 4 puntas en acero. Sillón de 1 plaza con S7 Trineo en acero. respaldo alto y descansa brazos en poliuretano L21 giratoria de 4 puntas en madera inyectado y tapizado. sólida Natural/Wengué/Nogal. + *Con base R13",
+      "revised": "Sillón de 1 plaza con respaldo alto y descansabrazos de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.081,
+            429.252,
+            409.274,
+            471.627
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 29
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "R13": "Base giratoria de 4 puntas de acero.",
+        "S7": "Base de trineo de acero.",
+        "L21": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "L31": "Base fija de 4 puntas de madera sólida, en acabado natural, wengué o nogal."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Madera Nogal de tapices. L31 Fija de 4 puntas en madera sólida Natural/Wengué/Nogal. R13 Giratoria de 4 puntas en acero. Sillón de 1 plaza con S7 Trineo en acero. respaldo alto y descansa brazos en poliuretano L21 giratoria de 4 puntas en madera + inyectado y tapizado. sólida Natural/Wengué/Nogal. *Con base L15 en madera sólida.",
+      "revised": "Sillón de 1 plaza con respaldo alto y descansabrazos de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.643,
+            533.612,
+            413.373,
+            575.987
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 30
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "R13": "Base giratoria de 4 puntas de acero.",
+        "S7": "Base de trineo de acero.",
+        "L21": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "L31": "Base fija de 4 puntas de madera sólida, en acabado natural, wengué o nogal."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Blanco Madera Nogal de tapices. Aluminio L3 4 patas en madera de encino blanco en Natural/Wengué/Nogal. R3 Fija de 4 puntas de acero cromado o pintado. *Aplican colores especiales P3 Fija de 4 puntas tipo spider en acero cromado o pintado. Sillón de 1 plaza en cuerpo de poliuretano P20 Giratoria de 5 puntas nylon con rodajas color negro. inyectado y tapizado. R10 Giratoria de 5 puntas en nylon o aluminio con rodajas. L17 Giratoria de 4 puntas en madera sólida Natural/Wengué/Nogal. D1 Giratoria de plato y columna en acero inoxidable. R16 Giratoria de 4 puntas en alumino negro sin rodajas.",
+      "revised": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.736,
+            385.825,
+            415.63,
+            428.2
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 31
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "L3": "Base de 4 patas de madera de encino blanco, en acabado natural, wengué o nogal.",
+        "R3": "Base fija de 4 puntas de acero cromado o pintado.",
+        "P3": "Base fija de 4 puntas tipo araña, de acero cromado o pintado.",
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R10": "Base giratoria de 5 puntas de nylon o aluminio, con rodajas.",
+        "L17": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "D1": "Base giratoria de plato y columna de acero inoxidable.",
+        "R16": "Base giratoria de 4 puntas de aluminio negro, sin rodajas."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Blanco Madera Nogal de tapices. Aluminio L3 4 patas en madera de encino blanco en Natural/Wengué/Nogal. R3 Fija de 4 puntas de acero cromado o pintado. *Aplican colores especiales P3 Fija de 4 puntas tipo spider en acero cromado o pintado. P20 Giratoria de 5 puntas nylon con rodajas color negro. R10 Giratoria de 5 puntas en nylon o Sillón de 1 plaza en aluminio con rodajas. cuerpo de poliuretano inyectado y tapizado. L17 Giratoria de 4 puntas en madera sólida Natural/Wengué/Nogal. D1 Giratoria de plato y columna en acero inoxidable. S5 Trineo en acero cromado o pintado. R16 Spider giratoria de 4 puntas en aluminio pintado. P4 4 puntas de acero cromado o pintado.",
+      "revised": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.457,
+            370.943,
+            415.348,
+            413.318
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 27
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "L3": "Base de 4 patas de madera de encino blanco, en acabado natural, wengué o nogal.",
+        "R3": "Base fija de 4 puntas de acero cromado o pintado.",
+        "P3": "Base fija de 4 puntas tipo araña, de acero cromado o pintado.",
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R10": "Base giratoria de 5 puntas de nylon o aluminio, con rodajas.",
+        "L17": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "P4": "Base de 4 puntas de acero cromado o pintado.",
+        "D1": "Base giratoria de plato y columna de acero inoxidable.",
+        "S5": "Base de trineo de acero cromado o pintado.",
+        "R16": "Base giratoria de 4 puntas tipo araña, de aluminio pintado."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Blanco Madera Nogal de tapices. Aluminio R3 Fija de 4 puntas de acero cromado o pintado. *Aplican colores especiales P3 Fija de 4 puntas tipo spider en acero cromado o pintado. P20 Giratoria de 5 puntas nylon con rodajas color negro. R10 Giratoria de 5 puntas en nylon o Silla en cuerpo de aluminio con rodajas. poliuretano inyectado y tapizado. L17 Giratoria de 4 puntas en madera sólida Natural/Wengué/Nogal. D1 Giratoria de plato y columna en acero inoxidable. S3 Trineo en acero cromado o pintado. R16 Spider giratoria de 4 puntas en aluminio pintado.",
+      "revised": "Silla con cuerpo de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.081,
+            59.874,
+            410.486,
+            102.249
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 23
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "R3": "Base fija de 4 puntas de acero cromado o pintado.",
+        "P3": "Base fija de 4 puntas tipo araña, de acero cromado o pintado.",
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R10": "Base giratoria de 5 puntas de nylon o aluminio, con rodajas.",
+        "L17": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "D1": "Base giratoria de plato y columna de acero inoxidable.",
+        "S3": "Base de trineo de acero cromado o pintado.",
+        "R16": "Base giratoria de 4 puntas tipo araña, de aluminio pintado."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Madera Nogal de tapices. L31 Fija de 4 puntas en madera sólida Natural/Wengué/Nogal. R13 Giratoria de 4 puntas en acero. Sillón de una plaza con respaldo alto y descansa S7 Trineo en acero. brazos en poliuretano inyectado y tapizado. L21 giratoria de 4 puntas en madera sólida Natural/Wengué/Nogal. + *Con base R13",
+      "revised": "Sillón de 1 plaza con respaldo alto y descansabrazos de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.789,
+            122.227,
+            415.345,
+            164.602
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 29
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "R13": "Base giratoria de 4 puntas de acero.",
+        "S7": "Base de trineo de acero.",
+        "L21": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "L31": "Base fija de 4 puntas de madera sólida, en acabado natural, wengué o nogal."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Blanco Madera Nogal de tapices. Aluminio GL Fija de 4 puntas en madera madera sólida Natural/Wengué/Nogal. R3 Fija de 4 puntas de acero cromado o pintado. *Aplican colores especiales P3 Fija de 4 puntas tipo spider en acero cromado o pintado. Silla con estructura interna en acero P20 Giratoria de 5 puntas nylon con totalmente recubierta rodajas color negro. con poliuretano R10 Giratoria de 5 puntas en nylon o inyectado y tapizado. aluminio con rodajas. L17 Giratoria de 4 puntas en madera R16 Giratoria de 4 puntas en alumino negro sin rodajas.",
+      "revised": "Silla con estructura interna de acero, recubierta de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            336.033,
+            388.838,
+            417.875,
+            431.213
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 28
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "R3": "Base fija de 4 puntas de acero cromado o pintado.",
+        "P3": "Base fija de 4 puntas tipo araña, de acero cromado o pintado.",
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R10": "Base giratoria de 5 puntas de nylon o aluminio, con rodajas.",
+        "L17": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "R16": "Base giratoria de 4 puntas de aluminio negro, sin rodajas.",
+        "GL": "Base fija de 4 puntas de madera sólida, en acabado natural, wengué o nogal."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Madera Nogal de tapices. L31 Fija de 4 puntas de acero cromado o pintado. Sillón con estructura R13 Giratoria de 4 puntas en acero. interna en acero totalmente recubierta S7 Trineo en acero. con poliuretano inyectado. L21 giratoria de 4 puntas en madera sólida Natural/Wengué/Nogal.",
+      "revised": "Sillón con estructura interna de acero, recubierta de poliuretano inyectado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            333.59,
+            454.128,
+            411.46,
+            496.503
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 25
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "R13": "Base giratoria de 4 puntas de acero.",
+        "S7": "Base de trineo de acero.",
+        "L21": "Base giratoria de 4 puntas de madera sólida, en acabado natural, wengué o nogal.",
+        "L31": "Base fija de 4 puntas de acero cromado o pintado."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Negro Cromo Colores especiales Disponible en versión Silla con scocca en tecnopolímero. tapizada. Estructura tubular en acero cal. 16mm pintado.",
+      "revised": "Silla con carcasa de tecnopolímero y estructura tubular de acero pintado. Disponible en versión tapizada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            348.815,
+            366.251,
+            382.975,
+            411.451
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 16
+        }
+      ],
+      "pending": [
+        "unidad_del_calibre_16_mm_ambigua_en_fuente"
+      ]
+    },
+    {
+      "supplier": "labenze",
+      "original": "Negro Consultar catálogo de tapices. R16 R16 Giratoria de 4 puntas en alumino negro sin rodajas. R17 5 puntas en aluminio negro con rodajas. R17 R18 Fija de 4 puntas tipo spider en acero cromado o pintado. R19 4 puntas giratoria en aluminio Sillón de 1 plaza en negro con rodajas R18 cuerpo de poliuretano inyectado y tapizado P20 Giratoria de 5 puntas nylon con rodajas color negro. con paleta en melamina Arauco de 16 mm o R19 paleta en melamina Monolit de 18 mm. P20",
+      "revised": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado. Paleta en melamina Arauco de 16 mm o melamina Monolit de 18 mm, según la configuración seleccionada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            332.487,
+            87.355,
+            416.707,
+            121.255
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 27
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R16": "Base giratoria de 4 puntas de aluminio negro, sin rodajas."
+      },
+      "variant_descriptions": {
+        "Arauco": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado, con paleta de melamina Arauco de 16 mm.",
+        "Monolit": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado, con paleta de melamina Monolit de 18 mm."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Madera Natural Consultar Negro Madera Wengué catálogo Blanco Madera Nogal de tapices. Aluminio L3 4 patas en madera de encino blanco en Natural/Wengué/Nogal. R3 Fija de 4 puntas de acero cromado o pintado. *Aplican colores especiales P3 Fija de 4 puntas tipo spider en acero cromado o pintado. P20 Giratoria de 5 puntas nylon con rodajas color negro. Sillón de 1 plaza en cuerpo de poliuretano R10 Giratoria de 5 puntas en nylon o inyectado y tapizado. aluminio con rodajas. S5 Trineo en acero cromado o pintado. P4 4 puntas de acero cromodo o pintado.",
+      "revised": "Sillón de 1 plaza con cuerpo de poliuretano inyectado y tapizado.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            337.796,
+            380.864,
+            419.105,
+            423.239
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 26
+        }
+      ],
+      "pending": [],
+      "base_options": {
+        "L3": "Base de 4 patas de madera de encino blanco, en acabado natural, wengué o nogal.",
+        "R3": "Base fija de 4 puntas de acero cromado o pintado.",
+        "P3": "Base fija de 4 puntas tipo araña, de acero cromado o pintado.",
+        "P20": "Base giratoria de 5 puntas de nylon negro con rodajas.",
+        "R10": "Base giratoria de 5 puntas de nylon o aluminio, con rodajas.",
+        "P4": "Base de 4 puntas de acero cromado o pintado.",
+        "S5": "Base de trineo de acero cromado o pintado."
+      }
+    },
+    {
+      "supplier": "labenze",
+      "original": "Aluminio Este modelo en color NJA y DGY está sujeto a disponibilidad. Con opción a recorte Banco H.75, estructura de aluminio anodizado cuadrado de 25x25mm Asiento en polipropileno.",
+      "revised": "Banco H.75 con estructura de aluminio anodizado cuadrado de 25 × 25 mm y asiento de polipropileno. Opción de recorte de altura. Colores NJA y DGY sujetos a disponibilidad.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            347.983,
+            201.326,
+            383.079,
+            246.526
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 34
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Blanco Este modelo en colores Cromo BCO, ROJ, VDE y ANT está sujeto a disponibilidad. Con opción a recorte Banco de estructura de 4 patas en acero cromado o pintado. Asiento en polipropileno.",
+      "revised": "Banco con estructura de 4 patas de acero cromado o pintado y asiento de polipropileno. Opción de recorte de altura. Colores BCO, ROJ, VDE y ANT sujetos a disponibilidad.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            347.898,
+            48.181,
+            384.802,
+            93.381
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 34
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Opción a recorte de altura. Este modelo en colores ANT, BCO, NJA y ROJ está sujeto a disponibilidad. Con opción a recorte Banco de estructura de 4 patas en acero cromado. Asiento en polipropileno.",
+      "revised": "Banco con estructura de 4 patas de acero cromado y asiento de polipropileno. Opción de recorte de altura. Colores ANT, BCO, NJA y ROJ sujetos a disponibilidad.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            347.665,
+            521.278,
+            382.801,
+            566.478
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 33
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cromo Negro Colores especiales Disponible Opción a recorte de altura. en versión tapizada. Banco H.80 en tecnopolímero reciclable. Base de 4 patas en tubular de acero cromado o pintado.",
+      "revised": "Banco H.80 de tecnopolímero reciclable, con base de 4 patas de acero tubular cromado o pintado. Opción de recorte de altura y versión tapizada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            348.601,
+            48.29,
+            384.545,
+            93.49
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 38
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Blanco Mesa para exterior estructura de 4 patas elaborada en acero recubierto con tecnopolímero y cubierta en resina fenólica. y externo Cubiertas hasta:",
+      "revised": "Mesa para exterior con estructura de 4 patas de acero recubierto de tecnopolímero y cubierta de resina fenólica.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            348.154,
+            212.217,
+            384.914,
+            257.417
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 44
+        }
+      ],
+      "pending": [
+        "medida_maxima_de_cubierta_ausente_en_fuente"
+      ]
+    },
+    {
+      "supplier": "labenze",
+      "original": "Blanco Altura H.74 con Antracita cubierta de D-70. Altura H.50 con cubierta de D-60. Altura H.110 con Base elaborada en aluminio de 4 puntas con regatones, columna cuadrada con filos redondeados. y externo",
+      "revised": "Base de 4 puntas de aluminio con regatones y columna cuadrada con bordes redondeados. Versiones publicadas: H.74 con cubierta D-70, H.50 con cubierta D-60 y H.110.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            340.777,
+            542.992,
+            396.161,
+            588.192
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 45
+        }
+      ],
+      "pending": [
+        "diametro_de_cubierta_h110_ausente_en_fuente"
+      ]
+    },
+    {
+      "supplier": "labenze",
+      "original": "Cubierta y base Todas las mesas circulares H74 de 3 puntas están pintadas al mismo sujetas a disponibilidad. tono. Todos los modelos en colores BCO y AZL están sujetos a disponibilidad. Mesa con cubierta en acero versión cudrada y circular. Base y columna de aluminio de 3 puntas, versión alturas H.50 / H.74 / H.1.10. y externo",
+      "revised": "Mesa con cubierta de acero, disponible en formato cuadrado o circular. Base de 3 puntas y columna de aluminio. Versiones de altura: H.50, H.74 y H.1.10. Cubierta y base pintadas al mismo tono. Las mesas circulares H74 de 3 puntas y los colores BCO y AZL están sujetos a disponibilidad.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            346.252,
+            207.136,
+            384.844,
+            252.336
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 43
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "Blanco Cubiertas: Negro Cuadrada hasta Dovegray 0.80 mts. y circular 1.00 mts. Base cuadrada con esquinas redondeadas. Columna redonda 50 mm. Soportes de fijación superior de hierro fundido. H.0.73 mts. y externo",
+      "revised": "Base cuadrada con esquinas redondeadas, columna redonda de 50 mm y soportes superiores de hierro fundido. Altura H.0.73 m. Admite cubiertas cuadradas de hasta 0.80 m y circulares de hasta 1.00 m.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            345.551,
+            208.441,
+            402.023,
+            253.641
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 46
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "CROSS BASE Blanco Antracita Dovegray Base H.73 en forma de cruz de hierro fundido con recubirmiento de color. Columna cuadrada de acero cincado y revestido de color. Soportes de hierro fundido para la fijación al tablero de la mesa. y externo Negro",
+      "revised": "Base H.73 en forma de cruz de hierro fundido con recubrimiento de color. Columna cuadrada de acero cincado con acabado de color y soportes de hierro fundido para fijar la cubierta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            344.646,
+            361.07,
+            382.982,
+            406.27
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 44
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "labenze",
+      "original": "El modelo en colores ALU, VTP y OLP están sujetos a disponibilidad. colores ALU está sujeto a disponibilidad. Cubierta para mesa circular. Acabados Materiales Aglomerado hidrófugo con borde en polipropileno, superficies decorativas en resina melamínica. D: 70 y 85 cm. y externo",
+      "revised": "Cubierta circular para mesa, de aglomerado hidrófugo con borde de polipropileno y superficie decorativa de resina melamínica. Diámetros de 70 y 85 cm. Colores ALU, VTP y OLP sujetos a disponibilidad.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            350.172,
+            533.31,
+            384.42,
+            578.51
+          ],
+          "file_id": "c4fc2d2152b5e854f7c36c9106c71cd21853abb50efcde96ba2566cb72f1d6f3",
+          "sheet_or_page": 47
+        }
+      ],
+      "pending": []
+    },
+    {
+      "supplier": "idelika",
+      "original": "55*55*109 alto Acero con pintura electroestática , cuerda de multifilamento y tela Acero galvanizado con pintura electroestática cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 55*55*109 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "02d06ead7b18d6e43fb47a3a47211b5e22b681e03385d461db57b4432f96c2d4",
+          "page": 31,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "Madera Maciza Eucalipto 100*60*32 Sacaleta Love Madera Maciza Eucalipto 142*82*78",
+      "revised": "Mesa de madera maciza de eucalipto. Medidas: 100 × 60 × 32.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "0bb8df0dd9e614733dbe517e910735d4206d9bdb4b1fd5d9ab9b81e031e9b41b",
+          "page": 40,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "producto_vecino_excluido_de_descripcion"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "42*58*101 alto Acero con pintura electroestática cuerda de multifilamento y tela Acero galvanizado con pintura electroestática cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 42*58*101 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "0df43a7c0290d66e70cefef6ccf544bd59881c3268f47c02db546d59ddbed20c",
+          "page": 47,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "74*60*95 alto Acero con pintura electroestática , cuerda de multifilamento y tela Acero galvanizado con pintura electroestática cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 74*60*95 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "150087fe89ac87f525d74445d441a97e3b3586ab7d209f92d37b468fb3e29dee",
+          "page": 30,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "Acero con pintura electroestática , cuerda de multifilamento Acero galvanizado con pintura electroestática cuerda textilene",
+      "revised": "Estructura de acero con pintura electrostática y cuerda.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "1828f1f85672aecfb11e679337146429d9fa7c69f2d9091aa3515b2b40557bc4",
+          "page": 18,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "Acero con pintura electroestática cuerda de multifilamento Acero galvanizado y cuerda textilene Cojinería se vende por separado.",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. La cojinería se vende por separado.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "1b62d1006a40d10315c3c19ee1dcb57e4d6e89c7b1bd40ed6f4f6dec5f659da3",
+          "page": 15,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "90*78*81 alto Acero con pintura electroestática , cuerda de multifilamento y tela Acero galvanizado con pintura electroestática cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 90*78*81 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "210dc6776143c60a9f921d721252269fcf11229ae4a5d9c91f585a5a13f7955f",
+          "page": 31,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "190*82*95 alto Acero con pintura electroestática , cuerda de multifilamento y tela Acero galvanizado con pintura electroestática cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 190*82*95 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "251b016fc0215324393bf88684b47fdb9f87e81fd2f2a6e189624147bb625ae1",
+          "page": 30,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "Parota y cuerda 175*77*70 Majahuitas Holbox Cuadrado Ó Ovalado Parota natural Formas orgánicas Irregulares Medida aproximada 50*45",
+      "revised": "Camastro de parota y cuerda. Medidas: 175 × 77 × 70.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "43d9987eabd2ddb79343d37818189b03f925c39a5b93cfe9143cee07587b3484",
+          "page": 34,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "producto_vecino_excluido_de_descripcion"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "55*55*80 alto Acero con pintura electroestática cuerda de multifilamento y tela Acero galvanizado, cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 55*55*80 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "4a0952b0928e20f2b38d74c25e559a30ebe5fe40c195f27e43453a46de90f8c0",
+          "page": 31,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "46*66*81 alto Acero con pintura electroestática cuerda de multifilamento y tela Acero galvanizado cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 46*66*81 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "4ba77b55a0f345a157b1e4c6f5de8a10be9c4bceac644418b91b60ba34d2daad",
+          "page": 47,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "160*78*81 alto Acero con pintura electroestática , cuerda de multifilamento y tela Acero galvanizado con pintura electroestática cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 160*78*81 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "529e5739421555f2214292edec18aa09529e09e29c043c29cce10358a4817cda",
+          "page": 31,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "Acero con pintura Electroestática Y cuerda de Multifilamento de Polipropileno Uso exterior techado 90*79*94 No incluye cojinería (opción galvanizada 100% exterior) Variante Monte Alban Zapotlán Love 160*82*95 alto Acero con pintura electroestática , cuerda de multifilamento y tela Acero galvanizado con pintura electroestática cuerda textilene y loneta de exterior",
+      "revised": "Sillón de acero con pintura electrostática y cuerda de multifilamento de polipropileno, para exterior techado. Medidas: 90 × 79 × 94. No incluye cojinería. Se publica una opción galvanizada para exterior.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "9386dd57a679b2a6fab7619c000643690b3e4a4b886e4ff6b10d3d6c5b081686",
+          "page": 30,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "producto_vecino_excluido_de_descripcion",
+        "confirmar_variante_interior_exterior_al_cotizar"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "190*78*81 alto Acero con pintura electroestática , cuerda de multifilamento y tela Acero galvanizado con pintura electroestática cuerda textilene y loneta de exterior",
+      "revised": "Estructura de acero con pintura electrostática y cuerda. Medidas publicadas: 190*78*81 alto.",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "bfc1b6a1c44f1d73d0007232550e515cccdf79e79b13ff52ce30884ee9245a09",
+          "page": 31,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "variante_interior_exterior_sin_identidad_se_conservan_hechos_compartidos"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "diseño sin precedentes, exclusiva de flexibilidad, movilidad y almacenaje. Uso: Primaria superior hasta universitarios Materiales: Polipropileno, fibra de vidrio, laminado plástico y acero. Mecanismo: Pistón con altura regulable, porta paleta tubular giratorio y portavasos Medidas: 97*65*97 Humanity 360 grados diseño de nueva generación Uso: Primaria superior hasta universitarios Materiales: Polipropileno, fibra de vidrio, laminado plástico tela y acero. Mecanismo: Pistón con altura regulable, porta paleta tubular giratorio y portavasos Medidas: 97*65*97 Producto exclusivo de importación mínimo 200 piezas Producto en stock",
+      "revised": "Pupitre con pistón de altura regulable, portapaleta tubular giratorio y portavasos. Materiales: polipropileno, fibra de vidrio, laminado plástico y acero. Uso desde primaria superior hasta universidad. Medidas: 97 × 65 × 97. Pedido mínimo y disponibilidad por confirmar.",
+      "source_reference": [
+        {
+          "file": "4 SCHOOL SERIES 2026.pdf",
+          "identity_hash": "23b62f015dafe2a95b048b78f86fcc62b469d5098289337a104bc580fd432caf",
+          "page": 2,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YTQLPUZXRUN5E3J62UE2JQUWNC"
+        }
+      ],
+      "pending": [
+        "producto_vecino_excluido_de_descripcion",
+        "confirmar_pedido_minimo_y_disponibilidad_antes_de_cotizar"
+      ]
+    },
+    {
+      "supplier": "requiez",
+      "original": "autopesante con 3 posiciones de bloqueo. Elevación neumática. 4 posiciones de bloqueo y 4 niveles de tensión del reclinamiento. Elevación neumática. MECANISMO",
+      "revised": "Elevación neumática.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            443.433,
+            280.245,
+            492.843,
+            295.245
+          ],
+          "file_id": "7f3281d1965c67a234bac55112800067019ad471f835de59ff758e759eca56ba",
+          "sheet_or_page": 22
+        }
+      ],
+      "pending": [
+        "mecanismo_y_numero_de_bloqueos_contradictorios_omitidos_hasta_verificar"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Juego de escuadra para faldón interior o bajo cubierta, fabricado en acero acabado en",
+      "revised": "Juego de escuadras de acero para faldón interior o instalación bajo cubierta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E506",
+          "file_id": "43df36c4b4f2761373e718e45fda647c783bad8c2242b4d9181cf3f0023c0ea8",
+          "sheet_or_page": "COSTO ESTRUCTURAS 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Esquinero conector 180° para área de trabajo, cubierta fabricada en",
+      "revised": "Esquinero conector de 180° para área de trabajo.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E756",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Credenza baja complementaria para estructura 1 entrepaño móvil estructura laminado plástico de",
+      "revised": "Credenza baja complementaria para estructura, con 1 entrepaño móvil y estructura de laminado plástico.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E204",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Cubierta para mesa de consejo de laminado plástico de 28 mm con",
+      "revised": "Cubierta para mesa de consejo de laminado plástico de 28 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E1082",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Cubierta recta para lateral de laminado plástico de 28 mm con cantos de",
+      "revised": "Cubierta recta para lateral de laminado plástico de 28 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E928",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Cubierta recta para mesa de juntas de laminado plástico de 28 mm con",
+      "revised": "Cubierta recta para mesa de juntas de laminado plástico de 28 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E993",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Cubierta para mesa ajustable en escuadra en laminado plástico de 28 mm con",
+      "revised": "Cubierta para mesa ajustable en escuadra, de laminado plástico de 28 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E1236",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "plástico de 28 mm, caras frontales y entrepaños de 16 mm y cantos de",
+      "revised": "Caras frontales y entrepaños de 16 mm.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E869",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Mesa credenza, fabricada en base y cubierta en laminado plástico de",
+      "revised": "Mesa tipo credenza con base y cubierta de laminado plástico.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E849",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "28 mm faldón de 16 mm, cantos de pvc termoadheridos, sistema de",
+      "revised": "Faldón de 16 mm y cantos de PVC termoadheridos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E850",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Librero, 2 entrepaños abiertos para carpeta tipo lefort y",
+      "revised": "Librero con 2 entrepaños abiertos para carpetas tipo Lefort.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E441",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "faldón de 16 mm al ras, cantos de pvc termoadheridos, sistema de",
+      "revised": "Faldón de 16 mm al ras y cantos de PVC termoadheridos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E728",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Mesa central para sala de espera, cubierta recta fabricada en",
+      "revised": "Mesa central para sala de espera con cubierta recta.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E690",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Mesa central para sala de espera, cubierta redondeada fabricada en",
+      "revised": "Mesa central para sala de espera con cubierta redondeada.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E697",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Mesa Stool de juntas alta para 6 personas, base y cubierta fabricadas de",
+      "revised": "Mesa alta de juntas Stool para 6 personas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E555",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Mesa de juntas alta para 6 personas, base y cubierta fabricadas de",
+      "revised": "Mesa alta de juntas para 6 personas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E545",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Mesa de juntas alta para 8 personas, base y cubierta fabricadas de",
+      "revised": "Mesa alta de juntas para 8 personas.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E550",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Libero para recepción recta, 3 entrepaños fijos para lefort, estructura fabricada en",
+      "revised": "Librero para recepción recta con 3 entrepaños fijos para carpetas tipo Lefort.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E626",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "jome",
+      "original": "Recepción recta, base y 2 cubiertas fabricadas de laminado plástico de",
+      "revised": "Recepción recta con base y 2 cubiertas de laminado plástico.",
+      "source_reference": [
+        {
+          "cell_or_bbox": "E613",
+          "file_id": "4ca3edf32f8b44d0619c65299966905f5bd880bb12f7d3b8345941fd725a0e44",
+          "sheet_or_page": "COSTO LAMINADO 2026"
+        }
+      ],
+      "pending": [
+        "texto_fuente_truncado_se_omiten_clausulas_incompletas"
+      ]
+    },
+    {
+      "supplier": "idelika",
+      "original": "Precios disponibles en",
+      "revised": "",
+      "source_reference": [
+        {
+          "file": "1 CATALOGO FABRICACION 2026B.pdf",
+          "identity_hash": "2cc10bffbaa7c2ff5a61fd0062743676c3bd03dadaafd8d09a9d3efa7df85993",
+          "page": 51,
+          "url": "https://graph.microsoft.com/v1.0/me/drive/items/01DHXXN7YJMCJUVPBWNJEJPJIH7B4OTAUR"
+        }
+      ],
+      "pending": [
+        "fuente_sin_descripcion_tecnica"
+      ]
+    },
+    {
+      "supplier": "requiez",
+      "original": "Banco con Asiento de Polipropileno, Base 4 puntos de",
+      "revised": "Banco con asiento de polipropileno y base de 4 puntos.",
+      "source_reference": [
+        {
+          "cell_or_bbox": [
+            443.433,
+            188.476,
+            493.892,
+            203.476
+          ],
+          "file_id": "7f3281d1965c67a234bac55112800067019ad471f835de59ff758e759eca56ba",
+          "sheet_or_page": 99
+        }
+      ],
+      "pending": [
+        "material_de_base_ausente_en_fuente"
+      ]
+    }
+  ]
+}
