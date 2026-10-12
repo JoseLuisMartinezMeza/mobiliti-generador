@@ -39,13 +39,16 @@ Ocho pruebas fallaban también en `4ef5eaca` (la rama publicada), sin relación 
 - Rama `codex/importar-quotations-llm-20261012`, creada sobre `4ef5eaca`. Commits `6122b56f` (cambio) y `82e74d56` (ruta `/proveedores-oficiales` en `vercel.json`, detectada al probar el despliegue preparado).
 - **Worker Hetzner:** `CURRENT` e imagen activos en `6122b56f9a892b9e0536e0ab47a941115aa7a6bd`; sano, sin reinicios, `isolated_jobs=true`. Respaldo conservado: `mobiliti-worker-backup-20261012064653-be14accc6eea` (imagen `3f198b1d`). El servidor no tiene credenciales de GitHub: el commit se entregó como bundle de git en `/opt/mobiliti-worker/releases/` y el despliegue lo leyó con una reescritura de URL limitada a ese comando.
 - **Vercel:** `dpl_CDRhcsXxKaAVVf1NH4czcSgRZAyr`, preparado sin dominio, probado por su URL protegida y promovido a `web-lemon-one-45.vercel.app`. Función Python de 208.95 MB (antes 111.14 MB). Despliegue anterior: `dpl_FMZTb1M6Cwy4QcQjpHb4oGXRHUXL`.
-- El respaldo con Claude queda **apagado en producción**: ninguno de los dos entornos tiene `ANTHROPIC_API_KEY` ni `QUOTE_LLM_FALLBACK_MODEL`.
+- **Respaldo con Claude activado** el mismo día, con autorización del usuario: `ANTHROPIC_API_KEY` y `QUOTE_LLM_FALLBACK_MODEL=haiku` en Vercel Production y en `/etc/mobiliti-worker/worker.env`. La clave se copió desde el archivo que indicó el usuario, sin mostrarla ni guardarla en el repositorio. Copia previa de la configuración del worker: `worker.env.bak-20261012-antes-llm`.
+- Para que tomaran las variables: Vercel `dpl_9Bpp27BY595TvFgjv1vZxyZTd7Y4` (mismo commit `82e74d56`), promovido al dominio; el worker se recreó con la misma imagen después de terminar un trabajo real que estaba en curso.
 
 ## Verificación en producción
 
 - Dominio productivo: `/health` correcto, `/proveedores-oficiales` responde desde la API (401 sin sesión) y el JavaScript publicado contiene la pestaña y el menú nuevos.
 - Imagen productiva del worker, en un contenedor desechable del servidor: generó una cotización de 13 partidas; las 13 usan el descuento por partida y las 13 la fórmula nueva de margen. Recalculada en Excel: con 40 % solicitado la carátula muestra 40 % y el mismo precio final que `Mobiliti`; con 60 % (tope de Sunon Inc: 50 %) `Mobiliti` marca `ERROR` y la carátula muestra 50 %. Archivo: `output/respaldo-llm-20261011/v6-Cotizacion_imagen_produccion.xlsx`.
-- Pendiente: recorrido por la interfaz con sesión iniciada y activación del respaldo con Claude.
+- Respaldo con Claude en el servidor productivo: el worker reporta modelo `haiku` y la clave autentica contra la API. Un contenedor desechable con la imagen productiva convirtió un PDF real de proveedor: 13 productos, 13 fotos, 5,393 tokens de entrada y 2,942 de salida, USD 0.00201; la salida se lee como `Quotation` estándar. Tres advertencias esperadas (dos notas fuera de la tabla y un producto sin precio).
+- Un trabajo real de Proyecto (`cd7a08d4`) se procesó y completó en el worker nuevo antes del reinicio.
+- Pendiente: recorrido por la interfaz con sesión iniciada, incluida la conversión con Claude desde la API en Vercel, que requiere sesión y no se pudo ejercer.
 
 ## Observaciones fuera de este cambio
 
