@@ -65,6 +65,10 @@
       "destination": "/api/index"
     },
     {
+      "source": "/proveedores-oficiales",
+      "destination": "/api/index"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

@@ -186,6 +186,22 @@ def test_vercel_routes_project_workspace_requests_to_fastapi_before_spa():
     )
 
 
+def test_vercel_routes_official_providers_to_fastapi_before_spa():
+    """Sin esta ruta el menú de proveedores recibe index.html y cae al texto libre."""
+
+    config = json.loads(
+        Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
+    )
+    route_pairs = [
+        (rewrite["source"], rewrite["destination"])
+        for rewrite in config["rewrites"]
+    ]
+
+    assert route_pairs.index(("/proveedores-oficiales", "/api/index")) < route_pairs.index(
+        ("/(.*)", "/index.html")
+    )
+
+
 def test_vercel_keeps_static_catalog_assets_out_of_python_function_bundle():
     config = json.loads(
         Path("mobiliti_saas/web/vercel.json").read_text(encoding="utf-8")
