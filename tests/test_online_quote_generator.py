@@ -1,4 +1,5 @@
 ﻿import os
+from formulas_cotizacion import descuento_de_partida
 import sys
 from pathlib import Path
 
@@ -102,7 +103,7 @@ def test_generate_online_quote_creates_valid_xlsx(tmp_path):
     assert ws["D17"].value == "=Quotation!F9"
     assert ws["E17"].value == "=Mobiliti!H15"
     assert ws["F17"].value == "=Mobiliti!AA15"
-    assert ws["G17"].value == "=ROUND(Mobiliti!$AD$14,2)"
+    assert ws["G17"].value == descuento_de_partida(ws["F17"].value, 17)
     assert ws["H17"].value == "=F17*G17"
     assert ws["I17"].value == "=F17-H17"
     assert ws["J17"].value == "=E17*I17"

@@ -262,6 +262,7 @@ KNOWN_API_REQUESTS = frozenset({
     ("POST", f"/projects/{PROJECT_ID}/quote"),
     ("POST", f"/projects/{PROJECT_ID}/imports/{IMPORT_JOB_ID}"),
     ("GET", "/catalogs/search"),
+    ("GET", "/proveedores-oficiales"),
 })
 
 
@@ -822,6 +823,10 @@ class ApiStub:
                 return
             if request.method == "GET" and path == "/cotizaciones":
                 fulfill_json(route, {"cotizaciones": []})
+                return
+            if request.method == "GET" and path == "/proveedores-oficiales":
+                # Lista vacia: el proveedor sigue como texto libre, que es lo que estos escenarios cubren.
+                fulfill_json(route, {"providers": [], "aliases": {}})
                 return
             if request.method == "GET" and path == "/cotizaciones/job-mixed-1":
                 fulfill_json(route, {"job": {**SUCCESS_JOB["job"], "status": "completed"}})

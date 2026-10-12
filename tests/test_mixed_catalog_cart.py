@@ -27,6 +27,7 @@ from quotation_import_fixtures import write_import_fixture
 
 MIXED_CART_MODULE = Path("mobiliti_saas/web/src/mixedCart.js")
 MIXED_CART_EXPORTS = (
+    "appendImportedCartBundle",
     "createImportedCartBundle",
     "replaceImportedCartBundle",
     "toMixedQuoteItem",
@@ -697,6 +698,128 @@ def test_first_import_appends_after_the_initial_section_when_catalog_lines_exist
     assert [section["concept"] for section in result["sections"]] == [
         "Recepcion", "Sala de juntas", "Muestras", "Consejo",
     ]
+
+
+def _preview_combinado(import_id, filas_nuevas, titulo="Proveedor local"):
+    """Vista previa de la fuente del Proyecto con otra Quotation anexada al final."""
+    preview = imported_preview(import_id)
+    nuevos = [
+        {
+            "key": f"import:{import_id}:{row}",
+            "source_row": row,
+            "name": f"Local {row}",
+            "description": f"Descripcion local {row}",
+            "dimension": "1.20x .60x .75",
+            "quantity": "2",
+            "unit_price": "3790",
+            "image_url": f"https://storage.invalid/preview/{row}.png",
+            "image_asset_key": f"projects/7/p/images/abc-row-{row}.png",
+            "source_asset_key": "projects/7/p/sources/abc.xlsx",
+        }
+        for row in filas_nuevas
+    ]
+    for item in preview["items"]:
+        item["image_asset_key"] = f"projects/7/p/images/abc-row-{item['source_row']}.png"
+        item["source_asset_key"] = "projects/7/p/sources/abc.xlsx"
+    preview["items"] += nuevos
+    preview["sections"].append(
+        {"id": "import-section-4", "title": titulo, "item_keys": [item["key"] for item in nuevos]}
+    )
+    return preview
+
+
+def test_anexar_otra_quotation_conserva_las_lineas_y_agrega_solo_las_filas_nuevas():
+    nuevo_id = "0e061c8a-0085-446f-a4d3-b4d4b43f0f2a"
+    previas = run_mixed_cart_js(
+        "createImportedCartBundle", imported_preview(), "USD", "Sunon", [{"id": "section-1", "concept": "Recepcion"}]
+    )
+    existentes = [line for line in previas["lines"] if line["sourceRow"] != 10]  # el usuario quito la fila 10
+    existentes[0]["quantity"] = "5"
+    existentes[0]["edits"]["name"] = "Nombre editado"
+    catalogo = {"key": "tarkett:25731726", "catalog": "tarkett", "sectionId": previas["sections"][0]["id"]}
+    bundle = run_mixed_cart_js(
+        "createImportedCartBundle",
+        _preview_combinado(nuevo_id, [17, 18]),
+        "MXN",
+        "Proveedor local",
+        previas["sections"],
+    )
+
+    result = run_mixed_cart_js(
+        "appendImportedCartBundle", [catalogo, *existentes], previas["sections"], bundle, [17, 18]
+    )
+
+    assert result["lines"][0] == catalogo
+    conservadas = result["lines"][1:7]
+    assert [line["sourceRow"] for line in conservadas] == [9, 11, 12, 13, 14, 15]  # la 10 no revive
+    for antes, despues in zip(existentes, conservadas):
+        assert despues["lineId"] == antes["lineId"] and despues["sectionId"] == antes["sectionId"]
+        assert despues["edits"] == antes["edits"] and despues["quantity"] == antes["quantity"]
+        assert despues["sourceCurrency"] == "USD"
+        # Revinculadas a la fuente combinada: un Proyecto solo admite una Quotation de origen.
+        assert despues["importId"] == nuevo_id
+        assert despues["key"] == f"import:{nuevo_id}:{antes['sourceRow']}"
+        assert despues["sourceAssetKey"] == "projects/7/p/sources/abc.xlsx"
+        assert despues["imageAssetKey"] == f"projects/7/p/images/abc-row-{antes['sourceRow']}.png"
+    assert conservadas[0]["quantity"] == "5" and conservadas[0]["edits"]["name"] == "Nombre editado"
+    nuevas = result["lines"][7:]
+    assert [(line["sourceRow"], line["sourceCurrency"], line["edits"]["provider"]) for line in nuevas] == [
+        (17, "MXN", "Proveedor local"),
+        (18, "MXN", "Proveedor local"),
+    ]
+    assert result["sections"] == [*previas["sections"], {"id": "section-4", "concept": "Proveedor local"}]
+    assert {line["sectionId"] for line in nuevas} == {"section-4"}
+
+
+def test_anexar_a_un_proyecto_de_una_sola_seccion_no_reusa_su_identificador():
+    nuevo_id = "0e061c8a-0085-446f-a4d3-b4d4b43f0f2a"
+    preview = imported_preview()
+    preview["sections"] = [
+        {"id": "import-section-1", "title": "Productos", "item_keys": [item["key"] for item in preview["items"]]}
+    ]
+    secciones = [{"id": "section-1", "concept": "Productos"}]
+    previas = run_mixed_cart_js("createImportedCartBundle", preview, "MXN", "Local", secciones)
+    combinado = _preview_combinado(nuevo_id, [17], titulo="Fabrica")
+    combinado["sections"] = [
+        {"id": "import-section-1", "title": "Productos", "item_keys": [item["key"] for item in combinado["items"][:7]]},
+        {"id": "import-section-2", "title": "Fabrica", "item_keys": [combinado["items"][7]["key"]]},
+    ]
+    bundle = run_mixed_cart_js("createImportedCartBundle", combinado, "USD", "Sunon", previas["sections"])
+
+    result = run_mixed_cart_js("appendImportedCartBundle", previas["lines"], previas["sections"], bundle, [17])
+
+    assert result["sections"] == [{"id": "section-1", "concept": "Productos"}, {"id": "section-2", "concept": "Fabrica"}]
+    assert [line["sectionId"] for line in result["lines"]] == ["section-1"] * 7 + ["section-2"]
+
+
+def test_anexar_a_un_proyecto_vacio_equivale_a_la_primera_importacion():
+    bundle = run_mixed_cart_js("createImportedCartBundle", imported_preview(), "USD", "Sunon", [])
+    filas = [line["sourceRow"] for line in bundle["lines"]]
+
+    result = run_mixed_cart_js("appendImportedCartBundle", [], [], bundle, filas)
+
+    # Sin la seccion inicial vacia por delante, igual que al importar desde "Nueva".
+    assert result == run_mixed_cart_js("replaceImportedCartBundle", [], [], bundle)
+
+
+def test_anexar_rechaza_una_fuente_que_no_trae_un_producto_del_proyecto():
+    previas = run_mixed_cart_js(
+        "createImportedCartBundle", imported_preview(), "USD", "Sunon", [{"id": "section-1", "concept": "Recepcion"}]
+    )
+    otro = imported_preview("0e061c8a-0085-446f-a4d3-b4d4b43f0f2a")
+    otro["items"] = otro["items"][1:]  # falta la fila 9 que el Proyecto usa
+    otro["sections"][0]["item_keys"] = otro["sections"][0]["item_keys"][1:]
+    bundle = run_mixed_cart_js("createImportedCartBundle", otro, "USD", "Sunon", previas["sections"])
+    module_url = MIXED_CART_MODULE.resolve().as_uri()
+
+    result = _run_mixed_cart_script(
+        f'import {{ appendImportedCartBundle }} from {json.dumps(module_url)};\n'
+        f"try {{ appendImportedCartBundle({json.dumps(previas['lines'])}, {json.dumps(previas['sections'])}, "
+        f"{json.dumps(bundle)}, []); console.log(JSON.stringify('aceptado')); }}\n"
+        "catch (error) { console.log(JSON.stringify(error.message)); }"
+    )
+
+    assert result != "aceptado"
 
 
 def _supplier_item(catalog, *, internal_id, price="100.000000", stock="5.000000", availability="stocked"):

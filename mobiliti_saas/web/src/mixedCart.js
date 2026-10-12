@@ -1066,6 +1066,52 @@ export function replaceImportedCartBundle(lines, sections, bundle) {
   return { lines: finalLines, sections: resultSections };
 }
 
+// Un Proyecto admite una sola Quotation de origen: al anexar otra, el servidor entrega una fuente
+// combinada y las lineas importadas existentes se revinculan a ella por numero de fila.
+export function appendImportedCartBundle(lines, sections, bundle, addedRows) {
+  if (!Array.isArray(lines) || !bundle || typeof bundle !== "object" || Array.isArray(bundle)
+      || !Array.isArray(bundle.lines) || !Array.isArray(bundle.sections) || !Array.isArray(addedRows)
+      || addedRows.some((row) => typeOfInteger(row) === false || row <= 0)) {
+    throw new Error("Bundle importado invalido");
+  }
+  // Proyecto sin productos: es la primera importacion y no deja la seccion inicial vacia.
+  if (!lines.length) return replaceImportedCartBundle(lines, sections, bundle);
+  const currentSections = importedCurrentSections(sections);
+  const added = new Set(addedRows);
+  const incoming = bundle.lines.map(copyImportedCartLine);
+  const incomingByRow = new Map(incoming.map((line) => [line.sourceRow, line]));
+  const kept = lines.map((line) => {
+    if (line?.kind !== "imported") return line;
+    const twin = incomingByRow.get(line.sourceRow);
+    if (!twin || added.has(line.sourceRow)) {
+      throw new Error("La Quotation combinada no contiene un producto importado del Proyecto");
+    }
+    return {
+      ...line,
+      key: line.key === importedKey(line.importId, line.sourceRow) ? twin.key : line.key,
+      importId: twin.importId,
+      sourceAssetKey: twin.sourceAssetKey,
+      imageAssetKey: twin.imageAssetKey || line.imageAssetKey,
+    };
+  });
+  const fresh = incoming.filter((line) => added.has(line.sourceRow));
+  const highestId = currentSections.reduce((highest, section) => (
+    Math.max(highest, Number(SECTION_ID_PATTERN.exec(section.id)?.[1] || 0))
+  ), 0);
+  const conceptById = new Map(validatedSections(bundle.sections).map((section) => [section.id, section.concept]));
+  const sectionIds = new Map();
+  for (const line of fresh) {
+    if (!sectionIds.has(line.sectionId)) sectionIds.set(line.sectionId, `section-${highestId + sectionIds.size + 1}`);
+  }
+  return {
+    lines: [...kept, ...fresh.map((line) => ({...line, sectionId: sectionIds.get(line.sectionId)}))],
+    sections: [
+      ...currentSections,
+      ...[...sectionIds].map(([sourceId, id]) => ({id, concept: conceptById.get(sourceId)})),
+    ],
+  };
+}
+
 export function createProjectLineId() {
   return globalThis.crypto.randomUUID();
 }

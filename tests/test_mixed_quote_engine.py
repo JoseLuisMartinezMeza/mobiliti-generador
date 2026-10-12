@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from formulas_cotizacion import descuento_de_partida
 from copy import deepcopy
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -463,7 +464,7 @@ def test_mixed_engine_converts_once_and_references_one_general_discount(
             assert wb["Quotation"].cell(source_row, 11).value == expected_price
         assert mobiliti["AD14"].value == 0.4
         for row in (tarkett_cot, alma_cot, imported_cot):
-            assert cot.cell(row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+            assert cot.cell(row, 7).value == descuento_de_partida(cot.cell(row, 6).value, row)
         for row in (tarkett_mob, alma_mob, imported_mob):
             # V11/V12 limitan el descuento al máximo de la partida.
             assert mobiliti[f"AD{row}"].value == f"=MIN($E$5,AL{row})"
@@ -1089,8 +1090,8 @@ def test_mixed_discount_precision_and_half_up_price_boundaries_reach_both_sheets
         for source_row in (9, 10):
             cot_row = _row_for_formula(cot, 1, f"=Quotation!B{source_row}")
             mobiliti_row = _row_for_formula(mobiliti, 4, f"=Quotation!B{source_row}")
-            # El usuario confirmó conservar ROUND de la plantilla oficial.
-            assert cot.cell(cot_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+            # El usuario confirmó conservar ROUND de la plantilla oficial; ahora redondea el descuento de la partida.
+            assert cot.cell(cot_row, 7).value == descuento_de_partida(cot.cell(cot_row, 6).value, cot_row)
             assert mobiliti.cell(mobiliti_row, 10).value == (
                 f"=Quotation!K{source_row}"
             )

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 from PIL import Image, PngImagePlugin
 from quotation_import_fixtures import write_import_fixture
 
@@ -396,6 +397,176 @@ def test_import_preview_is_repeatable_without_reuploading_the_source(monkeypatch
     assert first.json()["source_hash"] == second.json()["source_hash"]
     assert downloads == [state["job"]["input_path"], state["job"]["input_path"]]
     assert all("/input.xlsx" not in path for path, _content, _type in state["uploads"])
+
+
+def _respaldo_llm_falso(monkeypatch, tmp_path, llamadas):
+    (tmp_path / "convertida").mkdir()
+    convertida = write_import_fixture(tmp_path / "convertida" / "quotation.xlsx").read_bytes()
+    uso = {"modelo": "claude-haiku-5-5", "costo_usd": 0.0018, "advertencias": []}
+
+    def convertir(source_bytes, extension, nombre):
+        llamadas.append((source_bytes, extension, nombre))
+        return convertida, uso
+
+    monkeypatch.setattr(index, "QUOTE_LLM_FALLBACK_MODEL", "haiku")
+    monkeypatch.setattr(index, "_convertir_fuente_con_llm", convertir)
+    return convertida, uso
+
+
+def test_import_preview_convierte_un_pdf_con_el_respaldo_llm(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    state["job"]["input_path"] = f"users/7/jobs/{job_id}/input.pdf"
+    state["job"]["metadata"] = {"original_filename": "gaby  sunon   oct.pdf", "file_size": 9, "input_extension": ".pdf"}
+    monkeypatch.setattr(index, "_storage_download_bytes", lambda path: b"%PDF-fake")
+    llamadas = []
+    convertida, uso = _respaldo_llm_falso(monkeypatch, tmp_path, llamadas)
+
+    response = client.post(f"/cotizaciones/{job_id}/import-preview", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 7
+    assert body["original_filename"] == "gaby  sunon   oct.xlsx"
+    assert body["source_hash"] == hashlib.sha256(convertida).hexdigest()
+    assert llamadas == [(b"%PDF-fake", ".pdf", "gaby  sunon   oct.pdf")]
+    # El borrador queda apuntando a la Quotation convertida, como si se hubiera subido un .xlsx.
+    assert state["job"]["input_path"] == f"users/7/jobs/{job_id}/input.xlsx"
+    assert (state["job"]["input_path"], convertida) in [(path, content) for path, content, _type in state["uploads"]]
+    metadata = state["job"]["metadata"]
+    assert metadata["original_filename"] == "gaby  sunon   oct.xlsx"
+    assert metadata["file_size"] == len(convertida)
+    assert metadata["input_extension"] == ".xlsx"
+    assert metadata["llm_fallback"] == uso
+    assert metadata["import_item_count"] == 7
+
+
+def test_import_preview_convierte_un_excel_sin_hoja_quotation(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    libro = Workbook()
+    libro.active.title = "Hoja1"
+    libro.active.append(["Silla", 4, 1250.5])
+    sin_quotation = BytesIO()
+    libro.save(sin_quotation)
+    monkeypatch.setattr(index, "_storage_download_bytes", lambda path: sin_quotation.getvalue())
+    llamadas = []
+    _respaldo_llm_falso(monkeypatch, tmp_path, llamadas)
+
+    response = client.post(f"/cotizaciones/{job_id}/import-preview", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    assert [extension for _bytes, extension, _nombre in llamadas] == [".xlsx"]
+    assert state["job"]["metadata"]["llm_fallback"]["modelo"] == "claude-haiku-5-5"
+
+
+def test_import_preview_no_llama_al_modelo_para_una_quotation_estandar(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    llamadas = []
+    _respaldo_llm_falso(monkeypatch, tmp_path, llamadas)
+
+    response = client.post(f"/cotizaciones/{job_id}/import-preview", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    assert llamadas == []
+    assert "llm_fallback" not in state["job"]["metadata"]
+
+
+def test_import_preview_sin_bandera_sigue_rechazando_pdf(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    state["job"]["input_path"] = f"users/7/jobs/{job_id}/input.pdf"
+    monkeypatch.setattr(index, "QUOTE_LLM_FALLBACK_MODEL", "")
+    monkeypatch.setattr(
+        index, "_convertir_fuente_con_llm", lambda *_args: pytest.fail("no debe llamar al modelo")
+    )
+
+    response = client.post(f"/cotizaciones/{job_id}/import-preview", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 409
+    assert state["job"]["input_path"].endswith("input.pdf")
+
+
+PROYECTO_DESTINO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def _proyecto_destino(monkeypatch, tmp_path, state, *, con_fuente=True, status="active"):
+    """Proyecto al que se anexa; el storage falso devuelve lo ultimo que se subio a cada ruta."""
+    (tmp_path / "base").mkdir()
+    base = write_import_fixture(tmp_path / "base" / "base.xlsx").read_bytes()
+    monkeypatch.setattr(
+        index,
+        "_project_for_current_user",
+        lambda project_id, usuario_id: {"id": project_id, "status": status, "payload": {"lines": []}},
+    )
+    monkeypatch.setattr(index, "_project_import_source_bytes", lambda payload: base if con_fuente else None)
+    descarga_original = index._storage_download_bytes
+
+    def descargar(path):
+        subidos = [content for subido, content, _type in state["uploads"] if subido == path]
+        return subidos[-1] if subidos else descarga_original(path)
+
+    monkeypatch.setattr(index, "_storage_download_bytes", descargar)
+    return base
+
+
+def test_import_preview_anexa_la_quotation_a_la_fuente_del_proyecto(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    _proyecto_destino(monkeypatch, tmp_path, state)
+    url = f"/cotizaciones/{job_id}/import-preview?append_to_project={PROYECTO_DESTINO}"
+
+    response = client.post(url, headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 14
+    nuevas = [item["source_row"] for item in body["items"][7:]]
+    assert body["added_rows"] == nuevas and nuevas[0] == 19
+    # Las filas de la fuente del Proyecto no se mueven: sus lineas se revinculan por numero de fila.
+    assert [item["source_row"] for item in body["items"][:7]] == [9, 11, 12, 13, 14, 15, 17]
+    combinada = next(content for path, content, _type in state["uploads"] if path == state["job"]["input_path"])
+    assert body["source_hash"] == hashlib.sha256(combinada).hexdigest()
+    assert state["job"]["metadata"]["file_size"] == len(combinada)
+    assert state["job"]["metadata"]["import_append"] == {"project_id": PROYECTO_DESTINO, "added_rows": nuevas}
+
+    repetida = client.post(url, headers={"Authorization": f"Bearer {token}"})
+
+    assert repetida.status_code == 200
+    assert len(repetida.json()["items"]) == 14  # no se vuelve a anexar sobre lo ya combinado
+    assert repetida.json()["added_rows"] == nuevas
+
+
+def test_import_preview_para_un_proyecto_sin_fuente_importa_todo_como_nuevo(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    _proyecto_destino(monkeypatch, tmp_path, state, con_fuente=False)
+
+    response = client.post(
+        f"/cotizaciones/{job_id}/import-preview?append_to_project={PROYECTO_DESTINO}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["added_rows"] == [item["source_row"] for item in body["items"]] and len(body["items"]) == 7
+    assert all("/input.xlsx" not in path for path, _content, _type in state["uploads"])
+
+
+def test_import_preview_no_anexa_a_un_proyecto_archivado(monkeypatch, tmp_path):
+    client, token, job_id, state = uploaded_draft_quote(monkeypatch, tmp_path)
+    _proyecto_destino(monkeypatch, tmp_path, state, status="archived")
+
+    response = client.post(
+        f"/cotizaciones/{job_id}/import-preview?append_to_project={PROYECTO_DESTINO}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 409
+    assert state["uploads"] == []
+
+
+def test_import_preview_sin_proyecto_no_incluye_filas_agregadas(monkeypatch, tmp_path):
+    client, token, job_id, _state = uploaded_draft_quote(monkeypatch, tmp_path)
+
+    response = client.post(f"/cotizaciones/{job_id}/import-preview", headers={"Authorization": f"Bearer {token}"})
+
+    assert "added_rows" not in response.json()
 
 
 def test_import_preview_does_not_persist_metadata_when_draft_cas_loses_race(monkeypatch, tmp_path):

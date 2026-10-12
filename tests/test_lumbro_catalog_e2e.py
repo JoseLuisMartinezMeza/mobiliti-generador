@@ -578,15 +578,15 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         quotation = workbook["Quotation"]
         assert quotation["A8"].value == "- Lumbro"
         assert quotation["B9"].value == "'=Multicontacto LIDO para interconectar"
-        assert quotation["D9"].value.startswith(
-            "Multicontacto modelo '=Multicontacto LIDO para interconectar."
-        )
+        assert quotation["D9"].value.startswith("'=Multicontacto LIDO para interconectar.")
         assert "'+Multicontacto especial" in quotation["D9"].value
         assert f"Fuente: {INTERCONNECTION_SOURCE}" in quotation["E9"].value
         assert "SKU: MULT-LIDO-INT" in quotation["E9"].value
         assert "Unidad: PZA" in quotation["E9"].value
         assert "Imagen de referencia" in quotation["E9"].value
-        assert "Notas:" not in quotation["D9"].value
+        # La revisión editorial del 30-09 conserva la nota como condición comercial, ya normalizada.
+        assert "Notas: se pueden modificar las conexiones con precio especial." in quotation["D9"].value
+        assert "NOTA:" not in quotation["D9"].value
         assert "Disponibilidad: por confirmar" not in quotation["D9"].value
         assert quotation["F9"].value == "420 x 160 mm"
         assert quotation["H9"].value == 2
@@ -616,7 +616,12 @@ def test_real_verified_lumbro_item_crosses_api_worker_and_xlsx_without_second_di
         )
         assert cotizacion["B7"].value == "'=Proyecto Lumbro E2E"
         assert cotizacion.cell(product_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
-        assert cotizacion.cell(product_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+        # Este modulo debe poder importarse solo (sin ayudas de tests/), por eso la formula va en linea.
+        precio = str(cotizacion.cell(product_row, 6).value)
+        assert cotizacion.cell(product_row, 7).value == (
+            "=IFERROR(ROUND((" + precio[1:].replace("Mobiliti!AA", "Mobiliti!AE")
+            + f")/F{product_row},2),0)"
+        )
         assert cotizacion.cell(product_row, 8).value == f"=F{product_row}*G{product_row}"
         assert cotizacion.cell(product_row, 9).value == f"=F{product_row}-H{product_row}"
         assert cotizacion.cell(product_row, 10).value == f"=E{product_row}*I{product_row}"

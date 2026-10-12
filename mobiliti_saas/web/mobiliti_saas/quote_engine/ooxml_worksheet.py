@@ -202,6 +202,19 @@ class FormulaIndex:
         )[1:]
 
 
+def provider_margin_formula(row: int) -> str:
+    """Control de margen por proveedor (AN) que marca ERROR si no hay margen calculable.
+
+    La plantilla trae ``IF(AK<AM,"ERROR","OK")``: cuando el precio falla, AK queda como
+    texto vacío y Excel considera un texto mayor que cualquier número, así que decía OK.
+    """
+
+    return (
+        f'IF(F{row}="","",IF(OR(NOT(ISNUMBER(AK{row})),AK{row}<AM{row}),'
+        '"ERROR","OK"))'
+    )
+
+
 def _detect_mobiliti_layout(root: ET.Element) -> MobilitiLayoutContract:
     """Falla cerrada si el XML no tiene una única firma conocida."""
 
@@ -239,7 +252,8 @@ def _detect_mobiliti_layout(root: ET.Element) -> MobilitiLayoutContract:
                 raise ValueError("La hoja Mobiliti no coincide con un layout firmado")
             return V17_MOBILITI_LAYOUT
         provider_margin = root.findtext(f".//{{{MAIN}}}c[@r='AN15']/{{{MAIN}}}f")
-        if provider_margin == 'IF(AK15<AM15,"ERROR","OK")':
+        # La plantilla oficial conserva su fórmula; una hoja ya compuesta trae la corregida.
+        if provider_margin in {'IF(AK15<AM15,"ERROR","OK")', provider_margin_formula(15)}:
             # El original V11 conserva E9 una fila arriba del rango real.
             if first != 15 or e9_signature is None or (
                 int(e9_signature.group("first")), int(e9_signature.group("last"))
@@ -743,6 +757,8 @@ def _set_uniform_product_price_formulas(
                 f'1-(AI{target_row}/Z{target_row})),"NA")'
             ),
         }
+        if layout.id == "v11":
+            formulas[40] = provider_margin_formula(target_row)
     else:
         formulas = {
             24: (

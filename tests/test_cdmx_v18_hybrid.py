@@ -187,7 +187,7 @@ def test_cdmx_v18_composes_fresh_seventeen_section_financial_contract(
     assert _text(package, "Cotizacion", f"D{delivery_row}") == "ZMG"
     assert f"D{delivery_row}" in _formula(package, "Cotizacion", f"A{delivery_row}")
     assert _formula(package, "Cotizacion", "F17") == "=Mobiliti!AA15"
-    assert _formula(package, "Cotizacion", "G17") == "=ROUND(Mobiliti!$AD$14,2)"
+    assert _formula(package, "Cotizacion", "G17") == "=IFERROR(ROUND((Mobiliti!AE15)/F17,2),0)"
     assert _formula(package, "Cotizacion", f"H{subtotal_row}") == (
         "=SUM(" + ",".join(f"J{row}" for row in subtotal_rows) + ")"
     )

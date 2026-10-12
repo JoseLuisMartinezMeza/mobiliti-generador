@@ -28,7 +28,9 @@ def test_v11_expansion_preserves_provider_rules_and_automatic_project_type():
     for row in (mutation.row_map.item_rows[0], mutation.row_map.item_rows[-1]):
         assert formula(f"AD{row}") == f"MIN($E$5,AL{row})"
         assert formula(f"AM{row}") == f"_xlfn.XLOOKUP(F{row},Proveedores!A:A,Proveedores!G:G)"
-        assert formula(f"AN{row}") == f'IF(AK{row}<AM{row},"ERROR","OK")'
+        assert formula(f"AN{row}") == (
+            f'IF(F{row}="","",IF(OR(NOT(ISNUMBER(AK{row})),AK{row}<AM{row}),"ERROR","OK"))'
+        )
         assert formula(f"L{row}") == f'IF(K{row}="Importado",Fletes!$B$66,0%)'
         assert "Proveedores!F:F" in formula(f"Q{row}")
     assert '"MIXTO"' in formula("P10")

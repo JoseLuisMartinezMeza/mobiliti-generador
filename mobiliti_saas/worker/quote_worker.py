@@ -47,6 +47,8 @@ WORKER_HEARTBEAT_SECONDS = max(
 MAX_QUOTE_OUTPUT_MB = int(os.environ.get("MAX_QUOTE_OUTPUT_MB", "150"))
 MAX_IMPORTED_SOURCE_BYTES = 25 * 1024 * 1024
 QUOTE_ENGINE = os.environ.get("QUOTE_ENGINE", "python").strip().lower()
+# "haiku" o "sonnet" activa el respaldo con Claude para entradas no estandar; vacio lo apaga.
+QUOTE_LLM_FALLBACK_MODEL = os.environ.get("QUOTE_LLM_FALLBACK_MODEL", "").strip().lower()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("VITE_SUPABASE_ANON_KEY")
 MOBILITI_REST_SECRET = os.environ.get("MOBILITI_REST_SECRET")
@@ -898,6 +900,34 @@ def _convert_pdf_to_quotation(source_pdf: Path, output_xlsx: Path, reference_xls
     convert_pdf_to_quotation(source_pdf, output_xlsx, reference_xlsx=reference_xlsx)
 
 
+def _convertir_con_llm(source: Path, output_xlsx: Path, reference_xlsx: str | Path) -> dict:
+    from pdf_quotation_import.llm_fallback import convertir_con_llm
+
+    return convertir_con_llm(source, output_xlsx, reference_xlsx, QUOTE_LLM_FALLBACK_MODEL)
+
+
+def _quotation_legible(source_xlsx: Path) -> bool:
+    from pdf_quotation_import.llm_fallback import es_quotation_estandar
+
+    return es_quotation_estandar(source_xlsx)
+
+
+def _respaldo_llm(job: dict, local_input: Path, tmp_dir: Path) -> Path:
+    converted_input = _safe_tmp_target(tmp_dir, "quotation_from_llm.xlsx")
+    uso = _convertir_con_llm(local_input, converted_input, _template_path_for_job(job))
+    metadata = job.get("metadata") or {}
+    metadata["llm_fallback"] = uso
+    job["metadata"] = metadata
+    print(
+        json.dumps(
+            {"event": "llm_fallback", "job_id": job.get("id"), **uso},
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+    )
+    return converted_input
+
+
 def _convert_tarkett_cart_to_quotation(source_json: Path, output_xlsx: Path, payload: dict) -> None:
     from mobiliti_saas.quote_engine.tarkett_catalog import create_tarkett_quotation_workbook
 
@@ -1360,6 +1390,8 @@ def _prepare_generator_input(
             quotation_data=canonical_rows,
         )
     if input_extension != ".pdf":
+        if QUOTE_LLM_FALLBACK_MODEL and not _quotation_legible(local_input):
+            local_input = _respaldo_llm(job, local_input, tmp_dir)
         return PreparedGeneratorInput(
             parser_source=local_input,
             original_quotation=local_input,
@@ -1367,11 +1399,17 @@ def _prepare_generator_input(
         )
 
     converted_input = _safe_tmp_target(tmp_dir, "quotation_from_pdf.xlsx")
-    _convert_pdf_to_quotation(
-        local_input,
-        converted_input,
-        _template_path_for_job(job),
-    )
+    try:
+        _convert_pdf_to_quotation(
+            local_input,
+            converted_input,
+            _template_path_for_job(job),
+        )
+    except Exception as exc:
+        if not QUOTE_LLM_FALLBACK_MODEL:
+            raise
+        print(f"Convertidor PDF fallo ({exc}); se usa respaldo LLM para job {job.get('id')}")
+        converted_input = _respaldo_llm(job, local_input, tmp_dir)
     metadata = job.get("metadata") or {}
     metadata["input_extension"] = ".pdf"
     metadata["pdf_converted"] = True

@@ -192,7 +192,7 @@ def test_vercel_keeps_static_catalog_assets_out_of_python_function_bundle():
     )
 
     assert config["functions"]["api/**/*.py"]["excludeFiles"] == (
-        "public/catalog-assets/**"
+        "{public/catalog-assets/**,dist/**}"
     )
 
 

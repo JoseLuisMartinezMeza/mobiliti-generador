@@ -3706,6 +3706,15 @@ textarea:focus {
   color: var(--muted);
 }
 
+.project-import-panel {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 560px;
+}
+
+.project-import-panel button {
+  justify-self: start;
+}
+
 .project-quick-panel {
   display: flex;
   flex-direction: column;

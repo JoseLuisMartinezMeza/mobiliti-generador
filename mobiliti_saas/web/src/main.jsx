@@ -32,6 +32,8 @@ import {
 import SupplierCatalogView from "./SupplierCatalogView";
 import CatalogAdminPanel from "./CatalogAdminPanel";
 import MixedCartDrawer from "./MixedCartDrawer";
+import OfficialProviderField from "./OfficialProviderField";
+import {loadOfficialProviders, suggestedProvider} from "./officialProviders.js";
 import ProjectEditor from "./ProjectEditor";
 import ProjectsView, {createNewProject} from "./ProjectsView";
 import {createProjectOperationId, projectMixedQuoteLines} from "./projectWorkspace.js";
@@ -110,6 +112,38 @@ function quoteInputContentType(fileName) {
   return String(fileName || "").toLowerCase().endsWith(".pdf")
     ? "application/pdf"
     : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+}
+
+// Crea el borrador y sube el archivo; devuelve el id del borrador.
+async function uploadQuotationFile(request, token, selectedFile, template) {
+  const init = await request("/cotizaciones/init-upload", {
+    method: "POST",
+    body: JSON.stringify({ filename: selectedFile.name, size: selectedFile.size, template })
+  });
+  if (init.signed_upload_url) {
+    const uploadRes = await fetch(init.signed_upload_url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": quoteInputContentType(selectedFile.name)
+      },
+      body: selectedFile
+    });
+    const uploadData = await uploadRes.json().catch(() => ({}));
+    if (!uploadRes.ok) throw new Error(uploadData.message || uploadData.error || "Error subiendo archivo");
+  } else if (init.upload_url) {
+    const body = new FormData();
+    body.append("file", selectedFile);
+    const uploadRes = await fetch(apiUrl(init.upload_url), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body
+    });
+    const uploadData = await uploadRes.json().catch(() => ({}));
+    if (!uploadRes.ok) throw new Error(uploadData.detail || "Error subiendo archivo");
+  } else {
+    throw new Error("La API no devolvio una ruta de carga valida.");
+  }
+  return init.job_id;
 }
 
 function safeFilenamePart(value, limit = 80) {
@@ -669,36 +703,10 @@ function QuoteForm({
   async function uploadQuoteDraft(selectedFile, template) {
     const existing = uploadDraftRef.current;
     if (existing?.file === selectedFile && existing.template === template) return existing;
-    const init = await request("/cotizaciones/init-upload", {
-        method: "POST",
-        body: JSON.stringify({ filename: selectedFile.name, size: selectedFile.size, template })
-      });
-      if (init.signed_upload_url) {
-        const uploadRes = await fetch(init.signed_upload_url, {
-          method: "PUT",
-          headers: {
-            "Content-Type": quoteInputContentType(selectedFile.name)
-          },
-          body: selectedFile
-        });
-        const uploadData = await uploadRes.json().catch(() => ({}));
-        if (!uploadRes.ok) throw new Error(uploadData.message || uploadData.error || "Error subiendo archivo");
-      } else if (init.upload_url) {
-        const body = new FormData();
-        body.append("file", selectedFile);
-        const uploadRes = await fetch(apiUrl(init.upload_url), {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-          body
-        });
-        const uploadData = await uploadRes.json().catch(() => ({}));
-        if (!uploadRes.ok) throw new Error(uploadData.detail || "Error subiendo archivo");
-      } else {
-        throw new Error("La API no devolvio una ruta de carga valida.");
-      }
-      const draft = { job_id: init.job_id, file: selectedFile, template };
-      uploadDraftRef.current = draft;
-      return draft;
+    const jobId = await uploadQuotationFile(request, token, selectedFile, template);
+    const draft = { job_id: jobId, file: selectedFile, template };
+    uploadDraftRef.current = draft;
+    return draft;
   }
 
   async function createQuote(event) {
@@ -744,8 +752,9 @@ function QuoteForm({
       setError("Selecciona un archivo .xlsx para previsualizar.");
       return;
     }
-    if (!/\.xlsx$/i.test(file.name)) {
-      setError("La importacion editable solo admite archivos .xlsx con hoja Quotation.");
+    // El servidor convierte PDF y Excel no estandar cuando tiene activo el respaldo con IA.
+    if (!/\.(xlsx|pdf)$/i.test(file.name)) {
+      setError("La importacion editable solo admite archivos .xlsx o .pdf.");
       return;
     }
     const requestEpoch = ++requestEpochRef.current;
@@ -757,7 +766,7 @@ function QuoteForm({
       const preview = await request(`/cotizaciones/${draft.job_id}/import-preview`, { method: "POST" });
       if (requestEpoch !== requestEpochRef.current) return;
       const sourceCurrency = preview.source_currency || "";
-      const provider = String(preview.provider || "").trim();
+      const provider = suggestedProvider(preview.provider);
       if (autoCreateProject
           && provider
           && (!previewNeedsSourceCurrency(preview) || sourceCurrency)) {
@@ -777,7 +786,7 @@ function QuoteForm({
       }
       setImportPreview(preview);
       setImportCurrency(preview.source_currency || "");
-      setImportProvider(preview.provider || "");
+      setImportProvider(provider);
     } catch (err) {
       if (requestEpoch === requestEpochRef.current) setError(err.message);
     } finally {
@@ -978,7 +987,7 @@ function QuoteForm({
               }</small>
               <label>
                 Proveedor *
-                <input name="import-provider" value={importProvider} disabled={busy} required onChange={(event) => setImportProvider(event.target.value)} />
+                <OfficialProviderField name="import-provider" value={importProvider} disabled={busy} required onChange={setImportProvider} />
               </label>
               <button
                 type="button"
@@ -2792,6 +2801,10 @@ function App() {
     setProjectChangeVersion(0);
   }
 
+  useEffect(() => {
+    if (session?.access_token) loadOfficialProviders(request);
+  }, [session?.access_token]);
+
   if (!session) return <Login onLogin={login} notice={sessionNotice} />;
 
   const isAdmin = Boolean(session.usuario?.es_admin);
@@ -3214,6 +3227,11 @@ function App() {
                 <ProjectEditor
                   project={editorProject}
                   request={request}
+                  userId={session.usuario?.id}
+                  onUploadQuotation={(file, template) => (
+                    uploadQuotationFile(request, session.access_token, file, template)
+                  )}
+                  onReloadProject={() => openProject(editorProject.id)}
                   autosave={projectAutosave}
                   onProjectChange={updateActiveProject}
                   onGenerateQuote={generateActiveProjectQuote}

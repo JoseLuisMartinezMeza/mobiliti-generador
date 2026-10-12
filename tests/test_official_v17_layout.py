@@ -175,7 +175,7 @@ def test_v17_end_to_end_links_new_financial_and_control_surfaces(
     )
 
     assert _formula(cotizacion, "F17") == "Mobiliti!AA15"
-    assert _formula(cotizacion, "G17") == "ROUND(Mobiliti!$AD$14,2)"
+    assert _formula(cotizacion, "G17") == "IFERROR(ROUND((Mobiliti!AE15)/F17,2),0)"
     total_row = int(_formula(control, "E4").removeprefix("Cotizacion!$H$"))
     assert total_row == 23
     delta = total_row - 41

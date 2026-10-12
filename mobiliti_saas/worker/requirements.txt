@@ -8,3 +8,4 @@ pyxlsb==1.0.10
 xlrd>=2.0.2
 rembg==2.0.75
 onnxruntime==1.26.0
+anthropic>=0.100,<1

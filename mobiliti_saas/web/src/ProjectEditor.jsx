@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useState} from "react";
+import {useEffect, useMemo, useRef, useState} from "react";
 import {ClipboardPaste, Copy, ImageOff, Trash2} from "lucide-react";
 
 import ImportedCartLineFields from "./ImportedCartLineFields";
@@ -12,9 +12,11 @@ import {
   DEFAULT_MIXED_SECTION_CONCEPTS,
   MAX_MIXED_CART_SECTIONS,
   addProjectComplement,
+  appendImportedCartBundle,
   closeMixedCartSection,
   copiar_complementos_proyecto,
   copyProjectLineTree,
+  createImportedCartBundle,
   createMixedCartLine,
   groupMixedCartLines,
   mergeMixedCartSection,
@@ -35,7 +37,10 @@ import {
   updateMixedCartQuantity,
   upsertMixedCartLine,
   validateLineQuantity,
+  withDurableImportedAssets,
 } from "./mixedCart.js";
+import OfficialProviderField from "./OfficialProviderField";
+import {suggestedProvider} from "./officialProviders.js";
 import ProductPickerDialog from "./ProductPickerDialog";
 
 const CUSTOMER_FIELDS = Object.freeze([
@@ -251,9 +256,145 @@ function ComplementCard({
   );
 }
 
+function ImportQuotationPanel({
+  project,
+  request,
+  userId,
+  disabled,
+  onUploadQuotation,
+  onImported,
+}) {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [draft, setDraft] = useState(null);
+  const [currency, setCurrency] = useState("");
+  const [provider, setProvider] = useState("");
+  const needsCurrency = Boolean(draft?.preview.items.some((item) => !item.source_currency));
+
+  async function previewFile(event) {
+    event.preventDefault();
+    if (!file || busy) return;
+    setBusy(true);
+    setError("");
+    setDraft(null);
+    try {
+      const jobId = await onUploadQuotation(file, project.quoteFields?.template);
+      const {added_rows: addedRows, ...manifest} = await request(
+        `/cotizaciones/${jobId}/import-preview?append_to_project=${project.id}`,
+        {method: "POST"},
+      );
+      const promoted = await request(
+        `/projects/${project.id}/imports/${manifest.import_id}`,
+        {method: "POST"},
+      );
+      const durable = withDurableImportedAssets(manifest, promoted, {
+        userId,
+        projectId: project.id,
+        importId: manifest.import_id,
+      });
+      // Las URL firmadas de la vista previa dejan ver las fotos nuevas sin reabrir el Proyecto.
+      const previewUrls = new Map(manifest.items.map((item) => [item.source_row, item.image_url]));
+      setDraft({
+        jobId,
+        addedRows,
+        preview: {
+          ...durable,
+          items: durable.items.map((item) => ({
+            ...item,
+            image_url: previewUrls.get(item.source_row) || "",
+          })),
+        },
+      });
+      setCurrency("");
+      setProvider(suggestedProvider(
+        file.name.replace(/\.[^.]+$/u, "").replace(/\s+/gu, " ").trim().slice(0, 120),
+      ));
+    } catch (failure) {
+      setError(failure.message || "No se pudo importar la Quotation.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function addToProject() {
+    try {
+      const bundle = createImportedCartBundle(
+        draft.preview,
+        currency,
+        provider.trim(),
+        project.sections,
+      );
+      onImported(
+        appendImportedCartBundle(project.lines, project.sections, bundle, draft.addedRows),
+        draft.addedRows.length,
+        draft.jobId,
+      );
+      setDraft(null);
+      setFile(null);
+    } catch (failure) {
+      setError(failure.message || "No se pudo agregar la Quotation al Proyecto.");
+    }
+  }
+
+  return (
+    <form className="project-quote-fields project-import-panel" onSubmit={previewFile}>
+      <label>
+        <span>Cotización del proveedor (Excel o PDF)</span>
+        <input
+          type="file"
+          accept=".xlsx,.pdf"
+          disabled={disabled || busy}
+          onChange={(event) => {
+            setFile(event.target.files?.[0] || null);
+            setDraft(null);
+            setError("");
+          }}
+        />
+        <small>Sus productos se agregan al final del Proyecto; los que ya tienes se conservan con sus cambios.</small>
+      </label>
+      <button type="submit" className="ghost-action" disabled={disabled || busy || !file}>
+        {busy ? "Leyendo cotización…" : "Previsualizar"}
+      </button>
+      {error ? <p className="error-line" role="alert">{error}</p> : null}
+      {draft ? (
+        <>
+          <p role="status">{draft.addedRows.length} producto(s) nuevo(s) listos para agregar.</p>
+          {needsCurrency ? (
+            <label>
+              <span>Moneda de origen *</span>
+              <select value={currency} required onChange={(event) => setCurrency(event.target.value)}>
+                <option value="">Selecciona una moneda</option>
+                {["MXN", "USD", "EUR"].map((option) => (
+                  <option key={option} value={option}>{option}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <label>
+            <span>Proveedor *</span>
+            <OfficialProviderField value={provider} maxLength={120} required onChange={setProvider} />
+          </label>
+          <button
+            type="button"
+            className="primary-action"
+            disabled={disabled || !provider.trim() || (needsCurrency && !currency)}
+            onClick={addToProject}
+          >
+            Agregar al Proyecto
+          </button>
+        </>
+      ) : null}
+    </form>
+  );
+}
+
 export default function ProjectEditor({
   project,
   request,
+  userId,
+  onUploadQuotation,
+  onReloadProject,
   autosave,
   onProjectChange,
   onGenerateQuote,
@@ -266,6 +407,8 @@ export default function ProjectEditor({
   const [aviso_complementos, set_aviso_complementos] = useState("");
   const [error, setError] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [importedDraftId, setImportedDraftId] = useState("");
+  const importSaveStartedRef = useRef(false);
   const lines = project?.lines || [];
   const sections = project?.sections || [];
   const quoteFields = project?.quoteFields || {};
@@ -298,6 +441,22 @@ export default function ProjectEditor({
     set_complementos_copiados(null);
     set_aviso_complementos("");
   }, [project?.id]);
+
+  // Cuando la importación ya se guardó, el Proyecto tiene sus propias copias: el borrador se descarta
+  // (ocupa un lugar del límite de cotizaciones activas) y se recarga para mostrar las fotos durables.
+  useEffect(() => {
+    if (!importedDraftId) return;
+    if (autosave?.status !== "saved") {
+      importSaveStartedRef.current = true;
+      return;
+    }
+    if (!importSaveStartedRef.current) return;
+    importSaveStartedRef.current = false;
+    setImportedDraftId("");
+    request(`/cotizaciones/${importedDraftId}`, {method: "DELETE"})
+      .catch(() => {})
+      .then(() => onReloadProject?.());
+  }, [importedDraftId, autosave?.status]);
 
   function commit(next) {
     setError("");
@@ -519,6 +678,14 @@ export default function ProjectEditor({
           onClick={() => setActiveTab("quote")}
         >
           Datos de cotización
+        </button>
+        <button
+          type="button"
+          className={activeTab === "import" ? "active" : ""}
+          aria-selected={activeTab === "import"}
+          onClick={() => setActiveTab("import")}
+        >
+          Importar otra Quotation
         </button>
       </nav>
 
@@ -778,6 +945,21 @@ export default function ProjectEditor({
             );
           })}
         </div>
+      ) : activeTab === "import" ? (
+        <ImportQuotationPanel
+          project={project}
+          request={request}
+          userId={userId}
+          // El servidor combina contra la fuente ya guardada del Proyecto.
+          disabled={disabled || autosave?.status !== "saved"}
+          onUploadQuotation={onUploadQuotation}
+          onImported={(next, count, jobId) => {
+            commitLines(next.lines, next.sections);
+            setImportedDraftId(jobId);
+            set_aviso_complementos(`${count} producto(s) importado(s) al final del Proyecto.`);
+            setActiveTab("products");
+          }}
+        />
       ) : (
         <form className="project-quote-fields" onSubmit={(event) => event.preventDefault()}>
           {CUSTOMER_FIELDS.map(([label, field, type]) => (

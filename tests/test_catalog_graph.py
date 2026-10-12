@@ -512,6 +512,7 @@ def test_worker_requirements_include_graph_xls_xlsb_and_local_image_segmentation
         "xlrd>=2.0.2",
         "rembg==2.0.75",
         "onnxruntime==1.26.0",
+        "anthropic>=0.100,<1",
     ]
 
 

@@ -1,3 +1,4 @@
+import OfficialProviderField from "./OfficialProviderField";
 import {
   changeImportedLineDraft,
   commitImportedLineDraft,
@@ -79,7 +80,7 @@ export default function ImportedCartLineFields({
       </label>
       <label>
         Proveedor
-        <input name="provider" disabled={busy} value={draft.values.provider} aria-invalid={Boolean(draft.invalidFields.provider)} aria-describedby={draft.errors.provider ? errorId("provider") : undefined} onChange={(event) => handleChange("provider", event.target.value)} onBlur={() => handleBlur("provider")} />
+        <OfficialProviderField name="provider" disabled={busy} value={draft.values.provider} aria-invalid={Boolean(draft.invalidFields.provider)} aria-describedby={draft.errors.provider ? errorId("provider") : undefined} onChange={(value) => handleChange("provider", value)} onBlur={() => handleBlur("provider")} />
         {draft.errors.provider ? <small id={errorId("provider")} role="alert">{draft.errors.provider}</small> : null}
       </label>
     </details>

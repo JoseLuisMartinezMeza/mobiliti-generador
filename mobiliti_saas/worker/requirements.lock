@@ -1,4 +1,7 @@
 # Resolved worker runtime. Update deliberately after dependency and container scans.
+annotated-types==0.8.0
+anthropic==0.100.0
+anyio==4.15.1
 attrs==26.1.0
 boto3==1.43.50
 botocore==1.43.50
@@ -6,10 +9,16 @@ certifi==2026.6.17
 cffi==2.1.0
 charset-normalizer==3.4.9
 cryptography==49.0.0
+distro==1.9.0
+docstring_parser==0.18.0
 et_xmlfile==2.0.0
 flatbuffers==25.12.19
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
 idna==3.18
 ImageIO==2.37.4
+jiter==0.17.0
 jmespath==1.1.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
@@ -29,6 +38,8 @@ protobuf==7.35.1
 psycopg==3.3.4
 psycopg-binary==3.3.4
 pycparser==3.0
+pydantic==2.14.1
+pydantic_core==2.50.1
 PyJWT==2.13.0
 PyMatting==1.1.15
 pymupdf==1.28.0
@@ -42,8 +53,10 @@ s3transfer==0.19.1
 scikit-image==0.26.0
 scipy==1.18.0
 six==1.17.0
+sniffio==1.3.1
 tifffile==2026.7.14
 tqdm==4.70.0
+typing-inspection==0.4.4
 typing_extensions==4.16.0
 urllib3==2.7.0
 xlrd==2.0.2

@@ -1,3 +1,4 @@
+from formulas_cotizacion import descuento_de_partida
 import os
 import sys
 import hashlib
@@ -281,8 +282,8 @@ def test_dev_mode_import_preview_mixed_checkout_worker_and_xlsx(tmp_path, monkey
         ]
         assert len(product_rows) == 8
         assert [cotizacion.cell(row, 7).value for row in product_rows] == [
-            "=ROUND(Mobiliti!$AD$14,2)"
-        ] * 8
+            descuento_de_partida(cotizacion.cell(row, 6).value, row) for row in product_rows
+        ]
         mobiliti = workbook["Mobiliti"]
         assert mobiliti["AD14"].value == 0.4
         assert mobiliti["P4"].value is False
@@ -306,7 +307,8 @@ def test_dev_mode_import_preview_mixed_checkout_worker_and_xlsx(tmp_path, monkey
         )
         assert mobiliti.cell(blank_row, 25).value == (
             f'=ROUNDUP(IF(OR(F{blank_row}="Offiho",F{blank_row}="Lauco Sofas",'
-            f'F{blank_row}="Requiez",F{blank_row}="Labenze",F{blank_row}="Sunon Mty"),'
+            f'F{blank_row}="Requiez",F{blank_row}="Labenze",F{blank_row}="Sunon Mty",'
+            f'F{blank_row}="Sonara",F{blank_row}="Santeco"),'  # V12 agregó Sonara y Santeco
             f'J{blank_row},IF(K{blank_row}="Nacional",O{blank_row}/(1-30%),'
             f'IF(K{blank_row}="Importado",O{blank_row}/(1-40%),'
             f'IF(OR(F{blank_row}="Lumbro",F{blank_row}="Idelika"),'
@@ -318,8 +320,13 @@ def test_dev_mode_import_preview_mixed_checkout_worker_and_xlsx(tmp_path, monkey
             f'$H$15:$H$572,_xlfn.MAXIFS($H$15:$H$572,'
             f'$D$15:$D$572,D{blank_row})),"NO SE ESTA RESPETANDO EL MARGEN")'
         )
+        # Desde V11: AL es el descuento máximo del proveedor y AN compara el margen contra su objetivo.
         assert mobiliti.cell(blank_row, 38).value == (
-            f'=IF(AK{blank_row}<30%,"ERROR","OK")'
+            f"=_xlfn.XLOOKUP(F{blank_row},Proveedores!A:A,Proveedores!H:H)"
+        )
+        assert mobiliti.cell(blank_row, 40).value == (
+            f'=IF(F{blank_row}="","",IF(OR(NOT(ISNUMBER(AK{blank_row})),'
+            f'AK{blank_row}<AM{blank_row}),"ERROR","OK"))'
         )
         assert all(
             "$K$6" not in str(cell.value or "")

@@ -7,6 +7,7 @@ datos remota.
 
 from __future__ import annotations
 
+from formulas_cotizacion import descuento_de_partida
 import hashlib
 import json
 import subprocess
@@ -623,7 +624,8 @@ def test_proyecto_mixto_local_cubre_busqueda_configuracion_reemplazo_y_conversio
         )
         assert "SKU:" not in pending_technical_text
         assert "Clave:" not in pending_technical_text
-        assert option["name"] in str(quotation.cell(conceptos_row, 4).value)
+        # La redacción comercial inicia cada oración con mayúscula; el contenido es el mismo.
+        assert option["name"].casefold() in str(quotation.cell(conceptos_row, 4).value).casefold()
         assert f"Clave: {alma_line['code']}" in str(quotation.cell(alma_row, 5).value)
         if priced_line["code"]:
             assert priced_line["code"] in " ".join(
@@ -683,7 +685,7 @@ def test_proyecto_mixto_local_cubre_busqueda_configuracion_reemplazo_y_conversio
             )
             assert cotizacion.cell(cotizacion_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
             assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
-            assert cotizacion.cell(cotizacion_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+            assert cotizacion.cell(cotizacion_row, 7).value == descuento_de_partida(cotizacion.cell(cotizacion_row, 6).value, cotizacion_row)
             assert cotizacion.cell(cotizacion_row, 10).value == (
                 f"=E{cotizacion_row}*I{cotizacion_row}"
             )

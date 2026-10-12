@@ -1,3 +1,4 @@
+from formulas_cotizacion import descuento_de_partida
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -412,7 +413,7 @@ def test_supplier_final_workbook_uses_official_template_and_frozen_price_contrac
         '=IF(P4=TRUE,_FV(J6,"Price"),0)'
     )
     assert mobiliti["AD14"].value == pytest.approx(0.4)
-    assert cot.cell(product_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+    assert cot.cell(product_row, 7).value == descuento_de_partida(cot.cell(product_row, 6).value, product_row)
     assert cot.cell(product_row, 3).value == "=Quotation!D9"
     assert cot.cell(product_row, 4).value == "=Quotation!F9"
     assert cot.cell(product_row, 5).value == f"=Mobiliti!H{mobiliti_row}"
@@ -476,9 +477,9 @@ def test_mixed_final_workbook_uses_official_formulas_and_one_frozen_cost_per_ite
             assert cot.cell(cot_row, 10).value == f"=E{cot_row}*I{cot_row}"
             assert mobiliti.cell(mobiliti_row, 10).value == f"=Quotation!K{source_row}"
         assert mobiliti["AD14"].value == pytest.approx(0.4)
-        assert cot.cell(first_product, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
-        assert cot.cell(product_row_map[1][1], 7).value == (
-            "=ROUND(Mobiliti!$AD$14,2)"
+        assert cot.cell(first_product, 7).value == descuento_de_partida(cot.cell(first_product, 6).value, first_product)
+        assert cot.cell(product_row_map[1][1], 7).value == descuento_de_partida(
+            cot.cell(product_row_map[1][1], 6).value, product_row_map[1][1]
         )
         assert wb["Quotation_Data"].sheet_state == "veryHidden"
         assert reference_totals(

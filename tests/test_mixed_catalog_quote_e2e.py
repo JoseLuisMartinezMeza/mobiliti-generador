@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from formulas_cotizacion import descuento_de_partida
 from copy import deepcopy
 from dataclasses import replace
 from datetime import date
@@ -1244,7 +1245,7 @@ def test_imported_only_cart_builds_workbook_and_generates_quote_without_rate_sum
         assert mobiliti.cell(mobiliti_row, 6).value == "Sunon Inc"
         assert cotizacion.cell(cotizacion_row, 6).value == f"=Mobiliti!AA{mobiliti_row}"
         assert mobiliti["AD14"].value == 0.4
-        assert cotizacion.cell(cotizacion_row, 7).value == "=ROUND(Mobiliti!$AD$14,2)"
+        assert cotizacion.cell(cotizacion_row, 7).value == descuento_de_partida(cotizacion.cell(cotizacion_row, 6).value, cotizacion_row)
         assert cotizacion.cell(cotizacion_row, 8).value == (
             f"=F{cotizacion_row}*G{cotizacion_row}"
         )
@@ -1573,7 +1574,7 @@ def test_imported_and_catalog_items_generate_one_quote_with_single_conversion(
         assert mobiliti["AD14"].value == 0.4
         assert mobiliti["P4"].value is (quote_currency in {"USD", "EUR"})
         assert [cotizacion.cell(row, 7).value for row in cotizacion_rows] == [
-            "=ROUND(Mobiliti!$AD$14,2)" for _ in cotizacion_rows
+            descuento_de_partida(cotizacion.cell(row, 6).value, row) for row in cotizacion_rows
         ]
         for canonical, mobiliti_row, cotizacion_row in zip(
             canonical_rows,
@@ -2054,8 +2055,8 @@ def _assert_task9_final_workbook(
     first_product = cotizacion_rows[0]
     assert mobiliti["AD14"].value == 0.4
     assert [cotizacion.cell(row, 7).value for row in cotizacion_rows] == [
-        "=ROUND(Mobiliti!$AD$14,2)"
-    ] * len(cotizacion_rows)
+        descuento_de_partida(cotizacion.cell(row, 6).value, row) for row in cotizacion_rows
+    ]
     assert not any(
         str(cotizacion.cell(row, 1).value or "").startswith("=Quotation!")
         for row in range(16, cotizacion.max_row + 1)

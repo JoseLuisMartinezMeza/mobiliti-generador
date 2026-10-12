@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from formulas_cotizacion import descuento_de_partida
 from dataclasses import replace
 from decimal import Decimal
 from io import BytesIO
@@ -708,10 +709,11 @@ def test_composer_handles_imported_goods_without_shipping_volume(tmp_path: Path)
     assert _cell_formula_in_root(fletes, "E61") == (
         "=IF(B67=0,0,MIN(1,B67/(B62*B71+B63*B74)))"
     )
+    # Desde V11 la plantilla acota el factor con E67/E68; el motor sólo evita dividir entre cero.
     assert _cell_formula_in_root(fletes, "B66") == (
-        '=MIN(110%,IF(E60="MANUAL",E63,IF(B61=0,0,'
+        '=IF(B61=0,0,MIN(E68,MAX(E67,IF(E60="MANUAL",E63,'
         'IF(E60="PRORRATEADO",(B61*B65+E62+B78)/B61,'
-        '(B61*B65+B64+B78)/B61))))'
+        '(B61*B65+B64+B78)/B61)))))'
     )
     for coordinate in ("B62", "B63", "B64", "B65", "E62"):
         assert _cell_formula_in_root(fletes, coordinate) == (
@@ -730,10 +732,10 @@ def test_cotizacion_clears_contamination_uses_master_discount_and_keeps_terms(
 
     first_discount = _cell(candidate, f"G{first_row}")
     second_discount = _cell(candidate, f"G{second_row}")
-    discount_row = request.mobiliti.row_map.canonical_first_section_row
-    expected_discount = f"ROUND(Mobiliti!$AD${discount_row},2)"
-    assert first_discount.findtext(f"{{{MAIN}}}f") == expected_discount
-    assert second_discount.findtext(f"{{{MAIN}}}f") == expected_discount
+    # Cada partida usa el descuento que calcula Mobiliti, que respeta el tope del proveedor.
+    for discount, row in ((first_discount, first_row), (second_discount, second_row)):
+        price = _cell(candidate, f"F{row}").findtext(f"{{{MAIN}}}f")
+        assert discount.findtext(f"{{{MAIN}}}f") == descuento_de_partida("=" + price, row)[1:]
     for row in (first_row, second_row):
         assert _cell(candidate, f"A{row}").attrib["t"] == "inlineStr"
         assert _cell(candidate, f"C{row}").attrib["t"] == "inlineStr"
@@ -777,7 +779,7 @@ def test_delivery_dropdown_and_mobiliti_reference_follow_dynamic_terms(
     assert validation.findtext(f"{{{XM}}}sqref") == "D46"
     assert validation.findtext(
         f"{{{X14}}}formula1/{{{XM}}}f"
-    ) == "Fletes!$A$46:$A$55"
+    ) == "Fletes!$A$46:$A$56"  # V13 agregó un destino a la lista
     assert _cell_formula_in_root(mobiliti, "P8") == "=Cotizacion!$D$46"
 
 
@@ -1625,7 +1627,7 @@ def test_active_engine_uses_authoritative_catalog_canonical_identity(
         frozen_rate="1",
         converted_cost="125.50",
         quantity="2",
-        provider="Tarkett MX",
+        provider="Santeco",  # nombre oficial de Tarkett desde V12
         region="tarkett",
     )
     output = tmp_path / "catalog-official.xlsx"

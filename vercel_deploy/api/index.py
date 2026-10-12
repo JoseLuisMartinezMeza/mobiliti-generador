@@ -91,9 +91,14 @@ from mobiliti_saas.quote_engine.project_quote import (  # noqa: E402
 )
 from mobiliti_saas.quote_engine.quotation_import import (  # noqa: E402
     build_import_manifest,
+    read_items_from_bytes,
     validate_import_manifest,
 )
 from mobiliti_saas.quote_engine.engine import _fetch_latest_usd_mxn_row  # noqa: E402
+from mobiliti_saas.quote_engine.quotation_sheets import (  # noqa: E402
+    OFFICIAL_MOBILITI_PROVIDERS,
+    _OFFICIAL_PROVIDER_ALIASES,
+)
 from mobiliti_saas.quote_engine.template_profiles import (  # noqa: E402
     DEFAULT_TEMPLATE_PROFILE_ID,
     lookup_template_profile,
@@ -151,6 +156,8 @@ QUOTE_DOWNLOADED_OUTPUT_RETENTION_DAYS = int(os.environ.get("QUOTE_DOWNLOADED_OU
 DELETE_COMPLETED_QUOTE_INPUTS = _env_bool("DELETE_COMPLETED_QUOTE_INPUTS", True)
 QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS = int(os.environ.get("QUOTE_STORAGE_RETENTION_MIN_AGE_DAYS", "1"))
 ALLOWED_QUOTE_INPUT_EXTENSIONS = (".xlsx", ".pdf")
+# "haiku" o "sonnet" permite importar a Proyectos cotizaciones no estandar; vacio conserva el rechazo.
+QUOTE_LLM_FALLBACK_MODEL = os.environ.get("QUOTE_LLM_FALLBACK_MODEL", "").strip().lower()
 SIGNED_UPLOAD_TTL_SECONDS = int(os.environ.get("SIGNED_UPLOAD_TTL_SECONDS", "3600"))
 SIGNED_DOWNLOAD_TTL_SECONDS = int(os.environ.get("SIGNED_DOWNLOAD_TTL_SECONDS", "3600"))
 DEV_MODE = os.environ.get("MOBILITI_DEV_MODE", "").lower() in {"1", "true", "yes"}
@@ -7772,13 +7779,101 @@ def _preview_response(manifest: dict, image_paths: dict[int, str]) -> dict:
     return {**manifest, "items": items}
 
 
+def _fuente_requiere_respaldo_llm(source_bytes: bytes, extension: str) -> bool:
+    """Solo lo que no es una Quotation; un .xlsx estandar con otro error no se reextrae."""
+    if extension == ".pdf":
+        return True
+    try:
+        items, _columns = read_items_from_bytes(source_bytes)
+    except ValueError as exc:
+        return "no contiene hoja Quotation" in str(exc)
+    return not any(item["tipo"] == "producto" for item in items)
+
+
+def _convertir_fuente_con_llm(source_bytes: bytes, extension: str, nombre: str) -> tuple[bytes, dict]:
+    # Import diferido: el bundle de Vercel no trae PyMuPDF ni el SDK y ahi la bandera va apagada.
+    import tempfile
+
+    from pdf_quotation_import.llm_fallback import convertir_con_llm
+
+    with tempfile.TemporaryDirectory(prefix="mobiliti-llm-") as tmp:
+        # El nombre del archivo es el proveedor sugerido cuando el documento no lo dice.
+        base = re.sub(r"[^\w\- ]", "_", Path(nombre).stem).strip()[:60] or "cotizacion"
+        fuente = Path(tmp) / f"{base}{extension}"
+        salida = Path(tmp) / "quotation.xlsx"
+        fuente.write_bytes(source_bytes)
+        uso = convertir_con_llm(fuente, salida, modelo=QUOTE_LLM_FALLBACK_MODEL)
+        return salida.read_bytes(), uso
+
+
+def _combinar_con_fuente_de_proyecto(base: bytes, nueva: bytes) -> tuple[bytes, list[int]]:
+    """Agrega los renglones de la nueva Quotation al final de la fuente del Proyecto."""
+    # Import diferido por la misma razon que el respaldo LLM.
+    import tempfile
+
+    from pdf_quotation_import.combinar import combinar_quotations
+
+    with tempfile.TemporaryDirectory(prefix="mobiliti-anexo-") as tmp:
+        rutas = [Path(tmp) / "base.xlsx", Path(tmp) / "nueva.xlsx"]
+        rutas[0].write_bytes(base)
+        rutas[1].write_bytes(nueva)
+        salida = Path(tmp) / "combinada.xlsx"
+        resumen = combinar_quotations([(rutas[0], "", ""), (rutas[1], "", "")], salida)
+        return salida.read_bytes(), resumen["filas_agregadas"]
+
+
+def _conversion_de_borrador(job_id: str, evento: str, operacion):
+    """Los fallos de datos siguen como 400; lo demas (red, dependencias ausentes) como 503."""
+    try:
+        return operacion()
+    except ValueError:
+        raise
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"event": evento, "job_id": job_id, "error": exc.__class__.__name__},
+                separators=(",", ":"),
+            )
+        )
+        raise RuntimeError("No se pudo convertir la cotizacion") from exc
+
+
+def _reemplazar_entrada_de_borrador(
+    job_id: str, input_path: str, contenido: bytes, metadata: dict
+) -> tuple[str, dict]:
+    """Deja el borrador como si se hubiera subido la Quotation .xlsx que genero el servidor."""
+    nueva_ruta = f"{input_path.rsplit('.', 1)[0]}.xlsx"
+    _storage_upload_bytes(
+        nueva_ruta,
+        contenido,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    metadata = {**metadata, "file_size": len(contenido), "input_extension": ".xlsx"}
+    if not db_update_quote_job(
+        job_id, {"input_path": nueva_ruta, "metadata": metadata}, expected_status="draft"
+    ):
+        raise HTTPException(status_code=409, detail="La quotation ya no esta disponible para importar")
+    return nueva_ruta, metadata
+
+
 @app.post("/cotizaciones/{job_id}/import-preview")
-def quotation_import_preview(job_id: str, current_user: dict = Depends(get_current_user)):
+def quotation_import_preview(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+    append_to_project: str | None = None,
+):
     try:
         _require_active_subscription(current_user["id"])
         job = _quote_job_for_user(job_id, current_user["id"])
     except RuntimeError:
         raise HTTPException(status_code=503, detail="Servicio de cotizaciones no disponible") from None
+    proyecto_destino = None
+    if append_to_project is not None:
+        proyecto_destino = _project_for_current_user(
+            _project_uuid(append_to_project), current_user["id"]
+        )
+        if proyecto_destino.get("status") != "active":
+            raise HTTPException(status_code=409, detail="Proyecto archivado")
 
     template = _canonical_template_id(job.get("template"))
     input_path = str(job.get("input_path") or "").strip().lstrip("/")
@@ -7786,12 +7881,63 @@ def quotation_import_preview(job_id: str, current_user: dict = Depends(get_curre
     filename = metadata.get("original_filename")
     if not input_path or not isinstance(filename, str) or not filename.strip():
         raise HTTPException(status_code=400, detail="La quotation no tiene archivo de entrada")
-    if job.get("status") != "draft" or Path(input_path).suffix.lower() != ".xlsx":
+    extension = Path(input_path).suffix.lower()
+    if job.get("status") != "draft" or (
+        extension != ".xlsx" and not (QUOTE_LLM_FALLBACK_MODEL and extension == ".pdf")
+    ):
         raise HTTPException(status_code=409, detail="La quotation no esta disponible para importar")
 
     try:
         source_bytes = _storage_download_bytes(input_path)
-        manifest, image_map = build_import_manifest(source_bytes, job_id, filename)
+        try:
+            if extension != ".xlsx":
+                raise ValueError("La fuente no es una Quotation .xlsx")
+            manifest, image_map = build_import_manifest(source_bytes, job_id, filename)
+        except ValueError:
+            if not QUOTE_LLM_FALLBACK_MODEL or not _fuente_requiere_respaldo_llm(source_bytes, extension):
+                raise
+            original, nombre_original = source_bytes, filename
+            source_bytes, uso = _conversion_de_borrador(
+                job_id,
+                "llm_fallback_failed",
+                lambda: _convertir_fuente_con_llm(original, extension, nombre_original),
+            )
+            filename = f"{Path(filename).stem}.xlsx"
+            input_path, metadata = _reemplazar_entrada_de_borrador(
+                job_id,
+                input_path,
+                source_bytes,
+                {**metadata, "original_filename": filename, "llm_fallback": uso},
+            )
+            print(
+                json.dumps(
+                    {"event": "llm_fallback", "job_id": job_id, **uso},
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                )
+            )
+            manifest, image_map = build_import_manifest(source_bytes, job_id, filename)
+        anexo = None
+        if proyecto_destino is not None:
+            anexo = metadata.get("import_append")
+            # shortcut: un borrador ya anexado no se vuelve a combinar; no contempla reusarlo en otro Proyecto.
+            if not isinstance(anexo, dict) or anexo.get("project_id") != proyecto_destino["id"]:
+                base = _project_import_source_bytes(proyecto_destino["payload"])
+                filas = [item["source_row"] for item in manifest["items"]]
+                if base is not None:
+                    nueva = source_bytes
+                    source_bytes, filas = _conversion_de_borrador(
+                        job_id,
+                        "import_append_failed",
+                        lambda: _combinar_con_fuente_de_proyecto(base, nueva),
+                    )
+                anexo = {"project_id": proyecto_destino["id"], "added_rows": filas}
+                metadata = {**metadata, "import_append": anexo}
+                if base is not None:
+                    input_path, metadata = _reemplazar_entrada_de_borrador(
+                        job_id, input_path, source_bytes, metadata
+                    )
+                    manifest, image_map = build_import_manifest(source_bytes, job_id, filename)
     except ValueError:
         raise HTTPException(status_code=400, detail="La quotation no se pudo importar") from None
     except RuntimeError:
@@ -7845,9 +7991,19 @@ def quotation_import_preview(job_id: str, current_user: dict = Depends(get_curre
             print(json.dumps({"event": "import_preview_cleanup_pending", "job_id": job_id}, separators=(",", ":")))
 
     try:
-        return _preview_response(manifest, image_paths)
+        respuesta = _preview_response(manifest, image_paths)
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo preparar la previsualizacion") from None
+    return {**respuesta, "added_rows": anexo["added_rows"]} if anexo else respuesta
+
+
+@app.get("/proveedores-oficiales")
+def proveedores_oficiales(current_user: dict = Depends(get_current_user)):
+    """Proveedores que la plantilla acepta, para elegirlos en vez de teclearlos."""
+    return {
+        "providers": list(OFFICIAL_MOBILITI_PROVIDERS),
+        "aliases": dict(_OFFICIAL_PROVIDER_ALIASES),
+    }
 
 
 @app.post("/cotizaciones/init-upload")

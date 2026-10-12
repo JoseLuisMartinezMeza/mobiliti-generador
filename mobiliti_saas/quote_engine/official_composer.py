@@ -52,6 +52,7 @@ from .ooxml_worksheet import (
     MobilitiSheetMutation,
     WorksheetEditor,
     build_mobiliti_sheet,
+    provider_margin_formula,
 )
 from .official_template import TemplateContract, verify_official_template
 from .quotation_sheets import (
@@ -355,6 +356,18 @@ class CotizacionPriceTerm:
             raise ValueError("Factor de precio compuesto inválido")
         object.__setattr__(self, "numerator", numerator)
         object.__setattr__(self, "denominator", denominator)
+
+
+def _cotizacion_line_discount_formula(price_formula: str, target_row: int) -> str:
+    """Descuento efectivo de la partida, el mismo que calcula Mobiliti.
+
+    La plantilla usa el descuento solicitado (``Mobiliti!$AD$14``) en todas las partidas
+    aunque Mobiliti lo limite al máximo de cada proveedor. AE es el descuento por unidad
+    de cada renglón; con las mismas proporciones de F da el descuento de la partida.
+    """
+
+    discount = price_formula.removeprefix("=").replace("Mobiliti!AA", "Mobiliti!AE")
+    return f"=IFERROR(ROUND(({discount})/F{target_row},2),0)"
 
 
 @dataclass(frozen=True)
@@ -956,6 +969,10 @@ class CotizacionSheetEditor:
                             origin="G17",
                             target=f"G{target_row}",
                             sheet="Cotizacion",
+                        )
+                        if contract_formulas is None
+                        else _cotizacion_line_discount_formula(
+                            contract_formulas["F"], target_row
                         ),
                     )
                 elif target_row == first_discount_row:
@@ -1743,6 +1760,8 @@ def verify_output_contract(
                     f'1-(AI{target_row}/Z{target_row})),"NA")'
                 ),
             }
+            if mobiliti_layout.id == "v11":
+                expected_downstream["AN"] = provider_margin_formula(target_row)
         else:
             uniform_formula = _formula_in_root(mobiliti, f"X{target_row}") or ""
             expected_uniform = (
@@ -2619,11 +2638,20 @@ def _validate_exact_cotizacion_surface(
         ]
         if layout.global_discount:
             assert global_discount_formula is not None
-            expected_discount_formula = translate_formula(
-                "=" + global_discount_formula,
-                origin="G17",
-                target=f"G{worksheet_row}",
-                sheet="Cotizacion",
+            price_formula_node = _require_root_cell(
+                candidate, f"F{worksheet_row}"
+            ).find(f"{{{MAIN}}}f")
+            expected_discount_formula = (
+                translate_formula(
+                    "=" + global_discount_formula,
+                    origin="G17",
+                    target=f"G{worksheet_row}",
+                    sheet="Cotizacion",
+                )
+                if price_formula_node is None
+                else _cotizacion_line_discount_formula(
+                    "=" + (price_formula_node.text or ""), worksheet_row
+                )
             )[1:]
             if _exact_formula_text(
                 _require_root_cell(candidate, f"G{worksheet_row}"),

@@ -38,3 +38,19 @@ def test_vercel_quote_engine_bundle_matches_production_source():
 
 def test_vercel_bundle_includes_official_template_contract():
     assert VERCEL_CONTRACT.read_bytes() == SOURCE_CONTRACT.read_bytes()
+
+
+def test_vercel_bundle_includes_the_quotation_importer():
+    # La API convierte y combina Quotations al importar a un Proyecto; Vercel sólo sube mobiliti_saas/web.
+    fuente = ROOT / "pdf_quotation_import"
+    modulos = sorted(path.name for path in fuente.glob("*.py"))
+
+    assert {"combinar.py", "converter.py", "llm_fallback.py"} <= set(modulos)
+    for nombre in modulos:
+        copia = ROOT / "mobiliti_saas" / "web" / "pdf_quotation_import" / nombre
+        assert copia.is_file(), f"Falta en Vercel: pdf_quotation_import/{nombre}"
+        assert copia.read_bytes() == (fuente / nombre).read_bytes()
+
+    requisitos = (ROOT / "mobiliti_saas" / "web" / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    assert "PyMuPDF>=1.27.0" in requisitos
+    assert "anthropic>=0.100,<1" in requisitos
