@@ -86,13 +86,33 @@ def _costo_reportado(metadata: dict) -> int:
     return imagen * 8 + texto * 5 + salida * 30
 
 
-def verificar_configuracion(cuenta: str) -> None:
-    """Falla pronto por lo que afectaría a todas las fotos, no solo a una."""
+def _raiz_biblioteca(cuenta: str) -> Path:
     if not cuenta:
         raise RuntimeError("Falta la cuenta autenticada para la biblioteca de imágenes")
     ruta = os.environ.get("QUOTATION_IMAGE_LIBRARY_DIR", "")
     if not ruta or not Path(ruta).is_absolute():
         raise RuntimeError("Se requiere QUOTATION_IMAGE_LIBRARY_DIR absoluta y persistente")
+    return Path(ruta)
+
+
+def verificar_configuracion(cuenta: str) -> None:
+    """Falla pronto por lo que afectaría a todas las fotos de la cotización, no solo a una."""
+    raiz = _raiz_biblioteca(cuenta)
+    proveedor = "seedvr2"
+    try:
+        with closing(biblioteca.abrir_biblioteca(raiz / biblioteca.huella(cuenta.encode()) / "biblioteca.db")):
+            pass
+        if os.environ.get("QUOTATION_IMAGE_POLICY") == "openai_then_seedvr2":
+            with closing(_abrir_presupuesto(raiz)) as presupuesto:
+                proveedor = presupuesto.execute("SELECT proveedor FROM politica WHERE id=1").fetchone()[0]
+    except (OSError, sqlite3.Error) as error:
+        raise RuntimeError("La biblioteca de imágenes no se puede abrir o escribir") from error
+    except (KeyError, ArithmeticError, ValueError) as error:
+        raise RuntimeError("Falta configurar el presupuesto de OpenAI") from error
+    # Agotado el saldo de OpenAI su clave deja de hacer falta; SeedVR2 es siempre el respaldo.
+    for nombre in (("OPENAI_API_KEY",) if proveedor == "openai" else ()) + ("FAL_KEY",):
+        if not os.environ.get(nombre):
+            raise RuntimeError(f"Falta {nombre} para mejorar las imágenes")
 
 
 def _ejecutar_version(limite: float | None, *argumentos) -> str:
@@ -114,8 +134,7 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
     ``limite`` es un instante de ``time.monotonic()``: pasado ese momento solo se
     entrega lo que ya está en la biblioteca y lo demás lanza ``PlazoVencido``.
     """
-    verificar_configuracion(cuenta)
-    ruta = os.environ["QUOTATION_IMAGE_LIBRARY_DIR"]
+    raiz = _raiz_biblioteca(cuenta)
     if len(datos) > biblioteca.MAX_BYTES:
         raise RuntimeError("Imagen demasiado grande para la biblioteca")
     with Image.open(BytesIO(datos)) as imagen:
@@ -127,7 +146,6 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
     # Las fotografías que ya tienen suficiente resolución no necesitan otro cobro.
     if max(ancho, alto) >= 1024:
         return datos, tipo
-    raiz = Path(ruta)
     cuenta_hash = biblioteca.huella(cuenta.encode())
     with closing(biblioteca.abrir_biblioteca(raiz / cuenta_hash / "biblioteca.db")) as db:
         original = biblioteca.registrar_original(db, datos)

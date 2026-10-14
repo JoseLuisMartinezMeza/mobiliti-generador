@@ -68,6 +68,7 @@ def test_envia_texto_y_miniatura_y_devuelve_la_categoria_por_fila():
     assert resultado == {16: "Escritorios-WorkStation", 42: "Mesas de Juntas"}
     (solicitud,) = cliente.solicitudes
     assert solicitud["model"] == "claude-haiku-5-5"
+    assert 0 < solicitud["timeout"] <= visual.PLAZO_SEGUNDOS
     assert solicitud["output_config"] == {"effort": "high"}
     assert "Escritorios-WorkStation" in solicitud["system"]
     contenido = solicitud["messages"][0]["content"]
@@ -162,10 +163,24 @@ def test_foto_demasiado_grande_no_deja_sin_clasificar_a_las_demas(monkeypatch):
     assert resultado == {9: "Escritorios-WorkStation", 10: "Silla"}
 
 
+def test_un_fallo_pasajero_se_reintenta_una_vez():
+    cliente = ClienteFalso(RuntimeError("529 sobrecargado"), [(1, "Silla")])
+
+    assert visual.clasificar_productos([_producto(9, "lido privados")], {}, CATEGORIAS, cliente=cliente) == {9: "Silla"}
+    assert len(cliente.solicitudes) == 2
+
+
 def test_pasado_el_plazo_no_se_piden_mas_lotes(monkeypatch, capsys):
-    monkeypatch.setattr(visual, "PLAZO_SEGUNDOS", 0)
+    import time
+
+    class ClienteLento(ClienteFalso):
+        def parse(self, **solicitud):
+            time.sleep(0.06)
+            return super().parse(**solicitud)
+
+    monkeypatch.setattr(visual, "PLAZO_SEGUNDOS", 0.05)
     productos = [_producto(fila, f"producto {fila}") for fila in range(1, visual.LOTE + 6)]
-    cliente = ClienteFalso([(i, "Silla") for i in range(1, visual.LOTE + 1)])
+    cliente = ClienteLento([(i, "Silla") for i in range(1, visual.LOTE + 1)])
 
     resultado = visual.clasificar_productos(productos, {}, CATEGORIAS, cliente=cliente)
 

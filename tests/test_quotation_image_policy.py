@@ -193,12 +193,47 @@ def test_seis_hilos_comparten_biblioteca_y_presupuesto(entorno, monkeypatch):
 
 
 def test_configuracion_incompleta_se_detecta_antes_de_pedir_fotos(entorno, monkeypatch):
+    raiz, llamadas, _ = entorno
     politica.verificar_configuracion('karen')
     with pytest.raises(RuntimeError, match='autenticada'):
         politica.verificar_configuracion('')
     monkeypatch.setenv('QUOTATION_IMAGE_LIBRARY_DIR', 'relativa')
     with pytest.raises(RuntimeError, match='QUOTATION_IMAGE_LIBRARY_DIR'):
         politica.verificar_configuracion('karen')
+    # Una carpeta que no se puede crear: la biblioteca no podría guardar nada.
+    (raiz / 'archivo').write_bytes(b'x')
+    monkeypatch.setenv('QUOTATION_IMAGE_LIBRARY_DIR', str(raiz / 'archivo' / 'biblioteca'))
+    with pytest.raises(RuntimeError, match='biblioteca'):
+        politica.verificar_configuracion('karen')
+    assert llamadas == []
+
+
+def test_configuracion_exige_las_claves_del_proveedor_que_toca(entorno, monkeypatch):
+    raiz, _, _ = entorno
+    monkeypatch.setenv('FAL_KEY', '')
+    with pytest.raises(RuntimeError, match='FAL_KEY'):
+        politica.verificar_configuracion('karen')
+    monkeypatch.setenv('FAL_KEY', 'prueba')
+    monkeypatch.setenv('OPENAI_API_KEY', '')
+    with pytest.raises(RuntimeError, match='OPENAI_API_KEY'):
+        politica.verificar_configuracion('karen')
+    # Agotado el saldo de OpenAI, su clave deja de hacer falta.
+    with closing(politica._abrir_presupuesto(raiz)) as db, db:
+        db.execute("UPDATE politica SET proveedor='seedvr2' WHERE id=1")
+    politica.verificar_configuracion('karen')
+
+
+def test_configuracion_exige_el_presupuesto_solo_con_openai(tmp_path, monkeypatch):
+    monkeypatch.setenv('QUOTATION_IMAGE_LIBRARY_DIR', str(tmp_path))
+    monkeypatch.setenv('OPENAI_API_KEY', 'prueba')
+    monkeypatch.setenv('FAL_KEY', 'prueba')
+    monkeypatch.delenv('QUOTATION_OPENAI_BUDGET_USD', raising=False)
+    monkeypatch.delenv('QUOTATION_OPENAI_PREVIOUS_USD', raising=False)
+    monkeypatch.setenv('QUOTATION_IMAGE_POLICY', 'openai_then_seedvr2')
+    with pytest.raises(RuntimeError, match='presupuesto'):
+        politica.verificar_configuracion('karen')
+    monkeypatch.setenv('QUOTATION_IMAGE_POLICY', 'seedvr2')
+    politica.verificar_configuracion('karen')
 
 
 def test_reintento_por_frecuencia_no_espera_mas_alla_del_tope(entorno, monkeypatch):

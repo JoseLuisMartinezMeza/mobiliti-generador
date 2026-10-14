@@ -20,7 +20,7 @@ from PIL import Image
 MODELOS = {"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5"}
 LOTE = 40  # productos por solicitud; la API admite hasta 100 imágenes
 LADO_MAXIMO = 512  # basta para reconocer el mueble y cuesta pocos tokens
-PLAZO_SEGUNDOS = 60  # pasado este tiempo no se piden más lotes; la cotización no espera a Claude
+PLAZO_SEGUNDOS = 60  # tiempo total de la consulta; pasado el plazo la cotización sigue con el diccionario
 CATEGORIAS = {
     "Silla": "sillas operativas, ejecutivas, de visita, de capacitación o apilables",
     "Sillones": "sofás, sillones lounge, salas de espera, asientos modulares, puffs y otomanes tapizados",
@@ -116,10 +116,8 @@ def clasificar_productos(
         if cliente is None:
             import anthropic
 
-            cliente = anthropic.Anthropic(timeout=float(PLAZO_SEGUNDOS), max_retries=0)
+            cliente = anthropic.Anthropic(max_retries=0)
         for desde in range(0, len(unicos), LOTE):
-            if desde and time.monotonic() - inicio >= PLAZO_SEGUNDOS:
-                raise TimeoutError("sin tiempo para más lotes")
             lote = unicos[desde:desde + LOTE]
             contenido: list[dict[str, Any]] = []
             for indice, (nombre, descripcion, dimension, foto) in enumerate(lote, start=1):
@@ -136,14 +134,24 @@ def clasificar_productos(
                         "type": "image",
                         "source": {"type": "base64", "media_type": "image/jpeg", "data": miniatura},
                     })
-            respuesta = cliente.messages.parse(
-                model=modelo,
-                max_tokens=16000,
-                system=SISTEMA,
-                messages=[{"role": "user", "content": contenido}],
-                output_format=formato,
-                output_config={"effort": "high"},
-            )
+            for intento in range(2):  # un reintento por si el fallo fue pasajero
+                restante = PLAZO_SEGUNDOS - (time.monotonic() - inicio)
+                if restante <= 0:
+                    raise TimeoutError("sin tiempo para consultar a Claude")
+                try:
+                    respuesta = cliente.messages.parse(
+                        model=modelo,
+                        max_tokens=16000,
+                        system=SISTEMA,
+                        messages=[{"role": "user", "content": contenido}],
+                        output_format=formato,
+                        output_config={"effort": "high"},
+                        timeout=restante,
+                    )
+                    break
+                except Exception:
+                    if intento:
+                        raise
             entrada += respuesta.usage.input_tokens
             salida += respuesta.usage.output_tokens
             if respuesta.parsed_output is None:
