@@ -39,7 +39,7 @@ from openpyxl.worksheet.formula import ArrayFormula
 from PIL import Image as PILImage
 
 from .catalog_cart import WARNING_FILL
-from .classification import classify_product_name, load_category_dictionary
+from .classification import classify_product_name, load_category_dictionary, name_identifies_product
 from .descriptions import build_product_description, normalize_description_language
 from .customer_descriptions import CATALOGOS_COMERCIALES, construir_descripcion_catalogo
 from .ai_image_provider import (
@@ -51,6 +51,7 @@ from .ai_image_provider import (
 from .image_library import ErrorHTTPProveedor
 from .image_processing import improve_image_map, improve_product_image_bytes
 from .quotation_image_policy import PlazoVencido, politica_activa, mejorar_imagen_cotizacion
+from .visual_classification import clasificar_productos
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .mobiliti_layout import (
     BASE_FIRST_SECTION_ROW,
@@ -2414,22 +2415,44 @@ def _official_presentation_lines(
     lines: list[_OfficialPresentationLine] = []
     needs: list[SectionNeed] = []
 
+    def classification_supplier(item: QuoteItem) -> Any:
+        return (
+            item.proveedor
+            or single_catalog_origin
+            or metadata.get("catalog_supplier")
+            or provider_default
+        )
+
+    # Un apodo o una clave sin palabras ("lido privados", "DU82L.160155") no dice qué es
+    # el producto; adivinarlo por la descripción confunde escritorios con multicontactos.
+    # Solo aplica a lo importado de una Quotation: los catálogos ya traen su colección.
+    reviewed_categories = clasificar_productos(
+        [
+            item
+            for item in product_items
+            if not single_catalog_origin
+            and str(item.modo_precio or "").strip().lower() in {"", "imported"}
+            and not name_identifies_product(
+                str(item.nombre or ""),
+                category_dictionary,
+                supplier=classification_supplier(item),
+            )
+        ],
+        image_payloads,
+        tuple(category_dictionary.get("categorias", {})),
+    )
+
     for section_index, (raw_title, products) in enumerate(groups, start=1):
         section_id = f"section-{section_index}"
         section_title = safe_excel_text(raw_title)
         section_start = len(lines)
         for item in products:
-            category = classify_product_name(
+            category = reviewed_categories.get(item.row) or classify_product_name(
                 str(item.nombre or ""),
                 category_dictionary,
                 description=item.descripcion,
                 source_category=item.categoria,
-                supplier=(
-                    item.proveedor
-                    or single_catalog_origin
-                    or metadata.get("catalog_supplier")
-                    or provider_default
-                ),
+                supplier=classification_supplier(item),
             )
             provider = (
                 safe_excel_text(item.proveedor)
