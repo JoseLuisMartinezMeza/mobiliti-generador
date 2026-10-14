@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, wait
 from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
@@ -47,8 +48,9 @@ from .ai_image_provider import (
     image_provider_failure_is_fatal,
     normalize_image_provider,
 )
+from .image_library import ErrorHTTPProveedor
 from .image_processing import improve_image_map, improve_product_image_bytes
-from .quotation_image_policy import politica_activa, mejorar_imagen_cotizacion
+from .quotation_image_policy import PlazoVencido, politica_activa, mejorar_imagen_cotizacion
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .mobiliti_layout import (
     BASE_FIRST_SECTION_ROW,
@@ -3304,6 +3306,89 @@ def _build_official_cotizacion(
     return mutation, sections
 
 
+_IMAGENES_ESPERA_EXTRA_SEGUNDOS = 45.0
+
+
+def _entorno_numero(nombre: str, defecto: float, minimo: float, convertir: Any) -> Any:
+    try:
+        valor = convertir(os.environ.get(nombre, ""))
+    except ValueError:
+        return defecto
+    return valor if math.isfinite(valor) and valor >= minimo and valor > 0 else defecto
+
+
+def _mejorar_imagenes_con_biblioteca(
+    lines: Sequence[_OfficialPresentationLine],
+    cuenta: str,
+) -> tuple[_OfficialPresentationLine, ...]:
+    """Mejora en paralelo con tope de tiempo; la foto que falla conserva la original."""
+
+    inicio = time.monotonic()
+    # Una sola llamada por imagen: dos simultáneas con los mismos bytes chocan en la biblioteca.
+    indices_por_imagen: dict[bytes, list[int]] = {}
+    for indice, line in enumerate(lines):
+        if (
+            line.origin in {"imported", "quotation"}
+            and line.image_content is not None
+            and line.image_content_type is not None
+        ):
+            indices_por_imagen.setdefault(line.image_content, []).append(indice)
+    if not indices_por_imagen:
+        return tuple(lines)
+
+    concurrencia = _entorno_numero("QUOTATION_IMAGE_CONCURRENCY", 6, 1, int)
+    tope = _entorno_numero("QUOTATION_IMAGE_DEADLINE_SECONDS", 60.0, 0, float)
+    limite = inicio + tope
+
+    def tarea(datos: bytes) -> tuple[bytes, str]:
+        # La política entrega lo ya guardado aunque el tope haya pasado; solo lo nuevo se salta.
+        return mejorar_imagen_cotizacion(datos, cuenta, limite=limite)
+
+    improved = list(lines)
+    mejoradas = omitidas = fallidas = 0
+    errores: set[str] = set()
+    executor = ThreadPoolExecutor(max_workers=concurrencia)
+    try:
+        futuros = {datos: executor.submit(tarea, datos) for datos in indices_por_imagen}
+        wait(futuros.values(), timeout=max(0.0, limite - time.monotonic()))
+        terminados, _ = wait(futuros.values(), timeout=_IMAGENES_ESPERA_EXTRA_SEGUNDOS)
+        for datos, futuro in futuros.items():
+            if futuro not in terminados:
+                fallidas += 1
+                errores.add("TimeoutError")
+                continue
+            error = futuro.exception()
+            if isinstance(error, PlazoVencido):
+                omitidas += 1
+                continue
+            if error is not None:
+                fallidas += 1
+                errores.add(
+                    f"HTTP {error.estado} {error.codigo}"
+                    if isinstance(error, ErrorHTTPProveedor)
+                    else type(error).__name__
+                )
+                continue
+            resultado = futuro.result()
+            mejoradas += 1
+            for indice in indices_por_imagen[datos]:
+                improved[indice] = replace(
+                    lines[indice], image_content=resultado[0], image_content_type=resultado[1]
+                )
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    print(json.dumps({
+        "event": "quotation_images",
+        "unique": len(indices_por_imagen),
+        "improved": mejoradas,
+        "skipped_deadline": omitidas,
+        "failed": fallidas,
+        "errors": sorted(errores),
+        "seconds": round(time.monotonic() - inicio, 1),
+    }, ensure_ascii=True, separators=(",", ":")))
+    return tuple(improved)
+
+
 def _improve_official_cotizacion_images(
     lines: Sequence[_OfficialPresentationLine],
     metadata: Mapping[str, Any],
@@ -3328,8 +3413,11 @@ def _improve_official_cotizacion_images(
     if cleanup_strength not in {"normal", "balanced", "aggressive"}:
         cleanup_strength = "balanced"
 
+    if politica_activa():
+        return _mejorar_imagenes_con_biblioteca(
+            lines, str(metadata.get("_image_library_account") or "")
+        )
     improved: list[_OfficialPresentationLine] = []
-    usar_biblioteca = politica_activa()
     for line in lines:
         if (
             line.origin not in {"imported", "quotation"}
@@ -3337,12 +3425,6 @@ def _improve_official_cotizacion_images(
             or line.image_content_type is None
         ):
             improved.append(line)
-            continue
-        if usar_biblioteca:
-            content, content_type = mejorar_imagen_cotizacion(
-                line.image_content, str(metadata.get("_image_library_account") or "")
-            )
-            improved.append(replace(line, image_content=content, image_content_type=content_type))
             continue
         try:
             content, content_type = improve_product_image_bytes(

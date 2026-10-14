@@ -153,6 +153,45 @@ def test_sondeo_seedvr2_saturado_conserva_la_solicitud_en_cola(entorno, monkeypa
     assert sum(url.endswith('/fal-ai/seedvr/upscale/image') for url in llamadas) == 1
 
 
+def test_tope_vencido_entrega_lo_guardado_y_no_pide_fotos_nuevas(entorno):
+    import time
+
+    raiz, llamadas, _ = entorno
+    politica.mejorar_imagen_cotizacion(foto(), 'karen')
+    vencido = time.monotonic() - 1
+    # Una foto que ya está en la biblioteca no depende del tiempo que quede.
+    assert politica.mejorar_imagen_cotizacion(foto(), 'karen', limite=vencido) == (foto('white'), 'image/png')
+    with pytest.raises(politica.PlazoVencido):
+        politica.mejorar_imagen_cotizacion(foto('red'), 'karen', limite=vencido)
+    assert len(llamadas) == 1
+    with closing(politica._abrir_presupuesto(raiz)) as db:
+        assert db.execute('SELECT COUNT(*) FROM consumos').fetchone()[0] == 1
+    # Con tiempo de sobra se pide normalmente.
+    assert politica.mejorar_imagen_cotizacion(foto('red'), 'karen', limite=time.monotonic() + 60)[1] == 'image/png'
+    assert len(llamadas) == 2
+
+
+def test_seis_hilos_comparten_biblioteca_y_presupuesto(entorno, monkeypatch):
+    import time
+
+    raiz, llamadas, original = entorno
+    def lento(url, *args):
+        time.sleep(0.05)  # deja que las llamadas se encimen como con el proveedor real
+        return original(url, *args)
+    monkeypatch.setattr(biblioteca, 'solicitar', lento)
+    colores = ['red', 'green', 'blue', 'gray', 'black', 'orange', 'purple', 'brown', 'pink', 'olive', 'navy', 'teal']
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        resultados = list(pool.map(lambda color: politica.mejorar_imagen_cotizacion(foto(color), 'karen'), colores))
+    assert resultados == [(foto('white'), 'image/png')] * len(colores)
+    assert len(llamadas) == len(colores)
+    with closing(politica._abrir_presupuesto(raiz)) as db:
+        assert db.execute('SELECT COUNT(*), SUM(micro_usd) FROM consumos').fetchone() == (12, 12 * 54070)
+    # En otra cotización todas salen de la biblioteca, sin llamadas nuevas.
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(lambda color: politica.mejorar_imagen_cotizacion(foto(color), 'karen'), colores))
+    assert len(llamadas) == len(colores)
+
+
 def test_reserva_atomica_entre_workers(entorno, monkeypatch):
     raiz, _, _ = entorno
     monkeypatch.setenv('QUOTATION_OPENAI_BUDGET_USD', '0.50')

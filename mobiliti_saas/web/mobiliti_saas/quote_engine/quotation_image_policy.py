@@ -22,6 +22,10 @@ ESPERAS_POR_FRECUENCIA = (8, 20)
 RESERVA_MICRO_USD = 100_000
 
 
+class PlazoVencido(RuntimeError):
+    """La foto no está en la biblioteca y ya no hay tiempo para pedirla al proveedor."""
+
+
 def politica_activa() -> bool:
     valor = os.environ.get("QUOTATION_IMAGE_POLICY", "off")
     if valor not in {"off", "openai_then_seedvr2", "seedvr2"}:
@@ -90,8 +94,12 @@ def _ejecutar_version(*argumentos) -> str:
             time.sleep(espera)
 
 
-def mejorar_imagen_cotizacion(datos: bytes, cuenta: str) -> tuple[bytes, str]:
-    """Reutiliza por cuenta y contenido; los fallos no cambian silenciosamente de proveedor."""
+def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None = None) -> tuple[bytes, str]:
+    """Reutiliza por cuenta y contenido; los fallos no cambian silenciosamente de proveedor.
+
+    ``limite`` es un instante de ``time.monotonic()``: pasado ese momento solo se
+    entrega lo que ya está en la biblioteca y lo demás lanza ``PlazoVencido``.
+    """
     if not cuenta:
         raise RuntimeError("Falta la cuenta autenticada para la biblioteca de imágenes")
     ruta = os.environ.get("QUOTATION_IMAGE_LIBRARY_DIR", "")
@@ -120,6 +128,8 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str) -> tuple[bytes, str]:
             if not fila or fila['estado'] != 'completada' or biblioteca.huella(fila['imagen']) != fila['sha']:
                 raise RuntimeError("La imagen guardada no conserva su integridad")
             return fila['imagen'], "image/png"
+        if limite is not None and time.monotonic() >= limite:
+            raise PlazoVencido("Sin tiempo para mejorar esta imagen en la cotización")
 
         proveedor = "seedvr2"
         config = dict(biblioteca.CONFIGURACIONES["openai"])

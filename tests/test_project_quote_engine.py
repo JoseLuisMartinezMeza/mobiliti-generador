@@ -631,7 +631,7 @@ def test_official_image_improvement_only_processes_quotation_images(monkeypatch)
 def test_official_image_policy_uses_authenticated_scope_preserves_catalogs(monkeypatch):
     monkeypatch.setenv("QUOTATION_IMAGE_POLICY", "openai_then_seedvr2")
     llamadas = []
-    def mejorar(datos, cuenta):
+    def mejorar(datos, cuenta, limite=None):
         llamadas.append((datos, cuenta))
         return b"resultado", "image/png"
     monkeypatch.setattr(engine, "mejorar_imagen_cotizacion", mejorar)
@@ -642,6 +642,127 @@ def test_official_image_policy_uses_authenticated_scope_preserves_catalogs(monke
     assert resultado[0].image_content == b"resultado"
     assert importada.image_content == b"original"
     assert resultado[1] is catalogo
+
+
+def _preparar_politica_paralela(monkeypatch, espera, falla=b""):
+    import time
+
+    monkeypatch.setenv("QUOTATION_IMAGE_POLICY", "openai_then_seedvr2")
+    llamadas = []
+
+    def mejorar(datos, cuenta, limite=None):
+        # Como la política real: lo guardado se entrega siempre; lo nuevo respeta el tope.
+        if datos.startswith(b"guardada"):
+            return b"mejorada-" + datos, "image/webp"
+        if limite is not None and time.monotonic() >= limite:
+            raise engine.PlazoVencido("sin tiempo")
+        llamadas.append(datos)
+        time.sleep(espera)
+        if datos == falla:
+            raise RuntimeError("proveedor caido")
+        return b"mejorada-" + datos, "image/webp"
+
+    monkeypatch.setattr(engine, "mejorar_imagen_cotizacion", mejorar)
+    return llamadas
+
+
+def _importadas(*imagenes):
+    return tuple(
+        _line(f"linea-{i}", description="Importada", quantity="1", origin="imported", image_content=datos)
+        for i, datos in enumerate(imagenes)
+    )
+
+
+def _evento_imagenes(capsys):
+    import json
+
+    eventos = [json.loads(linea) for linea in capsys.readouterr().out.splitlines() if linea.startswith("{")]
+    assert len(eventos) == 1
+    assert eventos[0]["event"] == "quotation_images"
+    return eventos[0]
+
+
+def test_official_image_policy_procesa_en_paralelo(monkeypatch, capsys):
+    import time
+
+    monkeypatch.setenv("QUOTATION_IMAGE_CONCURRENCY", "6")
+    _preparar_politica_paralela(monkeypatch, 0.3)
+    lineas = _importadas(*(f"foto-{i}".encode() for i in range(6)))
+    inicio = time.perf_counter()
+    resultado = engine._improve_official_cotizacion_images(lineas, {})
+    assert time.perf_counter() - inicio < 1.2
+    assert [r.image_content for r in resultado] == [b"mejorada-" + l.image_content for l in lineas]
+    assert all(r.image_content_type == "image/webp" for r in resultado)
+    evento = _evento_imagenes(capsys)
+    assert (evento["unique"], evento["improved"], evento["skipped_deadline"], evento["failed"]) == (6, 6, 0, 0)
+    assert evento["errors"] == []
+
+
+def test_official_image_policy_manda_una_vez_las_duplicadas(monkeypatch):
+    llamadas = _preparar_politica_paralela(monkeypatch, 0.05)
+    resultado = engine._improve_official_cotizacion_images(_importadas(b"igual", b"igual", b"otra"), {})
+    assert sorted(llamadas) == [b"igual", b"otra"]
+    assert resultado[0].image_content == resultado[1].image_content == b"mejorada-igual"
+    assert resultado[2].image_content == b"mejorada-otra"
+
+
+def test_official_image_policy_aisla_el_fallo_de_una_imagen(monkeypatch, capsys):
+    _preparar_politica_paralela(monkeypatch, 0.05, falla=b"mala")
+    lineas = _importadas(b"buena", b"mala", b"otra")
+    resultado = engine._improve_official_cotizacion_images(lineas, {})
+    assert resultado[1] is lineas[1]
+    assert resultado[0].image_content == b"mejorada-buena"
+    assert resultado[2].image_content == b"mejorada-otra"
+    evento = _evento_imagenes(capsys)
+    assert evento["failed"] == 1
+    assert evento["improved"] == 2
+    assert evento["errors"] == ["RuntimeError"]
+
+
+def test_official_image_policy_respeta_el_tope_de_tiempo(monkeypatch, capsys):
+    monkeypatch.setenv("QUOTATION_IMAGE_CONCURRENCY", "1")
+    monkeypatch.setenv("QUOTATION_IMAGE_DEADLINE_SECONDS", "0.25")
+    llamadas = _preparar_politica_paralela(monkeypatch, 0.2)
+    lineas = _importadas(b"uno", b"dos", b"tres")
+    resultado = engine._improve_official_cotizacion_images(lineas, {})
+    assert llamadas == [b"uno", b"dos"]
+    assert resultado[0].image_content == b"mejorada-uno"
+    assert resultado[1].image_content == b"mejorada-dos"
+    assert resultado[2] is lineas[2]
+    evento = _evento_imagenes(capsys)
+    assert evento["skipped_deadline"] == 1
+    assert evento["improved"] == 2
+
+
+def test_official_image_policy_entrega_lo_guardado_aunque_venza_el_tope(monkeypatch, capsys):
+    monkeypatch.setenv("QUOTATION_IMAGE_CONCURRENCY", "1")
+    monkeypatch.setenv("QUOTATION_IMAGE_DEADLINE_SECONDS", "0.1")
+    llamadas = _preparar_politica_paralela(monkeypatch, 0.3)
+    lineas = _importadas(b"lenta", b"nueva", b"guardada-en-biblioteca")
+    resultado = engine._improve_official_cotizacion_images(lineas, {})
+    assert llamadas == [b"lenta"]
+    assert resultado[0].image_content == b"mejorada-lenta"
+    assert resultado[1] is lineas[1]
+    # Quedó detrás de una llamada lenta, pero ya estaba mejorada: no puede salir la original.
+    assert resultado[2].image_content == b"mejorada-guardada-en-biblioteca"
+    evento = _evento_imagenes(capsys)
+    assert (evento["improved"], evento["skipped_deadline"], evento["failed"]) == (2, 1, 0)
+
+
+def test_official_image_policy_sin_candidatas_no_imprime(monkeypatch, capsys):
+    llamadas = _preparar_politica_paralela(monkeypatch, 0)
+    catalogo = _line(PER_UNIT_ID, description="Catalogo", quantity="1", origin="lumbro", image_content=b"catalogo")
+    assert engine._improve_official_cotizacion_images((catalogo,), {}) == (catalogo,)
+    assert llamadas == []
+    assert capsys.readouterr().out == ""
+
+
+def test_official_image_policy_ignora_variables_invalidas(monkeypatch):
+    monkeypatch.setenv("QUOTATION_IMAGE_CONCURRENCY", "cero")
+    monkeypatch.setenv("QUOTATION_IMAGE_DEADLINE_SECONDS", "-1")
+    _preparar_politica_paralela(monkeypatch, 0.01)
+    resultado = engine._improve_official_cotizacion_images(_importadas(b"uno", b"dos"), {})
+    assert [r.image_content for r in resultado] == [b"mejorada-uno", b"mejorada-dos"]
 
 
 def test_official_image_improvement_uses_storage_efficient_resolution(monkeypatch):
