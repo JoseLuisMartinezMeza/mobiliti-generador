@@ -61,6 +61,8 @@ Armado de una cotización real de 40 líneas, en la misma máquina, con las foto
 | Desplegada (`45bcb4aa`) | 25.9 |
 | Con los cambios | 12.9 |
 
+Dentro de la imagen del worker (Linux, Python 3.12, dos CPU), el mismo armado pasa de 27.6 a 14.9 segundos, medianas de cuatro y cinco corridas.
+
 La salida es idéntica parte por parte (597 partes) mientras la clasificación con Claude está apagada. La memoria máxima del proceso sube de 279 a unos 340 MB.
 
 Con cada foto tardando 7 segundos (como SeedVR2), 30 fotos distintas pasan de 210 segundos en serie a 35.
