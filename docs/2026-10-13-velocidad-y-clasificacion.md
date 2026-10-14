@@ -110,9 +110,9 @@ El caso extremo, con fal y Claude agotando sus topes (105 y 60 segundos), llegar
 
 | Variable | Por defecto | Efecto |
 |---|---|---|
-| `QUOTATION_IMAGE_POLICY` | `off` | En producción, `seedvr2` desde el 13 de octubre |
+| `QUOTATION_IMAGE_POLICY` | `off` | En producción, `seedvr2` el 13 de octubre y `openai_then_seedvr2` (OpenAI `medium`) desde el 14 |
 | `QUOTATION_IMAGE_CONCURRENCY` | 6 | Fotos que se piden a la vez |
-| `QUOTATION_IMAGE_DEADLINE_SECONDS` | 60 | Segundos durante los que se piden fotos nuevas |
+| `QUOTATION_IMAGE_DEADLINE_SECONDS` | 60 | Segundos durante los que se piden fotos nuevas; en producción 100 desde el 14 de octubre |
 | `QUOTE_LLM_FALLBACK_MODEL` | vacío | `haiku` o `sonnet`; además del respaldo de importación, activa la clasificación con foto |
 
 Un valor inválido en `QUOTATION_IMAGE_CONCURRENCY` o `QUOTATION_IMAGE_DEADLINE_SECONDS` usa el valor por defecto.
@@ -141,6 +141,36 @@ Un valor inválido en `QUOTATION_IMAGE_CONCURRENCY` o `QUOTATION_IMAGE_DEADLINE_
 - Rama `codex/velocidad-y-clasificacion-20261013`, entregada por bundle en tres pasos: `0912c862` (los cambios), `7365dd27` (tope del factor de SeedVR2, que no bastó) y `6e9eff47` (fotos pequeñas). `CURRENT=6e9eff47`, contenedor sano y sin reinicios.
 - `/etc/mobiliti-worker/worker.env`: `QUOTATION_IMAGE_POLICY` pasó de `openai_then_seedvr2` a `seedvr2`. Respaldo: `worker.env.bak-20261013-antes-seedvr2`. La clave de OpenAI sigue en el archivo, sin uso.
 - Contenedor previo a estos cambios: `mobiliti-worker-backup-20261014025846-ba4fe80789ab` (imagen `6122b56f`, con su propia política `openai_then_seedvr2`). Para volver a él: detener y renombrar `mobiliti-worker`, renombrar ese respaldo a `mobiliti-worker`, arrancarlo y escribir `6122b56f9a892b9e0536e0ab47a941115aa7a6bd` en `/opt/mobiliti-worker/releases/CURRENT`. Restaurar también el respaldo de `worker.env`, para que el siguiente despliegue no vuelva a SeedVR2.
+
+## Fotos con OpenAI medium (14 de octubre)
+
+Tras comparar diez modelos y SeedVR2 con fotos reales (`output/comparativa-ia-20261013/`), el usuario eligió el acabado de OpenAI: reconstruye cubiertas pixeladas y con reflejo, quita fondos o pisos grises y respeta el producto. Ninguna alternativa cumplió las tres cosas. SeedVR2 conserva el reflejo y el piso gris.
+
+- `gpt-image-2.5-sunburst` en calidad `medium` (en la comparación se ve como `high`) y fondo opaco, con una instrucción nueva: reconstruir superficies, quitar fondos o pisos grises y dejar el producto al 92 % del cuadro.
+- A OpenAI se envía el producto centrado según su transparencia, sobre blanco y a 512 px. Una foto sin transparencia se envía tal cual. La selección se sigue guardando con la huella de la foto original.
+- Toda foto entregada, de OpenAI, de SeedVR2 o ya guardada, se recorta al producto con un margen de 3 %; nunca se agregan píxeles. Las fotos que SeedVR2 mejoró el 13 de octubre se conservan.
+
+Medición en el servidor, en un contenedor desechable con biblioteca temporal: BUCE PISO 8 (49 líneas, 34 fotos nuevas; en producción eran 27) por `generate_quote`, con el tope todavía en 60 s.
+
+| | Primera generación | Regenerar |
+|---|---|---|
+| Fotos | 69.4 s; 24 de 34 mejoradas, 10 por tope | 35.9 s; 34 de 34 |
+| Armado completo | 163.9 s | 130.1 s |
+| Con preparar entrada (14.8 s) y subir (4 s) de la bitácora | unos 3 min 3 s | unos 2 min 29 s |
+
+- Costo real: USD 0.0225 por foto (promedio de 944 tokens de imagen de entrada, 325 de texto y 439 de salida), 16 s por foto. Las 34 fotos costaron USD 0.77; las 27 de producción serían unos USD 0.61, contra USD 1.66 con `high`.
+- Haiku: 3 s y unos 5,400 tokens de entrada por corrida.
+- La copia de la entrada (`fuente_buce8.xlsx`) tiene 8 estilos con `xfId` fuera de rango, que el motor rechaza al copiar la Quotation; se repararon solo para medir. El primer intento falló por eso después de generar 24 fotos. Gasto total de la medición: unos USD 1.30.
+- Con el tope en 100 s se espera que las fotos de una cotización así salgan todas en la primera generación, en unos 3.5 minutos.
+
+Validación: política de fotos, paridad del bundle, motor de Proyectos, piloto de fotos, worker y clasificación con foto, 181 aprobadas. Las cuatro fotos de la comparación producen con este código la misma entrada que se comparó (diferencia de 0 píxeles).
+
+Despliegue el 14 de octubre (04:14 UTC), con autorización del usuario. Solo el worker.
+
+- Commit `50cd453e`, entregado por bundle desde `6e9eff47`. `CURRENT=50cd453e`, contenedor sano.
+- `/etc/mobiliti-worker/worker.env`: `QUOTATION_IMAGE_POLICY` de `seedvr2` a `openai_then_seedvr2` y `QUOTATION_IMAGE_DEADLINE_SECONDS=100`. Respaldo: `worker.env.bak-20261014-antes-openai-medium`.
+- Contenedor previo: `mobiliti-worker-backup-20261014041407-1100bfcf8570` (imagen `6e9eff47`, con SeedVR2). Para volver a él, el mismo procedimiento de arriba con `6e9eff472af3f73169b090cbc778ff6743937375` en `CURRENT` y el respaldo de `worker.env` de este despliegue.
+- Presupuesto de la app al desplegar: USD 16.90 disponibles de 30. El saldo real de la cuenta de OpenAI puede ser menor; al agotarse, el worker pasa solo a SeedVR2.
 
 ## Pendiente
 
