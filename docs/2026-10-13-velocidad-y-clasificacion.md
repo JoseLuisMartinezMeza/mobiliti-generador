@@ -172,7 +172,23 @@ Despliegue el 14 de octubre (04:14 UTC), con autorización del usuario. Solo el 
 - Contenedor previo: `mobiliti-worker-backup-20261014041407-1100bfcf8570` (imagen `6e9eff47`, con SeedVR2). Para volver a él, el mismo procedimiento de arriba con `6e9eff472af3f73169b090cbc778ff6743937375` en `CURRENT` y el respaldo de `worker.env` de este despliegue.
 - Presupuesto de la app al desplegar: USD 16.90 disponibles de 30. El saldo real de la cuenta de OpenAI puede ser menor; al agotarse, el worker pasa solo a SeedVR2.
 
+## Estilos con `xfId` fuera de rango (14 de octubre)
+
+La entrada de BUCE PISO 8 tiene 14 estilos de celda (`cellXfs`) cuyo `xfId` (116 a 123) supera los 116 estilos con nombre (`cellStyleXfs`). Excel los abre como el estilo Normal (0); el motor lanzaba `ValueError: Referencia xfId fuera de rango` al copiar la Quotation y la cotización no se generaba. Ahora el remapeo de estilos los trata como 0. Si el archivo no tiene ningún estilo con nombre, sigue fallando.
+
+- Prueba nueva en `tests/test_quotation_sheet_transplant.py`. Con la copia del motor web sincronizada: trasplante y paridad del bundle, 137 aprobadas.
+- Las 16 suites del motor que usan `quotation_sheets`: 330 aprobadas, 1 omitida, la falla ya conocida del constructor IDÉLIKA y 6 errores de `test_template_variant_e2e.py` porque falta su archivo real de entrada en este worktree.
+- No es la causa de la falla de ESSENTIA por «Nueva cotización»: sus dos Quotations de fábrica no tienen `xfId` fuera de rango y el error registrado es otro («Más de una imagen Quotation para la misma fila»).
+
+Despliegue el 14 de octubre (04:56 UTC), con autorización del usuario. Solo el worker; Vercel no ejecuta este código.
+
+- Commit `9051d17c`, entregado por bundle desde `50cd453e`. `CURRENT=9051d17c`, sin cambios en `worker.env`. Sano y sin reinicios de 04:57 a 05:07 UTC.
+- Con la imagen productiva, en un contenedor desechable sin fotos ni Claude, BUCE PISO 8 se generó desde la entrada sin reparar en 188 s.
+- Contenedor previo: `mobiliti-worker-backup-20261014045644-55d697d16787` (imagen `50cd453e`). Para volver a él, el mismo procedimiento de arriba con `50cd453ec63af5519bf3f4ea87f47a86d30ad24e` en `CURRENT`; no hay respaldo de `worker.env` porque no cambió.
+- Antes del despliegue, los contenedores `50cd453e` (desde unas 04:17 UTC) y `6e9eff47` (desde unas 04:09) estaban `unhealthy`: `/health` respondía 503 con `worker_cycle_failed` y `processed: 0`, sin trabajos en la cola ni trazas en el registro. El ciclo del worker descarta la excepción y ese estado solo se limpia al procesar un trabajo; la salud que se mide al desplegar es anterior al primer ciclo. La causa no se pudo saber.
+
 ## Pendiente
 
 - Confirmar con la primera cotización real: el tiempo que muestra la web y, en el registro del worker, las líneas `quotation_images` y `visual_classification`.
 - Si se quiere el tiempo exacto de BUCE PISO 8, regenerarla desde la web; sus fotos ya están en la biblioteca, así que medirá el armado y la clasificación, no SeedVR2.
+- Registrar la excepción del ciclo del worker y limpiar `worker_cycle_failed` tras un ciclo en reposo sin errores, para que una falla pasajera no deje el worker `unhealthy` sin rastro.
