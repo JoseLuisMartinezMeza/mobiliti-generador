@@ -36,6 +36,8 @@ CONFIGURACIONES = {
     },
 }
 MAX_BYTES = 32 * 1024 * 1024
+# Un 429 con estos códigos es saldo agotado; cualquier otro 429 es límite de frecuencia.
+CODIGOS_SALDO = frozenset({"credit_balance_exhausted", "billing_hard_limit_reached", "insufficient_quota"})
 
 
 def huella(datos: bytes) -> str:
@@ -185,12 +187,18 @@ def ejecutar_version(db: sqlite3.Connection, original: str, proveedor: str, conf
         # Solo registrar rechazo inequívoco; un fallo 5xx puede ocurrir tras generar.
         if error.estado in {400, 401, 403, 404, 422, 429}:
             identificador = clave_version(original, proveedor, configuracion)
+            # Un 429 por frecuencia no generó nada: se puede reenviar, y lo ya encolado sigue vivo.
+            por_frecuencia = error.estado == 429 and error.codigo not in CODIGOS_SALDO
             with db:
                 fila = db.execute("SELECT metadata FROM versiones WHERE id=?", (identificador,)).fetchone()
                 meta = json.loads(fila[0]) if fila else {}
                 meta.update(http=error.estado, code=error.codigo)
-                db.execute("UPDATE versiones SET estado='rechazada', metadata=? WHERE id=? AND estado IN ('enviando', 'en_cola')",
-                           (json.dumps(meta), identificador))
+                if por_frecuencia:
+                    db.execute("UPDATE versiones SET estado='reintento_autorizado', metadata=? WHERE id=? AND estado='enviando'",
+                               (json.dumps(meta), identificador))
+                else:
+                    db.execute("UPDATE versiones SET estado='rechazada', metadata=? WHERE id=? AND estado IN ('enviando', 'en_cola')",
+                               (json.dumps(meta), identificador))
         raise
 
 

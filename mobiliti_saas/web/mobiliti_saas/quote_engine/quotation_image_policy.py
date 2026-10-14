@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from contextlib import closing
 from decimal import Decimal
 from io import BytesIO
@@ -14,7 +15,9 @@ from PIL import Image
 from . import image_library as biblioteca
 
 
-ERRORES_SALDO = {"credit_balance_exhausted", "billing_hard_limit_reached", "insufficient_quota"}
+ERRORES_SALDO = biblioteca.CODIGOS_SALDO
+# Segundos de espera antes de cada reintento cuando el proveedor responde 429 por frecuencia.
+ESPERAS_POR_FRECUENCIA = (8, 20)
 # Reserva conservadora para una entrada <=1024 y una salida high 1024, n=1.
 RESERVA_MICRO_USD = 100_000
 
@@ -77,6 +80,16 @@ def _costo_reportado(metadata: dict) -> int:
     return imagen * 8 + texto * 5 + salida * 30
 
 
+def _ejecutar_version(*argumentos) -> str:
+    for espera in (*ESPERAS_POR_FRECUENCIA, None):
+        try:
+            return biblioteca.ejecutar_version(*argumentos)
+        except biblioteca.ErrorHTTPProveedor as exc:
+            if exc.estado != 429 or exc.codigo in ERRORES_SALDO or espera is None:
+                raise
+            time.sleep(espera)
+
+
 def mejorar_imagen_cotizacion(datos: bytes, cuenta: str) -> tuple[bytes, str]:
     """Reutiliza por cuenta y contenido; los fallos no cambian silenciosamente de proveedor."""
     if not cuenta:
@@ -124,7 +137,7 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str) -> tuple[bytes, str]:
                     version = version_openai
                 elif _reservar_gasto(presupuesto, cargo):
                     try:
-                        version = biblioteca.ejecutar_version(db, original, "openai", config, os.environ.get("OPENAI_API_KEY", ""))
+                        version = _ejecutar_version(db, original, "openai", config, os.environ.get("OPENAI_API_KEY", ""))
                         proveedor = "openai"
                     except biblioteca.ErrorHTTPProveedor as exc:
                         if exc.codigo not in ERRORES_SALDO:
@@ -141,7 +154,7 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str) -> tuple[bytes, str]:
                             presupuesto.execute("UPDATE politica SET proveedor='seedvr2', motivo='revisar_tarifa' WHERE id=1")
         if proveedor == "seedvr2":
             config = {**biblioteca.CONFIGURACIONES["seedvr2"], "upscale_factor": 1024 / max(ancho, alto)}
-            version = biblioteca.ejecutar_version(db, original, proveedor, config, os.environ.get("FAL_KEY", ""))
+            version = _ejecutar_version(db, original, proveedor, config, os.environ.get("FAL_KEY", ""))
         fila = db.execute("SELECT imagen, sha, estado FROM versiones WHERE id=?", (version,)).fetchone()
         if fila['estado'] != 'completada' or biblioteca.huella(fila['imagen']) != fila['sha']:
             raise RuntimeError("Resultado de imagen inválido")

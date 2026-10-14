@@ -82,7 +82,7 @@ def test_tope_incluye_consumo_previo_y_conserva_imagen_openai(entorno, monkeypat
     assert sum('openai.com' in url for url in llamadas) == 1
 
 
-@pytest.mark.parametrize('error', [TimeoutError('sin respuesta'), biblioteca.ErrorHTTPProveedor(429, 'rate_limit_exceeded'), biblioteca.ErrorHTTPProveedor(401, 'invalid_api_key')])
+@pytest.mark.parametrize('error', [TimeoutError('sin respuesta'), biblioteca.ErrorHTTPProveedor(401, 'invalid_api_key')])
 def test_error_temporal_o_credencial_no_cambia_ni_reenvia(entorno, monkeypatch, error):
     raiz, llamadas, _ = entorno
     def fallo(*args):
@@ -97,6 +97,60 @@ def test_error_temporal_o_credencial_no_cambia_ni_reenvia(entorno, monkeypatch, 
     with closing(politica._abrir_presupuesto(raiz)) as db:
         assert db.execute('SELECT proveedor FROM politica').fetchone()[0] == 'openai'
         assert db.execute('SELECT SUM(micro_usd) FROM consumos').fetchone()[0] == 100000
+
+
+def test_limite_de_frecuencia_reintenta_y_cobra_una_sola_vez(entorno, monkeypatch):
+    raiz, llamadas, original = entorno
+    monkeypatch.setattr(politica, 'ESPERAS_POR_FRECUENCIA', (0, 0))
+    rechazos = []
+    def saturado_una_vez(url, *args):
+        if 'openai.com' in url and not rechazos:
+            rechazos.append(url)
+            raise biblioteca.ErrorHTTPProveedor(429, 'rate_limit_exceeded')
+        return original(url, *args)
+    monkeypatch.setattr(biblioteca, 'solicitar', saturado_una_vez)
+    # Un 429 por frecuencia no generó nada: se reenvía en la misma cotización.
+    assert politica.mejorar_imagen_cotizacion(foto(), 'karen') == (foto('white'), 'image/png')
+    assert len(rechazos) == 1 and sum('openai.com' in url for url in llamadas) == 1
+    with closing(politica._abrir_presupuesto(raiz)) as db:
+        assert db.execute('SELECT proveedor FROM politica').fetchone()[0] == 'openai'
+        assert db.execute('SELECT SUM(micro_usd) FROM consumos').fetchone()[0] == 54070
+
+
+def test_limite_de_frecuencia_persistente_no_bloquea_la_imagen(entorno, monkeypatch):
+    raiz, llamadas, original = entorno
+    monkeypatch.setattr(politica, 'ESPERAS_POR_FRECUENCIA', (0, 0))
+    saturado = [True]
+    def proveedor(url, *args):
+        if 'openai.com' in url and saturado[0]:
+            llamadas.append('saturado')
+            raise biblioteca.ErrorHTTPProveedor(429, 'rate_limit_exceeded')
+        return original(url, *args)
+    monkeypatch.setattr(biblioteca, 'solicitar', proveedor)
+    with pytest.raises(biblioteca.ErrorHTTPProveedor):
+        politica.mejorar_imagen_cotizacion(foto(), 'karen')
+    assert llamadas == ['saturado'] * 3  # el intento y sus dos reintentos
+    saturado[0] = False
+    # La siguiente cotización vuelve a enviarla sin intervención manual.
+    assert politica.mejorar_imagen_cotizacion(foto(), 'karen')[0] == foto('white')
+    with closing(politica._abrir_presupuesto(raiz)) as db:
+        assert db.execute('SELECT proveedor FROM politica').fetchone()[0] == 'openai'
+
+
+def test_sondeo_seedvr2_saturado_conserva_la_solicitud_en_cola(entorno, monkeypatch):
+    _, llamadas, original = entorno
+    monkeypatch.setenv('QUOTATION_IMAGE_POLICY', 'seedvr2')
+    monkeypatch.setattr(politica, 'ESPERAS_POR_FRECUENCIA', (0, 0))
+    rechazos = []
+    def proveedor(url, *args):
+        if url.endswith('/status') and not rechazos:
+            rechazos.append(url)
+            raise biblioteca.ErrorHTTPProveedor(429, 'sin_codigo')
+        return original(url, *args)
+    monkeypatch.setattr(biblioteca, 'solicitar', proveedor)
+    assert politica.mejorar_imagen_cotizacion(foto(), 'karen')[0] == foto('blue')
+    # La solicitud ya encolada se consulta de nuevo; no se envía ni se cobra otra.
+    assert sum(url.endswith('/fal-ai/seedvr/upscale/image') for url in llamadas) == 1
 
 
 def test_reserva_atomica_entre_workers(entorno, monkeypatch):
