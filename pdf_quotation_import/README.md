@@ -23,7 +23,7 @@ python -m pdf_quotation_import.llm_fallback "C:\ruta\cotizacion.pdf" --modelo ha
 
 Requiere `ANTHROPIC_API_KEY` en el entorno y el paquete `anthropic`. Imprime productos, fotos asignadas, advertencias, tokens y `costo_usd` de la llamada. `--modelo` acepta `haiku` (Claude Haiku 5.5) o `sonnet` (Claude Sonnet 5.5).
 
-En el worker se activa con `QUOTE_LLM_FALLBACK_MODEL=haiku` o `sonnet`; sin la variable el worker se comporta igual que antes. Solo llama al modelo cuando el convertidor PDF falla o el XLSX no trae hoja `Quotation` con productos, y guarda tokens y costo en `metadata.llm_fallback` del job.
+En el worker se activa con `QUOTE_LLM_FALLBACK_MODEL=haiku` o `sonnet`; sin la variable el worker se comporta igual que antes. Para convertir, solo llama al modelo cuando el convertidor PDF falla o el XLSX no trae hoja `Quotation` con productos, y guarda tokens y costo en `metadata.llm_fallback` del job. Con la misma variable, al generar la cotización el motor consulta la categoría de los productos importados cuyo nombre no reconoce el diccionario, enviando también su foto ([detalle](../docs/2026-10-13-velocidad-y-clasificacion.md)).
 
 La API lee la misma variable: con ella, "Previsualizar e importar al proyecto" acepta PDF y Excel sin hoja `Quotation`, los convierte y deja el borrador como si se hubiera subido la Quotation `.xlsx` (tokens y costo en `metadata.llm_fallback`). Requiere que el proceso de la API tenga `pdf_quotation_import`, PyMuPDF y `anthropic`; el bundle de Vercel no los trae, asi que ahi la variable debe seguir vacia.
 
