@@ -72,7 +72,7 @@ def test_reserva_unica_entre_conexiones_y_configuraciones_distintas(tmp_path):
     registro, nueva = piloto.reservar(primera, sha, "openai", config)
     assert nueva
     assert not piloto.reservar(segunda, sha, "openai", config)[1]
-    otra, nueva = piloto.reservar(segunda, sha, "openai", {**config, "quality": "medium"})
+    otra, nueva = piloto.reservar(segunda, sha, "openai", {**config, "quality": "high"})
     assert nueva and otra["id"] != registro["id"]
     with pytest.raises(ValueError, match="completa"):
         piloto.aprobar(primera, registro["id"])

@@ -14,19 +14,31 @@ from pathlib import Path
 from PIL import Image
 from .ai_image_provider import _multipart_body
 
+# Instrucción y calidad elegidas en la comparación del 2026-10-13 (output/comparativa-ia-20261013):
+# medium se ve como high por un cuarto del costo y en unos 20 s en lugar de 30.
 PROMPT = (
-    "Restore this low-resolution furniture product photograph for a quotation. "
-    "Preserve the EXACT product, silhouette, camera angle, framing, proportions, colors, "
-    "materials, number and position of legs, casters, armrests and structural wires. "
-    "Only reduce pixelation and compression artifacts and improve edge clarity. "
-    "Keep the original white background. Do not redesign, add details or objects, change "
-    "upholstery, invent texture, add text, or crop the product. When a detail is ambiguous, "
-    "preserve its appearance instead of inventing a new detail."
+    "Recreate this low-resolution furniture product photo as a clean, sharp studio catalog image of the "
+    "SAME product for a sales quotation. "
+    "REBUILD SURFACES: the source is heavily pixelated and its flat surfaces (tabletops, desktops, panels, "
+    "seats) show capture defects: blur, pixel blocks, banding and washed-out white glare or reflection "
+    "patches. Do not preserve those defects. Re-render every surface as continuous, evenly lit material with "
+    "crisp realistic detail; for wood or laminate show clear natural grain running in the same direction, the "
+    "same color tone across the whole surface and a clean, defined edge thickness. Remove white glare, hot "
+    "spots and reflections completely. "
+    "KEEP THE PRODUCT IDENTICAL: same design, silhouette, proportions, camera angle, colors and materials; "
+    "same number, position and thickness of legs, wires, casters, armrests, panels, drawers and cable ports. "
+    "Do not redesign, add or remove parts, or add text, logos or props. If a structural detail is ambiguous, "
+    "keep its original shape instead of inventing a new one. "
+    "BACKGROUND: seamless pure white (#FFFFFF). If the source has a gray, tinted or gradient background, a "
+    "floor plane, a backdrop or any cast shadow, remove it entirely. No floor, no shadow, no border. "
+    "FRAMING: tight product-only crop. Center the product and scale it uniformly so it fills about 92% of the "
+    "frame along its longest dimension, leaving only a thin even white margin. Never cut off any part of the "
+    "product and never stretch it."
 )
 CONFIGURACIONES = {
     "openai": {
         "model": "gpt-image-2.5-sunburst-2026-09-08",
-        "prompt": PROMPT, "size": "1024x1024", "quality": "high",
+        "prompt": PROMPT, "size": "1024x1024", "quality": "medium", "background": "opaque",
         "output_format": "png", "n": 1,
     },
     "seedvr2": {

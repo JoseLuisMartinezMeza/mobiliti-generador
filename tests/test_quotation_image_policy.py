@@ -6,7 +6,7 @@ from contextlib import closing
 from io import BytesIO
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 
 from mobiliti_saas.quote_engine import quotation_image_policy as politica
 from mobiliti_saas.quote_engine import image_library as biblioteca
@@ -340,6 +340,36 @@ def test_jpeg_sin_modificar_entrada_y_sin_cuenta_no_envia(entorno, monkeypatch):
     assert not llamadas
     politica.mejorar_imagen_cotizacion(datos, 'karen')
     assert len(llamadas) == 1
+
+
+def test_openai_recibe_el_producto_centrado_y_se_entrega_sin_blanco_sobrante(entorno, monkeypatch):
+    _, llamadas, original = entorno
+    enviadas = []
+    def proveedor(url, clave='', datos=None, tipo=None):
+        if 'openai.com' not in url:
+            return original(url, clave, datos, tipo)
+        llamadas.append(url)
+        assert b'name="quality"\r\n\r\nmedium\r\n' in datos and b'name="background"\r\n\r\nopaque\r\n' in datos
+        enviadas.append(Image.open(BytesIO(datos[datos.index(b'\x89PNG'):])).convert('RGB'))
+        resultado = Image.new('RGB', (1024, 1024), 'white')
+        resultado.paste((40, 40, 40), (300, 200, 700, 800))
+        salida = BytesIO()
+        resultado.save(salida, 'PNG')
+        return json.dumps({"data": [{"b64_json": base64.b64encode(salida.getvalue()).decode()}],
+            "usage": {"input_tokens_details": {"image_tokens": 300, "text_tokens": 330}, "output_tokens": 439}}).encode(), {}
+    monkeypatch.setattr(biblioteca, 'solicitar', proveedor)
+    silla = Image.new('RGBA', (150, 150), (0, 0, 0, 0))
+    silla.paste((90, 90, 90, 255), (50, 40, 80, 110))  # 30x70 px de producto y mucho margen transparente
+    datos = BytesIO()
+    silla.save(datos, 'PNG')
+    for _ in range(2):  # la segunda vez sale de la biblioteca, igual de recortada
+        entregada = Image.open(BytesIO(politica.mejorar_imagen_cotizacion(datos.getvalue(), 'karen')[0]))
+        assert entregada.size == (436, 636)  # 400x600 de producto más 3 % por lado
+    assert len(llamadas) == 1
+    entrada = enviadas[0]
+    assert entrada.size == (512, 512) and entrada.getpixel((5, 5)) == (255, 255, 255)
+    x0, y0, x1, y1 = ImageChops.difference(entrada, Image.new('RGB', entrada.size, 'white')).convert('L').point(lambda p: 255 if p > 30 else 0).getbbox()
+    assert abs((y1 - y0) / 512 - politica.LLENADO_ENTRADA) < 0.02 and abs((x0 + x1) / 2 - 256) < 3
 
 
 def test_excel_general_y_cdmx_reutilizan_biblioteca_y_preservan_quotation(entorno, monkeypatch):

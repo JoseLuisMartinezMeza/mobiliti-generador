@@ -10,7 +10,7 @@ from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from . import image_library as biblioteca
 
@@ -20,8 +20,52 @@ ERRORES_SALDO = biblioteca.CODIGOS_SALDO
 ESPERAS_POR_FRECUENCIA = (8, 20)
 # Segundos que una cotización espera, pasado su tope, a lo que ya estaba en curso.
 GRACIA_EN_CURSO = 45.0
-# Reserva conservadora para una entrada <=1024 y una salida high 1024, n=1.
+# Reserva conservadora para una entrada <=1024 y una salida 1024 de calidad high o menor, n=1.
 RESERVA_MICRO_USD = 100_000
+# Entrada a OpenAI comparada el 2026-10-13: producto al 92 % de un cuadro blanco de 512 px.
+LLENADO_ENTRADA = 0.92
+LADO_ENTRADA = 512
+# Margen que se deja alrededor del producto al recortar el blanco sobrante del resultado.
+MARGEN_SALIDA = 0.03
+
+
+def _entrada_openai(datos: bytes) -> bytes | None:
+    """Centra el producto según su transparencia; una foto sin transparencia se envía tal cual."""
+    with Image.open(BytesIO(datos)) as imagen:
+        rgba = imagen.convert("RGBA")
+    alfa = rgba.getchannel("A")
+    caja = alfa.point(lambda p: 255 if p else 0).getbbox()
+    if alfa.getextrema()[0] == 255 or not caja:
+        return None
+    x0, y0, x1, y1 = caja
+    lado = round(max(x1 - x0, y1 - y0) / LLENADO_ENTRADA)
+    blanca = Image.new("RGBA", rgba.size, "white")
+    blanca.alpha_composite(rgba)
+    lienzo = Image.new("RGB", (lado, lado), "white")
+    lienzo.paste(blanca.convert("RGB"), (-((x0 + x1 - lado) // 2), -((y0 + y1 - lado) // 2)))
+    salida = BytesIO()
+    lienzo.resize((LADO_ENTRADA, LADO_ENTRADA), Image.LANCZOS).save(salida, "PNG")
+    return salida.getvalue()
+
+
+def _recortar_margen(datos: bytes) -> bytes:
+    """Quita el blanco sobrante alrededor del producto; nunca agrega píxeles."""
+    with Image.open(BytesIO(datos)) as imagen:
+        imagen.load()
+    blanca = Image.new("RGBA", imagen.size, "white")
+    blanca.alpha_composite(imagen.convert("RGBA"))
+    diferencia = ImageChops.difference(blanca.convert("RGB"), Image.new("RGB", imagen.size, "white")).convert("L")
+    caja = diferencia.point(lambda p: 255 if p > 8 else 0).getbbox()
+    if not caja:
+        return datos
+    x0, y0, x1, y1 = caja
+    margen = round(max(x1 - x0, y1 - y0) * MARGEN_SALIDA)
+    ventana = (max(x0 - margen, 0), max(y0 - margen, 0), min(x1 + margen, imagen.width), min(y1 + margen, imagen.height))
+    if ventana == (0, 0, *imagen.size):
+        return datos
+    salida = BytesIO()
+    imagen.crop(ventana).save(salida, "PNG")
+    return salida.getvalue()
 
 
 class PlazoVencido(RuntimeError):
@@ -156,15 +200,18 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
             fila = db.execute("SELECT * FROM versiones WHERE id=?", seleccion).fetchone()
             if not fila or fila['estado'] != 'completada' or biblioteca.huella(fila['imagen']) != fila['sha']:
                 raise RuntimeError("La imagen guardada no conserva su integridad")
-            return fila['imagen'], "image/png"
+            return _recortar_margen(fila['imagen']), "image/png"
         if limite is not None and time.monotonic() >= limite:
             raise PlazoVencido("Sin tiempo para mejorar esta imagen en la cotización")
 
         proveedor = "seedvr2"
-        config = dict(biblioteca.CONFIGURACIONES["openai"])
-        version_openai = biblioteca.clave_version(original, "openai", config)
-        cargo = cuenta_hash + ":" + version_openai
         if os.environ.get("QUOTATION_IMAGE_POLICY") == "openai_then_seedvr2":
+            config = dict(biblioteca.CONFIGURACIONES["openai"])
+            centrada = _entrada_openai(datos)
+            # La selección se sigue guardando con la huella de la foto original.
+            entrada_openai = biblioteca.registrar_original(db, centrada) if centrada else original
+            version_openai = biblioteca.clave_version(entrada_openai, "openai", config)
+            cargo = cuenta_hash + ":" + version_openai
             with closing(_abrir_presupuesto(raiz)) as presupuesto:
                 # Recuperar un resultado previo a un reinicio antes de hacer otra reserva.
                 anterior = db.execute("SELECT estado, metadata FROM versiones WHERE id=?", (version_openai,)).fetchone()
@@ -176,7 +223,7 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
                     version = version_openai
                 elif _reservar_gasto(presupuesto, cargo):
                     try:
-                        version = _ejecutar_version(limite, db, original, "openai", config, os.environ.get("OPENAI_API_KEY", ""))
+                        version = _ejecutar_version(limite, db, entrada_openai, "openai", config, os.environ.get("OPENAI_API_KEY", ""))
                         proveedor = "openai"
                     except biblioteca.ErrorHTTPProveedor as exc:
                         if exc.codigo not in ERRORES_SALDO:
@@ -208,4 +255,4 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
             raise RuntimeError("Resultado de imagen inválido")
         with db:
             db.execute("INSERT OR IGNORE INTO seleccionadas VALUES (?, ?)", (original, version))
-        return fila['imagen'], "image/png"
+        return _recortar_margen(fila['imagen']), "image/png"
