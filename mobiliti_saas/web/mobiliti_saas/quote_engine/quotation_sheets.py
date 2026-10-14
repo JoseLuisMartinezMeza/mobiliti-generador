@@ -655,9 +655,12 @@ class StyleTableMerger:
 
     def _merge_style_xf(self, style_xf_id: int) -> int:
         assert self._source is not None
+        source_xfs = _section_children(self._source, "cellStyleXfs", "xf")
+        if source_xfs and style_xf_id >= len(source_xfs):
+            # Excel abre un xfId inexistente como el estilo Normal (0).
+            style_xf_id = 0
         if style_xf_id in self._style_xf_map:
             return self._style_xf_map[style_xf_id]
-        source_xfs = _section_children(self._source, "cellStyleXfs", "xf")
         if style_xf_id < 0 or style_xf_id >= len(source_xfs):
             raise ValueError(f"Referencia xfId fuera de rango: {style_xf_id}")
         clone = deepcopy(source_xfs[style_xf_id])

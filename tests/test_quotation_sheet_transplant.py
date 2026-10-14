@@ -465,6 +465,33 @@ def test_style_merge_failure_is_transactional(tmp_path):
     assert merger.to_xml() == before
 
 
+def test_style_merge_treats_out_of_range_xf_id_as_normal_like_excel():
+    def styles(xf_id: str) -> bytes:
+        return (
+            f'<styleSheet xmlns="{MAIN}">'
+            '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'
+            '<font><b/><sz val="9"/><name val="Arial"/></font></fonts>'
+            '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
+            '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+            '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+            f'<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="{xf_id}" applyFont="1"/></cellXfs>'
+            '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+            "</styleSheet>"
+        ).encode()
+
+    target = XlsxPackage.read(OFFICIAL_TEMPLATE).parts["xl/styles.xml"]
+    expected = StyleTableMerger.from_xml(target)
+    expected_mapping = expected.merge_referenced_styles(styles("0"), {1})
+    merger = StyleTableMerger.from_xml(target)
+
+    # Excel abre cellXfs con xfId inexistente como si apuntara al estilo Normal (0).
+    mapping = merger.merge_referenced_styles(styles("119"), {1})
+
+    assert mapping == expected_mapping
+    assert merger.to_xml() == expected.to_xml()
+
+
 def test_style_name_collisions_are_casefolded_deterministic_and_idempotent(tmp_path):
     source = build_rich_quotation_fixture(tmp_path / "source.xlsx")
     source_styles = _styles_without_theme_refs(_part_bytes(source, "xl/styles.xml"))
