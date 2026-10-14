@@ -192,9 +192,17 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
                         if costo > RESERVA_MICRO_USD:
                             presupuesto.execute("UPDATE politica SET proveedor='seedvr2', motivo='revisar_tarifa' WHERE id=1")
         if proveedor == "seedvr2":
-            # SeedVR2 acepta un factor de 1 a 10 (HTTP 422 fuera de rango); bajo 103 px la salida queda menor a 1024.
-            config = {**biblioteca.CONFIGURACIONES["seedvr2"], "upscale_factor": min(1024 / max(ancho, alto), 10)}
-            version = _ejecutar_version(limite, db, original, proveedor, config, os.environ.get("FAL_KEY", ""))
+            entrada = original
+            # fal responde HTTP 422 si un lado mide menos de 128 px o el factor sale de 1 a 10.
+            if min(ancho, alto) < 128:
+                escala = 128 / min(ancho, alto)
+                ancho, alto = round(ancho * escala), round(alto * escala)
+                agrandada = BytesIO()
+                with Image.open(BytesIO(datos)) as imagen:
+                    imagen.convert("RGBA").resize((ancho, alto), Image.LANCZOS).save(agrandada, "PNG")
+                entrada = biblioteca.registrar_original(db, agrandada.getvalue())
+            config = {**biblioteca.CONFIGURACIONES["seedvr2"], "upscale_factor": max(1024 / max(ancho, alto), 1)}
+            version = _ejecutar_version(limite, db, entrada, proveedor, config, os.environ.get("FAL_KEY", ""))
         fila = db.execute("SELECT imagen, sha, estado FROM versiones WHERE id=?", (version,)).fetchone()
         if fila['estado'] != 'completada' or biblioteca.huella(fila['imagen']) != fila['sha']:
             raise RuntimeError("Resultado de imagen inválido")

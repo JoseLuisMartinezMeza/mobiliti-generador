@@ -153,22 +153,26 @@ def test_sondeo_seedvr2_saturado_conserva_la_solicitud_en_cola(entorno, monkeypa
     assert sum(url.endswith('/fal-ai/seedvr/upscale/image') for url in llamadas) == 1
 
 
-def test_seedvr2_no_pide_un_factor_mayor_al_que_acepta(entorno, monkeypatch):
+@pytest.mark.parametrize('tamano', [(101, 101), (100, 900)])
+def test_seedvr2_recibe_las_fotos_pequenas_ya_agrandadas(entorno, monkeypatch, tamano):
     _, _, original = entorno
     monkeypatch.setenv('QUOTATION_IMAGE_POLICY', 'seedvr2')
-    factores = []
+    envios = []
     def proveedor(url, clave='', datos=None, tipo=None):
         if url.endswith('/fal-ai/seedvr/upscale/image'):
-            factores.append(json.loads(datos)['upscale_factor'])
-            if not 1 <= factores[-1] <= 10:  # validación del esquema de fal
+            cuerpo = json.loads(datos)
+            imagen = Image.open(BytesIO(base64.b64decode(cuerpo['image_url'].split(',', 1)[1])))
+            envios.append(imagen.size)
+            # Validación de fal: al menos 128 px por lado y un factor de 1 a 10; si no, HTTP 422.
+            if min(imagen.size) < 128 or not 1 <= cuerpo['upscale_factor'] <= 10:
                 raise biblioteca.ErrorHTTPProveedor(422, 'sin_codigo')
         return original(url, clave, datos, tipo)
     monkeypatch.setattr(biblioteca, 'solicitar', proveedor)
     pequena = BytesIO()
-    Image.new('RGB', (101, 101), 'gray').save(pequena, 'PNG')
-    # Con 101 px el factor para llegar a 1024 sería 10.14 y fal lo rechazaba con HTTP 422.
-    assert politica.mejorar_imagen_cotizacion(pequena.getvalue(), 'karen')[0] == foto('blue')
-    assert factores == [10]
+    Image.new('RGB', tamano, 'gray').save(pequena, 'PNG')
+    for _ in range(2):  # la segunda vez sale de la biblioteca
+        assert politica.mejorar_imagen_cotizacion(pequena.getvalue(), 'karen')[0] == foto('blue')
+    assert len(envios) == 1 and min(envios[0]) == 128
 
 
 def test_tope_vencido_entrega_lo_guardado_y_no_pide_fotos_nuevas(entorno):
