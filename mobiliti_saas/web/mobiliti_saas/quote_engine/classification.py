@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 import json
 import re
@@ -15,6 +16,10 @@ except ImportError:
 
 
 BASE_DICTIONARY_PATH = Path(__file__).resolve().parent / "diccionario_categorias.json"
+_LUMBRO = re.compile(r"(?:^|[^a-z0-9])lumbro(?:[^a-z0-9]|$)")
+# "Bench para 4PX" es una estación de trabajo para cuatro personas, no un banco para sentarse.
+_BENCH = re.compile(r"(?<![a-z0-9])bench(?![a-z0-9])")
+_PERSONAS = re.compile(r"(?<![a-z0-9])\d+\s*(?:px|pax|personas?|usuarios?|users?)(?![a-z0-9])")
 
 
 def cargar_diccionario(path: str | Path) -> dict:
@@ -84,8 +89,10 @@ def classify_product_name(
     supplier: object = "",
 ) -> str:
     supplier_text = normalizar_texto(supplier)
-    if re.search(r"(?:^|[^a-z0-9])lumbro(?:[^a-z0-9]|$)", supplier_text):
+    if _LUMBRO.search(supplier_text):
         return "Multicontactos"
+    if _es_bench_de_trabajo(product_name):
+        return "Escritorios-WorkStation"
     if re.search(r"(?:^|[^a-z0-9])tarkett(?:[^a-z0-9]|$)", supplier_text):
         tarkett_text = normalizar_texto(
             " ".join(str(value or "") for value in (product_name, description, source_category))
@@ -118,6 +125,44 @@ def classify_product_name(
     return default
 
 
+def _es_bench_de_trabajo(product_name: object) -> bool:
+    name = normalizar_texto(product_name)
+    return bool(_BENCH.search(name) and _PERSONAS.search(name))
+
+
+def name_identifies_product(product_name: object, dictionary: dict, *, supplier: object = "") -> bool:
+    """Indica si el nombre (o el proveedor) basta para clasificar, sin adivinar por la descripción."""
+
+    if _LUMBRO.search(normalizar_texto(supplier)) or _es_bench_de_trabajo(product_name):
+        return True
+    normalize_accents = dictionary.get("config", {}).get("normalizar_acentos", True)
+    default = dictionary.get("config", {}).get("default_category", "OTRO")
+    return _classify_exact(
+        normalizar_texto(product_name, quitar_acentos=normalize_accents),
+        dictionary,
+        normalize_accents,
+        excluded_category=default,
+    ) is not None
+
+
+@lru_cache(maxsize=16)
+def _compiled_terms(
+    terms: tuple[tuple[str, str], ...],
+    normalize_accents: bool,
+) -> tuple[tuple[re.Pattern[str], str], ...]:
+    # Ordenar y compilar ~600 términos por cada texto consumía segundos en cotizaciones grandes.
+    ordered_terms = [
+        (len(term_norm), term_norm, category)
+        for term, category in terms
+        if (term_norm := normalizar_texto(term, quitar_acentos=normalize_accents))
+    ]
+    ordered_terms.sort(reverse=True)
+    return tuple(
+        (re.compile(rf"(?<![a-z0-9]){re.escape(term_norm)}(?![a-z0-9])"), category)
+        for _, term_norm, category in ordered_terms
+    )
+
+
 def _classify_exact(
     text: str,
     dictionary: dict,
@@ -125,22 +170,13 @@ def _classify_exact(
     *,
     excluded_category: str | None = None,
 ) -> str | None:
-    ordered_terms: list[tuple[int, str, str]] = []
-    for category, data in dictionary.get("categorias", {}).items():
-        for term in data.get("terminos", []):
-            term_norm = normalizar_texto(term, quitar_acentos=normalize_accents)
-            ordered_terms.append((len(term_norm), term_norm, category))
-    ordered_terms.sort(reverse=True)
-
-    for _, term_norm, category in ordered_terms:
-        if (
-            category != excluded_category
-            and term_norm
-            and re.search(
-                rf"(?<![a-z0-9]){re.escape(term_norm)}(?![a-z0-9])",
-                text,
-            )
-        ):
+    terms = tuple(
+        (term, category)
+        for category, data in dictionary.get("categorias", {}).items()
+        for term in data.get("terminos", [])
+    )
+    for pattern, category in _compiled_terms(terms, normalize_accents):
+        if category != excluded_category and pattern.search(text):
             return category
     return None
 

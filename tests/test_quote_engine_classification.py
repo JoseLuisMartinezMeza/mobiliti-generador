@@ -15,6 +15,7 @@ from mobiliti_saas.quote_engine import (  # noqa: E402
     load_category_dictionary,
 )
 from mobiliti_saas.quote_engine.catalog_cart import catalog_quotation_item_text  # noqa: E402
+from mobiliti_saas.quote_engine.classification import name_identifies_product  # noqa: E402
 
 
 DOWNLOADS = Path(r"C:\Users\pepem\Downloads")
@@ -447,3 +448,46 @@ def test_python_engine_writes_product_category_from_product_name(tmp_path):
     assert mob["E14"].value == "Silla"
     assert mob["E49"].value == "Archiveros Moviles y Fijos"
     wb.close()
+
+
+@pytest.mark.parametrize(
+    "nombre",
+    ["BENCH LIDO PARA 2PX", "BENCH P/8PX", "BENCH LIDO PARA 6PX - 60", "Bench para 4 personas"],
+)
+def test_bench_para_varias_personas_es_estacion_de_trabajo(nombre):
+    dictionary = load_category_dictionary([nombre])
+
+    # Antes caía en Bancos por la palabra "bench" y la cotización lo presentaba como banco.
+    assert classify_product_name(nombre, dictionary, supplier="Sunon Inc") == "Escritorios-WorkStation"
+
+
+@pytest.mark.parametrize("nombre", ["Bench", "Storage bench", "Bar stool 2 pzas"])
+def test_banco_sin_numero_de_personas_sigue_siendo_banco(nombre):
+    dictionary = load_category_dictionary([nombre])
+
+    assert classify_product_name(nombre, dictionary, supplier="Sunon Inc") == "Bancos"
+
+
+def test_name_identifies_product_separa_nombres_conocidos_de_apodos_y_claves():
+    dictionary = load_category_dictionary([])
+
+    assert name_identifies_product("CLG67SW Locke Task Chair", dictionary, supplier="Sunon Inc")
+    assert name_identifies_product("BENCH LIDO PARA 2PX", dictionary, supplier="Sunon Inc")
+    # Todo lo de Lumbro es multicontacto por regla de proveedor.
+    assert name_identifies_product("LIDO", dictionary, supplier="Lumbro CH")
+    # Apodos y claves sin palabras: su categoría saldría de adivinar por la descripción.
+    assert not name_identifies_product("lido privados ch", dictionary, supplier="Sunon Inc")
+    assert not name_identifies_product("DU82L.160155 clone 1", dictionary, supplier="Sunon Inc")
+    assert not name_identifies_product("MESAS ONE TO ONE", dictionary, supplier="Proveedor Externo")
+    assert not name_identifies_product("", dictionary, supplier="Sunon Inc")
+
+
+def test_clasificar_muchos_productos_no_recompila_el_diccionario():
+    from mobiliti_saas.quote_engine import classification
+
+    dictionary = load_category_dictionary([])
+    classification._compiled_terms.cache_clear()
+    for numero in range(30):
+        classify_product_name(f"Producto {numero}", dictionary, description="silla de visita")
+
+    assert classification._compiled_terms.cache_info().misses == 1
