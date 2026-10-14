@@ -20,6 +20,7 @@ from PIL import Image
 MODELOS = {"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5"}
 LOTE = 40  # productos por solicitud; la API admite hasta 100 imágenes
 LADO_MAXIMO = 512  # basta para reconocer el mueble y cuesta pocos tokens
+PLAZO_SEGUNDOS = 60  # pasado este tiempo no se piden más lotes; la cotización no espera a Claude
 CATEGORIAS = {
     "Silla": "sillas operativas, ejecutivas, de visita, de capacitación o apilables",
     "Sillones": "sofás, sillones lounge, salas de espera, asientos modulares, puffs y otomanes tapizados",
@@ -58,7 +59,7 @@ def _miniatura(datos: bytes) -> str | None:
     try:
         with Image.open(BytesIO(datos)) as original:
             imagen = original.convert("RGBA")
-    except (OSError, ValueError):
+    except Exception:  # incluye DecompressionBombError, que no es OSError
         return None  # sin foto legible se clasifica solo con el texto
     fondo = Image.new("RGBA", imagen.size, "white")
     fondo.alpha_composite(imagen)
@@ -115,8 +116,10 @@ def clasificar_productos(
         if cliente is None:
             import anthropic
 
-            cliente = anthropic.Anthropic(timeout=90.0, max_retries=1)
+            cliente = anthropic.Anthropic(timeout=float(PLAZO_SEGUNDOS), max_retries=0)
         for desde in range(0, len(unicos), LOTE):
+            if desde and time.monotonic() - inicio >= PLAZO_SEGUNDOS:
+                raise TimeoutError("sin tiempo para más lotes")
             lote = unicos[desde:desde + LOTE]
             contenido: list[dict[str, Any]] = []
             for indice, (nombre, descripcion, dimension, foto) in enumerate(lote, start=1):

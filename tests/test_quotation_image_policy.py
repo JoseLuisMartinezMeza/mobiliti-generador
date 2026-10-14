@@ -192,6 +192,55 @@ def test_seis_hilos_comparten_biblioteca_y_presupuesto(entorno, monkeypatch):
     assert len(llamadas) == len(colores)
 
 
+def test_configuracion_incompleta_se_detecta_antes_de_pedir_fotos(entorno, monkeypatch):
+    politica.verificar_configuracion('karen')
+    with pytest.raises(RuntimeError, match='autenticada'):
+        politica.verificar_configuracion('')
+    monkeypatch.setenv('QUOTATION_IMAGE_LIBRARY_DIR', 'relativa')
+    with pytest.raises(RuntimeError, match='QUOTATION_IMAGE_LIBRARY_DIR'):
+        politica.verificar_configuracion('karen')
+
+
+def test_reintento_por_frecuencia_no_espera_mas_alla_del_tope(entorno, monkeypatch):
+    import time
+
+    _, llamadas, _ = entorno
+    monkeypatch.setattr(politica, 'ESPERAS_POR_FRECUENCIA', (30, 30))
+    monkeypatch.setattr(politica.time, 'sleep', lambda segundos: pytest.fail('no debe esperar'))
+    def saturado(url, *args):
+        llamadas.append('saturado')
+        raise biblioteca.ErrorHTTPProveedor(429, 'rate_limit_exceeded')
+    monkeypatch.setattr(biblioteca, 'solicitar', saturado)
+    with pytest.raises(biblioteca.ErrorHTTPProveedor):
+        politica.mejorar_imagen_cotizacion(foto(), 'karen', limite=time.monotonic() + 5)
+    assert llamadas == ['saturado']
+
+
+def test_sondeo_seedvr2_se_detiene_tras_el_tope_y_se_reanuda_despues(entorno, monkeypatch):
+    import time
+
+    _, llamadas, original = entorno
+    monkeypatch.setenv('QUOTATION_IMAGE_POLICY', 'seedvr2')
+    monkeypatch.setattr(politica, 'GRACIA_EN_CURSO', 0.05)
+    dormir = time.sleep
+    monkeypatch.setattr(biblioteca.time, 'sleep', lambda segundos: dormir(0.02))
+    pendiente = [True]
+    def proveedor(url, *args):
+        if url.endswith('/status') and pendiente[0]:
+            llamadas.append(url)
+            return b'{"status":"IN_PROGRESS"}', {}
+        return original(url, *args)
+    monkeypatch.setattr(biblioteca, 'solicitar', proveedor)
+    inicio = time.monotonic()
+    with pytest.raises(RuntimeError, match='sigue pendiente'):
+        politica.mejorar_imagen_cotizacion(foto(), 'karen', limite=inicio + 0.05)
+    assert time.monotonic() - inicio < 2
+    pendiente[0] = False
+    # La siguiente cotización retoma la misma solicitud: no se envía ni se cobra otra.
+    assert politica.mejorar_imagen_cotizacion(foto(), 'karen')[0] == foto('blue')
+    assert sum(url.endswith('/fal-ai/seedvr/upscale/image') for url in llamadas) == 1
+
+
 def test_reserva_atomica_entre_workers(entorno, monkeypatch):
     raiz, _, _ = entorno
     monkeypatch.setenv('QUOTATION_OPENAI_BUDGET_USD', '0.50')

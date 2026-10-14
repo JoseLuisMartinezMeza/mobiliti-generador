@@ -180,9 +180,11 @@ def consultar_json(url: str, clave: str, datos: dict | None = None) -> dict:
     return json.loads(respuesta)
 
 
-def ejecutar_version(db: sqlite3.Connection, original: str, proveedor: str, configuracion: dict, clave: str) -> str:
+def ejecutar_version(db: sqlite3.Connection, original: str, proveedor: str, configuracion: dict, clave: str,
+                     *, hasta: float | None = None) -> str:
+    """``hasta`` (instante de ``time.monotonic()``) corta el sondeo de la cola; la solicitud queda reanudable."""
     try:
-        return _ejecutar_version(db, original, proveedor, configuracion, clave)
+        return _ejecutar_version(db, original, proveedor, configuracion, clave, hasta)
     except ErrorHTTPProveedor as error:
         # Solo registrar rechazo inequívoco; un fallo 5xx puede ocurrir tras generar.
         if error.estado in {400, 401, 403, 404, 422, 429}:
@@ -202,7 +204,8 @@ def ejecutar_version(db: sqlite3.Connection, original: str, proveedor: str, conf
         raise
 
 
-def _ejecutar_version(db: sqlite3.Connection, original: str, proveedor: str, configuracion: dict, clave: str) -> str:
+def _ejecutar_version(db: sqlite3.Connection, original: str, proveedor: str, configuracion: dict, clave: str,
+                      hasta: float | None = None) -> str:
     if not clave:
         raise ValueError("Falta la clave del proveedor")
     version, nueva = reservar(db, original, proveedor, configuracion)
@@ -238,7 +241,7 @@ def _ejecutar_version(db: sqlite3.Connection, original: str, proveedor: str, con
             metadata = {k: respuesta[k] for k in ("request_id", "status_url", "response_url")}
             with db:
                 db.execute("UPDATE versiones SET estado='en_cola', metadata=? WHERE id=?", (json.dumps(metadata), identificador))
-        while time.monotonic() - inicio < 600:
+        while time.monotonic() - inicio < 600 and (hasta is None or time.monotonic() < hasta):
             estado = consultar_json(metadata["status_url"], clave)
             if estado["status"] == "COMPLETED":
                 if estado.get("error"):

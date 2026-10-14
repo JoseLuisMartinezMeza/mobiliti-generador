@@ -18,6 +18,8 @@ from . import image_library as biblioteca
 ERRORES_SALDO = biblioteca.CODIGOS_SALDO
 # Segundos de espera antes de cada reintento cuando el proveedor responde 429 por frecuencia.
 ESPERAS_POR_FRECUENCIA = (8, 20)
+# Segundos que una cotización espera, pasado su tope, a lo que ya estaba en curso.
+GRACIA_EN_CURSO = 45.0
 # Reserva conservadora para una entrada <=1024 y una salida high 1024, n=1.
 RESERVA_MICRO_USD = 100_000
 
@@ -84,13 +86,25 @@ def _costo_reportado(metadata: dict) -> int:
     return imagen * 8 + texto * 5 + salida * 30
 
 
-def _ejecutar_version(*argumentos) -> str:
+def verificar_configuracion(cuenta: str) -> None:
+    """Falla pronto por lo que afectaría a todas las fotos, no solo a una."""
+    if not cuenta:
+        raise RuntimeError("Falta la cuenta autenticada para la biblioteca de imágenes")
+    ruta = os.environ.get("QUOTATION_IMAGE_LIBRARY_DIR", "")
+    if not ruta or not Path(ruta).is_absolute():
+        raise RuntimeError("Se requiere QUOTATION_IMAGE_LIBRARY_DIR absoluta y persistente")
+
+
+def _ejecutar_version(limite: float | None, *argumentos) -> str:
+    hasta = None if limite is None else limite + GRACIA_EN_CURSO
     for espera in (*ESPERAS_POR_FRECUENCIA, None):
         try:
-            return biblioteca.ejecutar_version(*argumentos)
+            return biblioteca.ejecutar_version(*argumentos, hasta=hasta)
         except biblioteca.ErrorHTTPProveedor as exc:
             if exc.estado != 429 or exc.codigo in ERRORES_SALDO or espera is None:
                 raise
+            if limite is not None and time.monotonic() + espera > limite:
+                raise  # queda reenviable; se pedirá en la siguiente cotización
             time.sleep(espera)
 
 
@@ -100,11 +114,8 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
     ``limite`` es un instante de ``time.monotonic()``: pasado ese momento solo se
     entrega lo que ya está en la biblioteca y lo demás lanza ``PlazoVencido``.
     """
-    if not cuenta:
-        raise RuntimeError("Falta la cuenta autenticada para la biblioteca de imágenes")
-    ruta = os.environ.get("QUOTATION_IMAGE_LIBRARY_DIR", "")
-    if not ruta or not Path(ruta).is_absolute():
-        raise RuntimeError("Se requiere QUOTATION_IMAGE_LIBRARY_DIR absoluta y persistente")
+    verificar_configuracion(cuenta)
+    ruta = os.environ["QUOTATION_IMAGE_LIBRARY_DIR"]
     if len(datos) > biblioteca.MAX_BYTES:
         raise RuntimeError("Imagen demasiado grande para la biblioteca")
     with Image.open(BytesIO(datos)) as imagen:
@@ -147,7 +158,7 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
                     version = version_openai
                 elif _reservar_gasto(presupuesto, cargo):
                     try:
-                        version = _ejecutar_version(db, original, "openai", config, os.environ.get("OPENAI_API_KEY", ""))
+                        version = _ejecutar_version(limite, db, original, "openai", config, os.environ.get("OPENAI_API_KEY", ""))
                         proveedor = "openai"
                     except biblioteca.ErrorHTTPProveedor as exc:
                         if exc.codigo not in ERRORES_SALDO:
@@ -164,7 +175,7 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
                             presupuesto.execute("UPDATE politica SET proveedor='seedvr2', motivo='revisar_tarifa' WHERE id=1")
         if proveedor == "seedvr2":
             config = {**biblioteca.CONFIGURACIONES["seedvr2"], "upscale_factor": 1024 / max(ancho, alto)}
-            version = _ejecutar_version(db, original, proveedor, config, os.environ.get("FAL_KEY", ""))
+            version = _ejecutar_version(limite, db, original, proveedor, config, os.environ.get("FAL_KEY", ""))
         fila = db.execute("SELECT imagen, sha, estado FROM versiones WHERE id=?", (version,)).fetchone()
         if fila['estado'] != 'completada' or biblioteca.huella(fila['imagen']) != fila['sha']:
             raise RuntimeError("Resultado de imagen inválido")

@@ -50,7 +50,13 @@ from .ai_image_provider import (
 )
 from .image_library import ErrorHTTPProveedor
 from .image_processing import improve_image_map, improve_product_image_bytes
-from .quotation_image_policy import PlazoVencido, politica_activa, mejorar_imagen_cotizacion
+from .quotation_image_policy import (
+    GRACIA_EN_CURSO,
+    PlazoVencido,
+    mejorar_imagen_cotizacion,
+    politica_activa,
+    verificar_configuracion,
+)
 from .visual_classification import clasificar_productos
 from .images import center_image_in_cell, extract_images, fit_image_to_cell, image_scale_for_category
 from .mobiliti_layout import (
@@ -3329,9 +3335,6 @@ def _build_official_cotizacion(
     return mutation, sections
 
 
-_IMAGENES_ESPERA_EXTRA_SEGUNDOS = 45.0
-
-
 def _entorno_numero(nombre: str, defecto: float, minimo: float, convertir: Any) -> Any:
     try:
         valor = convertir(os.environ.get(nombre, ""))
@@ -3358,6 +3361,8 @@ def _mejorar_imagenes_con_biblioteca(
             indices_por_imagen.setdefault(line.image_content, []).append(indice)
     if not indices_por_imagen:
         return tuple(lines)
+    # Un error de configuración afectaría a todas las fotos: que se vea, no que salgan sin mejorar.
+    verificar_configuracion(cuenta)
 
     concurrencia = _entorno_numero("QUOTATION_IMAGE_CONCURRENCY", 6, 1, int)
     tope = _entorno_numero("QUOTATION_IMAGE_DEADLINE_SECONDS", 60.0, 0, float)
@@ -3374,7 +3379,7 @@ def _mejorar_imagenes_con_biblioteca(
     try:
         futuros = {datos: executor.submit(tarea, datos) for datos in indices_por_imagen}
         wait(futuros.values(), timeout=max(0.0, limite - time.monotonic()))
-        terminados, _ = wait(futuros.values(), timeout=_IMAGENES_ESPERA_EXTRA_SEGUNDOS)
+        terminados, _ = wait(futuros.values(), timeout=GRACIA_EN_CURSO)
         for datos, futuro in futuros.items():
             if futuro not in terminados:
                 fallidas += 1
@@ -3389,7 +3394,7 @@ def _mejorar_imagenes_con_biblioteca(
                 errores.add(
                     f"HTTP {error.estado} {error.codigo}"
                     if isinstance(error, ErrorHTTPProveedor)
-                    else type(error).__name__
+                    else f"{type(error).__name__}: {error}"[:120]
                 )
                 continue
             resultado = futuro.result()

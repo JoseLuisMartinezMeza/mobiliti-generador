@@ -452,7 +452,7 @@ def test_python_engine_writes_product_category_from_product_name(tmp_path):
 
 @pytest.mark.parametrize(
     "nombre",
-    ["BENCH LIDO PARA 2PX", "BENCH P/8PX", "BENCH LIDO PARA 6PX - 60", "Bench para 4 personas"],
+    ["BENCH LIDO PARA 2PX", "BENCH P/8PX", "BENCH LIDO PARA 6PX - 60", "bench 4 pax"],
 )
 def test_bench_para_varias_personas_es_estacion_de_trabajo(nombre):
     dictionary = load_category_dictionary([nombre])
@@ -461,11 +461,22 @@ def test_bench_para_varias_personas_es_estacion_de_trabajo(nombre):
     assert classify_product_name(nombre, dictionary, supplier="Sunon Inc") == "Escritorios-WorkStation"
 
 
-@pytest.mark.parametrize("nombre", ["Bench", "Storage bench", "Bar stool 2 pzas"])
-def test_banco_sin_numero_de_personas_sigue_siendo_banco(nombre):
+@pytest.mark.parametrize(
+    "nombre",
+    ["Bench", "Storage bench", "Bar stool 2 pzas", "Bench tapizado para 3 personas"],
+)
+def test_banco_sin_puestos_de_trabajo_sigue_siendo_banco(nombre):
     dictionary = load_category_dictionary([nombre])
 
     assert classify_product_name(nombre, dictionary, supplier="Sunon Inc") == "Bancos"
+
+
+def test_una_banca_para_personas_no_se_vuelve_escritorio():
+    nombre = "Banca bench 2 personas lounge"
+    dictionary = load_category_dictionary([nombre])
+
+    # "N personas" no es jerga de puestos de trabajo; el diccionario decide como siempre.
+    assert classify_product_name(nombre, dictionary, supplier="Sunon Inc") == "Sillones"
 
 
 def test_name_identifies_product_separa_nombres_conocidos_de_apodos_y_claves():
@@ -473,6 +484,10 @@ def test_name_identifies_product_separa_nombres_conocidos_de_apodos_y_claves():
 
     assert name_identifies_product("CLG67SW Locke Task Chair", dictionary, supplier="Sunon Inc")
     assert name_identifies_product("BENCH LIDO PARA 2PX", dictionary, supplier="Sunon Inc")
+    assert name_identifies_product("Storage bench", dictionary, supplier="Sunon Inc")
+    # "bench" a secas puede ser banca o estación de trabajo: que decida la foto.
+    assert not name_identifies_product("Bench", dictionary, supplier="Sunon Inc")
+    assert not name_identifies_product("Bench tapizado para 3 personas", dictionary, supplier="Sunon Inc")
     # Todo lo de Lumbro es multicontacto por regla de proveedor.
     assert name_identifies_product("LIDO", dictionary, supplier="Lumbro CH")
     # Apodos y claves sin palabras: su categoría saldría de adivinar por la descripción.

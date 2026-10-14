@@ -159,11 +159,12 @@ def _official_formula(coordinate: str) -> str:
     return "=" + formula.text
 
 
-def test_v18_detection_survives_currency_selector_write_and_reparse():
+def test_official_layout_detection_survives_currency_selector_write_and_reparse():
     part = _official_part(OFFICIAL_TEMPLATE, "Mobiliti")
     editor = WorksheetEditor.from_xml(_part_bytes(OFFICIAL_TEMPLATE, part))
 
-    assert editor.layout.id == "v18"
+    # La plantilla oficial vigente se firma como v11 desde la actualización de SharePoint.
+    assert editor.layout.id == "v11"
     write_official_currency_selector(
         editor,
         "MXN",
@@ -171,10 +172,10 @@ def test_v18_detection_survives_currency_selector_write_and_reparse():
         Decimal("0.35"),
     )
 
-    assert WorksheetEditor.from_xml(editor.to_xml()).layout.id == "v18"
+    assert WorksheetEditor.from_xml(editor.to_xml()).layout.id == "v11"
 
 
-def test_seventeenth_section_output_reparses_as_v18():
+def test_seventeenth_section_output_reparses_as_official_layout():
     needs = [
         SectionNeed(f"section-{index}", f"SECCION {index + 1}", 1)
         for index in range(17)
@@ -187,7 +188,7 @@ def test_seventeenth_section_output_reparses_as_v18():
     )
 
     assert mutation.row_map.last_product_row == 607
-    assert WorksheetEditor.from_xml(mutation.xml).layout.id == "v18"
+    assert WorksheetEditor.from_xml(mutation.xml).layout.id == "v11"
 
 
 def test_real_frozen_v17_survives_currency_selector_write_and_reparse():

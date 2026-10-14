@@ -146,3 +146,28 @@ def test_si_falla_el_segundo_lote_conserva_el_primero():
     resultado = visual.clasificar_productos(productos, {}, CATEGORIAS, cliente=cliente)
 
     assert len(resultado) == visual.LOTE and set(resultado.values()) == {"Silla"}
+
+
+def test_foto_demasiado_grande_no_deja_sin_clasificar_a_las_demas(monkeypatch):
+    def abrir(_datos):
+        raise Image.DecompressionBombError("demasiados pixeles")
+
+    monkeypatch.setattr(visual.Image, "open", abrir)
+    cliente = ClienteFalso([(1, "Escritorios-WorkStation"), (2, "Silla")])
+
+    resultado = visual.clasificar_productos(
+        [_producto(9, "lido privados"), _producto(10, "otro")], {9: (b"enorme", "image/png")}, CATEGORIAS, cliente=cliente
+    )
+
+    assert resultado == {9: "Escritorios-WorkStation", 10: "Silla"}
+
+
+def test_pasado_el_plazo_no_se_piden_mas_lotes(monkeypatch, capsys):
+    monkeypatch.setattr(visual, "PLAZO_SEGUNDOS", 0)
+    productos = [_producto(fila, f"producto {fila}") for fila in range(1, visual.LOTE + 6)]
+    cliente = ClienteFalso([(i, "Silla") for i in range(1, visual.LOTE + 1)])
+
+    resultado = visual.clasificar_productos(productos, {}, CATEGORIAS, cliente=cliente)
+
+    assert len(cliente.solicitudes) == 1 and len(resultado) == visual.LOTE
+    assert '"status":"failed"' in capsys.readouterr().out

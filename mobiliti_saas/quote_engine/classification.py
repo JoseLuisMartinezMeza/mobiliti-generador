@@ -19,7 +19,9 @@ BASE_DICTIONARY_PATH = Path(__file__).resolve().parent / "diccionario_categorias
 _LUMBRO = re.compile(r"(?:^|[^a-z0-9])lumbro(?:[^a-z0-9]|$)")
 # "Bench para 4PX" es una estación de trabajo para cuatro personas, no un banco para sentarse.
 _BENCH = re.compile(r"(?<![a-z0-9])bench(?![a-z0-9])")
-_PERSONAS = re.compile(r"(?<![a-z0-9])\d+\s*(?:px|pax|personas?|usuarios?|users?)(?![a-z0-9])")
+_PERSONAS = re.compile(r"(?<![a-z0-9])\d+\s*(?:px|pax)(?![a-z0-9])")
+# Sin esa jerga, "bench" puede ser una banca o una estación de trabajo.
+_TERMINOS_AMBIGUOS = frozenset({"bench", "benches"})
 
 
 def cargar_diccionario(path: str | Path) -> dict:
@@ -137,19 +139,20 @@ def name_identifies_product(product_name: object, dictionary: dict, *, supplier:
         return True
     normalize_accents = dictionary.get("config", {}).get("normalizar_acentos", True)
     default = dictionary.get("config", {}).get("default_category", "OTRO")
-    return _classify_exact(
+    match = _match_exact(
         normalizar_texto(product_name, quitar_acentos=normalize_accents),
         dictionary,
         normalize_accents,
         excluded_category=default,
-    ) is not None
+    )
+    return match is not None and match[1] not in _TERMINOS_AMBIGUOS
 
 
 @lru_cache(maxsize=16)
 def _compiled_terms(
     terms: tuple[tuple[str, str], ...],
     normalize_accents: bool,
-) -> tuple[tuple[re.Pattern[str], str], ...]:
+) -> tuple[tuple[re.Pattern[str], str, str], ...]:
     # Ordenar y compilar ~600 términos por cada texto consumía segundos en cotizaciones grandes.
     ordered_terms = [
         (len(term_norm), term_norm, category)
@@ -158,9 +161,29 @@ def _compiled_terms(
     ]
     ordered_terms.sort(reverse=True)
     return tuple(
-        (re.compile(rf"(?<![a-z0-9]){re.escape(term_norm)}(?![a-z0-9])"), category)
+        (re.compile(rf"(?<![a-z0-9]){re.escape(term_norm)}(?![a-z0-9])"), category, term_norm)
         for _, term_norm, category in ordered_terms
     )
+
+
+def _match_exact(
+    text: str,
+    dictionary: dict,
+    normalize_accents: bool,
+    *,
+    excluded_category: str | None = None,
+) -> tuple[str, str] | None:
+    """Categoría y término del término más largo que aparece en el texto."""
+
+    terms = tuple(
+        (term, category)
+        for category, data in dictionary.get("categorias", {}).items()
+        for term in data.get("terminos", [])
+    )
+    for pattern, category, term_norm in _compiled_terms(terms, normalize_accents):
+        if category != excluded_category and pattern.search(text):
+            return category, term_norm
+    return None
 
 
 def _classify_exact(
@@ -170,15 +193,8 @@ def _classify_exact(
     *,
     excluded_category: str | None = None,
 ) -> str | None:
-    terms = tuple(
-        (term, category)
-        for category, data in dictionary.get("categorias", {}).items()
-        for term in data.get("terminos", [])
-    )
-    for pattern, category in _compiled_terms(terms, normalize_accents):
-        if category != excluded_category and pattern.search(text):
-            return category
-    return None
+    match = _match_exact(text, dictionary, normalize_accents, excluded_category=excluded_category)
+    return None if match is None else match[0]
 
 
 def enrich_dictionary_with_aliases(dictionary: dict, product_names: list[str]) -> dict:

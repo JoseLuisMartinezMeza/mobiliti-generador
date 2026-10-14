@@ -635,6 +635,7 @@ def test_official_image_policy_uses_authenticated_scope_preserves_catalogs(monke
         llamadas.append((datos, cuenta))
         return b"resultado", "image/png"
     monkeypatch.setattr(engine, "mejorar_imagen_cotizacion", mejorar)
+    monkeypatch.setattr(engine, "verificar_configuracion", lambda cuenta: None)
     importada = _line(PRINCIPAL_ID, description="Importada", quantity="1", origin="imported", image_content=b"original")
     catalogo = _line(PER_UNIT_ID, description="Catalogo", quantity="1", origin="lumbro", image_content=b"catalogo")
     resultado = engine._improve_official_cotizacion_images((importada, catalogo), {"_image_library_account": "25"})
@@ -663,6 +664,7 @@ def _preparar_politica_paralela(monkeypatch, espera, falla=b""):
         return b"mejorada-" + datos, "image/webp"
 
     monkeypatch.setattr(engine, "mejorar_imagen_cotizacion", mejorar)
+    monkeypatch.setattr(engine, "verificar_configuracion", lambda cuenta: None)
     return llamadas
 
 
@@ -716,7 +718,7 @@ def test_official_image_policy_aisla_el_fallo_de_una_imagen(monkeypatch, capsys)
     evento = _evento_imagenes(capsys)
     assert evento["failed"] == 1
     assert evento["improved"] == 2
-    assert evento["errors"] == ["RuntimeError"]
+    assert evento["errors"] == ["RuntimeError: proveedor caido"]
 
 
 def test_official_image_policy_respeta_el_tope_de_tiempo(monkeypatch, capsys):
@@ -747,6 +749,21 @@ def test_official_image_policy_entrega_lo_guardado_aunque_venza_el_tope(monkeypa
     assert resultado[2].image_content == b"mejorada-guardada-en-biblioteca"
     evento = _evento_imagenes(capsys)
     assert (evento["improved"], evento["skipped_deadline"], evento["failed"]) == (2, 1, 0)
+
+
+def test_official_image_policy_falla_pronto_si_falta_configuracion(monkeypatch):
+    llamadas = []
+    monkeypatch.setenv("QUOTATION_IMAGE_POLICY", "openai_then_seedvr2")
+    monkeypatch.delenv("QUOTATION_IMAGE_LIBRARY_DIR", raising=False)
+    monkeypatch.setattr(
+        engine, "mejorar_imagen_cotizacion", lambda *a, **k: llamadas.append(a) or (b"x", "image/png")
+    )
+    # Un error de configuración afectaría a todas las fotos: no se disfraza de "foto original".
+    with pytest.raises(RuntimeError, match="autenticada"):
+        engine._improve_official_cotizacion_images(_importadas(b"uno"), {})
+    with pytest.raises(RuntimeError, match="QUOTATION_IMAGE_LIBRARY_DIR"):
+        engine._improve_official_cotizacion_images(_importadas(b"uno"), {"_image_library_account": "25"})
+    assert llamadas == []
 
 
 def test_official_image_policy_sin_candidatas_no_imprime(monkeypatch, capsys):
