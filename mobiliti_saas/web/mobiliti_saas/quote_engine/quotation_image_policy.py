@@ -192,7 +192,8 @@ def mejorar_imagen_cotizacion(datos: bytes, cuenta: str, *, limite: float | None
                         if costo > RESERVA_MICRO_USD:
                             presupuesto.execute("UPDATE politica SET proveedor='seedvr2', motivo='revisar_tarifa' WHERE id=1")
         if proveedor == "seedvr2":
-            config = {**biblioteca.CONFIGURACIONES["seedvr2"], "upscale_factor": 1024 / max(ancho, alto)}
+            # SeedVR2 acepta un factor de 1 a 10 (HTTP 422 fuera de rango); bajo 103 px la salida queda menor a 1024.
+            config = {**biblioteca.CONFIGURACIONES["seedvr2"], "upscale_factor": min(1024 / max(ancho, alto), 10)}
             version = _ejecutar_version(limite, db, original, proveedor, config, os.environ.get("FAL_KEY", ""))
         fila = db.execute("SELECT imagen, sha, estado FROM versiones WHERE id=?", (version,)).fetchone()
         if fila['estado'] != 'completada' or biblioteca.huella(fila['imagen']) != fila['sha']:

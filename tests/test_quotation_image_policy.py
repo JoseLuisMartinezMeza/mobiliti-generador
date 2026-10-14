@@ -153,6 +153,24 @@ def test_sondeo_seedvr2_saturado_conserva_la_solicitud_en_cola(entorno, monkeypa
     assert sum(url.endswith('/fal-ai/seedvr/upscale/image') for url in llamadas) == 1
 
 
+def test_seedvr2_no_pide_un_factor_mayor_al_que_acepta(entorno, monkeypatch):
+    _, _, original = entorno
+    monkeypatch.setenv('QUOTATION_IMAGE_POLICY', 'seedvr2')
+    factores = []
+    def proveedor(url, clave='', datos=None, tipo=None):
+        if url.endswith('/fal-ai/seedvr/upscale/image'):
+            factores.append(json.loads(datos)['upscale_factor'])
+            if not 1 <= factores[-1] <= 10:  # validación del esquema de fal
+                raise biblioteca.ErrorHTTPProveedor(422, 'sin_codigo')
+        return original(url, clave, datos, tipo)
+    monkeypatch.setattr(biblioteca, 'solicitar', proveedor)
+    pequena = BytesIO()
+    Image.new('RGB', (101, 101), 'gray').save(pequena, 'PNG')
+    # Con 101 px el factor para llegar a 1024 sería 10.14 y fal lo rechazaba con HTTP 422.
+    assert politica.mejorar_imagen_cotizacion(pequena.getvalue(), 'karen')[0] == foto('blue')
+    assert factores == [10]
+
+
 def test_tope_vencido_entrega_lo_guardado_y_no_pide_fotos_nuevas(entorno):
     import time
 
