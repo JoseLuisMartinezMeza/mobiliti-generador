@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 import hashlib
 from io import BytesIO
 import ntpath
@@ -489,6 +490,26 @@ class XlsxPackage:
         return result
 
     def _sheet_rows(self) -> list[tuple[str, str, int, str]]:
+        # Resolver hojas analiza el workbook y cada hoja, y el armado lo pide decenas de veces.
+        cached = self.__dict__.get("_sheet_rows_cache")
+        if cached is not None and all(
+            self.parts.get(name) is part for name, part in cached[0]
+        ):
+            return list(cached[1])
+        rows = self._resolve_sheet_rows()
+        watched = (
+            "xl/workbook.xml",
+            "xl/_rels/workbook.xml.rels",
+            "[Content_Types].xml",
+            *(row[3] for row in rows),
+        )
+        self.__dict__["_sheet_rows_cache"] = (
+            tuple((name, self.parts[name]) for name in watched),
+            tuple(rows),
+        )
+        return rows
+
+    def _resolve_sheet_rows(self) -> list[tuple[str, str, int, str]]:
         if "xl/workbook.xml" not in self.parts:
             raise ValueError("Workbook OOXML ausente")
         try:
@@ -949,6 +970,15 @@ def _parse_content_types(
 ) -> tuple[dict[str, str], dict[str, str]]:
     if content is None:
         raise ValueError("Content types OOXML ausentes")
+    defaults, overrides = _content_types(content)
+    return dict(defaults), dict(overrides)
+
+
+@lru_cache(maxsize=32)
+def _content_types(
+    content: bytes,
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    # El armado consulta los content types cientos de veces con el mismo XML.
     try:
         root = ElementTree.fromstring(content)
     except ElementTree.ParseError as error:
@@ -979,4 +1009,4 @@ def _parse_content_types(
             override_identities.add(identity)
         else:
             raise ValueError("Content types OOXML inválidos")
-    return defaults, overrides
+    return tuple(defaults.items()), tuple(overrides.items())

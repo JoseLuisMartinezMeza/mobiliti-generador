@@ -422,3 +422,64 @@ def test_existing_zip_entries_follow_declared_safe_metadata_profile() -> None:
         assert result.create_version == 20
         assert result.extract_version == 20
         assert result.external_attr == 0o600 << 16
+
+
+def test_resolver_hojas_otra_vez_no_vuelve_a_analizar_el_paquete(monkeypatch):
+    package = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    primera = package._sheet_rows()
+    analizados = []
+    real = ooxml_package_module.ElementTree.fromstring
+    monkeypatch.setattr(
+        ooxml_package_module.ElementTree,
+        "fromstring",
+        lambda datos: analizados.append(1) or real(datos),
+    )
+
+    assert package._sheet_rows() == primera
+    assert package.sheet_part("Mobiliti") == next(row[3] for row in primera if row[0] == "Mobiliti")
+    assert analizados == []
+    # Cada llamada entrega su propia lista.
+    package._sheet_rows().clear()
+    assert package._sheet_rows() == primera
+
+
+def test_cambiar_una_parte_obliga_a_resolver_las_hojas_de_nuevo():
+    package = XlsxPackage.read(OFFICIAL_TEMPLATE)
+    hoja = package.sheet_part("Mobiliti")
+    partes = dict(package.parts)
+    package.parts = partes
+
+    partes[hoja] = b"<no-es-una-hoja/>"
+    with pytest.raises(ValueError, match="worksheet"):
+        package._sheet_rows()
+
+    partes[hoja] = XlsxPackage.read(OFFICIAL_TEMPLATE).parts[hoja]
+    partes["xl/workbook.xml"] = partes["xl/workbook.xml"].replace(b'name="Mobiliti"', b'name="Otra"')
+    assert "Otra" in [row[0] for row in package._sheet_rows()]
+    with pytest.raises(KeyError):
+        package.sheet_part("Mobiliti")
+
+
+def test_content_types_se_analiza_una_vez_sin_compartir_diccionarios(monkeypatch):
+    contenido = XlsxPackage.read(OFFICIAL_TEMPLATE).parts["[Content_Types].xml"] + b" "
+    primero = ooxml_package_module._parse_content_types(contenido)
+    analizados = []
+    real = ooxml_package_module.ElementTree.fromstring
+    monkeypatch.setattr(
+        ooxml_package_module.ElementTree,
+        "fromstring",
+        lambda datos: analizados.append(1) or real(datos),
+    )
+    primero[0].clear()
+    primero[1].clear()
+
+    segundo = ooxml_package_module._parse_content_types(contenido)
+
+    assert analizados == []
+    assert segundo[0] and segundo[1]
+    for _ in range(2):
+        with pytest.raises(ValueError, match="Content types"):
+            ooxml_package_module._parse_content_types(b"<otro/>")
+    with pytest.raises(ValueError, match="ausentes"):
+        ooxml_package_module._parse_content_types(None)
+
