@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 import re
 from typing import Mapping, Sequence
 import xml.etree.ElementTree as ET
@@ -29,6 +30,13 @@ class FormulaTranslationError(ValueError):
     """Una fórmula oficial contiene una referencia que no se puede mover segura."""
 
 
+@lru_cache(maxsize=131072)
+def formula_tokens(formula: str) -> tuple:
+    """Tokens de una fórmula; se comparten entre llamadas y no deben mutarse."""
+
+    return tuple(Tokenizer(formula).items)
+
+
 def _context(sheet: str | None, origin: str, formula: str) -> str:
     address = f"{sheet}!{origin}" if sheet else origin
     return f"{address}; fórmula: {formula}"
@@ -41,10 +49,16 @@ def _validate_range_token(value: str, *, context: str) -> None:
         )
 
 
+# El contexto queda fuera de la clave: solo sirve para los mensajes de error.
+@lru_cache(maxsize=131072)
+def _move_range(value: str, origin: str, target: str) -> str:
+    return Translator(f"={value}", origin=origin).translate_formula(target)
+
+
 def _translate_range_token(value: str, *, origin: str, target: str, context: str) -> str:
     _validate_range_token(value, context=context)
     try:
-        translated = Translator(f"={value}", origin=origin).translate_formula(target)
+        translated = _move_range(value, origin, target)
     except Exception as error:  # Translator expone varios ValueError internos.
         raise FormulaTranslationError(
             f"No se pudo mover el rango {value!r} ({context})"
@@ -79,7 +93,7 @@ def translate_formula(
         _validate_range_token(replacement, context=context)
 
     try:
-        tokens = Tokenizer(formula).items
+        tokens = formula_tokens(formula)
     except Exception as error:
         raise FormulaTranslationError(f"No se pudo tokenizar la fórmula ({context})") from error
 

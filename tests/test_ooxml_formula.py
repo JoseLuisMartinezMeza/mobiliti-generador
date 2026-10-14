@@ -1,9 +1,11 @@
 import xml.etree.ElementTree as ET
 
 import pytest
+from openpyxl.formula.tokenizer import Tokenizer
 
 from mobiliti_saas.quote_engine.ooxml_formula import (
     FormulaTranslationError,
+    formula_tokens,
     translate_calc_chain,
     translate_formula,
 )
@@ -210,3 +212,62 @@ def test_calc_chain_rejects_invalid_root_namespace_or_direct_child(payload):
 def test_calc_chain_rejects_malformed_xml_with_context():
     with pytest.raises(FormulaTranslationError, match="calcChain.xml no es XML válido"):
         translate_calc_chain(b"<calcChain><c", sheet_id=2, coordinate_map={})
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "=SUM(IFERROR(H14:H46,0))+$K$6+Mobiliti!W14",
+        "=IF(A14=\"H14:H46\",'Source Sheet'!$B14+C$4+$D$5,0)",
+        "=SUM((A1:A3,B1:B3))",
+        "=NamedRange+H14",
+    ],
+)
+def test_formula_tokens_memoizado_equivale_al_tokenizer(formula):
+    esperado = [(t.value, t.type, t.subtype) for t in Tokenizer(formula).items]
+
+    for _ in range(2):
+        tokens = formula_tokens(formula)
+        assert isinstance(tokens, tuple)
+        assert [(t.value, t.type, t.subtype) for t in tokens] == esperado
+
+
+def test_translate_formula_repite_el_mismo_resultado_con_cache():
+    argumentos = dict(
+        origin="H47",
+        target="H114",
+        range_overrides={"H81:H113": "H14:H113"},
+    )
+    formula = "=SUM(IFERROR(H14:H46,0))+$K$6+'Source Sheet'!W14&\"H14:H46\""
+
+    primera = translate_formula(formula, **argumentos)
+    segunda = translate_formula(formula, **argumentos)
+
+    assert primera == segunda == (
+        "=SUM(IFERROR(H14:H113,0))+$K$6+'Source Sheet'!W81&\"H14:H46\""
+    )
+
+
+def test_translate_formula_no_reutiliza_el_contexto_de_un_fallo_anterior():
+    # A1 no puede subir dos filas: el mismo rango falla con dos contextos distintos.
+    with pytest.raises(FormulaTranslationError) as primero:
+        translate_formula("=A1+1", origin="A3", target="A1", sheet="Mobiliti")
+    with pytest.raises(FormulaTranslationError) as segundo:
+        translate_formula("=A1+2", origin="A3", target="A1", sheet="Cotizacion")
+
+    assert str(primero.value) == (
+        "No se pudo mover el rango 'A1' (Mobiliti!A3; fórmula: =A1+1)"
+    )
+    assert str(segundo.value) == (
+        "No se pudo mover el rango 'A1' (Cotizacion!A3; fórmula: =A1+2)"
+    )
+
+
+def test_translate_formula_invalida_sigue_fallando_en_la_segunda_llamada():
+    for _ in range(2):
+        with pytest.raises(FormulaTranslationError, match="Mobiliti!H47"):
+            translate_formula(
+                "=SUM(Table1[Amount])", origin="H47", target="H114", sheet="Mobiliti"
+            )
+        with pytest.raises(FormulaTranslationError, match="No se pudo tokenizar"):
+            translate_formula('="sin cerrar', origin="H47", target="H114")

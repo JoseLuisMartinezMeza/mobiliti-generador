@@ -10,15 +10,15 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
 import re
 from typing import Literal, Sequence
 import xml.etree.ElementTree as ET
 
-from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils.cell import column_index_from_string, get_column_letter
 
 from .mobiliti_layout import MobilitiRowMap, SectionNeed, plan_mobiliti_layout
-from .ooxml_formula import translate_formula
+from .ooxml_formula import formula_tokens, translate_formula
 
 
 MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -615,7 +615,7 @@ def _special_formula_has_moved_structural_reference(
     if formula.text:
         values.extend(
             token.value
-            for token in Tokenizer("=" + formula.text).items
+            for token in formula_tokens("=" + formula.text)
             if token.type == "OPERAND" and token.subtype == "RANGE"
         )
     for value in values:
@@ -1166,8 +1166,8 @@ def _translate_official_formula(
 ) -> str:
     translated = _translate_formula_ranges(formula, origin=origin, target=target)
     result = ["="]
-    original_tokens = Tokenizer(formula).items
-    translated_tokens = Tokenizer(translated).items
+    original_tokens = formula_tokens(formula)
+    translated_tokens = formula_tokens(translated)
     if len(original_tokens) != len(translated_tokens):
         raise ValueError(f"La traducción oficial cambió la estructura de {origin}")
     for original_token, translated_token in zip(
@@ -1189,9 +1189,10 @@ def _translate_official_formula(
     return "".join(result)
 
 
+@lru_cache(maxsize=131072)
 def _translate_formula_ranges(formula: str, *, origin: str, target: str) -> str:
     result = ["="]
-    for token in Tokenizer(formula).items:
+    for token in formula_tokens(formula):
         value = token.value
         if token.type == "OPERAND" and token.subtype == "RANGE" and _RANGE_REFERENCE.fullmatch(value):
             value = translate_formula(
@@ -1305,8 +1306,8 @@ def _translate_total_formula(
         target=target,
         row_map=row_map,
     )
-    tokens = Tokenizer(formula).items
-    translated_tokens = Tokenizer(translated).items
+    tokens = formula_tokens(formula)
+    translated_tokens = formula_tokens(translated)
     if len(tokens) != len(translated_tokens):
         raise ValueError(f"La traducción del total cambió su estructura: {origin}")
     reference_indices: list[int] = []
